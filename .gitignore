@@ -1,0 +1,59 @@
+# ===========================
+# Python
+# ===========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# ===========================
+# Virtual Environments
+# ===========================
+.env
+.venv
+env/
+venv/
+ENV/
+
+# ===========================
+# Sensitive Configuration
+# ===========================
+.env.local
+.env.production
+*.secret
+secrets/
+
+# ===========================
+# Logs (لا ترفع السجلات)
+# ===========================
+السجلات/*.log
+السجلات/archive/
+*.log
+
+# ===========================
+# Testing & Coverage
+# ===========================
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# ===========================
+# IDE & OS
+# ===========================
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db
+
+# ===========================
+# Database
+# ===========================
+*.db
+*.sqlite3
