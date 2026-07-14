@@ -19,3 +19,14 @@
 ### Fixed
 -   تم إصلاح أخطاء بناء الجملة والمسافات البادئة في ملف اختبارات الوحدات.
 -   تم إصلاح مشكلة استيراد الوحدة في ملف اختبارات الوحدات.
+
+## v0.2.2 - LLM Abstraction Layer Implemented
+
+### Added
+-   **LLM Abstraction Layer:** Implemented `BaseLLMClient` interface for unified LLM interaction.
+-   **OpenAI LLM Client:** Integrated `OpenAILLMClient` as a concrete implementation for OpenAI models.
+-   **Token Counting:** Added `tiktoken` integration for accurate token counting.
+-   **Retry Mechanism:** Implemented a robust retry mechanism for LLM calls.
+
+### Fixed
+-   Minor issues in `BaseLLMClient` and `OpenAILLMClient` during testing.
