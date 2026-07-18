@@ -88,7 +88,7 @@ class KnowledgeGraphConfig:
 class KnowledgeGraph:
     """
     Knowledge Graph for managing entities, relationships, and attributes.
-    
+
     The Knowledge Graph is responsible for:
     - Ingesting structured and unstructured data
     - Storing entities and relationships
@@ -102,7 +102,7 @@ class KnowledgeGraph:
     def __init__(self, config: Optional[KnowledgeGraphConfig] = None):
         """
         Initialize the Knowledge Graph.
-        
+
         Args:
             config: KnowledgeGraphConfig instance for configuring graph behavior.
                    If None, uses default config.
@@ -124,7 +124,7 @@ class KnowledgeGraph:
     ) -> KnowledgeEntity:
         """
         Add an entity to the knowledge graph.
-        
+
         Args:
             entity_id: Unique identifier for the entity
             name: Name of the entity
@@ -132,7 +132,7 @@ class KnowledgeGraph:
             attributes: Optional attributes of the entity
             source: Optional source of the entity information
             confidence: Confidence level (0.0 to 1.0)
-            
+
         Returns:
             KnowledgeEntity representing the added entity
         """
@@ -174,7 +174,7 @@ class KnowledgeGraph:
     ) -> KnowledgeRelationship:
         """
         Add a relationship between entities.
-        
+
         Args:
             relationship_id: Unique identifier for the relationship
             source_entity_id: ID of the source entity
@@ -183,7 +183,7 @@ class KnowledgeGraph:
             attributes: Optional attributes of the relationship
             source: Optional source of the relationship information
             confidence: Confidence level (0.0 to 1.0)
-            
+
         Returns:
             KnowledgeRelationship representing the added relationship
         """
@@ -191,7 +191,7 @@ class KnowledgeGraph:
         if source_entity_id not in self.entities:
             logger.error(f"Source entity {source_entity_id} not found")
             raise ValueError(f"Source entity {source_entity_id} not found")
-        
+
         if target_entity_id not in self.entities:
             logger.error(f"Target entity {target_entity_id} not found")
             raise ValueError(f"Target entity {target_entity_id} not found")
@@ -216,10 +216,10 @@ class KnowledgeGraph:
     def query_entity(self, entity_id: str) -> Optional[KnowledgeEntity]:
         """
         Query an entity by ID.
-        
+
         Args:
             entity_id: The entity ID to query
-            
+
         Returns:
             KnowledgeEntity if found, None otherwise
         """
@@ -228,10 +228,10 @@ class KnowledgeGraph:
     def query_entities_by_name(self, name: str) -> List[KnowledgeEntity]:
         """
         Query entities by name.
-        
+
         Args:
             name: The entity name to query
-            
+
         Returns:
             List of KnowledgeEntity objects matching the name
         """
@@ -241,10 +241,10 @@ class KnowledgeGraph:
     def query_entities_by_type(self, entity_type: EntityType) -> List[KnowledgeEntity]:
         """
         Query entities by type.
-        
+
         Args:
             entity_type: The entity type to query
-            
+
         Returns:
             List of KnowledgeEntity objects of the specified type
         """
@@ -260,11 +260,11 @@ class KnowledgeGraph:
     ) -> Dict[str, Any]:
         """
         Traverse the knowledge graph starting from an entity.
-        
+
         Args:
             start_entity_id: The starting entity ID
             max_depth: Maximum traversal depth
-            
+
         Returns:
             Dictionary containing traversal results
         """
@@ -295,14 +295,14 @@ class KnowledgeGraph:
                 if relationship.source_entity_id == entity_id:
                     target_id = relationship.target_entity_id
                     traversal_result["relationships"].add(rel_id)
-                    
+
                     if target_id not in visited:
                         queue.append((target_id, depth + 1))
-                
+
                 elif relationship.target_entity_id == entity_id:
                     source_id = relationship.source_entity_id
                     traversal_result["relationships"].add(rel_id)
-                    
+
                     if source_id not in visited:
                         queue.append((source_id, depth + 1))
 
@@ -313,7 +313,7 @@ class KnowledgeGraph:
     def detect_conflicts(self) -> List[Dict[str, Any]]:
         """
         Detect conflicts in the knowledge graph.
-        
+
         Returns:
             List of detected conflicts
         """
@@ -333,10 +333,10 @@ class KnowledgeGraph:
                 if (relationship.source_entity_id == other_rel.source_entity_id and
                     relationship.target_entity_id == other_rel.target_entity_id and
                     relationship.relationship_type != other_rel.relationship_type):
-                    
+
                     # Calculate conflict score
                     conflict_score = abs(relationship.confidence - other_rel.confidence)
-                    
+
                     if conflict_score > self.config.conflict_threshold:
                         conflicts.append({
                             "type": "relationship_conflict",
@@ -353,15 +353,15 @@ class KnowledgeGraph:
     def resolve_entity(self, entity_name: str) -> Optional[KnowledgeEntity]:
         """
         Resolve an entity by name (returns the most confident entity).
-        
+
         Args:
             entity_name: The entity name to resolve
-            
+
         Returns:
             KnowledgeEntity with highest confidence, or None
         """
         entities = self.query_entities_by_name(entity_name)
-        
+
         if not entities:
             return None
 
@@ -371,7 +371,7 @@ class KnowledgeGraph:
     def get_graph_stats(self) -> Dict[str, Any]:
         """
         Get statistics about the knowledge graph.
-        
+
         Returns:
             Dictionary containing graph statistics
         """
@@ -406,33 +406,33 @@ class KnowledgeGraph:
     ) -> KnowledgeEntity:
         """
         Update an existing entity.
-        
+
         Args:
             entity_id: The entity ID to update
             attributes: New attributes to merge
             confidence: New confidence level
-            
+
         Returns:
             Updated KnowledgeEntity
         """
         entity = self.entities[entity_id]
-        
+
         if self.config.enable_versioning:
             entity.version += 1
-        
+
         if attributes:
             entity.attributes.update(attributes)
-        
+
         entity.confidence = max(0.0, min(1.0, confidence))
         entity.timestamp = datetime.now(UTC)
-        
+
         logger.debug(f"Entity updated: {entity_id}")
         return entity
 
     def invalidate_entity(self, entity_id: str) -> None:
         """
         Invalidate an entity (mark as no longer valid).
-        
+
         Args:
             entity_id: The entity ID to invalidate
         """
@@ -443,7 +443,7 @@ class KnowledgeGraph:
     def invalidate_relationship(self, relationship_id: str) -> None:
         """
         Invalidate a relationship (mark as no longer valid).
-        
+
         Args:
             relationship_id: The relationship ID to invalidate
         """

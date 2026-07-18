@@ -1,4 +1,5 @@
 import pytest
+import logging
 from unittest.mock import AsyncMock, MagicMock
 from core.runtime.security_layer.sandbox import Sandbox, ISandbox
 
@@ -73,10 +74,10 @@ async def test_destroy_sandbox(sandbox_instance: ISandbox):
     assert sandbox_id not in sandbox_instance._sandboxes
 
 @pytest.mark.asyncio
-async def test_destroy_non_existent_sandbox(sandbox_instance: ISandbox, capsys):
+async def test_destroy_non_existent_sandbox(sandbox_instance: ISandbox, caplog):
     non_existent_sandbox_id = "non_existent_sandbox_to_destroy"
     
     await sandbox_instance.destroy_sandbox(non_existent_sandbox_id)
     
-    captured = capsys.readouterr()
-    assert f"[Sandbox] Sandbox \'{non_existent_sandbox_id}\' not found for destruction." in captured.out
+    with caplog.at_level(logging.WARNING):
+        assert f"[Sandbox] Sandbox \'{non_existent_sandbox_id}\' not found for destruction." in caplog.text

@@ -1,7 +1,3 @@
-"""
-وحدة BaseAgent الأساسية لمنصة basirah.
-توفر الهيكل الأساسي والوظائف المشتركة لجميع العملاء الذكيين.
-"""
 import logging
 import uuid
 from datetime import datetime
@@ -115,6 +111,9 @@ class BaseAgent:
 
     async def _call_tool(self, tool_name: str, **kwargs) -> Any:
         """Placeholder for calling an external tool."""
+        if tool_name is None:
+            logger.error("Tool name cannot be None.")
+            raise ValueError("Tool name cannot be None")
         if not self.tool_registry:
             logger.error("ToolRegistry not initialized for agent %s.", self.name)
             raise RuntimeError("ToolRegistry not initialized for this agent")

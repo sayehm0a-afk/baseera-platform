@@ -1,4 +1,5 @@
 import pytest
+import logging
 from unittest.mock import AsyncMock, MagicMock
 from core.runtime.security_layer.agent_isolation import AgentIsolation, IAgentIsolation
 
@@ -73,10 +74,10 @@ async def test_destroy_isolated_environment(agent_isolation: IAgentIsolation):
     assert environment_id not in agent_isolation._environments
 
 @pytest.mark.asyncio
-async def test_destroy_non_existent_environment(agent_isolation: IAgentIsolation, capsys):
+async def test_destroy_non_existent_environment(agent_isolation: IAgentIsolation, caplog):
     non_existent_env_id = "non_existent_env_to_destroy"
     
     await agent_isolation.destroy_isolated_environment(non_existent_env_id)
     
-    captured = capsys.readouterr()
-    assert f"[AgentIsolation] Environment '{non_existent_env_id}' not found for destruction." in captured.out
+    with caplog.at_level(logging.WARNING):
+        assert f"[AgentIsolation] Environment \'{non_existent_env_id}\' not found for destruction." in caplog.text

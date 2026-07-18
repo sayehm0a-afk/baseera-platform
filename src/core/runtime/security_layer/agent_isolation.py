@@ -59,7 +59,7 @@ class AgentIsolation(IAgentIsolation):
     async def execute_in_isolated_environment(self, environment_id: str, code: str, *args, **kwargs) -> Any:
         if environment_id not in self._environments:
             raise ValueError(f"Environment '{environment_id}' not found.")
-        
+
         # منطق تنفيذ التعليمة البرمجية في بيئة معزولة افتراضي
         # في تطبيق حقيقي، قد يتضمن ذلك إرسال التعليمة البرمجية إلى الحاوية أو الآلة الافتراضية
         logger.info(f"[AgentIsolation] Executing code in environment '{environment_id}': {code} with args: {args}, kwargs: {kwargs}")

@@ -47,7 +47,7 @@ class ExecutionGraph(IExecutionGraph):
 
     async def execute_graph(self, graph_definition: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         tasks_for_resolver = {task_id: task_data.get("dependencies", []) for task_id, task_data in graph_definition.items()}
-        
+
         try:
             execution_order = self._dependency_resolver.resolve(tasks_for_resolver)
         except ValueError as e:
@@ -78,6 +78,6 @@ class ExecutionGraph(IExecutionGraph):
             except Exception as e:
                 logger.error("Task %s failed during execution: %s", task_id, e)
                 raise
-        
+
         logger.info("Execution graph completed successfully.")
         return results

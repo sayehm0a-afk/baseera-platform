@@ -37,8 +37,8 @@ class PlannerAI:
                 {"task_id": "analyze_market_trends", "description": "تحليل اتجاهات السوق", "payload": {"method": "ML"}}
             ]
         return [{
-            "task_id": "generic_task_1", 
-            "description": f"مهمة عامة لتنفيذ {goal}", 
+            "task_id": "generic_task_1",
+            "description": f"مهمة عامة لتنفيذ {goal}",
             "payload": {"input": goal}
         }]
 
@@ -60,7 +60,7 @@ class PlannerAI:
             node = Node(node_id=task.id, task=task)
             new_dag.add_node(node)
             nodes[node.id] = node
-        
+
         # مثال بسيط لإضافة التبعيات: المهام تنفذ بشكل تسلسلي افتراضيًا
         for i in range(len(decomposed_tasks) - 1):
             from_node_id = decomposed_tasks[i]["task_id"]
@@ -88,7 +88,7 @@ class PlannerAI:
             task = Task(task_id=task_data["task_id"], payload=task_data.get("payload", {}))
             node = Node(node_id=task.id, task=task)
             new_dag.add_node(node)
-        
+
         for task_data in tasks_with_dependencies:
             task_id = task_data["task_id"]
             dependencies = task_data.get("dependencies", [])
@@ -97,7 +97,7 @@ class PlannerAI:
                     new_dag.add_edge(dep_id, task_id)
                 except ValueError as e:
                     logger.warning(f"تحذير: لم يتمكن المخطط من إضافة حافة {dep_id}->{task_id} بسبب: {e}")
-        
+
         self.task_graph_engine = new_dag
         return new_dag
 
@@ -117,7 +117,7 @@ class PlannerAI:
         # مثال بسيط: استخدام الفرز الطوبولوجي لتحديد المستويات
         try:
             sorted_nodes = dag.topological_sort()
-            # هذا لا يمثل بالضرورة مستويات متوازية، بل ترتيبًا صالحًا. 
+            # هذا لا يمثل بالضرورة مستويات متوازية، بل ترتيبًا صالحًا.
             # للتوازي الحقيقي، نحتاج إلى خوارزمية أكثر تعقيدًا.
             # هنا، نفترض أن كل مهمة في القائمة يمكن أن تكون في مستوى خاص بها مؤقتًا.
             return [[node] for node in sorted_nodes]
@@ -162,7 +162,7 @@ class PlannerAI:
             # افتراض أن الشروط تحدد ما إذا كانت المهمة يجب أن تكون جزءًا من الخطة
             if condition_map.get(node_id, True): # إذا لم يكن هناك شرط، يتم تضمينها
                 modified_dag.add_node(Node(node_id, node.task))
-        
+
         for from_node_id in dag.adj:
             for to_node_id in dag.adj[from_node_id]:
                 if from_node_id in modified_dag.nodes and to_node_id in modified_dag.nodes:
@@ -210,7 +210,7 @@ class PlannerAI:
         for node_id, node in current_dag.nodes.items():
             if node_id != failed_task_id:
                 remaining_tasks_data.append({"task_id": node.task.id, "payload": node.task.payload})
-        
+
         # هنا يمكن إضافة منطق لإعادة تفكيك المهام المتأثرة أو إضافة مهام جديدة
         return self.plan_multi_step(remaining_tasks_data)
 

@@ -60,7 +60,7 @@ class SelfOptimizationConfig:
 class SelfOptimization:
     """
     Self-Optimization for autonomous system optimization.
-    
+
     The Self-Optimization is responsible for:
     - Collecting performance metrics
     - Analyzing performance trends
@@ -73,7 +73,7 @@ class SelfOptimization:
     def __init__(self, config: Optional[SelfOptimizationConfig] = None):
         """
         Initialize Self-Optimization.
-        
+
         Args:
             config: SelfOptimizationConfig instance.
                    If None, uses default config.
@@ -92,12 +92,12 @@ class SelfOptimization:
     ) -> Optional[PerformanceMetric]:
         """
         Record a performance metric.
-        
+
         Args:
             metric_id: Unique identifier for the metric
             metric_type: Type of metric
             value: Metric value
-            
+
         Returns:
             PerformanceMetric if recorded successfully, None otherwise
         """
@@ -119,11 +119,11 @@ class SelfOptimization:
     def set_parameter(self, param_name: str, value: Any) -> bool:
         """
         Set a system parameter.
-        
+
         Args:
             param_name: Parameter name
             value: Parameter value
-            
+
         Returns:
             True if set successfully, False otherwise
         """
@@ -138,10 +138,10 @@ class SelfOptimization:
     def get_parameter(self, param_name: str) -> Optional[Any]:
         """
         Get a system parameter.
-        
+
         Args:
             param_name: Parameter name
-            
+
         Returns:
             Parameter value if found, None otherwise
         """
@@ -155,12 +155,12 @@ class SelfOptimization:
     ) -> Optional[OptimizationResult]:
         """
         Optimize system parameters for a metric.
-        
+
         Args:
             optimization_id: Unique identifier for the optimization
             metric_type: Type of metric to optimize
             optimization_func: Function to perform optimization
-            
+
         Returns:
             OptimizationResult if optimization successful, None otherwise
         """
@@ -230,12 +230,12 @@ class SelfOptimization:
     ) -> float:
         """
         Calculate improvement percentage.
-        
+
         Args:
             old_value: Old metric value
             new_value: New metric value
             metric_type: Type of metric
-            
+
         Returns:
             Improvement percentage
         """
@@ -253,10 +253,10 @@ class SelfOptimization:
     def get_metric(self, metric_id: str) -> Optional[PerformanceMetric]:
         """
         Get a performance metric.
-        
+
         Args:
             metric_id: The metric ID
-            
+
         Returns:
             PerformanceMetric if found, None otherwise
         """
@@ -265,10 +265,10 @@ class SelfOptimization:
     def get_optimization(self, optimization_id: str) -> Optional[OptimizationResult]:
         """
         Get an optimization result.
-        
+
         Args:
             optimization_id: The optimization ID
-            
+
         Returns:
             OptimizationResult if found, None otherwise
         """
@@ -277,10 +277,10 @@ class SelfOptimization:
     def get_metrics_by_type(self, metric_type: OptimizationMetric) -> List[PerformanceMetric]:
         """
         Get metrics by type.
-        
+
         Args:
             metric_type: Type of metric
-            
+
         Returns:
             List of metrics of specified type
         """
@@ -289,10 +289,10 @@ class SelfOptimization:
     def get_average_metric(self, metric_type: OptimizationMetric) -> float:
         """
         Get average metric value.
-        
+
         Args:
             metric_type: Type of metric
-            
+
         Returns:
             Average metric value
         """
@@ -305,7 +305,7 @@ class SelfOptimization:
     def get_best_optimization(self) -> Optional[OptimizationResult]:
         """
         Get the best optimization result.
-        
+
         Returns:
             OptimizationResult with highest improvement, or None
         """

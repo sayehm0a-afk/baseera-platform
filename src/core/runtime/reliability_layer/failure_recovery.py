@@ -11,7 +11,7 @@ class IFailureRecovery(ABC):
     """
 
     @abstractmethod
-    async def execute_with_recovery(self, func: Callable[..., Any], fallback_func: Optional[Callable[..., Any]] = None, 
+    async def execute_with_recovery(self, func: Callable[..., Any], fallback_func: Optional[Callable[..., Any]] = None,
                                     compensation_func: Optional[Callable[..., Any]] = None, *args: Any, **kwargs: Any) -> Any:
         """ينفذ دالة مع آليات استعادة الفشل.
 
@@ -40,7 +40,7 @@ class FailureRecovery(IFailureRecovery):
     def __init__(self) -> None:
         logger.info("FailureRecovery instance created.")
 
-    async def execute_with_recovery(self, func: Callable[..., Any], fallback_func: Optional[Callable[..., Any]] = None, 
+    async def execute_with_recovery(self, func: Callable[..., Any], fallback_func: Optional[Callable[..., Any]] = None,
                                     compensation_func: Optional[Callable[..., Any]] = None, *args: Any, **kwargs: Any) -> Any:
         try:
             result = await func(*args, **kwargs)

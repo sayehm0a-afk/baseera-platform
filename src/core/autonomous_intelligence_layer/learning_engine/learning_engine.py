@@ -1,10 +1,3 @@
-"""
-Learning Engine Module
-
-This module implements Learning Engine for autonomous learning and improvement,
-including experience tracking and pattern recognition.
-"""
-
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
@@ -31,7 +24,7 @@ class Experience:
     input_data: Dict[str, Any]
     output_data: Dict[str, Any]
     outcome: str  # "SUCCESS", "FAILURE", "PARTIAL"
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -43,7 +36,7 @@ class LearningPattern:
     pattern_data: Dict[str, Any]
     confidence: float  # 0.0 to 1.0
     occurrences: int
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -54,7 +47,7 @@ class LearningResult:
     learning_type: LearningType
     patterns_discovered: List[str]
     improvement_metrics: Dict[str, float]
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -70,7 +63,7 @@ class LearningEngineConfig:
 class LearningEngine:
     """
     Learning Engine for autonomous learning and improvement.
-    
+
     The Learning Engine is responsible for:
     - Recording experiences
     - Discovering patterns
@@ -83,7 +76,7 @@ class LearningEngine:
     def __init__(self, config: Optional[LearningEngineConfig] = None):
         """
         Initialize Learning Engine.
-        
+
         Args:
             config: LearningEngineConfig instance.
                    If None, uses default config.
@@ -104,14 +97,14 @@ class LearningEngine:
     ) -> Optional[Experience]:
         """
         Record a learning experience.
-        
+
         Args:
             experience_id: Unique identifier for the experience
             experience_type: Type of experience
             input_data: Input data for the experience
             output_data: Output data from the experience
             outcome: Outcome of the experience
-            
+
         Returns:
             Experience if recorded successfully, None otherwise
         """
@@ -141,13 +134,13 @@ class LearningEngine:
     ) -> Optional[LearningPattern]:
         """
         Discover and record a pattern.
-        
+
         Args:
             pattern_id: Unique identifier for the pattern
             pattern_type: Type of pattern
             pattern_data: Pattern data
             confidence: Confidence level (0.0 to 1.0)
-            
+
         Returns:
             LearningPattern if discovered successfully, None otherwise
         """
@@ -178,11 +171,11 @@ class LearningEngine:
     ) -> Optional[LearningResult]:
         """
         Learn from recorded experiences.
-        
+
         Args:
             learning_id: Unique identifier for the learning
             learning_type: Type of learning
-            
+
         Returns:
             LearningResult if learning successful, None otherwise
         """
@@ -235,10 +228,10 @@ class LearningEngine:
     def get_experience(self, experience_id: str) -> Optional[Experience]:
         """
         Get an experience.
-        
+
         Args:
             experience_id: The experience ID
-            
+
         Returns:
             Experience if found, None otherwise
         """
@@ -247,10 +240,10 @@ class LearningEngine:
     def get_pattern(self, pattern_id: str) -> Optional[LearningPattern]:
         """
         Get a pattern.
-        
+
         Args:
             pattern_id: The pattern ID
-            
+
         Returns:
             LearningPattern if found, None otherwise
         """
@@ -259,10 +252,10 @@ class LearningEngine:
     def get_learning_result(self, learning_id: str) -> Optional[LearningResult]:
         """
         Get a learning result.
-        
+
         Args:
             learning_id: The learning ID
-            
+
         Returns:
             LearningResult if found, None otherwise
         """
@@ -271,7 +264,7 @@ class LearningEngine:
     def get_experience_history(self) -> List[Experience]:
         """
         Get experience history.
-        
+
         Returns:
             List of experiences
         """
@@ -280,7 +273,7 @@ class LearningEngine:
     def get_successful_experiences(self) -> List[Experience]:
         """
         Get successful experiences.
-        
+
         Returns:
             List of successful experiences
         """
@@ -289,7 +282,7 @@ class LearningEngine:
     def get_failed_experiences(self) -> List[Experience]:
         """
         Get failed experiences.
-        
+
         Returns:
             List of failed experiences
         """
@@ -298,7 +291,7 @@ class LearningEngine:
     def get_high_confidence_patterns(self) -> List[LearningPattern]:
         """
         Get high confidence patterns.
-        
+
         Returns:
             List of patterns with high confidence
         """
@@ -310,7 +303,7 @@ class LearningEngine:
     def get_success_rate(self) -> float:
         """
         Get overall success rate.
-        
+
         Returns:
             Success rate (0.0 to 1.0)
         """
@@ -323,7 +316,7 @@ class LearningEngine:
     def recommend_strategy(self) -> Optional[Dict[str, Any]]:
         """
         Recommend a strategy based on learning.
-        
+
         Returns:
             Recommended strategy, or None if no recommendation
         """

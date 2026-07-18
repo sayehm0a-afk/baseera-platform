@@ -78,7 +78,7 @@ class VotingConfig:
 class VotingSystem:
     """
     Voting System for agent decision-making.
-    
+
     The Voting System is responsible for:
     - Creating proposals
     - Recording votes
@@ -91,7 +91,7 @@ class VotingSystem:
     def __init__(self, config: Optional[VotingConfig] = None):
         """
         Initialize the Voting System.
-        
+
         Args:
             config: VotingConfig instance for configuring voting behavior.
                    If None, uses default config.
@@ -113,7 +113,7 @@ class VotingSystem:
     ) -> Optional[Proposal]:
         """
         Create a new proposal.
-        
+
         Args:
             proposal_id: Unique identifier for the proposal
             title: Title of the proposal
@@ -123,7 +123,7 @@ class VotingSystem:
             voting_mechanism: Optional voting mechanism (uses default if not provided)
             required_majority: Optional required majority (uses default if not provided)
             deadline: Optional voting deadline
-            
+
         Returns:
             Proposal if created successfully, None otherwise
         """
@@ -158,7 +158,7 @@ class VotingSystem:
     ) -> Optional[Vote]:
         """
         Cast a vote on a proposal.
-        
+
         Args:
             vote_id: Unique identifier for the vote
             voter_id: ID of the voter
@@ -166,7 +166,7 @@ class VotingSystem:
             vote_type: Type of vote
             confidence: Confidence level (0.0 to 1.0)
             reasoning: Optional reasoning for the vote
-            
+
         Returns:
             Vote if cast successfully, None otherwise
         """
@@ -207,10 +207,10 @@ class VotingSystem:
     def close_proposal(self, proposal_id: str) -> bool:
         """
         Close a proposal and determine the result.
-        
+
         Args:
             proposal_id: The proposal ID
-            
+
         Returns:
             True if proposal closed successfully, False otherwise
         """
@@ -234,10 +234,10 @@ class VotingSystem:
     def get_vote_count(self, proposal_id: str) -> Dict[str, int]:
         """
         Get vote counts for a proposal.
-        
+
         Args:
             proposal_id: The proposal ID
-            
+
         Returns:
             Dictionary with vote type counts
         """
@@ -262,10 +262,10 @@ class VotingSystem:
     def get_vote_percentage(self, proposal_id: str) -> Dict[str, float]:
         """
         Get vote percentages for a proposal.
-        
+
         Args:
             proposal_id: The proposal ID
-            
+
         Returns:
             Dictionary with vote type percentages
         """
@@ -290,10 +290,10 @@ class VotingSystem:
     def get_weighted_votes(self, proposal_id: str) -> Dict[str, float]:
         """
         Get weighted vote counts (by confidence).
-        
+
         Args:
             proposal_id: The proposal ID
-            
+
         Returns:
             Dictionary with weighted vote counts
         """
@@ -317,10 +317,10 @@ class VotingSystem:
     def analyze_voting(self, proposal_id: str) -> Dict[str, Any]:
         """
         Analyze voting results for a proposal.
-        
+
         Args:
             proposal_id: The proposal ID
-            
+
         Returns:
             Dictionary containing voting analysis
         """
@@ -355,10 +355,10 @@ class VotingSystem:
     def _determine_result(self, proposal: Proposal) -> str:
         """
         Determine the result of a proposal based on votes.
-        
+
         Args:
             proposal: The proposal to evaluate
-            
+
         Returns:
             Result string (e.g., "APPROVED", "REJECTED", "INCONCLUSIVE")
         """
@@ -414,10 +414,10 @@ class VotingSystem:
     def get_proposal(self, proposal_id: str) -> Optional[Proposal]:
         """
         Get a proposal.
-        
+
         Args:
             proposal_id: The proposal ID
-            
+
         Returns:
             Proposal if found, None otherwise
         """
@@ -426,7 +426,7 @@ class VotingSystem:
     def get_voting_history(self) -> List[Proposal]:
         """
         Get voting history.
-        
+
         Returns:
             List of closed proposals
         """

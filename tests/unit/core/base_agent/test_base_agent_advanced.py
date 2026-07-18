@@ -3,7 +3,7 @@ import logging
 import threading
 import asyncio
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 from core.base_agent.base_agent import BaseAgent
 
 # Mock logging to prevent console output during tests
@@ -50,7 +50,7 @@ async def test_base_agent_activate_from_terminated():
 @pytest.mark.asyncio
 async def test_base_agent_process_task_when_paused():
     agent = BaseAgent()
-    agent.activate()
+    await agent.activate()
     agent.pause()
     with pytest.raises(RuntimeError, match="Agent not active"):
         agent.process_task({"task_id": "1"})
@@ -58,6 +58,10 @@ async def test_base_agent_process_task_when_paused():
 @pytest.mark.asyncio
 async def test_base_agent_call_tool_none_name():
     agent = BaseAgent()
+    agent.tool_registry = AsyncMock() # Mock ToolRegistry
+    mock_tool = MagicMock()
+    mock_tool.execute = AsyncMock()
+    agent.tool_registry.get_tool.return_value = mock_tool # Mock a tool
     with pytest.raises(ValueError):
         await agent._call_tool(None)
 
@@ -121,9 +125,10 @@ async def test_base_agent_rapid_status_cycling():
         agent.pause()
     assert agent.status == "paused"
 
-def test_base_agent_memory_stress():
+@pytest.mark.asyncio
+async def test_base_agent_memory_stress():
     agent = BaseAgent()
-    agent.activate()
+    await agent.activate()
     # Adding 10,000 items to short term memory
     for i in range(10000):
         agent.memory['short_term'].append(f"item_{i}")

@@ -1,14 +1,16 @@
 import logging
 import heapq
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Tuple
 
 logger = logging.getLogger(__name__)
+
 
 class IPriorityQueue(ABC):
     """واجهة مجردة لقائمة الانتظار ذات الأولوية (Priority Queue).
 
-    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لقائمة الانتظار ذات الأولوية.
+    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لقائمة
+    الانتظار ذات الأولوية.
     """
 
     @abstractmethod
@@ -17,7 +19,8 @@ class IPriorityQueue(ABC):
 
         Args:
             item (Any): العنصر المراد إضافته.
-            priority (int): أولوية العنصر (افتراضي 0، حيث الأرقام الأعلى تعني أولوية أعلى).
+            priority (int): أولوية العنصر (افتراضي 0، حيث الأرقام الأعلى
+                تعني أولوية أعلى).
         """
         raise NotImplementedError
 
@@ -59,12 +62,14 @@ class PriorityQueue(IPriorityQueue):
     """
 
     def __init__(self) -> None:
-        self._queue: List[Tuple[int, int, Any]] = []  # (priority, entry_id, item)
+        self._queue: List[Tuple[int, int, Any]] = []  # (priority, entry_id,
+        # item)
         self._entry_id = 0
         logger.info("PriorityQueue instance created.")
 
     async def put(self, item: Any, priority: int = 0) -> None:
-        # heapq هو min-heap، لذا نستخدم أولوية سالبة لتمثيل الأولوية الأعلى كقيمة أصغر.
+        # heapq هو min-heap، لذا نستخدم أولوية سالبة لتمثيل الأولوية الأعلى
+        # كقيمة أصغر.
         # entry_id يستخدم لكسر التعادل بين العناصر ذات الأولوية المتساوية.
         heapq.heappush(self._queue, (-priority, self._entry_id, item))
         self._entry_id += 1

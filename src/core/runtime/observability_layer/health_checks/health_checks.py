@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, List
 import asyncio
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 class HealthStatus:
     HEALTHY = "Healthy"
@@ -59,6 +62,8 @@ class HealthCheckManager(IHealthCheckManager):
 
     async def register_check(self, name: str, check: IHealthCheck):
         self._checks[name] = check
+        logger.info(f"Health check \'{name}\' registered.")
+
 
 
     async def run_all_checks(self) -> Dict[str, HealthCheckResult]:

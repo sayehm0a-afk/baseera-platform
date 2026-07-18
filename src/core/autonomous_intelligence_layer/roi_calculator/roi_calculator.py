@@ -71,7 +71,7 @@ class ROICalculatorConfig:
 class ROICalculator:
     """
     ROI Calculator for investment analysis.
-    
+
     The ROI Calculator is responsible for:
     - Recording investments
     - Recording returns on investments
@@ -83,7 +83,7 @@ class ROICalculator:
     def __init__(self, config: Optional[ROICalculatorConfig] = None):
         """
         Initialize ROI Calculator.
-        
+
         Args:
             config: ROICalculatorConfig instance.
                    If None, uses default config.
@@ -102,13 +102,13 @@ class ROICalculator:
     ) -> Optional[Investment]:
         """
         Record an investment.
-        
+
         Args:
             investment_id: Unique identifier for the investment
             investment_type: Type of investment
             initial_cost: Initial cost of investment
             description: Investment description
-            
+
         Returns:
             Investment if recorded successfully, None otherwise
         """
@@ -136,13 +136,13 @@ class ROICalculator:
     ) -> Optional[Return]:
         """
         Record a return on investment.
-        
+
         Args:
             return_id: Unique identifier for the return
             investment_id: ID of the investment
             amount: Return amount
             description: Return description
-            
+
         Returns:
             Return if recorded successfully, None otherwise
         """
@@ -164,11 +164,11 @@ class ROICalculator:
     def calculate_roi(self, analysis_id: str, investment_id: str) -> Optional[ROIAnalysis]:
         """
         Calculate ROI for an investment.
-        
+
         Args:
             analysis_id: Unique identifier for the analysis
             investment_id: ID of the investment
-            
+
         Returns:
             ROIAnalysis if calculation successful, None otherwise
         """
@@ -226,10 +226,10 @@ class ROICalculator:
     def get_investment(self, investment_id: str) -> Optional[Investment]:
         """
         Get an investment.
-        
+
         Args:
             investment_id: The investment ID
-            
+
         Returns:
             Investment if found, None otherwise
         """
@@ -238,10 +238,10 @@ class ROICalculator:
     def get_return(self, return_id: str) -> Optional[Return]:
         """
         Get a return.
-        
+
         Args:
             return_id: The return ID
-            
+
         Returns:
             Return if found, None otherwise
         """
@@ -250,10 +250,10 @@ class ROICalculator:
     def get_analysis(self, analysis_id: str) -> Optional[ROIAnalysis]:
         """
         Get an ROI analysis.
-        
+
         Args:
             analysis_id: The analysis ID
-            
+
         Returns:
             ROIAnalysis if found, None otherwise
         """
@@ -262,10 +262,10 @@ class ROICalculator:
     def get_investment_returns(self, investment_id: str) -> List[Return]:
         """
         Get all returns for an investment.
-        
+
         Args:
             investment_id: The investment ID
-            
+
         Returns:
             List of returns for the investment
         """
@@ -277,10 +277,10 @@ class ROICalculator:
     ) -> Dict[str, Dict[str, Any]]:
         """
         Compare multiple investments.
-        
+
         Args:
             investment_ids: List of investment IDs to compare
-            
+
         Returns:
             Dictionary with comparison results
         """
@@ -312,7 +312,7 @@ class ROICalculator:
     def get_best_roi_investment(self) -> Optional[str]:
         """
         Get the investment with the best ROI.
-        
+
         Returns:
             Investment ID with best ROI, or None if no investments
         """

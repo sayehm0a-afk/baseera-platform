@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
+
 class IWorkflowStateMachine(ABC):
     """واجهة مجردة لـ Workflow State Machine.
 
@@ -16,7 +17,7 @@ class IWorkflowStateMachine(ABC):
     """
 
     @abstractmethod
-    async def get_current_state(self, workflow_id: str) -> str:
+    async def get_current_state(self, workflow_id: str) -> str:  # noqa: E501
         """الحصول على الحالة الحالية لتدفق عمل معين.
 
         Args:
@@ -28,7 +29,7 @@ class IWorkflowStateMachine(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def transition_state(self, workflow_id: str, new_state: str, \
+    async def transition_state(self, workflow_id: str, new_state: str,  # noqa: E501
                                context: Dict[str, Any] | None = None) -> None:
         """الانتقال بحالة تدفق عمل معين إلى حالة جديدة.
 
@@ -50,12 +51,12 @@ class WorkflowStateMachine(IWorkflowStateMachine):
         self._workflow_states: Dict[str, str] = {}
         logger.info("WorkflowStateMachine instance created.")
 
-    async def get_current_state(self, workflow_id: str) -> str:
+    async def get_current_state(self, workflow_id: str) -> str:  # noqa: E501
         return self._workflow_states.get(workflow_id, "UNKNOWN")
 
-    async def transition_state(self, workflow_id: str, new_state: str, \
+    async def transition_state(self, workflow_id: str, new_state: str,  # noqa: E501
                                context: Dict[str, Any] | None = None) -> None:
         old_state = self._workflow_states.get(workflow_id, "NONE")
         self._workflow_states[workflow_id] = new_state
-        logger.info("Workflow \"%s\" transitioned from %s to %s. Context: %s",
+        logger.info("Workflow \"%s\" transitioned from %s to %s. Context: %s",  # noqa: E501
                     workflow_id, old_state, new_state, context)

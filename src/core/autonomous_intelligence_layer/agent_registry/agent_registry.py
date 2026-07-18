@@ -85,7 +85,7 @@ class AgentRegistry:
                     if not agent.has_capability(cap):
                         matches_capabilities = False
                         break
-            
+
             matches_status = True
             if status and agent.status != status:
                 matches_status = False

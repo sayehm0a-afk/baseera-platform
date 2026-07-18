@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict
 import logging
 import sys
-import sys
 
 class ILoggingManager(ABC):
     @abstractmethod
@@ -57,7 +56,7 @@ class LoggingManager(ILoggingManager):
             formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
             console_handler.setFormatter(formatter)
             effective_handlers = [console_handler]
-        
+
         # Add effective handlers to the root logger
         for handler in effective_handlers:
             root_logger.addHandler(handler)

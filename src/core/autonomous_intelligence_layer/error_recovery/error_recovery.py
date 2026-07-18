@@ -69,7 +69,7 @@ class ErrorRecoveryConfig:
 class ErrorRecovery:
     """
     Error Recovery for autonomous error handling and recovery.
-    
+
     The Error Recovery is responsible for:
     - Recording errors
     - Implementing retry strategies
@@ -82,7 +82,7 @@ class ErrorRecovery:
     def __init__(self, config: Optional[ErrorRecoveryConfig] = None):
         """
         Initialize Error Recovery.
-        
+
         Args:
             config: ErrorRecoveryConfig instance.
                    If None, uses default config.
@@ -103,14 +103,14 @@ class ErrorRecovery:
     ) -> Optional[ErrorRecord]:
         """
         Record an error.
-        
+
         Args:
             error_id: Unique identifier for the error
             error_type: Type of error
             message: Error message
             severity: Error severity level
             context: Optional error context
-            
+
         Returns:
             ErrorRecord if recorded successfully, None otherwise
         """
@@ -139,12 +139,12 @@ class ErrorRecovery:
     ) -> Optional[RecoveryAction]:
         """
         Create a recovery action for an error.
-        
+
         Args:
             action_id: Unique identifier for the action
             error_id: ID of the error
             action_type: Type of recovery action
-            
+
         Returns:
             RecoveryAction if created successfully, None otherwise
         """
@@ -171,12 +171,12 @@ class ErrorRecovery:
     ) -> Tuple[bool, Optional[Any]]:
         """
         Execute a recovery action with retry strategy.
-        
+
         Args:
             action_id: The recovery action ID
             recovery_func: Function to execute for recovery
             strategy: Optional retry strategy (uses default if not provided)
-            
+
         Returns:
             Tuple of (success, result)
         """
@@ -215,11 +215,11 @@ class ErrorRecovery:
     def _calculate_retry_delay(self, attempt: int, strategy: RetryStrategy) -> int:
         """
         Calculate retry delay based on strategy.
-        
+
         Args:
             attempt: Current attempt number (0-indexed)
             strategy: Retry strategy
-            
+
         Returns:
             Delay in seconds
         """
@@ -250,11 +250,11 @@ class ErrorRecovery:
     ) -> bool:
         """
         Register a fallback handler for an error type.
-        
+
         Args:
             error_type: Type of error
             handler: Fallback handler function
-            
+
         Returns:
             True if registered successfully, False otherwise
         """
@@ -265,10 +265,10 @@ class ErrorRecovery:
     def execute_fallback(self, error_type: str) -> Optional[Any]:
         """
         Execute fallback handler for an error type.
-        
+
         Args:
             error_type: Type of error
-            
+
         Returns:
             Result of fallback handler, or None if not found
         """
@@ -288,10 +288,10 @@ class ErrorRecovery:
     def get_error(self, error_id: str) -> Optional[ErrorRecord]:
         """
         Get an error record.
-        
+
         Args:
             error_id: The error ID
-            
+
         Returns:
             ErrorRecord if found, None otherwise
         """
@@ -300,10 +300,10 @@ class ErrorRecovery:
     def get_recovery_action(self, action_id: str) -> Optional[RecoveryAction]:
         """
         Get a recovery action.
-        
+
         Args:
             action_id: The action ID
-            
+
         Returns:
             RecoveryAction if found, None otherwise
         """
@@ -312,7 +312,7 @@ class ErrorRecovery:
     def get_error_history(self) -> List[ErrorRecord]:
         """
         Get error history.
-        
+
         Returns:
             List of error records
         """
@@ -321,10 +321,10 @@ class ErrorRecovery:
     def get_errors_by_severity(self, severity: ErrorSeverity) -> List[ErrorRecord]:
         """
         Get errors by severity level.
-        
+
         Args:
             severity: Error severity level
-            
+
         Returns:
             List of errors with specified severity
         """
@@ -333,10 +333,10 @@ class ErrorRecovery:
     def get_recent_errors(self, minutes: int = 60) -> List[ErrorRecord]:
         """
         Get recent errors.
-        
+
         Args:
             minutes: Number of minutes to look back
-            
+
         Returns:
             List of recent errors
         """

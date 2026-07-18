@@ -23,14 +23,14 @@ async def test_get_logger(logging_manager: ILoggingManager):
     assert logger is another_logger
 
 @pytest.mark.asyncio
-async def test_configure_logging_default(logging_manager: ILoggingManager, capsys):
+async def test_configure_logging_default(logging_manager: ILoggingManager, caplog):
     # LoggingManager is initialized with default logging, so we just need to check it
     logger = logging_manager.get_logger("default_test")
-    logger.info("This is a test message")
+    with caplog.at_level(logging.INFO):
+        logger.info("This is a test message")
 
-    captured = capsys.readouterr()
-    assert "This is a test message" in captured.out
-    assert "INFO" in captured.out
+    assert "This is a test message" in caplog.text
+    assert "INFO" in caplog.text
 
 @pytest.mark.asyncio
 async def test_configure_logging_custom_level(logging_manager: ILoggingManager, capsys):

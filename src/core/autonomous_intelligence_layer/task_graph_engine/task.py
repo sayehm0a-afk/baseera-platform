@@ -8,9 +8,9 @@ class Task:
     """
 
     def __init__(
-        self, 
-        task_id: str, 
-        payload: Dict[str, Any], 
+        self,
+        task_id: str,
+        payload: Dict[str, Any],
         agent_id: Optional[str] = None,
         status: str = "PENDING"
     ):

@@ -67,7 +67,7 @@ class MemoryStoreConfig:
 class MemoryStore:
     """
     Memory Store for managing different types of memory.
-    
+
     The Memory Store is responsible for:
     - Storing information in appropriate memory types
     - Retrieving information based on queries
@@ -80,7 +80,7 @@ class MemoryStore:
     def __init__(self, config: Optional[MemoryStoreConfig] = None):
         """
         Initialize the Memory Store.
-        
+
         Args:
             config: MemoryStoreConfig instance for configuring memory behavior.
                    If None, uses default config.
@@ -102,7 +102,7 @@ class MemoryStore:
     ) -> MemoryEntry:
         """
         Store information in memory.
-        
+
         Args:
             content: The content to store
             memory_type: The type of memory to store in
@@ -110,12 +110,12 @@ class MemoryStore:
             confidence: Confidence level (0.0 to 1.0)
             tags: Optional tags for categorization
             metadata: Optional additional metadata
-            
+
         Returns:
             MemoryEntry representing the stored information
         """
         memory_id = f"{memory_type.value}_{datetime.now(UTC).timestamp()}"
-        
+
         # Create memory entry
         entry = MemoryEntry(
             memory_id=memory_id,
@@ -151,16 +151,16 @@ class MemoryStore:
     ) -> List[MemoryEntry]:
         """
         Retrieve memory entries of a specific type.
-        
+
         Args:
             memory_type: The type of memory to retrieve
             limit: Maximum number of entries to retrieve
-            
+
         Returns:
             List of MemoryEntry objects
         """
         entries = self.memory[memory_type]
-        
+
         # Filter out archived and expired entries
         active_entries = [
             e for e in entries
@@ -189,12 +189,12 @@ class MemoryStore:
     ) -> List[MemoryEntry]:
         """
         Search for memory entries matching a query.
-        
+
         Args:
             query: Search query
             memory_types: Optional list of memory types to search in
             limit: Maximum number of results
-            
+
         Returns:
             List of matching MemoryEntry objects
         """
@@ -232,11 +232,11 @@ class MemoryStore:
     ) -> List[MemoryEntry]:
         """
         Rank memory entries based on criteria.
-        
+
         Args:
             entries: List of memory entries to rank
             criteria: Optional ranking criteria (confidence, recency, access_count)
-            
+
         Returns:
             Ranked list of MemoryEntry objects
         """
@@ -249,20 +249,20 @@ class MemoryStore:
 
         def calculate_score(entry: MemoryEntry) -> float:
             score = 0.0
-            
+
             if "confidence" in criteria:
                 score += entry.confidence * criteria["confidence"]
-            
+
             if "recency" in criteria:
                 age_days = (datetime.now(UTC) - entry.timestamp).days
                 recency_score = max(0.0, 1.0 - (age_days / 365.0))
                 score += recency_score * criteria["recency"]
-            
+
             if "access_count" in criteria:
                 # Normalize access count (assuming max 1000 accesses)
                 access_score = min(1.0, entry.access_count / 1000.0)
                 score += access_score * criteria["access_count"]
-            
+
             return score
 
         ranked_entries = sorted(
@@ -279,11 +279,11 @@ class MemoryStore:
     ) -> str:
         """
         Summarize a list of memory entries.
-        
+
         Args:
             entries: List of memory entries to summarize
             max_summary_length: Maximum length of the summary
-            
+
         Returns:
             Summary string
         """
@@ -310,12 +310,12 @@ class MemoryStore:
     def consolidate(self, memory_type: MemoryType) -> None:
         """
         Consolidate memory entries (remove duplicates, merge similar entries).
-        
+
         Args:
             memory_type: The type of memory to consolidate
         """
         entries = self.memory[memory_type]
-        
+
         # Remove duplicates
         unique_entries = []
         seen_content = set()
@@ -332,7 +332,7 @@ class MemoryStore:
         """Expire and archive old memory entries."""
         for memory_type in MemoryType:
             entries = self.memory[memory_type]
-            
+
             for entry in entries:
                 if self._is_expired(entry) and not entry.is_archived:
                     if self.config.enable_archival:
@@ -348,7 +348,7 @@ class MemoryStore:
     def get_memory_stats(self) -> Dict[str, Any]:
         """
         Get statistics about memory usage.
-        
+
         Returns:
             Dictionary containing memory statistics
         """
@@ -374,7 +374,7 @@ class MemoryStore:
     def _calculate_expiration_time(self, memory_type: MemoryType) -> Optional[datetime]:
         """Calculate expiration time based on memory type."""
         now = datetime.now(UTC)
-        
+
         if memory_type == MemoryType.WORKING:
             return None  # Working memory doesn't expire
         elif memory_type == MemoryType.SHORT_TERM:
@@ -387,7 +387,7 @@ class MemoryStore:
             return now + timedelta(days=self.config.procedural_memory_ttl_days)
         elif memory_type == MemoryType.LONG_TERM:
             return now + timedelta(days=self.config.long_term_memory_ttl_days)
-        
+
         return None
 
     def _is_expired(self, entry: MemoryEntry) -> bool:
@@ -419,9 +419,9 @@ class MemoryStore:
             # Remove oldest entries
             entries.sort(key=lambda e: e.timestamp)
             to_remove = len(entries) - max_entries[memory_type]
-            
+
             for entry in entries[:to_remove]:
                 if entry.memory_id in self.memory_index:
                     del self.memory_index[entry.memory_id]
-            
+
             self.memory[memory_type] = entries[to_remove:]

@@ -58,7 +58,7 @@ class ReflectionPolicy:
 class ReflectionEngine:
     """
     Reflection Engine for evaluating and improving agent outputs.
-    
+
     The Reflection Engine is responsible for:
     - Reviewing agent outputs and plans
     - Comparing results against objectives and acceptance criteria
@@ -72,7 +72,7 @@ class ReflectionEngine:
     def __init__(self, policy: Optional[ReflectionPolicy] = None):
         """
         Initialize the Reflection Engine.
-        
+
         Args:
             policy: ReflectionPolicy instance for configuring reflection behavior.
                    If None, uses default policy.
@@ -91,25 +91,25 @@ class ReflectionEngine:
     ) -> ReflectionResult:
         """
         Evaluate an agent's output against objectives and acceptance criteria.
-        
+
         Args:
             task_id: Unique identifier for the task being evaluated
             agent_output: The output produced by the agent
             objective: The high-level objective the agent was trying to achieve
             acceptance_criteria: List of criteria that the output should meet
             context: Additional context for the evaluation
-            
+
         Returns:
             ReflectionResult containing the evaluation results
         """
         reflection_id = f"reflection_{task_id}_{datetime.now(UTC).timestamp()}"
-        
+
         # Check for infinite reflection loops
         iteration_count = self.reflection_iteration_count.get(task_id, 0)
         if iteration_count >= self.policy.max_reflection_iterations:
             logger.warning(
                 f"Maximum reflection iterations reached for task {task_id}. "
-                f"Stopping reflection to prevent infinite loops."
+                "Stopping reflection to prevent infinite loops."
             )
             return self._create_default_reflection_result(reflection_id, task_id)
 
@@ -185,11 +185,11 @@ class ReflectionEngine:
     ) -> List[str]:
         """
         Detect contradictions in the agent output.
-        
+
         Args:
             agent_output: The output to analyze
             context: Additional context
-            
+
         Returns:
             List of detected contradictions
         """
@@ -207,11 +207,11 @@ class ReflectionEngine:
     ) -> List[str]:
         """
         Detect hallucinations in the agent output.
-        
+
         Args:
             agent_output: The output to analyze
             context: Additional context
-            
+
         Returns:
             List of detected hallucinations
         """
@@ -232,11 +232,11 @@ class ReflectionEngine:
     ) -> List[str]:
         """
         Validate evidence in the agent output.
-        
+
         Args:
             agent_output: The output to analyze
             context: Additional context
-            
+
         Returns:
             List of missing or weak evidence
         """
@@ -255,12 +255,12 @@ class ReflectionEngine:
     ) -> List[str]:
         """
         Validate reasoning in the agent output.
-        
+
         Args:
             agent_output: The output to analyze
             objective: The objective the agent was trying to achieve
             context: Additional context
-            
+
         Returns:
             List of weak reasoning issues
         """
@@ -280,13 +280,13 @@ class ReflectionEngine:
     ) -> float:
         """
         Calculate the overall reflection score.
-        
+
         Args:
             contradictions: List of detected contradictions
             hallucinations: List of detected hallucinations
             missing_evidence: List of missing evidence
             weak_reasoning: List of weak reasoning issues
-            
+
         Returns:
             Reflection score between 0.0 and 1.0
         """
@@ -310,10 +310,10 @@ class ReflectionEngine:
     def _determine_score_level(self, score: float) -> ReflectionScoreLevel:
         """
         Determine the score level based on the score value.
-        
+
         Args:
             score: The reflection score
-            
+
         Returns:
             ReflectionScoreLevel
         """
@@ -335,13 +335,13 @@ class ReflectionEngine:
     ) -> List[str]:
         """
         Generate recommendations for improvement.
-        
+
         Args:
             contradictions: List of detected contradictions
             hallucinations: List of detected hallucinations
             missing_evidence: List of missing evidence
             weak_reasoning: List of weak reasoning issues
-            
+
         Returns:
             List of recommendations
         """
@@ -371,11 +371,11 @@ class ReflectionEngine:
     ) -> ReflectionResult:
         """
         Create a default reflection result when max iterations are reached.
-        
+
         Args:
             reflection_id: Unique identifier for the reflection
             task_id: Unique identifier for the task
-            
+
         Returns:
             ReflectionResult with default values
         """
@@ -394,10 +394,10 @@ class ReflectionEngine:
     def get_reflection_history(self, task_id: Optional[str] = None) -> List[ReflectionResult]:
         """
         Retrieve reflection history.
-        
+
         Args:
             task_id: Optional task ID to filter results
-            
+
         Returns:
             List of ReflectionResult objects
         """
@@ -408,7 +408,7 @@ class ReflectionEngine:
     def reset_reflection_count(self, task_id: str) -> None:
         """
         Reset the reflection iteration count for a task.
-        
+
         Args:
             task_id: The task ID to reset
         """

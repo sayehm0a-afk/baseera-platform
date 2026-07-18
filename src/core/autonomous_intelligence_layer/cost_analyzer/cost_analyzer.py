@@ -28,7 +28,7 @@ class CostCategory(Enum):
     OTHER = "other"
 
 
-@dataclass
+@dataclass(kw_only=True)
 class CostItem(BaseTransaction):
     """Represents a cost item."""
     cost_id: str
@@ -57,7 +57,7 @@ class CostOptimizerConfig:
 class CostAnalyzer:
     """
     Cost Analyzer for operational cost analysis and optimization.
-    
+
     The Cost Analyzer is responsible for:
     - Recording cost items
     - Analyzing costs by category
@@ -69,7 +69,7 @@ class CostAnalyzer:
     def __init__(self, config: Optional[CostOptimizerConfig] = None):
         """
         Initialize Cost Analyzer.
-        
+
         Args:
             config: CostOptimizerConfig instance.
                    If None, uses default config.
@@ -87,13 +87,13 @@ class CostAnalyzer:
     ) -> Optional[CostItem]:
         """
         Record a cost item.
-        
+
         Args:
             cost_id: Unique identifier for the cost
             category: Cost category
             amount: Cost amount
             description: Cost description
-            
+
         Returns:
             CostItem if recorded successfully, None otherwise
         """
@@ -115,10 +115,10 @@ class CostAnalyzer:
     def analyze_costs(self, analysis_id: str) -> CostAnalysis:
         """
         Analyze recorded costs.
-        
+
         Args:
             analysis_id: Unique identifier for the analysis
-            
+
         Returns:
             CostAnalysis instance
         """
@@ -156,7 +156,7 @@ class CostAnalyzer:
     def _analyze_trends(self) -> Dict[str, float]:
         """
         Analyze cost trends.
-        
+
         Returns:
             Dictionary of cost trends
         """
@@ -189,10 +189,10 @@ class CostAnalyzer:
     ) -> List[str]:
         """
         Generate optimization suggestions.
-        
+
         Args:
             cost_by_category: Cost breakdown by category
-            
+
         Returns:
             List of optimization suggestions
         """
@@ -224,7 +224,7 @@ class CostAnalyzer:
     def get_cost_by_category(self) -> Dict[CostCategory, float]:
         """
         Get cost breakdown by category.
-        
+
         Returns:
             Dictionary of costs by category
         """
@@ -243,7 +243,7 @@ class CostAnalyzer:
     def get_total_cost(self) -> float:
         """
         Get total cost.
-        
+
         Returns:
             Total cost amount
         """
@@ -252,10 +252,10 @@ class CostAnalyzer:
     def get_cost_item(self, cost_id: str) -> Optional[CostItem]:
         """
         Get a cost item.
-        
+
         Args:
             cost_id: The cost ID
-            
+
         Returns:
             CostItem if found, None otherwise
         """
@@ -264,10 +264,10 @@ class CostAnalyzer:
     def get_analysis(self, analysis_id: str) -> Optional[CostAnalysis]:
         """
         Get a cost analysis.
-        
+
         Args:
             analysis_id: The analysis ID
-            
+
         Returns:
             CostAnalysis if found, None otherwise
         """

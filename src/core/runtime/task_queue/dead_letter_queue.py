@@ -1,18 +1,22 @@
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
-from datetime import datetime
+from datetime import datetime, UTC
 
 logger = logging.getLogger(__name__)
+
 
 class IDeadLetterQueue(ABC):
     """واجهة مجردة لقائمة انتظار الرسائل الميتة (Dead Letter Queue).
 
-    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لقائمة انتظار الرسائل الميتة.
+    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لقائمة
+    انتظار الرسائل الميتة.
     """
 
     @abstractmethod
-    async def enqueue(self, task_id: str, task_payload: Dict[str, Any], error: str) -> None:
+    async def enqueue(
+        self, task_id: str, task_payload: Dict[str, Any], error: str
+    ) -> None:
         """يضيف مهمة فاشلة إلى قائمة انتظار الرسائل الميتة.
 
         Args:
@@ -66,15 +70,16 @@ class DeadLetterQueue(IDeadLetterQueue):
         self._dlq: Dict[str, Dict[str, Any]] = {}
         logger.info("DeadLetterQueue instance created.")
 
-    async def enqueue(self, task_id: str, task_payload: Dict[str, Any], error: str) -> None:
+    async def enqueue(
+        self, task_id: str, task_payload: Dict[str, Any], error: str
+    ) -> None:
         if task_id in self._dlq:
             logger.warning("Task %s already in DLQ. Overwriting.", task_id)
-        
         self._dlq[task_id] = {
             "task_id": task_id,
             "task_payload": task_payload,
             "error": error,
-            "timestamp": datetime.now(datetime.UTC)
+            "timestamp": datetime.now(UTC)
         }
         logger.info("Task %s enqueued to DLQ due to error: %s", task_id, error)
 
@@ -87,7 +92,6 @@ class DeadLetterQueue(IDeadLetterQueue):
                 task_ids_to_remove.append(task_id)
             else:
                 break
-        
         for task_id in task_ids_to_remove:
             del self._dlq[task_id]
 
@@ -99,7 +103,9 @@ class DeadLetterQueue(IDeadLetterQueue):
             del self._dlq[task_id]
             logger.info("Task %s removed from DLQ.", task_id)
             return True
-        logger.warning("Attempted to remove non-existent task %s from DLQ.", task_id)
+        logger.warning(
+            "Attempted to remove non-existent task %s from DLQ.", task_id
+        )
         return False
 
     async def size(self) -> int:

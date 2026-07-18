@@ -34,7 +34,7 @@ class FinancialMetric(Enum):
     BURN_RATE = "burn_rate"
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Transaction(BaseTransaction):
     """Represents a financial transaction."""
     transaction_id: str
@@ -79,7 +79,7 @@ class FinancialIntelligenceConfig:
 class FinancialIntelligence:
     """
     Financial Intelligence for autonomous financial management.
-    
+
     The Financial Intelligence is responsible for:
     - Recording financial transactions
     - Managing budgets
@@ -92,7 +92,7 @@ class FinancialIntelligence:
     def __init__(self, config: Optional[FinancialIntelligenceConfig] = None):
         """
         Initialize Financial Intelligence.
-        
+
         Args:
             config: FinancialIntelligenceConfig instance.
                    If None, uses default config.
@@ -111,13 +111,13 @@ class FinancialIntelligence:
     ) -> Optional[Transaction]:
         """
         Record a financial transaction.
-        
+
         Args:
             transaction_id: Unique identifier for the transaction
             transaction_type: Type of transaction
             amount: Transaction amount
             description: Transaction description
-            
+
         Returns:
             Transaction if recorded successfully, None otherwise
         """
@@ -144,12 +144,12 @@ class FinancialIntelligence:
     ) -> Budget:
         """
         Create a budget.
-        
+
         Args:
             budget_id: Unique identifier for the budget
             category: Budget category
             allocated_amount: Allocated amount
-            
+
         Returns:
             Budget instance
         """
@@ -170,11 +170,11 @@ class FinancialIntelligence:
     ) -> bool:
         """
         Update budget spending.
-        
+
         Args:
             budget_id: The budget ID
             amount: Amount spent
-            
+
         Returns:
             True if updated successfully, False otherwise
         """
@@ -196,7 +196,7 @@ class FinancialIntelligence:
     def calculate_metrics(self) -> Dict[FinancialMetric, float]:
         """
         Calculate financial metrics.
-        
+
         Returns:
             Dictionary of financial metrics
         """
@@ -228,11 +228,11 @@ class FinancialIntelligence:
     ) -> FinancialReport:
         """
         Generate a financial report.
-        
+
         Args:
             report_id: Unique identifier for the report
             period: Reporting period
-            
+
         Returns:
             FinancialReport instance
         """
@@ -260,11 +260,11 @@ class FinancialIntelligence:
     ) -> float:
         """
         Forecast financial trend.
-        
+
         Args:
             transaction_type: Type of transaction to forecast
             historical_periods: Number of historical periods to consider
-            
+
         Returns:
             Forecasted amount
         """
@@ -296,10 +296,10 @@ class FinancialIntelligence:
     def get_budget_status(self, budget_id: str) -> Optional[Dict[str, Any]]:
         """
         Get budget status.
-        
+
         Args:
             budget_id: The budget ID
-            
+
         Returns:
             Dictionary with budget status, or None if not found
         """
@@ -323,10 +323,10 @@ class FinancialIntelligence:
     def get_transaction(self, transaction_id: str) -> Optional[Transaction]:
         """
         Get a transaction.
-        
+
         Args:
             transaction_id: The transaction ID
-            
+
         Returns:
             Transaction if found, None otherwise
         """
@@ -335,10 +335,10 @@ class FinancialIntelligence:
     def get_report(self, report_id: str) -> Optional[FinancialReport]:
         """
         Get a financial report.
-        
+
         Args:
             report_id: The report ID
-            
+
         Returns:
             FinancialReport if found, None otherwise
         """

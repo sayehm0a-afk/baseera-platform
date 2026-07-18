@@ -81,7 +81,7 @@ class ResourceOptimizerConfig:
 class ResourceOptimizer:
     """
     Resource Optimizer for autonomous agent resource management.
-    
+
     The Resource Optimizer is responsible for:
     - Allocating resources to agents
     - Optimizing resource usage
@@ -94,7 +94,7 @@ class ResourceOptimizer:
     def __init__(self, config: Optional[ResourceOptimizerConfig] = None):
         """
         Initialize the Resource Optimizer.
-        
+
         Args:
             config: ResourceOptimizerConfig instance for configuring optimization behavior.
                    If None, uses default config.
@@ -114,14 +114,14 @@ class ResourceOptimizer:
     ) -> ResourceConstraint:
         """
         Add a resource constraint.
-        
+
         Args:
             constraint_id: Unique identifier for the constraint
             resource_type: Type of resource
             max_total: Maximum total available
             max_per_agent: Maximum per agent
             priority_weight: Priority weight for allocation
-            
+
         Returns:
             ResourceConstraint instance
         """
@@ -146,13 +146,13 @@ class ResourceOptimizer:
     ) -> Optional[ResourceAllocation]:
         """
         Allocate a resource to an agent.
-        
+
         Args:
             allocation_id: Unique identifier for the allocation
             agent_id: ID of the agent
             resource_type: Type of resource
             amount: Amount to allocate
-            
+
         Returns:
             ResourceAllocation if successful, None otherwise
         """
@@ -201,11 +201,11 @@ class ResourceOptimizer:
     ) -> bool:
         """
         Update resource usage for an allocation.
-        
+
         Args:
             allocation_id: The allocation ID
             used_amount: Amount used
-            
+
         Returns:
             True if updated successfully, False otherwise
         """
@@ -225,12 +225,12 @@ class ResourceOptimizer:
     ) -> Optional[OptimizationResult]:
         """
         Optimize resource allocation for agents.
-        
+
         Args:
             optimization_id: Unique identifier for the optimization
             agent_ids: List of agent IDs to optimize for
             strategy: Optional optimization strategy (uses default if not provided)
-            
+
         Returns:
             OptimizationResult if optimization successful, None otherwise
         """
@@ -272,11 +272,11 @@ class ResourceOptimizer:
     ) -> List[ResourceAllocation]:
         """
         Apply optimization strategy to allocations.
-        
+
         Args:
             allocations: List of allocations to optimize
             strategy: Strategy to apply
-            
+
         Returns:
             List of optimized allocations
         """
@@ -369,10 +369,10 @@ class ResourceOptimizer:
     ) -> float:
         """
         Calculate overall efficiency of allocations.
-        
+
         Args:
             allocations: List of allocations
-            
+
         Returns:
             Efficiency score (0.0 to 1.0)
         """
@@ -394,11 +394,11 @@ class ResourceOptimizer:
     ) -> Dict[ResourceType, float]:
         """
         Predict future resource needs for an agent.
-        
+
         Args:
             agent_id: The agent ID
             historical_data: Historical resource usage data
-            
+
         Returns:
             Dictionary of predicted resource needs
         """
@@ -419,10 +419,10 @@ class ResourceOptimizer:
     def get_allocation(self, allocation_id: str) -> Optional[ResourceAllocation]:
         """
         Get a resource allocation.
-        
+
         Args:
             allocation_id: The allocation ID
-            
+
         Returns:
             ResourceAllocation if found, None otherwise
         """
@@ -431,10 +431,10 @@ class ResourceOptimizer:
     def get_agent_allocations(self, agent_id: str) -> List[ResourceAllocation]:
         """
         Get all allocations for an agent.
-        
+
         Args:
             agent_id: The agent ID
-            
+
         Returns:
             List of allocations for the agent
         """
@@ -443,7 +443,7 @@ class ResourceOptimizer:
     def get_optimization_history(self) -> List[OptimizationResult]:
         """
         Get optimization history.
-        
+
         Returns:
             List of optimization results
         """

@@ -58,10 +58,19 @@ class Span(ISpan):
         self.events = []
         self.tracer = tracer
 
+    def __enter__(self):
+        self.tracer.set_current_span(self)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            self.record_exception(exc_val, {"exception.type": exc_type.__name__, "exception.message": str(exc_val)})
+        self.end()
+        if self.tracer.current_span() == self:
+            self.tracer.current_span_instance.pop()
 
     def set_attribute(self, key: str, value: Any):
         self.attributes[key] = value
-
 
     def record_exception(self, exception: Exception, attributes: Optional[Dict[str, Any]] = None):
         event_attributes = {"event.name": "exception", "exception.type": type(exception).__name__, "exception.message": str(exception)}
@@ -69,30 +78,29 @@ class Span(ISpan):
             event_attributes.update(attributes)
         self.events.append({"timestamp": time.time(), "attributes": event_attributes})
 
-
     def end(self):
         if self.end_time is None:
             self.end_time = time.time()
             duration = self.end_time - self.start_time
 
             # Remove from current span context if it was the current one
-            if self.tracer.current_span_instance == self:
-                self.tracer.current_span_instance = None
+            if self.tracer.current_span_instance and self.tracer.current_span_instance[-1] == self:
+                self.tracer.current_span_instance.pop()
 
 class Tracer(ITracer):
     def __init__(self):
-        self.current_span_instance: Optional[ISpan] = None
+        self.current_span_instance: list[ISpan] = []
 
     def start_span(self, name: str, attributes: Optional[Dict[str, Any]] = None) -> ISpan:
         span = Span(name, self, attributes)
-        self.set_current_span(span)
+        self.current_span_instance.append(span)
         return span
 
     def current_span(self) -> Optional[ISpan]:
-        return self.current_span_instance
+        return self.current_span_instance[-1] if self.current_span_instance else None
 
     def set_current_span(self, span: ISpan):
-        self.current_span_instance = span
+        self.current_span_instance.append(span)
 
 # Global tracer instance (for simplicity in this example)
 # In a real application, this would be managed via dependency injection or a global context manager

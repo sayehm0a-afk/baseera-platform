@@ -2,7 +2,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from typing import Dict, Any
 
-@dataclass
+
+@dataclass(kw_only=True)
 class BaseTransaction:
     amount: float
     description: str

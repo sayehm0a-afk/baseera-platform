@@ -15,7 +15,7 @@ class IReliabilityLayer(ABC):
     """
 
     @abstractmethod
-    async def execute_reliable(self, func: Callable[..., Awaitable[Any]], 
+    async def execute_reliable(self, func: Callable[..., Awaitable[Any]],
                                  fallback_func: Optional[Callable[..., Awaitable[Any]]] = None,
                                  compensation_func: Optional[Callable[..., Awaitable[Any]]] = None,
                                  operation_id: Optional[str] = None,
@@ -47,7 +47,7 @@ class ReliabilityLayer(IReliabilityLayer):
     تجمع بين قاطع الدائرة واستعادة الفشل والتعويض لتوفير تنفيذ موثوق للعمليات.
     """
 
-    def __init__(self, 
+    def __init__(self,
                  circuit_breaker: Optional[ICircuitBreaker] = None,
                  failure_recovery: Optional[IFailureRecovery] = None,
                  compensation: Optional[ICompensation] = None) -> None:
@@ -56,13 +56,13 @@ class ReliabilityLayer(IReliabilityLayer):
         self._compensation = compensation or Compensation()
         logger.info("ReliabilityLayer instance created.")
 
-    async def execute_reliable(self, func: Callable[..., Awaitable[Any]], 
+    async def execute_reliable(self, func: Callable[..., Awaitable[Any]],
                                  fallback_func: Optional[Callable[..., Awaitable[Any]]] = None,
                                  compensation_func: Optional[Callable[..., Awaitable[Any]]] = None,
                                  operation_id: Optional[str] = None,
                                  use_circuit_breaker: bool = True,
                                  *args: Any, **kwargs: Any) -> Any:
-        
+
         # Register compensation if provided and operation_id is present
         if compensation_func and operation_id:
             await self._compensation.compensate(operation_id, compensation_func, *args, **kwargs)
@@ -74,7 +74,7 @@ class ReliabilityLayer(IReliabilityLayer):
             else:
                 # Execute directly if circuit breaker is not used
                 result = await func(*args, **kwargs)
-            
+
             # If successful, clear any registered compensation for this operation
             if operation_id:
                 await self._compensation.clear_compensation(operation_id)

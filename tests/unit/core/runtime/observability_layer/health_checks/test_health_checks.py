@@ -1,4 +1,5 @@
 import pytest
+import logging
 from core.runtime.observability_layer.health_checks.health_checks import (
     HealthCheckManager, HealthStatus, HealthCheckResult, IHealthCheck, DatabaseHealthCheck, ServiceHealthCheck
 )
@@ -9,11 +10,11 @@ def health_check_manager():
     return HealthCheckManager()
 
 @pytest.mark.asyncio
-async def test_register_check(health_check_manager, capsys):
+async def test_register_check(health_check_manager, caplog):
     mock_check = AsyncMock(spec=IHealthCheck)
-    await health_check_manager.register_check("mock_db_check", mock_check)
-    captured = capsys.readouterr()
-    assert "Health check \'mock_db_check\' registered." in captured.out
+    with caplog.at_level(logging.INFO):
+        await health_check_manager.register_check("mock_db_check", mock_check)
+    assert "Health check \'mock_db_check\' registered." in caplog.text
     assert "mock_db_check" in health_check_manager._checks
 
 @pytest.mark.asyncio

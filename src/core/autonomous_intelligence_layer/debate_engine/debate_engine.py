@@ -87,7 +87,7 @@ class DebateConfig:
 class DebateEngine:
     """
     Debate Engine for facilitating multi-agent discussions.
-    
+
     The Debate Engine is responsible for:
     - Managing debate sessions and rounds
     - Recording arguments from different agents
@@ -100,7 +100,7 @@ class DebateEngine:
     def __init__(self, config: Optional[DebateConfig] = None):
         """
         Initialize the Debate Engine.
-        
+
         Args:
             config: DebateConfig instance for configuring debate behavior.
                    If None, uses default config.
@@ -117,12 +117,12 @@ class DebateEngine:
     ) -> DebateSession:
         """
         Create a new debate session.
-        
+
         Args:
             session_id: Unique identifier for the session
             topic: The topic to debate
             participants: List of agent IDs participating
-            
+
         Returns:
             DebateSession representing the new session
         """
@@ -149,7 +149,7 @@ class DebateEngine:
     ) -> Optional[Argument]:
         """
         Add an argument to a debate session.
-        
+
         Args:
             session_id: The session ID
             argument_id: Unique identifier for the argument
@@ -159,7 +159,7 @@ class DebateEngine:
             confidence: Confidence level (0.0 to 1.0)
             supporting_evidence: Optional supporting evidence
             references: Optional references
-            
+
         Returns:
             Argument if added successfully, None otherwise
         """
@@ -215,11 +215,11 @@ class DebateEngine:
     def advance_phase(self, session_id: str, new_phase: DebatePhase) -> bool:
         """
         Advance the debate to the next phase.
-        
+
         Args:
             session_id: The session ID
             new_phase: The new phase
-            
+
         Returns:
             True if phase advanced successfully, False otherwise
         """
@@ -240,10 +240,10 @@ class DebateEngine:
     def detect_consensus(self, session_id: str) -> Tuple[bool, float]:
         """
         Detect if consensus has been reached.
-        
+
         Args:
             session_id: The session ID
-            
+
         Returns:
             Tuple of (consensus_reached, consensus_score)
         """
@@ -291,10 +291,10 @@ class DebateEngine:
     def analyze_arguments(self, session_id: str) -> Dict[str, Any]:
         """
         Analyze arguments in a debate session.
-        
+
         Args:
             session_id: The session ID
-            
+
         Returns:
             Dictionary containing analysis results
         """
@@ -362,10 +362,10 @@ class DebateEngine:
     def generate_summary(self, session_id: str) -> str:
         """
         Generate a summary of the debate.
-        
+
         Args:
             session_id: The session ID
-            
+
         Returns:
             Summary string
         """
@@ -398,10 +398,10 @@ Current Phase: {session.current_phase.value}
     def _validate_argument(self, argument: Argument) -> bool:
         """
         Validate an argument.
-        
+
         Args:
             argument: The argument to validate
-            
+
         Returns:
             True if valid, False otherwise
         """
@@ -421,10 +421,10 @@ Current Phase: {session.current_phase.value}
     def get_session(self, session_id: str) -> Optional[DebateSession]:
         """
         Get a debate session.
-        
+
         Args:
             session_id: The session ID
-            
+
         Returns:
             DebateSession if found, None otherwise
         """
@@ -433,7 +433,7 @@ Current Phase: {session.current_phase.value}
     def get_debate_history(self) -> List[DebateSession]:
         """
         Get the debate history.
-        
+
         Returns:
             List of concluded debate sessions
         """

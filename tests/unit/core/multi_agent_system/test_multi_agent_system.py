@@ -311,7 +311,7 @@ async def test_supervisor_agent_initialize_llm_client_logging(caplog):
         # Check if the specific log message from SupervisorAgent's _initialize_llm_client is present
         found_log = False
         for record in caplog.records:
-            if record.name == "src.core.multi_agent_system.supervisor_agent" and \
+               if record.name == "core.multi_agent_system.supervisor_agent" and \
                re.match(r"LLM client for SupervisorAgent .* set to None \(or specialized later\).", record.message):
                 found_log = True
                 break

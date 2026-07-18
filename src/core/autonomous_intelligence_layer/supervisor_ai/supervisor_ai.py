@@ -64,7 +64,7 @@ class SupervisorAI:
         logger.info(f"SupervisorAI: تهيئة مهمة جديدة للهدف: {goal}")
         # 1. تفكيك الهدف إلى مهام فرعية
         decomposed_tasks_data = self.planner_ai.decompose_goal(goal)
-        
+
         # 2. إنشاء DAG من المهام المفككة
         task_dag = self.planner_ai.plan_multi_step(decomposed_tasks_data)
         self._current_task_dag = task_dag
@@ -77,7 +77,7 @@ class SupervisorAI:
         self.context_manager.store_isolated_context(task_id, context)
         self.memory_store.store(content=goal, memory_type=MemoryType.WORKING, metadata={"task_id": task_id, "type": "goal"})
         self.knowledge_graph.add_entity(entity_id=task_id, name=goal, entity_type=EntityType.OTHER, attributes={"goal": goal, "status": "INITIALIZED"})
-        
+
         logger.info(f"SupervisorAI: تم تهيئة المهمة {task_id} بنجاح.")
         return task_id
 
@@ -96,7 +96,7 @@ class SupervisorAI:
             ValueError: إذا لم يتم العثور على المهمة أو السياسة.
         """
         logger.info(f"SupervisorAI: تنفيذ المهمة {task_id} باستخدام السياسة {policy_name}.")
-        
+
         # 1. استرداد السياق والسياسة
         task_context = self.context_manager.get_isolated_context(task_id)
         policy = self.execution_policies.get_policy(policy_name)
@@ -110,7 +110,7 @@ class SupervisorAI:
         # في تطبيق حقيقي، قد نحتاج إلى استرداد DAG من مكان تخزين دائم باستخدام task_id.
         if self._current_task_dag is None or self._current_task_dag.id != task_id:
             raise ValueError(f"لم يتم العثور على DAG للمهمة {task_id}. يرجى تهيئة المهمة أولاً.")
-        
+
         dag_to_execute = self._current_task_dag
 
         # 4. تنفيذ المهام في DAG (تنفيذ وهمي)
@@ -127,7 +127,7 @@ class SupervisorAI:
                 if agent:
                     agent.update_status("RUNNING")
                     self.context_manager.update_isolated_context(task_id, {f"task_{node.id}_agent": agent.id, f"task_{node.id}_status": "RUNNING"})
-                
+
                 # تنفيذ المهمة الفرعية بواسطة الوكيل
                 agent_task_result = agent.execute_task(node.task.id, node.task.payload)
                 task_result = {"node_id": node.id, "output": agent_task_result.get("result", f"تم تنفيذ {node.id} بنجاح."), "agent_id": agent.id if agent else "None", "status": agent_task_result.get("status", "COMPLETED")}
@@ -173,7 +173,7 @@ class SupervisorAI:
         # مثال بسيط: البحث عن وكيل لديه القدرة المطلوبة وحالته IDLE
         required_capabilities = task.payload.get("capabilities", ["generic"])
         available_agents = self.agent_registry.discover_agents(capabilities=required_capabilities, status="IDLE")
-        
+
         if available_agents:
             # اختيار أول وكيل متاح (يمكن تحسين هذا بمنطق اختيار أكثر تعقيدًا)
             selected_agent = available_agents[0]

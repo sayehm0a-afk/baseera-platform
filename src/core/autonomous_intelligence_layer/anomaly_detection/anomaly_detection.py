@@ -67,7 +67,7 @@ class AnomalyDetectionConfig:
 class AnomalyDetection:
     """
     Anomaly Detection for identifying unusual patterns.
-    
+
     The Anomaly Detection is responsible for:
     - Recording data points
     - Detecting anomalies using various methods
@@ -80,7 +80,7 @@ class AnomalyDetection:
     def __init__(self, config: Optional[AnomalyDetectionConfig] = None):
         """
         Initialize Anomaly Detection.
-        
+
         Args:
             config: AnomalyDetectionConfig instance.
                    If None, uses default config.
@@ -97,11 +97,11 @@ class AnomalyDetection:
     ) -> Optional[DataPoint]:
         """
         Record a data point.
-        
+
         Args:
             point_id: Unique identifier for the data point
             value: Data value
-            
+
         Returns:
             DataPoint if recorded successfully, None otherwise
         """
@@ -122,7 +122,7 @@ class AnomalyDetection:
     def detect_anomalies(self) -> List[Anomaly]:
         """
         Detect anomalies in recorded data.
-        
+
         Returns:
             List of detected anomalies
         """
@@ -144,7 +144,7 @@ class AnomalyDetection:
     def _detect_statistical_anomalies(self) -> List[Anomaly]:
         """
         Detect statistical anomalies using Z-score method.
-        
+
         Returns:
             List of detected anomalies
         """
@@ -182,7 +182,7 @@ class AnomalyDetection:
     def _detect_behavioral_anomalies(self) -> List[Anomaly]:
         """
         Detect behavioral anomalies using IQR method.
-        
+
         Returns:
             List of detected anomalies
         """
@@ -222,7 +222,7 @@ class AnomalyDetection:
     def _detect_contextual_anomalies(self) -> List[Anomaly]:
         """
         Detect contextual anomalies.
-        
+
         Returns:
             List of detected anomalies
         """
@@ -234,10 +234,10 @@ class AnomalyDetection:
     def _calculate_severity(self, z_score: float) -> AnomalySeverity:
         """
         Calculate anomaly severity based on Z-score.
-        
+
         Args:
             z_score: Z-score value
-            
+
         Returns:
             AnomalySeverity
         """
@@ -253,10 +253,10 @@ class AnomalyDetection:
     def get_data_point(self, point_id: str) -> Optional[DataPoint]:
         """
         Get a data point.
-        
+
         Args:
             point_id: The data point ID
-            
+
         Returns:
             DataPoint if found, None otherwise
         """
@@ -265,10 +265,10 @@ class AnomalyDetection:
     def get_anomaly(self, anomaly_id: str) -> Optional[Anomaly]:
         """
         Get an anomaly.
-        
+
         Args:
             anomaly_id: The anomaly ID
-            
+
         Returns:
             Anomaly if found, None otherwise
         """
@@ -277,10 +277,10 @@ class AnomalyDetection:
     def get_anomalies_by_severity(self, severity: AnomalySeverity) -> List[Anomaly]:
         """
         Get anomalies by severity.
-        
+
         Args:
             severity: Anomaly severity level
-            
+
         Returns:
             List of anomalies with specified severity
         """
@@ -289,10 +289,10 @@ class AnomalyDetection:
     def get_anomalies_by_type(self, anomaly_type: AnomalyType) -> List[Anomaly]:
         """
         Get anomalies by type.
-        
+
         Args:
             anomaly_type: Anomaly type
-            
+
         Returns:
             List of anomalies of specified type
         """
@@ -301,7 +301,7 @@ class AnomalyDetection:
     def get_critical_anomalies(self) -> List[Anomaly]:
         """
         Get critical anomalies.
-        
+
         Returns:
             List of critical anomalies
         """
@@ -310,7 +310,7 @@ class AnomalyDetection:
     def get_anomaly_report(self) -> Dict[str, Any]:
         """
         Generate anomaly report.
-        
+
         Returns:
             Anomaly report dictionary
         """

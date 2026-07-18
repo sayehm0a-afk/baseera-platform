@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
+
 class IWorkflowContext(ABC):
     """واجهة مجردة لـ Workflow Context.
 
@@ -16,7 +17,7 @@ class IWorkflowContext(ABC):
     """
 
     @abstractmethod
-    async def get_context(self, workflow_id: str) -> Dict[str, Any]:
+    async def get_context(self, workflow_id: str) -> Dict[str, Any]:  # noqa: E501
         """الحصول على سياق تدفق عمل معين.
 
         Args:
@@ -28,7 +29,7 @@ class IWorkflowContext(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def update_context(self, workflow_id: str, updates: Dict[str, Any]) -> None:
+    async def update_context(self, workflow_id: str, updates: Dict[str, Any]) -> None:  # noqa: E501
         """تحديث سياق تدفق عمل معين.
 
         Args:
@@ -48,11 +49,11 @@ class WorkflowContext(IWorkflowContext):
         self._contexts: Dict[str, Dict[str, Any]] = {}
         logger.info("WorkflowContext instance created.")
 
-    async def get_context(self, workflow_id: str) -> Dict[str, Any]:
+    async def get_context(self, workflow_id: str) -> Dict[str, Any]:  # noqa: E501
         return self._contexts.get(workflow_id, {})
 
-    async def update_context(self, workflow_id: str, updates: Dict[str, Any]) -> None:
+    async def update_context(self, workflow_id: str, updates: Dict[str, Any]) -> None:  # noqa: E501
         if workflow_id not in self._contexts:
             self._contexts[workflow_id] = {}
         self._contexts[workflow_id].update(updates)
-        logger.info("Workflow \"%s\" context updated with: %s", workflow_id, updates)
+        logger.info("Workflow \"%s\" context updated with: %s", workflow_id, updates)  # noqa: E501

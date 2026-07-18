@@ -73,7 +73,7 @@ class DecisionFusionConfig:
 class DecisionFusion:
     """
     Decision Fusion for combining multiple decision sources.
-    
+
     The Decision Fusion is responsible for:
     - Collecting decision inputs from multiple sources
     - Fusing decisions using various methods
@@ -86,7 +86,7 @@ class DecisionFusion:
     def __init__(self, config: Optional[DecisionFusionConfig] = None):
         """
         Initialize the Decision Fusion.
-        
+
         Args:
             config: DecisionFusionConfig instance for configuring fusion behavior.
                    If None, uses default config.
@@ -108,7 +108,7 @@ class DecisionFusion:
     ) -> Optional[DecisionInput]:
         """
         Add a decision input from a source.
-        
+
         Args:
             decision_id: The decision ID to add input to
             input_id: Unique identifier for the input
@@ -117,7 +117,7 @@ class DecisionFusion:
             decision: The decision/recommendation
             confidence: Confidence level (0.0 to 1.0)
             supporting_data: Optional supporting data
-            
+
         Returns:
             DecisionInput if added successfully, None otherwise
         """
@@ -145,11 +145,11 @@ class DecisionFusion:
     ) -> Optional[FusedDecision]:
         """
         Fuse pending decision inputs into a final decision.
-        
+
         Args:
             decision_id: The decision ID
             method: Optional fusion method (uses default if not provided)
-            
+
         Returns:
             FusedDecision if fusion successful, None otherwise
         """
@@ -202,11 +202,11 @@ class DecisionFusion:
     ) -> Tuple[str, float]:
         """
         Fuse inputs using the specified method.
-        
+
         Args:
             inputs: List of decision inputs
             method: Fusion method to use
-            
+
         Returns:
             Tuple of (final_decision, confidence)
         """
@@ -356,12 +356,12 @@ class DecisionFusion:
     ) -> str:
         """
         Generate reasoning for the fused decision.
-        
+
         Args:
             inputs: List of decision inputs
             final_decision: The final decision
             method: Fusion method used
-            
+
         Returns:
             Reasoning string
         """
@@ -386,10 +386,10 @@ class DecisionFusion:
     ) -> List[Tuple[str, float]]:
         """
         Rank alternative decisions.
-        
+
         Args:
             inputs: List of decision inputs
-            
+
         Returns:
             List of (decision, score) tuples sorted by score
         """
@@ -412,10 +412,10 @@ class DecisionFusion:
     def analyze_decision(self, decision_id: str) -> Dict[str, Any]:
         """
         Analyze a fused decision.
-        
+
         Args:
             decision_id: The decision ID
-            
+
         Returns:
             Dictionary containing analysis results
         """
@@ -449,10 +449,10 @@ class DecisionFusion:
     def get_decision(self, decision_id: str) -> Optional[FusedDecision]:
         """
         Get a fused decision.
-        
+
         Args:
             decision_id: The decision ID
-            
+
         Returns:
             FusedDecision if found, None otherwise
         """
@@ -461,7 +461,7 @@ class DecisionFusion:
     def get_decision_history(self) -> List[FusedDecision]:
         """
         Get decision history.
-        
+
         Returns:
             List of fused decisions
         """

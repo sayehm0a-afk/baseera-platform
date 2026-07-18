@@ -50,7 +50,7 @@ class MessageRouter(IMessageRouter):
         if not destination:
             logger.error("No route registered for message %s", message_type)
             raise ValueError(f"No route registered for message {message_type}")
-        
+
         # افتراض أن الوجهة لديها طريقة dispatch أو publish_event
         if hasattr(destination, 'dispatch'):
             return await destination.dispatch(message_type, payload)

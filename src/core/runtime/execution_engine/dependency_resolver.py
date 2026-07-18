@@ -66,7 +66,7 @@ class DependencyResolver(IDependencyResolver):
                 in_degree[neighbor_task] -= 1
                 if in_degree[neighbor_task] == 0:
                     queue.append(neighbor_task)
-        
+
         if len(result) != len(all_task_ids):
             raise ValueError("Circular dependency detected in tasks.")
 

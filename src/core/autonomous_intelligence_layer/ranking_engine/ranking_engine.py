@@ -68,7 +68,7 @@ class RankingConfig:
 class RankingEngine:
     """
     Ranking Engine for multi-criteria decision making.
-    
+
     The Ranking Engine is responsible for:
     - Ranking items based on multiple criteria
     - Applying various ranking methods
@@ -81,7 +81,7 @@ class RankingEngine:
     def __init__(self, config: Optional[RankingConfig] = None):
         """
         Initialize the Ranking Engine.
-        
+
         Args:
             config: RankingConfig instance for configuring ranking behavior.
                    If None, uses default config.
@@ -99,13 +99,13 @@ class RankingEngine:
     ) -> Optional[RankingResult]:
         """
         Rank items based on criteria.
-        
+
         Args:
             ranking_id: Unique identifier for the ranking
             items: List of items to rank
             criteria: List of ranking criteria
             method: Optional ranking method (uses default if not provided)
-            
+
         Returns:
             RankingResult if ranking successful, None otherwise
         """
@@ -150,17 +150,17 @@ class RankingEngine:
     ) -> List[RankingItem]:
         """
         Normalize scores to 0-1 range.
-        
+
         Args:
             items: List of items with scores
             criteria: List of criteria
-            
+
         Returns:
             List of items with normalized scores
         """
         for criterion in criteria:
             scores = [item.scores.get(criterion.criterion_id, 0) for item in items]
-            
+
             if not scores:
                 continue
 
@@ -176,11 +176,11 @@ class RankingEngine:
                 for item in items:
                     original_score = item.scores.get(criterion.criterion_id, 0)
                     normalized = (original_score - min_score) / score_range
-                    
+
                     # Reverse if minimizing
                     if not criterion.is_maximizing:
                         normalized = 1.0 - normalized
-                    
+
                     item.scores[criterion.criterion_id] = normalized
 
         return items
@@ -193,12 +193,12 @@ class RankingEngine:
     ) -> Dict[str, float]:
         """
         Calculate final scores for items.
-        
+
         Args:
             items: List of items
             criteria: List of criteria
             method: Ranking method to use
-            
+
         Returns:
             Dictionary of item_id -> final_score
         """
@@ -287,7 +287,7 @@ class RankingEngine:
                 key=lambda i: i.scores.get(criterion.criterion_id, 0),
                 reverse=True,
             )
-            
+
             # Assign Borda points
             for rank, item in enumerate(ranked):
                 points = (len(items) - rank) * criterion.weight
@@ -325,7 +325,7 @@ class RankingEngine:
                 score = item.scores.get(criterion.criterion_id, 0)
                 diff_ideal = (score - ideal[criterion.criterion_id]) ** 2
                 diff_anti_ideal = (score - anti_ideal[criterion.criterion_id]) ** 2
-                
+
                 distance_to_ideal += diff_ideal * (criterion.weight ** 2)
                 distance_to_anti_ideal += diff_anti_ideal * (criterion.weight ** 2)
 
@@ -384,10 +384,10 @@ class RankingEngine:
     def analyze_ranking(self, ranking_id: str) -> Dict[str, Any]:
         """
         Analyze ranking results.
-        
+
         Args:
             ranking_id: The ranking ID
-            
+
         Returns:
             Dictionary containing analysis results
         """
@@ -417,10 +417,10 @@ class RankingEngine:
     def get_ranking(self, ranking_id: str) -> Optional[RankingResult]:
         """
         Get a ranking result.
-        
+
         Args:
             ranking_id: The ranking ID
-            
+
         Returns:
             RankingResult if found, None otherwise
         """
@@ -429,7 +429,7 @@ class RankingEngine:
     def get_ranking_history(self) -> List[RankingResult]:
         """
         Get ranking history.
-        
+
         Returns:
             List of ranking results
         """

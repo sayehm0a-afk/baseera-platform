@@ -1,6 +1,7 @@
 """وحدة Supervisor Runtime.
 
-تتولى هذه الوحدة مسؤولية الإشراف على الوكلاء، توزيع المهام، وإدارة سير العمل على مستوى عالٍ.
+تتولى هذه الوحدة مسؤولية الإشراف على الوكلاء، توزيع المهام،
+    وإدارة سير العمل على مستوى عالٍ.
 """
 import logging
 from abc import ABC, abstractmethod
@@ -8,14 +9,18 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+
 class ISupervisorRuntime(ABC):
     """واجهة مجردة لـ Supervisor Runtime.
 
-    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لـ Supervisor Runtime.
+    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لـ
+    Supervisor Runtime.
     """
 
     @abstractmethod
-    async def start_supervision(self, config: Optional[Dict[str, Any]] = None) -> None:
+    async def start_supervision(
+        self, config: Optional[Dict[str, Any]] = None
+    ) -> None:
         """بدء عملية الإشراف.
 
         مسؤولة عن بدء مراقبة وإدارة الوكلاء والمهام.
@@ -46,7 +51,8 @@ class ISupervisorRuntime(ABC):
 class SupervisorRuntime(ISupervisorRuntime):
     """تنفيذ Supervisor Runtime.
 
-    مسؤول عن الإشراف على الوكلاء، توزيع المهام، وإدارة سير العمل على مستوى عالٍ.
+    مسؤول عن الإشراف على الوكلاء، توزيع المهام، وإدارة سير العمل على
+    مستوى عالٍ.
     """
 
     def __init__(self) -> None:
@@ -54,7 +60,9 @@ class SupervisorRuntime(ISupervisorRuntime):
         self._config: Dict[str, Any] = {}
         logger.info("SupervisorRuntime instance created.")
 
-    async def start_supervision(self, config: Optional[Dict[str, Any]] = None) -> None:
+    async def start_supervision(
+        self, config: Optional[Dict[str, Any]] = None
+    ) -> None:
         if self._is_supervising:
             logger.warning("SupervisorRuntime already supervising.")
             return
@@ -68,7 +76,8 @@ class SupervisorRuntime(ISupervisorRuntime):
 
     async def stop_supervision(self) -> None:
         if not self._is_supervising:
-            logger.warning("SupervisorRuntime is not supervising. Nothing to stop.")
+            logger.warning("SupervisorRuntime is not supervising. "
+                           "Nothing to stop.")
             return
 
         logger.info("Stopping SupervisorRuntime supervision...")
