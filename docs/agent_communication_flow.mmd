@@ -1,0 +1,28 @@
+graph TD
+    User[User/External System] --> SupervisorAgent
+    SupervisorAgent --> AgentRegistry
+    SupervisorAgent --> AgentA[Agent A]
+    SupervisorAgent --> AgentB[Agent B]
+
+    AgentA --> SupervisorAgent
+    AgentB --> SupervisorAgent
+
+    SupervisorAgent -- delegates task --> AgentA
+    SupervisorAgent -- delegates task --> AgentB
+
+    AgentA -- requests tool --> ToolRegistry
+    AgentB -- requests tool --> ToolRegistry
+
+    ToolRegistry -- provides tool --> AgentA
+    ToolRegistry -- provides tool --> AgentB
+
+    AgentA -- executes tool --> ExternalTool[External Tool/Service]
+    AgentB -- executes tool --> ExternalTool
+
+    ExternalTool --> AgentA
+    ExternalTool --> AgentB
+
+    AgentA -- reports result --> SupervisorAgent
+    AgentB -- reports result --> SupervisorAgent
+
+    SupervisorAgent -- provides response --> User

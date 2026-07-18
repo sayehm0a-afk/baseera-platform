@@ -1,0 +1,116 @@
+"""وحدة Workflow Executor.
+
+تتولى هذه الوحدة مسؤولية تنفيذ تدفقات العمل (Workflows) خطوة بخطوة، وإدارة حالتها،
+وتنسيق التفاعلات بين الوكلاء والأدوات.
+"""
+import logging
+from abc import ABC, abstractmethod
+from typing import Any, Dict
+
+logger = logging.getLogger(__name__)
+
+class IWorkflowExecutor(ABC):
+    """واجهة مجردة لـ Workflow Executor.
+
+    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لـ Workflow Executor.
+    """
+
+    @abstractmethod
+    async def execute_workflow(self, workflow_id: str, workflow_definition: Dict[str, Any]) -> \
+            Dict[str, Any]:
+        """تنفيذ تدفق عمل معين.
+
+        Args:
+            workflow_id (str): معرف تدفق العمل المراد تنفيذه.
+            workflow_definition (Dict[str, Any]): تعريف تدفق العمل، بما في ذلك الخطوات والمنطق.
+
+        Returns:
+            Dict[str, Any]: نتيجة تنفيذ تدفق العمل.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def pause_workflow(self, workflow_id: str) -> None:
+        """إيقاف مؤقت لتدفق عمل معين.
+
+        Args:
+            workflow_id (str): معرف تدفق العمل المراد إيقافه مؤقتاً.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def resume_workflow(self, workflow_id: str) -> None:
+        """استئناف تدفق عمل معين بعد إيقافه مؤقتاً.
+
+        Args:
+            workflow_id (str): معرف تدفق العمل المراد استئنافه.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def terminate_workflow(self, workflow_id: str) -> None:
+        """إنهاء تدفق عمل معين.
+
+        Args:
+            workflow_id (str): معرف تدفق العمل المراد إنهاؤه.
+        """
+        raise NotImplementedError
+
+
+class WorkflowExecutor(IWorkflowExecutor):
+    """تنفيذ Workflow Executor.
+
+    مسؤول عن تنفيذ تدفقات العمل خطوة بخطوة، وإدارة حالتها، وتنسيق التفاعلات.
+    """
+
+    def __init__(self) -> None:
+        self._active_workflows: Dict[str, Any] = {}
+        logger.info("WorkflowExecutor instance created.")
+
+    async def execute_workflow(self, workflow_id: str, workflow_definition: Dict[str, Any]) -> \
+            Dict[str, Any]:
+        logger.info(
+            "Executing workflow '%s' with definition: %s",
+            workflow_id, workflow_definition
+        )
+        # منطق تنفيذ تدفق العمل سيتم إضافته هنا.
+        # حالياً، هو مجرد محاكاة لنتيجة.
+        self._active_workflows[workflow_id] = {
+            "status": "RUNNING",
+            "definition": workflow_definition,
+            "current_step": 0,
+            "result": None
+        }
+        logger.info("Workflow \'%s\' started successfully.", workflow_id)
+        return {
+            "status": "COMPLETED",
+            "workflow_id": workflow_id,
+            "result": "Simulated workflow completion"
+        }
+
+    async def pause_workflow(self, workflow_id: str) -> None:
+        if workflow_id not in self._active_workflows:
+            logger.warning("Workflow \'%s\' not found or not active. Cannot pause.", workflow_id)
+            return
+        self._active_workflows[workflow_id]["status"] = "PAUSED"
+        logger.info("Workflow \'%s\' paused.", workflow_id)
+
+    async def resume_workflow(self, workflow_id: str) -> None:
+        if workflow_id not in self._active_workflows:
+            logger.warning(
+                "Workflow \'%s\' not found or not paused. Cannot resume.",
+                workflow_id
+            )
+            return
+        self._active_workflows[workflow_id]["status"] = "RUNNING"
+        logger.info("Workflow \'%s\' resumed.", workflow_id)
+
+    async def terminate_workflow(self, workflow_id: str) -> None:
+        if workflow_id not in self._active_workflows:
+            logger.warning(
+                "Workflow \'%s\' not found or not active. Cannot terminate.",
+                workflow_id
+            )
+            return
+        del self._active_workflows[workflow_id]
+        logger.info("Workflow \'%s\' terminated.", workflow_id)

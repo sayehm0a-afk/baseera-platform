@@ -1,0 +1,63 @@
+import logging
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Callable
+
+logger = logging.getLogger(__name__)
+
+class IMessageDispatcher(ABC):
+    """واجهة مجردة لـ Message Dispatcher.
+
+    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لـ Message Dispatcher.
+    """
+
+    @abstractmethod
+    async def dispatch(self, message_type: str, payload: Dict[str, Any]) -> Any:
+        """يرسل رسالة إلى المعالج المناسب.
+
+        Args:
+            message_type (str): نوع الرسالة.
+            payload (Dict[str, Any]): حمولة (بيانات) الرسالة.
+
+        Returns:
+            Any: استجابة من معالج الرسالة.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def register_handler(self, message_type: str, handler: Callable[..., Any]) -> None:
+        """يسجل معالجًا لنوع رسالة معين.
+
+        Args:
+            message_type (str): نوع الرسالة الذي سيتعامل معه المعالج.
+            handler (Callable[..., Any]): الدالة التي ستعالج الرسالة.
+        """
+        raise NotImplementedError
+
+
+class MessageDispatcher(IMessageDispatcher):
+    """تنفيذ Message Dispatcher.
+
+    مسؤول عن إرسال الرسائل إلى المعالجات المسجلة.
+    """
+
+    def __init__(self) -> None:
+        self._handlers: Dict[str, Callable[..., Any]] = {}
+        logger.info("MessageDispatcher instance created.")
+
+    async def dispatch(self, message_type: str, payload: Dict[str, Any]) -> Any:
+        logger.info("Dispatching message %s with payload %s", message_type, payload)
+        handler = self._handlers.get(message_type)
+        if not handler:
+            logger.error("No handler registered for message %s", message_type)
+            raise ValueError(f"No handler registered for message {message_type}")
+        try:
+            return await handler(payload)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error("Error handling message %s with handler %s: %s", message_type, handler.__name__, e)
+            raise
+
+    async def register_handler(self, message_type: str, handler: Callable[..., Any]) -> None:
+        if message_type in self._handlers:
+            logger.warning("Handler already registered for message %s. Overwriting.", message_type)
+        self._handlers[message_type] = handler
+        logger.info("Registered handler for message %s: %s", message_type, handler.__name__)

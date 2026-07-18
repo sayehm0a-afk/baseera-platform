@@ -2,7 +2,7 @@ import pytest
 import logging
 from unittest.mock import MagicMock, patch
 from datetime import datetime
-from src.core.base_agent.base_agent import BaseAgent
+from core.base_agent.base_agent import BaseAgent
 
 # Mock logging to prevent console output during tests
 @pytest.fixture(autouse=True)
@@ -24,29 +24,38 @@ def test_base_agent_custom_id_initialization():
     agent = BaseAgent(agent_id="custom-id-123")
     assert agent.agent_id == "custom-id-123"
 
-def test_base_agent_activate_success():
+@pytest.mark.asyncio
+async def test_base_agent_activate_success():
     agent = BaseAgent()
     with patch.object(agent, '_load_config') as mock_load_config:
         with patch.object(agent, '_initialize_memory') as mock_init_memory:
-            with patch.object(agent, '_initialize_tools') as mock_init_tools:
+            with patch.object(agent, '_initialize_tools', new_callable=pytest.MonkeyPatch) as mock_init_tools:
+                # We need to mock the async method properly
+                async def mock_async_init_tools(*args, **kwargs):
+                    pass
+                agent._initialize_tools = mock_async_init_tools
                 with patch.object(agent, '_initialize_llm_client') as mock_init_llm_client:
-                    assert agent.activate() is True
+                    assert await agent.activate() is True
                     assert agent.status == "active"
                     mock_load_config.assert_called_once()
                     mock_init_memory.assert_called_once()
-                    mock_init_tools.assert_called_once()
                     mock_init_llm_client.assert_called_once()
 
-def test_base_agent_activate_from_paused():
+@pytest.mark.asyncio
+async def test_base_agent_activate_from_paused():
     agent = BaseAgent()
     agent.status = "paused"
-    assert agent.activate() is True
+    async def mock_async_init_tools(*args, **kwargs):
+        pass
+    agent._initialize_tools = mock_async_init_tools
+    assert await agent.activate() is True
     assert agent.status == "active"
 
-def test_base_agent_activate_when_active():
+@pytest.mark.asyncio
+async def test_base_agent_activate_when_active():
     agent = BaseAgent()
     agent.status = "active"
-    assert agent.activate() is False
+    assert await agent.activate() is False
     assert agent.status == "active"
 
 def test_base_agent_pause_success():
@@ -71,9 +80,13 @@ def test_base_agent_terminate_when_already_terminated():
     assert agent.terminate() is False
     assert agent.status == "terminated"
 
-def test_base_agent_process_task_not_implemented():
+@pytest.mark.asyncio
+async def test_base_agent_process_task_not_implemented():
     agent = BaseAgent()
-    agent.activate()
+    async def mock_async_init_tools(*args, **kwargs):
+        pass
+    agent._initialize_tools = mock_async_init_tools
+    await agent.activate()
     with pytest.raises(NotImplementedError, match="process_task method must be implemented by subclasses"):
         agent.process_task({"task_id": "1"})
 
@@ -82,10 +95,14 @@ def test_base_agent_process_task_not_active():
     with pytest.raises(RuntimeError, match="Agent not active"):
         agent.process_task({"task_id": "1"})
 
-def test_base_agent_get_status():
+@pytest.mark.asyncio
+async def test_base_agent_get_status():
     agent = BaseAgent()
     assert agent.get_status() == "initialized"
-    agent.activate()
+    async def mock_async_init_tools(*args, **kwargs):
+        pass
+    agent._initialize_tools = mock_async_init_tools
+    await agent.activate()
     assert agent.get_status() == "active"
 
 def test_base_agent_get_info():
@@ -104,16 +121,50 @@ def test_base_agent_reason_placeholder():
     result = agent._reason("test prompt", {"key": "value"})
     assert result == "Reasoning result"
 
-def test_base_agent_call_tool_placeholder():
+@pytest.mark.asyncio
+async def test_base_agent_call_tool_no_registry():
     agent = BaseAgent()
-    agent.tools["test_tool"] = MagicMock()
-    result = agent._call_tool("test_tool", arg1="val1")
-    assert result == "Result from test_tool"
+    with pytest.raises(RuntimeError, match="ToolRegistry not initialized for this agent"):
+        await agent._call_tool("test_tool")
 
-def test_base_agent_call_tool_not_found():
+@pytest.mark.asyncio
+async def test_base_agent_call_tool_not_found():
     agent = BaseAgent()
-    with pytest.raises(ValueError, match="Tool 'non_existent_tool' not available"):
-        agent._call_tool("non_existent_tool")
+    from unittest.mock import AsyncMock
+    agent.tool_registry = MagicMock()
+    agent.tool_registry.get_tool = AsyncMock(return_value=None)
+    with pytest.raises(ValueError, match="Tool non_existent_tool not found in registry"):
+        await agent._call_tool("non_existent_tool")
+
+@pytest.mark.asyncio
+async def test_base_agent_call_tool_success():
+    agent = BaseAgent()
+    from unittest.mock import AsyncMock
+    agent.tool_registry = MagicMock()
+    mock_tool = AsyncMock()
+    mock_tool.execute = AsyncMock(return_value="Result from test_tool")
+    agent.tool_registry.get_tool = AsyncMock(return_value=mock_tool)
+    
+    result = await agent._call_tool("test_tool", arg1="val1")
+    assert result == "Result from test_tool"
+    mock_tool.execute.assert_called_once_with(arg1="val1")
+
+@pytest.mark.asyncio
+async def test_base_agent_initialize_tools_no_registry():
+    agent = BaseAgent()
+    await agent._initialize_tools()
+    assert agent.tool_registry is None
+    assert agent.tools == {}
+
+@pytest.mark.asyncio
+async def test_base_agent_initialize_tools_with_registry():
+    agent = BaseAgent()
+    from unittest.mock import AsyncMock
+    mock_registry = MagicMock()
+    mock_registry.get_all_tools = AsyncMock(return_value={"tool1": "mock_tool_1"})
+    await agent._initialize_tools(mock_registry)
+    assert agent.tool_registry == mock_registry
+    assert agent.tools == {"tool1": "mock_tool_1"}
 
 def test_base_agent_interact_with_llm_placeholder():
     agent = BaseAgent()

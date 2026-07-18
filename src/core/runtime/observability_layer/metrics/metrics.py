@@ -1,0 +1,56 @@
+from abc import ABC, abstractmethod
+import logging
+from typing import Dict, Any
+
+class IMetricsManager(ABC):
+    @abstractmethod
+    def record_metric(self, name: str, value: Any, tags: Dict[str, str] = None):
+        """
+        يسجل مقياسًا (metric) بالاسم والقيمة والعلامات المحددة.
+
+        Args:
+            name (str): اسم المقياس.
+            value (Any): قيمة المقياس.
+            tags (Dict[str, str], optional): علامات اختيارية للمقياس. الافتراضي هو None.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def increment_counter(self, name: str, tags: Dict[str, str] = None):
+        """
+        يزيد عدادًا (counter) بالاسم والعلامات المحددة.
+
+        Args:
+            name (str): اسم العداد.
+            tags (Dict[str, str], optional): علامات اختيارية للعداد. الافتراضي هو None.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def gauge(self, name: str, value: Any, tags: Dict[str, str] = None):
+        """
+        يحدد قيمة مقياس (gauge) بالاسم والقيمة والعلامات المحددة.
+
+        Args:
+            name (str): اسم المقياس.
+            value (Any): قيمة المقياس.
+            tags (Dict[str, str], optional): علامات اختيارية للمقياس. الافتراضي هو None.
+        """
+        raise NotImplementedError
+
+logger = logging.getLogger(__name__)
+
+class MetricsManager(IMetricsManager):
+    def __init__(self):
+        # في بيئة إنتاج حقيقية، سيتم تهيئة هذا باستخدام نظام مراقبة مثل Prometheus أو Datadog
+        # لأغراض هذا المحاكاة، سنقوم ببساطة بطباعة المقاييس.
+        pass
+
+    def record_metric(self, name: str, value: Any, tags: Dict[str, str] = None):
+        logger.info(f"METRIC: {name}, VALUE: {value}, TAGS: {tags}")
+
+    def increment_counter(self, name: str, tags: Dict[str, str] = None):
+        logger.info(f"COUNTER INCREMENTED: {name}, TAGS: {tags}")
+
+    def gauge(self, name: str, value: Any, tags: Dict[str, str] = None):
+        logger.info(f"GAUGE: {name}, VALUE: {value}, TAGS: {tags}")

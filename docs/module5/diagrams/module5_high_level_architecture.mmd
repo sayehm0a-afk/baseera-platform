@@ -1,0 +1,81 @@
+graph TD
+    subgraph "Module 5: Autonomous Intelligence Layer"
+        A[Supervisor AI] --> B(Planner AI)
+        B --> C{Task Graph / DAG Engine}
+        C --> D[Execution Policies]
+        A --> E[Agent Registry]
+        A --> F[Context Manager]
+        A --> G[Reflection Engine]
+        G --> H[Self-Improvement Engine]
+        F --> I[Memory Reasoning]
+        F --> J[Knowledge Graph]
+        B --> K[Long-Term Planning]
+        E --> L[Multi-Agent Collaboration]
+        L --> M[Debate Engine]
+        L --> N[Agent Voting]
+        L --> O[Agent Ranking]
+        A --> P[Dynamic Tool Selection]
+        A --> Q[Dynamic Model Selection]
+        A --> R[Cost Optimizer]
+        A --> S[Self-Healing Runtime]
+        H --> T[Autonomous Learning]
+        
+        subgraph "Financial and Market Intelligence Layer"
+            U[Market Intelligence Layer] --> V[Saudi Stock Analysis Engine]
+            U --> W[Portfolio Manager]
+            U --> X[Risk Manager]
+            U --> Y[News Intelligence]
+            U --> Z[Technical Analysis]
+            U --> AA[Fundamental Analysis]
+            U --> BB[Macro Economy Analyzer]
+            V & W & X & Y & Z & AA & BB --> CC[Decision Fusion Engine]
+        end
+        
+        A --> CC
+        CC --> A
+    end
+
+    subgraph "External Modules (1-4)"
+        Mod1[Module 1] --> A
+        Mod2[Module 2] --> A
+        Mod3[Module 3] --> A
+        Mod4[Module 4] --> A
+        A --> Mod1
+        A --> Mod2
+        A --> Mod3
+        A --> Mod4
+    end
+
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style C fill:#ccf,stroke:#333,stroke-width:2px
+    style D fill:#cfc,stroke:#333,stroke-width:2px
+    style E fill:#fcf,stroke:#333,stroke-width:2px
+    style F fill:#ffc,stroke:#333,stroke-width:2px
+    style G fill:#f9f,stroke:#333,stroke-width:2px
+    style H fill:#bbf,stroke:#333,stroke-width:2px
+    style I fill:#ccf,stroke:#333,stroke-width:2px
+    style J fill:#cfc,stroke:#333,stroke-width:2px
+    style K fill:#fcf,stroke:#333,stroke-width:2px
+    style L fill:#ffc,stroke:#333,stroke-width:2px
+    style M fill:#f9f,stroke:#333,stroke-width:2px
+    style N fill:#bbf,stroke:#333,stroke-width:2px
+    style O fill:#ccf,stroke:#333,stroke-width:2px
+    style P fill:#cfc,stroke:#333,stroke-width:2px
+    style Q fill:#fcf,stroke:#333,stroke-width:2px
+    style R fill:#ffc,stroke:#333,stroke-width:2px
+    style S fill:#f9f,stroke:#333,stroke-width:2px
+    style T fill:#bbf,stroke:#333,stroke-width:2px
+    style U fill:#ccf,stroke:#333,stroke-width:2px
+    style V fill:#cfc,stroke:#333,stroke-width:2px
+    style W fill:#fcf,stroke:#333,stroke-width:2px
+    style X fill:#ffc,stroke:#333,stroke-width:2px
+    style Y fill:#f9f,stroke:#333,stroke-width:2px
+    style Z fill:#bbf,stroke:#333,stroke-width:2px
+    style AA fill:#ccf,stroke:#333,stroke-width:2px
+    style BB fill:#cfc,stroke:#333,stroke-width:2px
+    style CC fill:#fcf,stroke:#333,stroke-width:2px
+    style Mod1 fill:#eee,stroke:#333,stroke-width:2px
+    style Mod2 fill:#eee,stroke:#333,stroke-width:2px
+    style Mod3 fill:#eee,stroke:#333,stroke-width:2px
+    style Mod4 fill:#eee,stroke:#333,stroke-width:2px

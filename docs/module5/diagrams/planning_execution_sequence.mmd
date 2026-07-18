@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant User
+    participant SupervisorAI
+    participant PlannerAI
+    participant ContextManager
+    participant AgentRegistry
+    participant ExecutionPolicies
+    participant TaskGraphEngine
+    participant Agent
+
+    User->>SupervisorAI: Submit High-Level Objective
+    SupervisorAI->>SupervisorAI: Validate Objective
+    SupervisorAI->>PlannerAI: Request Plan (Objective)
+    PlannerAI->>PlannerAI: Decompose Objective into Tasks
+    PlannerAI->>TaskGraphEngine: Build DAG (Tasks, Dependencies)
+    TaskGraphEngine-->>PlannerAI: DAG
+    PlannerAI-->>SupervisorAI: Execution Plan (DAG)
+    SupervisorAI->>ContextManager: Store Initial Context (Plan, Objective)
+    SupervisorAI->>AgentRegistry: Discover Available Agents
+    AgentRegistry-->>SupervisorAI: List of Agents
+    SupervisorAI->>ExecutionPolicies: Select Execution Policy
+    ExecutionPolicies-->>SupervisorAI: Selected Policy
+    SupervisorAI->>SupervisorAI: Assign Agents to Tasks (based on Policy, Capabilities)
+
+    loop For each Task in DAG (Topological Order)
+        SupervisorAI->>ContextManager: Get Task Context
+        ContextManager-->>SupervisorAI: Task Context
+        SupervisorAI->>Agent: Execute Task (Task, Context, Policy)
+        Agent->>Agent: Perform Work
+        Agent->>ContextManager: Update Task Context
+        ContextManager-->>Agent: Confirmation
+        Agent-->>SupervisorAI: Task Result (Success/Failure)
+        SupervisorAI->>SupervisorAI: Monitor Task Status
+        alt If Task Fails
+            SupervisorAI->>PlannerAI: Request Re-plan (Failed Task, Current State)
+            PlannerAI-->>SupervisorAI: New/Updated Plan
+            SupervisorAI->>SupervisorAI: Adjust Execution
+        end
+    end
+
+    SupervisorAI->>SupervisorAI: Merge Outputs
+    SupervisorAI->>ContextManager: Store Final Result & Audit Trail
+    ContextManager-->>SupervisorAI: Confirmation
+    SupervisorAI-->>User: Final Result & Audit Report

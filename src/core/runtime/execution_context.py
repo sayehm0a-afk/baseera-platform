@@ -1,0 +1,91 @@
+"""وحدة Execution Context.
+
+تتولى هذه الوحدة مسؤولية توفير سياق قابل للتغيير (mutable context) لتنفيذ المهام وسير العمل.
+"""
+import logging
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+class IExecutionContext(ABC):
+    """واجهة مجردة لـ Execution Context.
+
+    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لـ Execution Context.
+    """
+
+    @abstractmethod
+    async def get_variable(self, key: str) -> Optional[Any]:
+        """يسترجع قيمة متغير من سياق التنفيذ.
+
+        Args:
+            key (str): مفتاح المتغير.
+
+        Returns:
+            Optional[Any]: قيمة المتغير، أو None إذا لم يتم العثور عليه.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def set_variable(self, key: str, value: Any) -> None:
+        """يحدد قيمة متغير في سياق التنفيذ.
+
+        Args:
+            key (str): مفتاح المتغير.
+            value (Any): قيمة المتغير.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_all_variables(self) -> Dict[str, Any]:
+        """يسترجع جميع المتغيرات في سياق التنفيذ.
+
+        Returns:
+            Dict[str, Any]: قاموس يحتوي على جميع المتغيرات وقيمها.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def update_context(self, updates: Dict[str, Any]) -> None:
+        """يحدّث سياق التنفيذ بقيم جديدة.
+
+        Args:
+            updates (Dict[str, Any]): قاموس يحتوي على المتغيرات المراد تحديثها.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def clear_context(self) -> None:
+        """يمسح جميع المتغيرات من سياق التنفيذ.
+        """
+        raise NotImplementedError
+
+
+class ExecutionContext(IExecutionContext):
+    """تنفيذ Execution Context.
+
+    مسؤول عن توفير سياق قابل للتغيير (mutable context) لتنفيذ المهام وسير العمل.
+    يحتوي على متغيرات يمكن للوكلاء والأدوات الوصول إليها وتعديلها أثناء التنفيذ.
+    """
+
+    def __init__(self, initial_context: Optional[Dict[str, Any]] = None):
+        self._context: Dict[str, Any] = initial_context if initial_context else {}
+        logger.info("ExecutionContext instance created with initial context: %s", initial_context)
+
+    async def get_variable(self, key: str) -> Optional[Any]:
+        return self._context.get(key)
+
+    async def set_variable(self, key: str, value: Any) -> None:
+        self._context[key] = value
+        logger.debug("Set variable '%s' to '%s' in execution context.", key, value)
+
+    async def get_all_variables(self) -> Dict[str, Any]:
+        return self._context.copy()
+
+    async def update_context(self, updates: Dict[str, Any]) -> None:
+        self._context.update(updates)
+        logger.debug("Updated execution context with: %s", updates)
+
+    async def clear_context(self) -> None:
+        self._context.clear()
+        logger.debug("Execution context cleared.")

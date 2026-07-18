@@ -1,0 +1,36 @@
+graph TD
+    subgraph Data Ingestion
+        DI_SM[Saudi Market Data Ingestion]
+        DI_Ext[External Data Sources]
+    end
+
+    subgraph Core Processing
+        CP_LLM[LLM Abstraction Layer]
+        CP_MEM[Memory Engine]
+        CP_KG[Knowledge Graph]
+        CP_PM[Prompt Management]
+        CP_MAS[Multi-Agent System]
+        CP_TCF[Tool Calling Framework]
+    end
+
+    subgraph Output & Interaction
+        OI_UI[Dashboard/UI]
+        OI_Rep[Reporting Module]
+        OI_Act[Agent Actions]
+    end
+
+    DI_SM --> CP_KG
+    DI_Ext --> CP_KG
+
+    CP_KG --> CP_MEM
+    CP_MEM --> CP_LLM
+    CP_PM --> CP_LLM
+    CP_LLM --> CP_MAS
+    CP_MAS --> CP_TCF
+    CP_TCF --> DI_Ext
+
+    CP_MAS --> OI_Act
+    CP_MAS --> OI_UI
+    CP_MAS --> OI_Rep
+    CP_LLM --> OI_UI
+    CP_LLM --> OI_Rep

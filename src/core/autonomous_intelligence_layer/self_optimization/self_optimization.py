@@ -1,0 +1,318 @@
+"""
+Self-Optimization Module
+
+This module implements Self-Optimization for autonomous system optimization,
+including performance tuning and parameter adjustment.
+"""
+
+from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+
+class OptimizationMetric(Enum):
+    """Enumeration for optimization metrics."""
+    LATENCY = "latency"
+    THROUGHPUT = "throughput"
+    ACCURACY = "accuracy"
+    COST = "cost"
+    RESOURCE_USAGE = "resource_usage"
+    ERROR_RATE = "error_rate"
+
+
+@dataclass
+class PerformanceMetric:
+    """Represents a performance metric."""
+    metric_id: str
+    metric_type: OptimizationMetric
+    value: float
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class OptimizationResult:
+    """Represents an optimization result."""
+    optimization_id: str
+    metric_type: OptimizationMetric
+    baseline_value: float
+    optimized_value: float
+    improvement_percentage: float
+    parameters_changed: Dict[str, Tuple[Any, Any]]  # {param: (old, new)}
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SelfOptimizationConfig:
+    """Configuration for Self-Optimization."""
+    enable_auto_tuning: bool = True
+    optimization_interval_seconds: int = 300
+    min_improvement_threshold: float = 1.0  # 1% improvement
+    max_parameters: int = 100
+
+
+class SelfOptimization:
+    """
+    Self-Optimization for autonomous system optimization.
+    
+    The Self-Optimization is responsible for:
+    - Collecting performance metrics
+    - Analyzing performance trends
+    - Identifying optimization opportunities
+    - Adjusting system parameters
+    - Tracking optimization history
+    - Generating optimization recommendations
+    """
+
+    def __init__(self, config: Optional[SelfOptimizationConfig] = None):
+        """
+        Initialize Self-Optimization.
+        
+        Args:
+            config: SelfOptimizationConfig instance.
+                   If None, uses default config.
+        """
+        self.config = config or SelfOptimizationConfig()
+        self.metrics: Dict[str, PerformanceMetric] = {}
+        self.optimizations: Dict[str, OptimizationResult] = {}
+        self.parameters: Dict[str, Any] = {}
+        self.baseline_metrics: Dict[OptimizationMetric, float] = {}
+
+    def record_metric(
+        self,
+        metric_id: str,
+        metric_type: OptimizationMetric,
+        value: float,
+    ) -> Optional[PerformanceMetric]:
+        """
+        Record a performance metric.
+        
+        Args:
+            metric_id: Unique identifier for the metric
+            metric_type: Type of metric
+            value: Metric value
+            
+        Returns:
+            PerformanceMetric if recorded successfully, None otherwise
+        """
+        metric = PerformanceMetric(
+            metric_id=metric_id,
+            metric_type=metric_type,
+            value=value,
+        )
+
+        self.metrics[metric_id] = metric
+
+        # Update baseline if not set
+        if metric_type not in self.baseline_metrics:
+            self.baseline_metrics[metric_type] = value
+
+        logger.debug(f"Metric recorded: {metric_id}")
+        return metric
+
+    def set_parameter(self, param_name: str, value: Any) -> bool:
+        """
+        Set a system parameter.
+        
+        Args:
+            param_name: Parameter name
+            value: Parameter value
+            
+        Returns:
+            True if set successfully, False otherwise
+        """
+        if len(self.parameters) >= self.config.max_parameters:
+            logger.error("Maximum parameters limit reached")
+            return False
+
+        self.parameters[param_name] = value
+        logger.debug(f"Parameter set: {param_name} = {value}")
+        return True
+
+    def get_parameter(self, param_name: str) -> Optional[Any]:
+        """
+        Get a system parameter.
+        
+        Args:
+            param_name: Parameter name
+            
+        Returns:
+            Parameter value if found, None otherwise
+        """
+        return self.parameters.get(param_name)
+
+    def optimize_parameters(
+        self,
+        optimization_id: str,
+        metric_type: OptimizationMetric,
+        optimization_func,
+    ) -> Optional[OptimizationResult]:
+        """
+        Optimize system parameters for a metric.
+        
+        Args:
+            optimization_id: Unique identifier for the optimization
+            metric_type: Type of metric to optimize
+            optimization_func: Function to perform optimization
+            
+        Returns:
+            OptimizationResult if optimization successful, None otherwise
+        """
+        baseline = self.baseline_metrics.get(metric_type, 0.0)
+
+        # Get current metric value
+        current_metrics = [
+            m for m in self.metrics.values()
+            if m.metric_type == metric_type
+        ]
+
+        if not current_metrics:
+            logger.warning(f"No metrics found for: {metric_type}")
+            return None
+
+        current_value = current_metrics[-1].value
+        old_parameters = dict(self.parameters)
+
+        try:
+            # Execute optimization function
+            optimization_func()
+
+            # Get new metric value
+            new_metrics = [
+                m for m in self.metrics.values()
+                if m.metric_type == metric_type
+            ]
+
+            if new_metrics:
+                new_value = new_metrics[-1].value
+                improvement_percentage = self._calculate_improvement(
+                    current_value, new_value, metric_type
+                )
+
+                if improvement_percentage >= self.config.min_improvement_threshold:
+                    parameters_changed = {}
+                    for param, new_val in self.parameters.items():
+                        old_val = old_parameters.get(param)
+                        if old_val != new_val:
+                            parameters_changed[param] = (old_val, new_val)
+
+                    result = OptimizationResult(
+                        optimization_id=optimization_id,
+                        metric_type=metric_type,
+                        baseline_value=baseline,
+                        optimized_value=new_value,
+                        improvement_percentage=improvement_percentage,
+                        parameters_changed=parameters_changed,
+                    )
+
+                    self.optimizations[optimization_id] = result
+                    logger.debug(f"Optimization completed: {optimization_id}")
+                    return result
+
+        except Exception as e:
+            logger.error(f"Optimization failed: {str(e)}")
+            # Rollback parameters
+            self.parameters = old_parameters
+
+        return None
+
+    def _calculate_improvement(
+        self,
+        old_value: float,
+        new_value: float,
+        metric_type: OptimizationMetric,
+    ) -> float:
+        """
+        Calculate improvement percentage.
+        
+        Args:
+            old_value: Old metric value
+            new_value: New metric value
+            metric_type: Type of metric
+            
+        Returns:
+            Improvement percentage
+        """
+        if old_value == 0:
+            return 0.0
+
+        # For some metrics, lower is better
+        if metric_type in [OptimizationMetric.LATENCY, OptimizationMetric.COST, OptimizationMetric.ERROR_RATE, OptimizationMetric.RESOURCE_USAGE]:
+            improvement = ((old_value - new_value) / old_value) * 100
+        else:
+            improvement = ((new_value - old_value) / old_value) * 100
+
+        return improvement
+
+    def get_metric(self, metric_id: str) -> Optional[PerformanceMetric]:
+        """
+        Get a performance metric.
+        
+        Args:
+            metric_id: The metric ID
+            
+        Returns:
+            PerformanceMetric if found, None otherwise
+        """
+        return self.metrics.get(metric_id)
+
+    def get_optimization(self, optimization_id: str) -> Optional[OptimizationResult]:
+        """
+        Get an optimization result.
+        
+        Args:
+            optimization_id: The optimization ID
+            
+        Returns:
+            OptimizationResult if found, None otherwise
+        """
+        return self.optimizations.get(optimization_id)
+
+    def get_metrics_by_type(self, metric_type: OptimizationMetric) -> List[PerformanceMetric]:
+        """
+        Get metrics by type.
+        
+        Args:
+            metric_type: Type of metric
+            
+        Returns:
+            List of metrics of specified type
+        """
+        return [m for m in self.metrics.values() if m.metric_type == metric_type]
+
+    def get_average_metric(self, metric_type: OptimizationMetric) -> float:
+        """
+        Get average metric value.
+        
+        Args:
+            metric_type: Type of metric
+            
+        Returns:
+            Average metric value
+        """
+        metrics = self.get_metrics_by_type(metric_type)
+        if not metrics:
+            return 0.0
+
+        return sum(m.value for m in metrics) / len(metrics)
+
+    def get_best_optimization(self) -> Optional[OptimizationResult]:
+        """
+        Get the best optimization result.
+        
+        Returns:
+            OptimizationResult with highest improvement, or None
+        """
+        if not self.optimizations:
+            return None
+
+        return max(
+            self.optimizations.values(),
+            key=lambda x: x.improvement_percentage,
+        )

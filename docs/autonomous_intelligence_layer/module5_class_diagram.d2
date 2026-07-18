@@ -1,0 +1,77 @@
+direction: right
+
+# Module 5: Autonomous Intelligence Layer Class Diagram
+
+SupervisorAI: {
+  shape: class
+  label: "SupervisorAI\n---\n+ coordinate_decisions()\n+ decompose_task()\n+ orchestrate_agents()\n+ supervise_execution()\n+ manage_dependencies()\n+ apply_retry_strategy()\n+ recover_from_failure()\n+ monitor_progress()\n+ manage_agent_lifecycle()\n+ allocate_resources()\n+ consider_cost()\n+ distribute_context()\n+ enforce_execution_policy()\n+ schedule_priority()\n---\n- agent_registry: AgentRegistry\n- planner_ai: PlannerAI\n- task_graph_engine: TaskGraphEngine\n- context_manager: ContextManager\n- execution_policies: ExecutionPolicies\n"
+}
+
+PlannerAI: {
+  shape: class
+  label: "PlannerAI\n---\n+ decompose_goal()\n+ plan_multi_step()\n+ create_dependency_graph()\n+ plan_parallel_execution()\n+ plan_sequential_execution()\n+ plan_conditional_execution()\n+ plan_recursive()\n+ replan_dynamically()\n+ optimize_plan()\n+ estimate_cost()\n---\n- task_graph_engine: TaskGraphEngine\n"
+}
+
+TaskGraphEngine: {
+  shape: class
+  label: "TaskGraphEngine\n---\n+ create_dag()\n+ validate_graph()\n+ detect_cycles()\n+ order_by_priority()\n+ expand_graph_dynamically()\n+ determine_execution_order()\n---\n- graph: DAG\n"
+}
+
+ExecutionPolicies: {
+  shape: class
+  label: "ExecutionPolicies\n---\n+ get_policy(mode: str): Policy\n---\n- policies: Dict[str, Policy]\n"
+}
+
+ContextManager: {
+  shape: class
+  label: "ContextManager\n---\n+ get_shared_context()\n+ get_isolated_context()\n+ get_inherited_context()\n+ compress_context()\n+ filter_context()\n+ merge_context()\n---\n- context_store: ContextStore\n"
+}
+
+AgentRegistry: {
+  shape: class
+  label: "AgentRegistry\n---\n+ discover_agents()\n+ get_agent(agent_id: str): Agent\n"
+}
+
+Policy: {
+  shape: class
+  label: "Policy\n---\n+ apply(task: Task): Task\n"
+}
+
+ContextStore: {
+  shape: class
+  label: "ContextStore\n---\n+ store_context(key: str, context: Any)
++ retrieve_context(key: str): Any\n"
+}
+
+DAG: {
+  shape: class
+  label: "DAG\n---\n+ add_node(node: Node)\n+ add_edge(from_node: Node, to_node: Node)\n+ get_dependencies(node: Node): List[Node]\n"
+}
+
+Node: {
+  shape: class
+  label: "Node\n---\n+ id: str\n+ task: Task\n"
+}
+
+Task: {
+  shape: class
+  label: "Task\n---\n+ id: str\n+ status: str\n+ agent_id: str\n+ payload: Any\n"
+}
+
+Agent: {
+  shape: class
+  label: "Agent\n---\n+ id: str\n+ capabilities: List[str]\n+ status: str\n"
+}
+
+SupervisorAI -> PlannerAI: uses
+SupervisorAI -> TaskGraphEngine: uses
+SupervisorAI -> ExecutionPolicies: uses
+SupervisorAI -> ContextManager: uses
+SupervisorAI -> AgentRegistry: integrates
+PlannerAI -> TaskGraphEngine: creates
+ExecutionPolicies -> Policy: contains
+ContextManager -> ContextStore: uses
+TaskGraphEngine -> DAG: manages
+DAG -> Node: contains
+Node -> Task: represents
+AgentRegistry -> Agent: manages

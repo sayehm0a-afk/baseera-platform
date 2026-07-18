@@ -1,0 +1,79 @@
+--- 
+title: Runtime & Orchestration High-Level Class Diagram
+---
+classDiagram
+    direction LR
+
+    class AgentRuntime {
+        +start_agent(agent_id)
+        +stop_agent(agent_id)
+        +restart_agent(agent_id)
+        +get_agent_status(agent_id)
+    }
+
+    class OrchestrationEngine {
+        +distribute_task(task)
+        +manage_dependencies(task_id)
+        +execute_workflow(workflow_id)
+        +prevent_deadlocks()
+    }
+
+    class InternalMessaging {
+        +publish_event(event)
+        +send_command(command)
+        +request_response(request)
+    }
+
+    class TaskQueueScheduler {
+        +add_task(task, priority)
+        +schedule_task(task_id, delay)
+        +cancel_task(task_id)
+        +get_task_status(task_id)
+    }
+
+    class WorkflowEngine {
+        +define_workflow(workflow_definition)
+        +start_workflow(workflow_id)
+        +get_workflow_state(workflow_id)
+        +resume_workflow(workflow_id)
+    }
+
+    class MemoryContracts {
+        +get_short_term_context(task_id)
+        +set_short_term_context(task_id, context)
+        +get_long_term_memory(query)
+        +update_long_term_memory(data)
+    }
+
+    class ConcurrencyResourceControl {
+        +acquire_resource(resource_id)
+        +release_resource(resource_id)
+        +apply_rate_limit(operation)
+        +check_token_budget(agent_id)
+    }
+
+    class ReliabilityModule {
+        +ensure_idempotency(operation_id)
+        +handle_failure(error)
+        +recover_state(task_id)
+    }
+
+    class SecurityModule {
+        +check_tool_permission(agent_id, tool_name)
+        +validate_input(data)
+        +manage_secrets(key)
+    }
+
+    AgentRuntime "1" -- "1" OrchestrationEngine : manages >
+    OrchestrationEngine "1" -- "1" InternalMessaging : communicates via >
+    OrchestrationEngine "1" -- "1" TaskQueueScheduler : schedules tasks >
+    OrchestrationEngine "1" -- "1" WorkflowEngine : executes workflows >
+    OrchestrationEngine "1" -- "1" ConcurrencyResourceControl : controls resources >
+    AgentRuntime "1" -- "1" MemoryContracts : accesses >
+    OrchestrationEngine "1" -- "1" ReliabilityModule : ensures >
+    OrchestrationEngine "1" -- "1" SecurityModule : enforces >
+    InternalMessaging "1" -- "*" TaskQueueScheduler : sends events/commands >
+    TaskQueueScheduler "1" -- "1" ReliabilityModule : handles retries >
+    WorkflowEngine "1" -- "1" TaskQueueScheduler : submits steps >
+    WorkflowEngine "1" -- "1" MemoryContracts : stores state >
+    AgentRuntime "1" -- "1" SecurityModule : checks permissions >

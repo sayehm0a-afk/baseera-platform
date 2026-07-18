@@ -1,0 +1,114 @@
+classDiagram
+    direction LR
+
+    class SupervisorAI {
+        + coordinate_decisions()
+        + decompose_task()
+        + orchestrate_agents()
+        + supervise_execution()
+        + manage_dependencies()
+        + apply_retry_strategy()
+        + recover_from_failure()
+        + monitor_progress()
+        + manage_agent_lifecycle()
+        + allocate_resources()
+        + consider_cost()
+        + distribute_context()
+        + enforce_execution_policy()
+        + schedule_priority()
+        - agent_registry: AgentRegistry
+        - planner_ai: PlannerAI
+        - task_graph_engine: TaskGraphEngine
+        - context_manager: ContextManager
+        - execution_policies: ExecutionPolicies
+    }
+
+    class PlannerAI {
+        + decompose_goal()
+        + plan_multi_step()
+        + create_dependency_graph()
+        + plan_parallel_execution()
+        + plan_sequential_execution()
+        + plan_conditional_execution()
+        + plan_recursive()
+        + replan_dynamically()
+        + optimize_plan()
+        + estimate_cost()
+        - task_graph_engine: TaskGraphEngine
+    }
+
+    class TaskGraphEngine {
+        + create_dag()
+        + validate_graph()
+        + detect_cycles()
+        + order_by_priority()
+        + expand_graph_dynamically()
+        + determine_execution_order()
+        - graph: DAG
+    }
+
+    class ExecutionPolicies {
+        + get_policy(mode: str): Policy
+        - policies: Dict[str, Policy]
+    }
+
+    class ContextManager {
+        + get_shared_context()
+        + get_isolated_context()
+        + get_inherited_context()
+        + compress_context()
+        + filter_context()
+        + merge_context()
+        - context_store: ContextStore
+    }
+
+    class AgentRegistry {
+        + discover_agents()
+        + get_agent(agent_id: str): Agent
+    }
+
+    class Policy {
+        + apply(task: Task): Task
+    }
+
+    class ContextStore {
+        + store_context(key: str, context: Any)
+        + retrieve_context(key: str): Any
+    }
+
+    class DAG {
+        + add_node(node: Node)
+        + add_edge(from_node: Node, to_node: Node)
+        + get_dependencies(node: Node): List[Node]
+    }
+
+    class Node {
+        + id: str
+        + task: Task
+    }
+
+    class Task {
+        + id: str
+        + status: str
+        + agent_id: str
+        + payload: Any
+    }
+
+    class Agent {
+        + id: str
+        + capabilities: List[str]
+        + status: str
+    }
+
+    SupervisorAI --> PlannerAI: uses
+    SupervisorAI --> TaskGraphEngine: uses
+    SupervisorAI --> ExecutionPolicies: uses
+    SupervisorAI --> ContextManager: uses
+    SupervisorAI --> AgentRegistry: integrates
+    PlannerAI --> TaskGraphEngine: creates
+    ExecutionPolicies --> Policy: contains
+    ContextManager --> ContextStore: uses
+    TaskGraphEngine --> DAG: manages
+    DAG --> Node: contains
+    Node --> Task: represents
+    AgentRegistry --> Agent: manages

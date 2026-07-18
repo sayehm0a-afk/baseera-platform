@@ -1,0 +1,20 @@
+sequenceDiagram
+    participant Agent
+    participant DynamicToolSelection
+    participant ToolRegistry
+    participant DynamicModelSelection
+    participant ModelRegistry
+
+    Agent->>DynamicToolSelection: Request Tool (Task Requirements)
+    DynamicToolSelection->>ToolRegistry: Discover Tools (Capabilities, Permissions)
+    ToolRegistry-->>DynamicToolSelection: Available Tools
+    DynamicToolSelection->>DynamicToolSelection: Evaluate Tools (Reliability, Latency)
+    DynamicToolSelection-->>Agent: Selected Tool
+    Agent->>Agent: Execute Task with Selected Tool
+
+    Agent->>DynamicModelSelection: Request LLM (Task Requirements)
+    DynamicModelSelection->>ModelRegistry: Discover Models (Capabilities, Cost, Latency)
+    ModelRegistry-->>DynamicModelSelection: Available Models
+    DynamicModelSelection->>DynamicModelSelection: Evaluate Models (Performance, Security)
+    DynamicModelSelection-->>Agent: Selected LLM
+    Agent->>Agent: Execute Task with Selected LLM

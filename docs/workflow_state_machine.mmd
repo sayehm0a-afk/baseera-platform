@@ -1,0 +1,14 @@
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Running: Start Workflow
+    Running --> Paused: Pause Workflow
+    Paused --> Running: Resume Workflow
+    Running --> Completed: All Steps Successful
+    Running --> Failed: Step Failure
+    Running --> Cancelled: User Cancellation
+    Failed --> Retrying: Retry Attempt
+    Retrying --> Running: Retry Success
+    Retrying --> Failed: Retry Exhausted
+    Completed --> [*]
+    Failed --> [*]
+    Cancelled --> [*]

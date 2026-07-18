@@ -1,0 +1,34 @@
+direction: right
+
+Platform: "منصة بصيرة" {
+  subgraph CoreFramework {
+    shape: cloud
+    BaseAgent: "BaseAgent"
+    LLMAbstractionLayer: "LLM Abstraction Layer"
+    ToolCallingFramework: "Tool Calling Framework"
+    ErrorHandling: "Error Handling & Retry"
+    LoggingTelemetry: "Logging & Telemetry"
+
+    BaseAgent -> LLMAbstractionLayer
+    BaseAgent -> ToolCallingFramework
+    ToolCallingFramework -> ErrorHandling
+    ToolCallingFramework -> LoggingTelemetry
+    LLMAbstractionLayer -> ErrorHandling
+    LLMAbstractionLayer -> LoggingTelemetry
+  }
+
+  subgraph MultiAgentSystemTools {
+    shape: cloud
+    SupervisorAgent: "Supervisor Agent"
+    AgentRegistry: "Agent Registry"
+BaseTool: "BaseTool"
+    ToolRegistry: "Tool Registry"
+
+    SupervisorAgent -> AgentRegistry
+    SupervisorAgent -> BaseAgent
+    ToolRegistry -> BaseTool
+    BaseAgent -> ToolRegistry
+  }
+
+  CoreFramework.BaseAgent -> MultiAgentSystemTools.SupervisorAgent
+}

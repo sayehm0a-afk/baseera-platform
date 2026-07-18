@@ -1,0 +1,43 @@
+graph TD
+    subgraph "Module 5: Autonomous Intelligence Layer"
+        subgraph "Knowledge Graph Layer"
+            A[Data Ingestion] --> B(Knowledge Graph Processor)
+            B --> C[Knowledge Graph Store]
+            C --> D[Entities]
+            C --> E[Relationships]
+            C --> F[Attributes]
+
+            B -- Provenance/Confidence/Time Validity --> C
+            B -- Versioning --> C
+
+            G[Knowledge Graph Query Engine] --> C
+            H[Traversal Engine] --> C
+            I[Entity Resolution] --> B
+            J[Relationship Extraction] --> B
+            K[Conflict Detection] --> B
+            L[Knowledge Updates] --> B
+            M[Knowledge Invalidation] --> B
+
+            N[Supervisor AI] --> G
+            N --> L
+            N --> M
+
+            C -- Permissions --> O[Security Layer]
+        end
+    end
+
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style C fill:#ccf,stroke:#333,stroke-width:2px
+    style D fill:#cfc,stroke:#333,stroke-width:2px
+    style E fill:#fcf,stroke:#333,stroke-width:2px
+    style F fill:#ffc,stroke:#333,stroke-width:2px
+    style G fill:#f9f,stroke:#333,stroke-width:2px
+    style H fill:#bbf,stroke:#333,stroke-width:2px
+    style I fill:#ccf,stroke:#333,stroke-width:2px
+    style J fill:#fcf,stroke:#333,stroke-width:2px
+    style K fill:#ffc,stroke:#333,stroke-width:2px
+    style L fill:#f9f,stroke:#333,stroke-width:2px
+    style M fill:#bbf,stroke:#333,stroke-width:2px
+    style N fill:#ccf,stroke:#333,stroke-width:2px
+    style O fill:#cfc,stroke:#333,stroke-width:2px

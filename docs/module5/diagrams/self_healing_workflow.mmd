@@ -1,0 +1,21 @@
+graph TD
+    A[Component Failure Detected] --> B{Diagnose Cause}
+    B --> C{Attempt Automatic Recovery}
+    C --> D{Recovery Successful?}
+    D -- Yes --> E[System Operational]
+    D -- No --> F{Reconfigure System?}
+    F -- Yes --> G[System Reconfigured]
+    F -- No --> H[Escalate to Supervisor AI/Human Review]
+    G --> E
+    H --> I[Problem Resolved Manually]
+    I --> E
+
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style C fill:#ccf,stroke:#333,stroke-width:2px
+    style D fill:#cfc,stroke:#333,stroke-width:2px
+    style E fill:#fcf,stroke:#333,stroke-width:2px
+    style F fill:#ffc,stroke:#333,stroke-width:2px
+    style G fill:#f9f,stroke:#333,stroke-width:2px
+    style H fill:#bbf,stroke:#333,stroke-width:2px
+    style I fill:#ccf,stroke:#333,stroke-width:2px

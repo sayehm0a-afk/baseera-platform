@@ -1,9 +1,10 @@
 import pytest
 import logging
 import threading
+import asyncio
 import time
 from unittest.mock import MagicMock, patch
-from src.core.base_agent.base_agent import BaseAgent
+from core.base_agent.base_agent import BaseAgent
 
 # Mock logging to prevent console output during tests
 @pytest.fixture(autouse=True)
@@ -39,23 +40,26 @@ def test_base_agent_pause_from_terminated():
     assert agent.pause() is False
     assert agent.status == "terminated"
 
-def test_base_agent_activate_from_terminated():
+@pytest.mark.asyncio
+async def test_base_agent_activate_from_terminated():
     agent = BaseAgent()
     agent.terminate()
-    assert agent.activate() is False
+    assert await agent.activate() is False
     assert agent.status == "terminated"
 
-def test_base_agent_process_task_when_paused():
+@pytest.mark.asyncio
+async def test_base_agent_process_task_when_paused():
     agent = BaseAgent()
     agent.activate()
     agent.pause()
     with pytest.raises(RuntimeError, match="Agent not active"):
         agent.process_task({"task_id": "1"})
 
-def test_base_agent_call_tool_none_name():
+@pytest.mark.asyncio
+async def test_base_agent_call_tool_none_name():
     agent = BaseAgent()
     with pytest.raises(ValueError):
-        agent._call_tool(None)
+        await agent._call_tool(None)
 
 # --- Concurrency Tests ---
 
@@ -63,8 +67,11 @@ def test_base_agent_concurrent_activations():
     agent = BaseAgent()
     results = []
 
+    async def activate_agent_async():
+        results.append(await agent.activate())
+
     def activate_agent():
-        results.append(agent.activate())
+        asyncio.run(activate_agent_async())
 
     threads = [threading.Thread(target=activate_agent) for _ in range(10)]
     for t in threads:
@@ -78,14 +85,18 @@ def test_base_agent_concurrent_activations():
     assert results.count(True) >= 1
     assert agent.status == "active"
 
-def test_base_agent_concurrent_status_changes():
+@pytest.mark.asyncio
+async def test_base_agent_concurrent_status_changes():
     agent = BaseAgent()
     agent.activate()
 
-    def toggle_status():
+    async def toggle_status_async():
         for _ in range(100):
             agent.pause()
-            agent.activate()
+            await agent.activate()
+
+    def toggle_status():
+        asyncio.run(toggle_status_async())
 
     threads = [threading.Thread(target=toggle_status) for _ in range(5)]
     for t in threads:
@@ -102,10 +113,11 @@ def test_base_agent_mass_initialization():
     assert len(agents) == 1000
     assert agents[999].name == "Agent_999"
 
-def test_base_agent_rapid_status_cycling():
+@pytest.mark.asyncio
+async def test_base_agent_rapid_status_cycling():
     agent = BaseAgent()
     for _ in range(1000):
-        agent.activate()
+        await agent.activate()
         agent.pause()
     assert agent.status == "paused"
 

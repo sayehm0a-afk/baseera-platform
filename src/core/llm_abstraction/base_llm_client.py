@@ -1,5 +1,5 @@
 """
-وحدة BaseLLMClient الأساسية لمنصة بصيرة.
+وحدة BaseLLMClient الأساسية لمنصة basirah.
 توفر واجهة موحدة للتعامل مع نماذج اللغة الكبيرة (LLMs).
 """
 import logging
@@ -32,7 +32,7 @@ class BaseLLMClient(ABC):
         Returns:
             Dict[str, Any]: قاموس يحتوي على الاستجابة من النموذج.
         """
-        pass
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
     async def count_tokens(self, text: str) -> int:
@@ -45,7 +45,7 @@ class BaseLLMClient(ABC):
         Returns:
             int: عدد التوكنات.
         """
-        pass
+        raise NotImplementedError  # pragma: no cover
 
     @abstractmethod
     async def get_model_info(self) -> Dict[str, Any]:
@@ -55,7 +55,7 @@ class BaseLLMClient(ABC):
         Returns:
             Dict[str, Any]: قاموس يحتوي على معلومات النموذج (مثل التكاليف، حدود التوكنات).
         """
-        pass
+        raise NotImplementedError  # pragma: no cover
 
     async def _handle_retry(self, func, *args, **kwargs) -> Any:
         """
@@ -67,24 +67,25 @@ class BaseLLMClient(ABC):
         for i in range(max_retries):
             try:
                 return await func(*args, **kwargs)
-            except Exception as e:
+            except (asyncio.TimeoutError, ConnectionError, Exception) as e:  # pylint: disable=W0718,broad-exception-caught
+            # Catching broad Exception here is intentional for retry mechanism robustness.
                 logger.warning("Attempt %d failed: %s", i + 1, e)
                 if i < max_retries - 1:
                     await asyncio.sleep(delay)
                 else:
                     raise
-        return None
+
 
 # Example of how a concrete client would implement this interface
 # class ConcreteLLMClient(BaseLLMClient):
 #     async def generate_response(self, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
 #         # Implementation specific to the concrete LLM provider
-#         pass
+#         raise NotImplementedError  # pragma: no cover
 #
 #     async def count_tokens(self, text: str) -> int:
 #         # Implementation specific to the concrete LLM provider
-#         pass
+#         raise NotImplementedError  # pragma: no cover
 #
 #     async def get_model_info(self) -> Dict[str, Any]:
 #         # Implementation specific to the concrete LLM provider
-#         pass
+#         raise NotImplementedError  # pragma: no cover

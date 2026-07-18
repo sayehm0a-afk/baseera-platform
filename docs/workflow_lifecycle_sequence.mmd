@@ -1,0 +1,36 @@
+sequenceDiagram
+    participant User
+    participant SupervisorAgent
+    participant OrchestrationEngine
+    participant WorkflowEngine
+    participant TaskQueueScheduler
+    participant WorkerAgent
+    participant Tool
+
+    User->>SupervisorAgent: Submit Task (e.g., "Analyze Stock X")
+    SupervisorAgent->>OrchestrationEngine: Create Workflow (Task ID)
+    OrchestrationEngine->>WorkflowEngine: Define Workflow (Steps, Dependencies)
+    WorkflowEngine->>OrchestrationEngine: Workflow Definition
+
+    loop Process Workflow Steps
+        OrchestrationEngine->>WorkflowEngine: Get Next Ready Step
+        WorkflowEngine-->>OrchestrationEngine: Step Details (e.g., "Fetch Data")
+
+        OrchestrationEngine->>TaskQueueScheduler: Add Task (Step, Priority)
+        TaskQueueScheduler->>TaskQueueScheduler: Enqueue Task
+
+        TaskQueueScheduler->>WorkerAgent: Dispatch Task (Step)
+        WorkerAgent->>WorkerAgent: Process Step
+
+        alt If Step Requires Tool
+            WorkerAgent->>Tool: Execute Tool (e.g., "Get Stock Data")
+            Tool-->>WorkerAgent: Tool Result
+        end
+
+        WorkerAgent->>OrchestrationEngine: Report Step Completion/Failure
+        OrchestrationEngine->>WorkflowEngine: Update Step State
+        WorkflowEngine->>WorkflowEngine: Check Dependencies
+    end
+
+    OrchestrationEngine->>SupervisorAgent: Report Workflow Completion/Failure
+    SupervisorAgent->>User: Deliver Result/Notification

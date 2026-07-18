@@ -1,0 +1,27 @@
+sequenceDiagram
+    participant MultipleAgents
+    participant AnalyticalEngines
+    participant DecisionFusionEngine
+    participant SupervisorAI
+    participant HumanApproval
+
+    MultipleAgents->>DecisionFusionEngine: Submit Outputs (Scores, Confidence)
+    AnalyticalEngines->>DecisionFusionEngine: Submit Outputs (Insights, Recommendations)
+
+    DecisionFusionEngine->>DecisionFusionEngine: Normalize Scores & Confidence
+    DecisionFusionEngine->>DecisionFusionEngine: Evaluate Evidence Quality
+    DecisionFusionEngine->>DecisionFusionEngine: Detect Contradictions
+    DecisionFusionEngine->>DecisionFusionEngine: Apply Configurable Weights
+    DecisionFusionEngine->>DecisionFusionEngine: Consider Risk & Uncertainty
+    DecisionFusionEngine->>DecisionFusionEngine: Produce Unified Decision
+    DecisionFusionEngine->>DecisionFusionEngine: Generate Alternative Scenarios
+    DecisionFusionEngine->>DecisionFusionEngine: Generate Confidence Intervals
+    DecisionFusionEngine->>DecisionFusionEngine: Explain Decision Rationale
+
+    alt High-Risk Action
+        DecisionFusionEngine->>HumanApproval: Request Approval (Decision, Explanation, Evidence)
+        HumanApproval-->>DecisionFusionEngine: Approval/Rejection
+    end
+
+    DecisionFusionEngine-->>SupervisorAI: Unified Decision (with Explanation, Evidence)
+    SupervisorAI->>SupervisorAI: Record Decision & Audit Trail

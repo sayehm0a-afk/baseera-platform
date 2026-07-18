@@ -1,0 +1,21 @@
+"""Financial Intelligence Module"""
+
+from .financial_intelligence import (
+    FinancialIntelligence,
+    Transaction,
+    Budget,
+    FinancialReport,
+    TransactionType,
+    FinancialMetric,
+    FinancialIntelligenceConfig,
+)
+
+__all__ = [
+    "FinancialIntelligence",
+    "Transaction",
+    "Budget",
+    "FinancialReport",
+    "TransactionType",
+    "FinancialMetric",
+    "FinancialIntelligenceConfig",
+]

@@ -1,0 +1,70 @@
+import logging
+from abc import ABC, abstractmethod
+from typing import Any, Dict
+
+logger = logging.getLogger(__name__)
+
+class IMessageRouter(ABC):
+    """واجهة مجردة لـ Message Router.
+
+    تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لـ Message Router.
+    """
+
+    @abstractmethod
+    async def route_message(self, message_type: str, payload: Dict[str, Any]) -> Any:
+        """يوجه رسالة إلى الوجهة المناسبة (مثل MessagingBus أو MessageDispatcher).
+
+        Args:
+            message_type (str): نوع الرسالة.
+            payload (Dict[str, Any]): حمولة (بيانات) الرسالة.
+
+        Returns:
+            Any: استجابة من معالج الرسالة.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def register_route(self, message_type: str, destination: Any) -> None:
+        """يسجل وجهة لنوع رسالة معين.
+
+        Args:
+            message_type (str): نوع الرسالة الذي سيتم توجيهه.
+            destination (Any): الوجهة (مثل MessagingBus أو MessageDispatcher) التي ستستقبل الرسالة.
+        """
+        raise NotImplementedError
+
+
+class MessageRouter(IMessageRouter):
+    """تنفيذ Message Router.
+
+    مسؤول عن توجيه الرسائل إلى الوجهات المسجلة.
+    """
+
+    def __init__(self) -> None:
+        self._routes: Dict[str, Any] = {}
+        logger.info("MessageRouter instance created.")
+
+    async def route_message(self, message_type: str, payload: Dict[str, Any]) -> Any:
+        logger.info("Routing message %s with payload %s", message_type, payload)
+        destination = self._routes.get(message_type)
+        if not destination:
+            logger.error("No route registered for message %s", message_type)
+            raise ValueError(f"No route registered for message {message_type}")
+        
+        # افتراض أن الوجهة لديها طريقة dispatch أو publish_event
+        if hasattr(destination, 'dispatch'):
+            return await destination.dispatch(message_type, payload)
+        elif hasattr(destination, 'publish_event'):
+            return await destination.publish_event(message_type, payload)
+        elif hasattr(destination, 'send_command'):
+            return await destination.send_command(message_type, payload)
+
+        else:
+            logger.error("Invalid destination type for message %s", message_type)
+            raise TypeError(f"Invalid destination type for message {message_type}")
+
+    async def register_route(self, message_type: str, destination: Any) -> None:
+        if message_type in self._routes:
+            logger.warning("Route already registered for message %s. Overwriting.", message_type)
+        self._routes[message_type] = destination
+        logger.info("Registered route for message %s: %s", message_type, destination.__class__.__name__)

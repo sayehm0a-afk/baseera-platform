@@ -1,0 +1,26 @@
+sequenceDiagram
+    participant SupervisorAI
+    participant Agent
+    participant ReflectionEngine
+    participant SelfImprovementEngine
+    participant ContextManager
+
+    Agent->>SupervisorAI: Task Result (Output, Status)
+    SupervisorAI->>ReflectionEngine: Request Reflection (Task Output, Objective, Acceptance Criteria)
+    ReflectionEngine->>ReflectionEngine: Review Output
+    ReflectionEngine->>ReflectionEngine: Compare against Objectives
+    ReflectionEngine->>ReflectionEngine: Detect Contradictions, Hallucinations, Weak Reasoning
+    ReflectionEngine-->>SupervisorAI: Reflection Score & Recommendations
+
+    alt If Reflection Score < Threshold
+        SupervisorAI->>SelfImprovementEngine: Trigger Improvement (Agent, Recommendations)
+        SelfImprovementEngine->>SelfImprovementEngine: Analyze Recommendations
+        SelfImprovementEngine->>Agent: Update Agent Configuration/Strategy
+        SelfImprovementEngine->>SupervisorAI: Improvement Applied
+        SupervisorAI->>SupervisorAI: Trigger Re-execution or Re-planning
+    else Reflection Score >= Threshold
+        SupervisorAI->>SupervisorAI: Mark Task as Complete/Accepted
+    end
+
+    ReflectionEngine->>ContextManager: Record Reflection History
+    ContextManager-->>ReflectionEngine: Confirmation

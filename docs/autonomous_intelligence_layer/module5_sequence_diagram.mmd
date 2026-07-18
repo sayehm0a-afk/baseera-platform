@@ -1,0 +1,47 @@
+sequenceDiagram
+    participant User
+    participant SupervisorAI
+    participant PlannerAI
+    participant TaskGraphEngine
+    participant AgentRegistry
+    participant Agent
+    participant ContextManager
+
+    User->>SupervisorAI: Submit Goal/Task Request
+    activate SupervisorAI
+
+    SupervisorAI->>PlannerAI: Decompose Goal & Plan Task
+    activate PlannerAI
+    PlannerAI->>TaskGraphEngine: Create/Update DAG
+    activate TaskGraphEngine
+    TaskGraphEngine-->>PlannerAI: DAG Created/Updated
+    deactivate TaskGraphEngine
+    PlannerAI-->>SupervisorAI: Task Plan (DAG)
+    deactivate PlannerAI
+
+    SupervisorAI->>AgentRegistry: Discover Available Agents
+    activate AgentRegistry
+    AgentRegistry-->>SupervisorAI: List of Agents
+    deactivate AgentRegistry
+
+    loop for each Task in DAG
+        SupervisorAI->>ContextManager: Distribute Context (shared/isolated/inherited)
+        activate ContextManager
+        ContextManager-->>SupervisorAI: Context Ready
+        deactivate ContextManager
+
+        SupervisorAI->>Agent: Assign Task & Context
+        activate Agent
+        Agent->>Agent: Execute Task
+        Agent-->>SupervisorAI: Task Result/Status
+        deactivate Agent
+
+        SupervisorAI->>SupervisorAI: Monitor Progress & Enforce Policies
+        alt Task Failed
+            SupervisorAI->>SupervisorAI: Apply Retry Strategy/Recovery
+            SupervisorAI->>PlannerAI: Request Dynamic Replanning (if needed)
+        end
+    end
+
+    SupervisorAI-->>User: Task Completed/Status Update
+    deactivate SupervisorAI

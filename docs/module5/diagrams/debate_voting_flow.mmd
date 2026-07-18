@@ -1,0 +1,34 @@
+sequenceDiagram
+    participant SupervisorAI
+    participant AgentA
+    participant AgentB
+    participant DebateEngine
+    participant AgentVoting
+    participant ContextManager
+
+    SupervisorAI->>DebateEngine: Initiate Debate (Topic, Participating Agents)
+    DebateEngine->>AgentA: Request Claims & Evidence
+    AgentA-->>DebateEngine: Claims & Evidence
+    DebateEngine->>AgentB: Request Claims & Evidence
+    AgentB-->>DebateEngine: Claims & Evidence
+
+    loop Debate Rounds
+        DebateEngine->>AgentA: Request Counterarguments/Rebuttals
+        AgentA-->>DebateEngine: Counterarguments/Rebuttals
+        DebateEngine->>AgentB: Request Counterarguments/Rebuttals
+        AgentB-->>DebateEngine: Counterarguments/Rebuttals
+        DebateEngine->>DebateEngine: Evaluate Arguments, Confidence, Sources
+    end
+
+    DebateEngine->>AgentVoting: Request Vote (Decision Options, Agent Confidence)
+    AgentVoting->>AgentA: Cast Vote
+    AgentA-->>AgentVoting: Vote (Option, Confidence)
+    AgentVoting->>AgentB: Cast Vote
+    AgentB-->>AgentVoting: Vote (Option, Confidence)
+    AgentVoting->>AgentVoting: Apply Voting Mechanism (Weighted, Majority, etc.)
+    AgentVoting-->>DebateEngine: Voting Result (Consensus, Tie, etc.)
+
+    DebateEngine->>DebateEngine: Final Synthesis
+    DebateEngine-->>SupervisorAI: Debate Outcome (Decision, Explanation, Supporting Evidence)
+    SupervisorAI->>ContextManager: Record Debate Outcome & Audit Trail
+    ContextManager-->>SupervisorAI: Confirmation

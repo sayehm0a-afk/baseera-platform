@@ -1,0 +1,28 @@
+from typing import Any, Dict
+from .policy import Policy
+
+class BalancedModePolicy(Policy):
+    """
+    سياسة الوضع المتوازن: تسعى لتحقيق توازن بين السرعة والدقة والتكلفة.
+    """
+
+    @property
+    def name(self) -> str:
+        return "BalancedMode"
+
+    def apply(self, task_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        تطبق سياسة الوضع المتوازن على سياق المهمة.
+
+        Args:
+            task_context (Dict[str, Any]): سياق المهمة الذي سيتم تطبيق السياسة عليه.
+
+        Returns:
+            Dict[str, Any]: سياق المهمة المعدل.
+        """
+        modified_context = task_context.copy()
+        modified_context["execution_mode"] = self.name
+        modified_context["priority"] = "medium"
+        modified_context["resource_allocation"] = "moderate"
+        modified_context["accuracy_tolerance"] = "medium"
+        return modified_context

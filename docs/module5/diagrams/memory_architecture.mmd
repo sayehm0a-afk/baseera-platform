@@ -1,0 +1,39 @@
+graph TD
+    subgraph "Module 5: Autonomous Intelligence Layer"
+        subgraph "Memory Reasoning System"
+            A[Supervisor AI] --> B(Context Manager)
+            B --> C[Memory Store]
+            C --> D[Working Memory]
+            C --> E[Short-Term Memory]
+            C --> F[Episodic Memory]
+            C --> G[Semantic Memory]
+            C --> H[Procedural Memory]
+            C --> I[Long-Term Memory]
+
+            B -- Store/Retrieve/Search/Rank --> C
+            B -- Summarize/Deduplicate/Consolidate --> C
+            B -- Expire/Archive/Forget --> C
+
+            J[Agent] --> B
+            K[Reflection Engine] --> B
+            L[Self-Improvement Engine] --> B
+
+            C -- Track Provenance/Confidence --> M[Audit Log]
+            C -- Apply Access Controls --> N[Security Layer]
+        end
+    end
+
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style C fill:#ccf,stroke:#333,stroke-width:2px
+    style D fill:#cfc,stroke:#333,stroke-width:2px
+    style E fill:#fcf,stroke:#333,stroke-width:2px
+    style F fill:#ffc,stroke:#333,stroke-width:2px
+    style G fill:#f9f,stroke:#333,stroke-width:2px
+    style H fill:#bbf,stroke:#333,stroke-width:2px
+    style I fill:#ccf,stroke:#333,stroke-width:2px
+    style J fill:#fcf,stroke:#333,stroke-width:2px
+    style K fill:#ffc,stroke:#333,stroke-width:2px
+    style L fill:#f9f,stroke:#333,stroke-width:2px
+    style M fill:#bbf,stroke:#333,stroke-width:2px
+    style N fill:#ccf,stroke:#333,stroke-width:2px

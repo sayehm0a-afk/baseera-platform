@@ -1,0 +1,48 @@
+graph TD
+    subgraph "Module 5: Autonomous Intelligence Layer"
+        A[Supervisor AI] --> B{Agent Registry}
+        B --> C[Agent 1]
+        B --> D[Agent 2]
+        B --> E[Agent N]
+
+        C -- Task Delegation --> D
+        D -- Task Delegation --> E
+        E -- Task Delegation --> C
+
+        C -- Agent-to-Agent Messaging --> D
+        D -- Agent-to-Agent Messaging --> E
+
+        A -- Shared Context (via Context Manager) --> C
+        A -- Shared Context (via Context Manager) --> D
+        A -- Shared Context (via Context Manager) --> E
+
+        C -- Conflict Detection --> A
+        D -- Conflict Detection --> A
+        E -- Conflict Detection --> A
+
+        A -- Consensus Building --> L[Debate Engine]
+        A -- Consensus Building --> M[Agent Voting]
+
+        C -- Capability Discovery --> B
+        D -- Capability Discovery --> B
+        E -- Capability Discovery --> B
+
+        A -- Role Assignment --> C
+        A -- Role Assignment --> D
+        A -- Role Assignment --> E
+
+        A -- Workload Awareness --> C
+        A -- Workload Awareness --> D
+        A -- Workload Awareness --> E
+
+        L --> A
+        M --> A
+    end
+
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style C fill:#ccf,stroke:#333,stroke-width:2px
+    style D fill:#cfc,stroke:#333,stroke-width:2px
+    style E fill:#fcf,stroke:#333,stroke-width:2px
+    style L fill:#ffc,stroke:#333,stroke-width:2px
+    style M fill:#f9f,stroke:#333,stroke-width:2px

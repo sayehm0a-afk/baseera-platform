@@ -1,0 +1,32 @@
+graph TD
+    subgraph Core Framework
+        CF_BA[BaseAgent]
+        CF_LLM[LLM Abstraction Layer]
+        CF_TCF[Tool Calling Framework]
+        CF_EH[Error Handling & Retry]
+        CF_LT[Logging & Telemetry]
+    end
+
+    subgraph Multi-Agent System & Tools
+        MAS_SA[Supervisor Agent]
+        MAS_AR[Agent Registry]
+        MAS_BT[BaseTool]
+        MAS_TR[Tool Registry]
+    end
+
+    CF_BA --> CF_LLM
+    CF_BA --> CF_TCF
+    CF_TCF --> CF_EH
+    CF_TCF --> CF_LT
+    CF_LLM --> CF_EH
+    CF_LLM --> CF_LT
+
+    MAS_SA --> MAS_AR
+    MAS_SA --> CF_BA
+    MAS_TR --> MAS_BT
+    CF_BA --> MAS_TR
+
+    MAS_SA -- depends on --> CF_BA
+    MAS_AR -- uses --> CF_BA
+    MAS_TR -- uses --> CF_BA
+    CF_TCF -- uses --> MAS_TR

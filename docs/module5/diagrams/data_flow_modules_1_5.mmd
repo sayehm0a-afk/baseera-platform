@@ -1,0 +1,84 @@
+graph TD
+    subgraph "Basirah Platform"
+        subgraph "Module 1: Data Ingestion & Preprocessing"
+            M1_A[Raw Data Sources] --> M1_B[Data Ingestion]
+            M1_B --> M1_C[Data Cleaning & Normalization]
+            M1_C --> M1_D[Processed Data Store]
+        end
+
+        subgraph "Module 2: Core Data Services"
+            M2_A[Data Access Layer] --> M1_D
+            M1_D --> M2_A
+            M2_A --> M2_B[Data Query & Retrieval]
+            M2_B --> M2_C[Feature Store]
+        end
+
+        subgraph "Module 3: Machine Learning & Analytics"
+            M3_A[ML Model Training] --> M2_C
+            M2_C --> M3_A
+            M3_A --> M3_B[Trained Models]
+            M3_C[Prediction Service] --> M3_B
+            M3_C --> M2_C
+        end
+
+        subgraph "Module 4: User Interaction & API Gateway"
+            M4_A[User Interface] --> M4_B[API Gateway]
+            M4_B --> M3_C
+            M4_B --> M2_B
+            M3_C --> M4_B
+            M2_B --> M4_B
+            M4_B --> M4_C[User Feedback]
+        end
+
+        subgraph "Module 5: Autonomous Intelligence Layer"
+            M5_A[Supervisor AI] --> M4_B
+            M4_B --> M5_A
+            M5_A --> M2_B
+            M2_B --> M5_A
+            M5_A --> M3_C
+            M3_C --> M5_A
+            M5_A --> M5_B[Planner AI]
+            M5_B --> M5_C[Context Manager]
+            M5_C --> M5_D[Memory Reasoning]
+            M5_C --> M5_E[Knowledge Graph]
+            M5_A --> M5_F[Decision Fusion Engine]
+            M5_F --> M4_B
+            M5_F --> M5_A
+            M5_D --> M5_A
+            M5_E --> M5_A
+        end
+
+        M5_A --> M1_D
+        M1_D --> M5_A
+
+        M5_A --> M2_C
+        M2_C --> M5_A
+
+        M5_A --> M3_B
+        M3_B --> M5_A
+
+    end
+
+    style M1_A fill:#f9f,stroke:#333,stroke-width:2px
+    style M1_B fill:#bbf,stroke:#333,stroke-width:2px
+    style M1_C fill:#ccf,stroke:#333,stroke-width:2px
+    style M1_D fill:#cfc,stroke:#333,stroke-width:2px
+
+    style M2_A fill:#fcf,stroke:#333,stroke-width:2px
+    style M2_B fill:#ffc,stroke:#333,stroke-width:2px
+    style M2_C fill:#f9f,stroke:#333,stroke-width:2px
+
+    style M3_A fill:#bbf,stroke:#333,stroke-width:2px
+    style M3_B fill:#ccf,stroke:#333,stroke-width:2px
+    style M3_C fill:#cfc,stroke:#333,stroke-width:2px
+
+    style M4_A fill:#fcf,stroke:#333,stroke-width:2px
+    style M4_B fill:#ffc,stroke:#333,stroke-width:2px
+    style M4_C fill:#f9f,stroke:#333,stroke-width:2px
+
+    style M5_A fill:#bbf,stroke:#333,stroke-width:2px
+    style M5_B fill:#ccf,stroke:#333,stroke-width:2px
+    style M5_C fill:#cfc,stroke:#333,stroke-width:2px
+    style M5_D fill:#fcf,stroke:#333,stroke-width:2px
+    style M5_E fill:#ffc,stroke:#333,stroke-width:2px
+    style M5_F fill:#f9f,stroke:#333,stroke-width:2px

@@ -1,0 +1,67 @@
+"""
+وحدة AgentRegistry لمنصة basirah.
+تدير تسجيل العملاء الذكيين وإلغاء تسجيلهم واسترجاعهم.
+"""
+import logging
+from typing import Dict, List, Optional
+
+from core.base_agent.base_agent import BaseAgent # pylint: disable=E0402 # type: ignore
+
+logger = logging.getLogger(__name__)
+
+class AgentRegistry:
+    """
+    AgentRegistry هو مخزن مركزي لتسجيل وإدارة العملاء الذكيين.
+    يسمح لـ SupervisorAgent وغيره من المكونات باكتشاف العملاء والتفاعل معهم.
+    """
+
+    def __init__(self):
+        self._agents: Dict[str, BaseAgent] = {}
+        logger.info("AgentRegistry initialized.")
+
+    async def register_agent(self, agent: BaseAgent) -> bool:
+        """
+        يسجل عميلاً ذكياً جديداً.
+        """
+        if agent.agent_id in self._agents:
+            logger.warning("Agent with ID %s already registered.", agent.agent_id)
+            return False
+        self._agents[agent.agent_id] = agent
+        logger.info("Agent %s (%s) registered successfully.", agent.name, agent.agent_id)
+        return True
+
+    async def unregister_agent(self, agent_id: str) -> bool:
+        """
+        يزيل عميلاً ذكياً من السجل.
+        """
+        if agent_id not in self._agents:
+            logger.warning("Agent with ID %s not found for unregistration.", agent_id)
+            return False
+        del self._agents[agent_id]
+        logger.info("Agent %s unregistered successfully.", agent_id)
+        return True
+
+    async def get_agent(self, agent_id: str) -> Optional[BaseAgent]:
+        """
+        يسترجع عميلاً ذكياً بواسطة معرفه.
+        """
+        return self._agents.get(agent_id)
+
+    async def get_all_agents(self) -> Dict[str, BaseAgent]:
+        """
+        يسترجع قاموساً بجميع العملاء المسجلين.
+        """
+        return self._agents
+
+    async def get_agents_by_name(self, name: str) -> List[BaseAgent]:
+        """
+        يسترجع قائمة بالعملاء الذين يطابقون اسماً معيناً.
+        """
+        return [agent for agent in self._agents.values() if agent.name == name]
+
+    async def get_agents_by_description_keyword(self, keyword: str) -> List[BaseAgent]:
+        """
+        يسترجع قائمة بالعملاء الذين تحتوي أوصافهم على كلمة مفتاحية معينة.
+        """
+        return [agent for agent in self._agents.values() if
+                keyword.lower() in agent.description.lower()]
