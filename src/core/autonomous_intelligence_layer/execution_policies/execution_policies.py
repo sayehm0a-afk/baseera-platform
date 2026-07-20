@@ -7,6 +7,7 @@ from .cost_optimized_mode_policy import CostOptimizedModePolicy
 from .research_mode_policy import ResearchModePolicy
 from .production_mode_policy import ProductionModePolicy
 
+
 class ExecutionPolicies:
     """
     مدير لسياسات التنفيذ المختلفة.
@@ -19,13 +20,14 @@ class ExecutionPolicies:
         يهيئ مثيلًا جديدًا لـ ExecutionPolicies ويقوم بتسجيل السياسات المتاحة.
         """
         self._policies: Dict[str, Policy] = {
-            policy.name: policy for policy in [
+            policy.name: policy
+            for policy in [
                 FastModePolicy(),
                 BalancedModePolicy(),
                 QualityModePolicy(),
                 CostOptimizedModePolicy(),
                 ResearchModePolicy(),
-                ProductionModePolicy()
+                ProductionModePolicy(),
             ]
         }
 
@@ -43,7 +45,9 @@ class ExecutionPolicies:
             ValueError: إذا لم يتم العثور على السياسة المطلوبة.
         """
         if policy_name not in self._policies:
-            raise ValueError(f"السياسة ‏'{policy_name}'‏ غير موجودة. السياسات المتاحة: {list(self._policies.keys())}")
+            raise ValueError(
+                f"السياسة ‏'{policy_name}'‏ غير موجودة. السياسات المتاحة: {list(self._policies.keys())}"
+            )
         return self._policies[policy_name]
 
     def list_available_policies(self) -> List[str]:

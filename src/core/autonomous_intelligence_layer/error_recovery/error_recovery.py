@@ -7,16 +7,16 @@ in autonomous operations, including retry strategies and fallback mechanisms.
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class ErrorSeverity(Enum):
     """Enumeration for error severity levels."""
+
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
@@ -25,6 +25,7 @@ class ErrorSeverity(Enum):
 
 class RetryStrategy(Enum):
     """Enumeration for retry strategies."""
+
     IMMEDIATE = "immediate"
     LINEAR_BACKOFF = "linear_backoff"
     EXPONENTIAL_BACKOFF = "exponential_backoff"
@@ -34,11 +35,12 @@ class RetryStrategy(Enum):
 @dataclass
 class ErrorRecord:
     """Represents an error record."""
+
     error_id: str
     error_type: str
     message: str
     severity: ErrorSeverity
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     context: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -46,18 +48,20 @@ class ErrorRecord:
 @dataclass
 class RecoveryAction:
     """Represents a recovery action."""
+
     action_id: str
     error_id: str
     action_type: str
     status: str  # "PENDING", "IN_PROGRESS", "SUCCESS", "FAILED"
     attempts: int = 0
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ErrorRecoveryConfig:
     """Configuration for Error Recovery."""
+
     default_retry_strategy: RetryStrategy = RetryStrategy.EXPONENTIAL_BACKOFF
     max_retries: int = 3
     initial_retry_delay_seconds: int = 1
@@ -115,7 +119,7 @@ class ErrorRecovery:
             ErrorRecord if recorded successfully, None otherwise
         """
         if len(self.errors) >= self.config.max_errors:
-            logger.error("Maximum errors limit reached")
+            logger.error("Maximum errors limit reached", exc_info=True)
             return None
 
         error = ErrorRecord(
@@ -149,7 +153,7 @@ class ErrorRecovery:
             RecoveryAction if created successfully, None otherwise
         """
         if error_id not in self.errors:
-            logger.error(f"Error {error_id} not found")
+            logger.error(f"Error {error_id} not found", exc_info=True)
             return None
 
         action = RecoveryAction(
@@ -181,7 +185,7 @@ class ErrorRecovery:
             Tuple of (success, result)
         """
         if action_id not in self.recovery_actions:
-            logger.error(f"Recovery action {action_id} not found")
+            logger.error(f"Recovery action {action_id} not found", exc_info=True)
             return False, None
 
         action = self.recovery_actions[action_id]
@@ -199,7 +203,7 @@ class ErrorRecovery:
                 return True, result
 
             except Exception as e:
-                logger.warning(f"Recovery attempt {attempt + 1} failed: {str(e)}")
+                logger.warning(f"Recovery attempt {attempt + 1} failed: {str(e)}", exc_info=True)
 
                 if attempt < self.config.max_retries:
                     delay = self._calculate_retry_delay(attempt, strategy)
@@ -207,7 +211,9 @@ class ErrorRecovery:
                     # In real implementation, would sleep here
                 else:
                     action.status = "FAILED"
-                    logger.error(f"Recovery action failed after {self.config.max_retries + 1} attempts")
+                    logger.error(
+                        f"Recovery action failed after {self.config.max_retries + 1} attempts", exc_info=True
+                    )
                     return False, None
 
         return False, None
@@ -230,7 +236,7 @@ class ErrorRecovery:
             delay = self.config.initial_retry_delay_seconds * (attempt + 1)
 
         elif strategy == RetryStrategy.EXPONENTIAL_BACKOFF:
-            delay = self.config.initial_retry_delay_seconds * (2 ** attempt)
+            delay = self.config.initial_retry_delay_seconds * (2**attempt)
 
         elif strategy == RetryStrategy.FIBONACCI_BACKOFF:
             fib_values = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
@@ -282,7 +288,7 @@ class ErrorRecovery:
             logger.debug(f"Fallback executed for: {error_type}")
             return result
         except Exception as e:
-            logger.error(f"Fallback execution failed: {str(e)}")
+            logger.error(f"Fallback execution failed: {str(e)}", exc_info=True)
             return None
 
     def get_error(self, error_id: str) -> Optional[ErrorRecord]:
@@ -340,5 +346,5 @@ class ErrorRecovery:
         Returns:
             List of recent errors
         """
-        cutoff_time = datetime.utcnow() - timedelta(minutes=minutes)
+        cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes)
         return [e for e in self.errors.values() if e.timestamp >= cutoff_time]

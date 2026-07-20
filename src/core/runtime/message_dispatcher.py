@@ -4,6 +4,7 @@ from typing import Any, Dict, Callable
 
 logger = logging.getLogger(__name__)
 
+
 class IMessageDispatcher(ABC):
     """واجهة مجردة لـ Message Dispatcher.
 
@@ -24,7 +25,9 @@ class IMessageDispatcher(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def register_handler(self, message_type: str, handler: Callable[..., Any]) -> None:
+    async def register_handler(
+        self, message_type: str, handler: Callable[..., Any]
+    ) -> None:
         """يسجل معالجًا لنوع رسالة معين.
 
         Args:
@@ -52,12 +55,23 @@ class MessageDispatcher(IMessageDispatcher):
             raise ValueError(f"No handler registered for message {message_type}")
         try:
             return await handler(payload)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Error handling message %s with handler %s: %s", message_type, handler.__name__, e)
+        except Exception as e:
+            logger.error(
+                "Error handling message %s with handler %s: %s",
+                message_type,
+                handler.__name__,
+                e,
+            )
             raise
 
-    async def register_handler(self, message_type: str, handler: Callable[..., Any]) -> None:
+    async def register_handler(
+        self, message_type: str, handler: Callable[..., Any]
+    ) -> None:
         if message_type in self._handlers:
-            logger.warning("Handler already registered for message %s. Overwriting.", message_type)
+            logger.warning(
+                "Handler already registered for message %s. Overwriting.", message_type
+            )
         self._handlers[message_type] = handler
-        logger.info("Registered handler for message %s: %s", message_type, handler.__name__)
+        logger.info(
+            "Registered handler for message %s: %s", message_type, handler.__name__
+        )

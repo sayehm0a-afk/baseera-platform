@@ -1,6 +1,6 @@
 import pytest
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime
 from core.base_agent.base_agent import BaseAgent
 
@@ -34,7 +34,8 @@ async def test_base_agent_activate_success():
                 async def mock_async_init_tools(*args, **kwargs):
                     pass
                 agent._initialize_tools = mock_async_init_tools
-                with patch.object(agent, '_initialize_llm_client') as mock_init_llm_client:
+                with patch.object(agent, '_initialize_llm_client', new_callable=AsyncMock) as mock_init_llm_client:
+
                     assert await agent.activate() is True
                     assert agent.status == "active"
                     mock_load_config.assert_called_once()
@@ -166,15 +167,20 @@ async def test_base_agent_initialize_tools_with_registry():
     assert agent.tool_registry == mock_registry
     assert agent.tools == {"tool1": "mock_tool_1"}
 
-def test_base_agent_interact_with_llm_placeholder():
+@pytest.mark.asyncio
+async def test_base_agent_interact_with_llm_placeholder():
     agent = BaseAgent()
-    agent.llm_client = MagicMock()
+    from unittest.mock import AsyncMock
+    agent.llm_client = AsyncMock()
+    agent.llm_client.generate_text.return_value = "LLM response"
     messages = [{'role': 'user', 'content': 'hello'}]
-    result = agent._interact_with_llm(messages)
+    result = await agent._interact_with_llm(messages)
+    agent.llm_client.generate_text.assert_called_once_with(messages, "default")
     assert result == "LLM response"
 
-def test_base_agent_interact_with_llm_no_client():
+@pytest.mark.asyncio
+async def test_base_agent_interact_with_llm_no_client():
     agent = BaseAgent()
     messages = [{'role': 'user', 'content': 'hello'}]
     with pytest.raises(RuntimeError, match="LLM client not available"):
-        agent._interact_with_llm(messages)
+        await agent._interact_with_llm(messages)

@@ -3,6 +3,7 @@
 تتولى هذه الوحدة مسؤولية إدارة حالات تدفقات العمل (Workflows) والانتقال بينها
 بناءً على الأحداث والنتائج.
 """
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
@@ -29,8 +30,12 @@ class IWorkflowStateMachine(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def transition_state(self, workflow_id: str, new_state: str,  # noqa: E501
-                               context: Dict[str, Any] | None = None) -> None:
+    async def transition_state(
+        self,
+        workflow_id: str,
+        new_state: str,  # noqa: E501
+        context: Dict[str, Any] | None = None,
+    ) -> None:
         """الانتقال بحالة تدفق عمل معين إلى حالة جديدة.
 
         Args:
@@ -54,9 +59,18 @@ class WorkflowStateMachine(IWorkflowStateMachine):
     async def get_current_state(self, workflow_id: str) -> str:  # noqa: E501
         return self._workflow_states.get(workflow_id, "UNKNOWN")
 
-    async def transition_state(self, workflow_id: str, new_state: str,  # noqa: E501
-                               context: Dict[str, Any] | None = None) -> None:
+    async def transition_state(
+        self,
+        workflow_id: str,
+        new_state: str,  # noqa: E501
+        context: Dict[str, Any] | None = None,
+    ) -> None:
         old_state = self._workflow_states.get(workflow_id, "NONE")
         self._workflow_states[workflow_id] = new_state
-        logger.info("Workflow \"%s\" transitioned from %s to %s. Context: %s",  # noqa: E501
-                    workflow_id, old_state, new_state, context)
+        logger.info(
+            'Workflow "%s" transitioned from %s to %s. Context: %s',  # noqa: E501
+            workflow_id,
+            old_state,
+            new_state,
+            context,
+        )

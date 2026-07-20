@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 
+
 class Agent:
     """
     يمثل وكيلًا ذكيًا في نظام basirah.
@@ -12,7 +13,7 @@ class Agent:
         agent_id: str,
         capabilities: List[str],
         status: str = "IDLE",
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         """
         يهيئ مثيلًا جديدًا للوكيل.
@@ -25,12 +26,18 @@ class Agent:
         """
         if not isinstance(agent_id, str) or not agent_id:
             raise ValueError("معرف الوكيل (agent_id) يجب أن يكون سلسلة نصية غير فارغة.")
-        if not isinstance(capabilities, list) or not all(isinstance(c, str) for c in capabilities):
-            raise ValueError("القدرات (capabilities) يجب أن تكون قائمة من السلاسل النصية.")
+        if not isinstance(capabilities, list) or not all(
+            isinstance(c, str) for c in capabilities
+        ):
+            raise ValueError(
+                "القدرات (capabilities) يجب أن تكون قائمة من السلاسل النصية."
+            )
         if not isinstance(status, str) or not status:
             raise ValueError("الحالة (status) يجب أن تكون سلسلة نصية غير فارغة.")
         if metadata is not None and not isinstance(metadata, dict):
-            raise ValueError("البيانات الوصفية (metadata) يجب أن تكون قاموسًا أو لا شيء.")
+            raise ValueError(
+                "البيانات الوصفية (metadata) يجب أن تكون قاموسًا أو لا شيء."
+            )
 
         self.id: str = agent_id
         self.capabilities: List[str] = capabilities
@@ -45,7 +52,9 @@ class Agent:
             new_status (str): الحالة الجديدة للوكيل.
         """
         if not isinstance(new_status, str) or not new_status:
-            raise ValueError("الحالة الجديدة (new_status) يجب أن تكون سلسلة نصية غير فارغة.")
+            raise ValueError(
+                "الحالة الجديدة (new_status) يجب أن تكون سلسلة نصية غير فارغة."
+            )
         self.status = new_status
 
     def has_capability(self, capability: str) -> bool:
@@ -71,7 +80,7 @@ class Agent:
             "id": self.id,
             "capabilities": self.capabilities,
             "status": self.status,
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -89,17 +98,28 @@ class Agent:
             agent_id=data["id"],
             capabilities=data["capabilities"],
             status=data.get("status", "IDLE"),
-            metadata=data.get("metadata")
+            metadata=data.get("metadata"),
         )
 
     def __repr__(self) -> str:
-        return f"Agent(id=\'{self.id}\', status=\'{self.status}\', capabilities={self.capabilities})"
+        return f"Agent(id='{self.id}', status='{self.status}', capabilities={self.capabilities})"
 
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, Agent):
             return NotImplemented
-        return self.id == other.id and self.capabilities == other.capabilities and \
-               self.status == other.status and self.metadata == other.metadata
+        return (
+            self.id == other.id
+            and self.capabilities == other.capabilities
+            and self.status == other.status
+            and self.metadata == other.metadata
+        )
 
     def __hash__(self) -> int:
-        return hash((self.id, tuple(self.capabilities), self.status, frozenset(self.metadata.items())))
+        return hash(
+            (
+                self.id,
+                tuple(self.capabilities),
+                self.status,
+                frozenset(self.metadata.items()),
+            )
+        )

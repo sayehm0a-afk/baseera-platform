@@ -1,8 +1,9 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Awaitable
+from typing import Any, Callable, Dict, Awaitable
 
 logger = logging.getLogger(__name__)
+
 
 class ICompensation(ABC):
     """واجهة مجردة للتعويض (Compensation).
@@ -11,7 +12,13 @@ class ICompensation(ABC):
     """
 
     @abstractmethod
-    async def compensate(self, operation_id: str, compensation_func: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> None:
+    async def compensate(
+        self,
+        operation_id: str,
+        compensation_func: Callable[..., Awaitable[Any]],
+        *args: Any,
+        **kwargs: Any
+    ) -> None:
         """يسجل ويقوم بتشغيل دالة تعويضية لعملية معينة.
 
         Args:
@@ -52,7 +59,13 @@ class Compensation(ICompensation):
         self._compensation_args: Dict[str, Dict[str, Any]] = {}
         logger.info("Compensation instance created.")
 
-    async def compensate(self, operation_id: str, compensation_func: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> None:
+    async def compensate(
+        self,
+        operation_id: str,
+        compensation_func: Callable[..., Awaitable[Any]],
+        *args: Any,
+        **kwargs: Any
+    ) -> None:
         self._compensations[operation_id] = compensation_func
         self._compensation_args[operation_id] = {"args": args, "kwargs": kwargs}
         logger.info("Compensation function registered for operation %s.", operation_id)
@@ -65,9 +78,17 @@ class Compensation(ICompensation):
             logger.info("Running compensation for operation %s.", operation_id)
             try:
                 await compensation_func(*args, **kwargs)
-                logger.info("Compensation for operation %s completed successfully.", operation_id)
+                logger.info(
+                    "Compensation for operation %s completed successfully.",
+                    operation_id,
+                )
             except Exception as e:
-                logger.error("Compensation for operation %s failed: %s", operation_id, e, exc_info=True)
+                logger.error(
+                    "Compensation for operation %s failed: %s",
+                    operation_id,
+                    e,
+                    exc_info=True,
+                )
             finally:
                 del self._compensations[operation_id]
                 del self._compensation_args[operation_id]

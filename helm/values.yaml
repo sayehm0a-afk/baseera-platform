@@ -1,0 +1,125 @@
+# Default values for Basirah Helm Chart
+
+# Image configuration
+image:
+  repository: basirah/app
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+# Replica configuration
+replicaCount: 3
+
+# Resource limits
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: basirah.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: basirah-tls
+      hosts:
+        - basirah.example.com
+
+# Health checks
+healthChecks:
+  liveness:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Database configuration
+database:
+  host: basirah-db
+  port: 5432
+  name: basirah_db
+  user: basirah_user
+  # password: set via secrets
+
+# Redis configuration
+redis:
+  host: basirah-redis
+  port: 6379
+  # password: set via secrets
+
+# Market data provider configuration
+marketData:
+  provider: saudi
+  # apiEndpoint: set via secrets
+  # apiKey: set via secrets
+
+# OpenAI configuration
+openai:
+  # apiKey: set via secrets
+
+# Logging configuration
+logging:
+  level: INFO
+  format: json
+  directory: /var/log/basirah
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    port: 9090
+  grafana:
+    enabled: true
+    port: 3000
+
+# Node affinity
+nodeSelector: {}
+
+# Pod affinity
+affinity: {}
+
+# Tolerations
+tolerations: []
+
+# Security context
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  capabilities:
+    drop:
+      - ALL
+
+# Pod security policy
+podSecurityPolicy:
+  enabled: true
+
+# Network policy
+networkPolicy:
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress

@@ -1,6 +1,7 @@
 from typing import Any, Dict
 from .policy import Policy
 
+
 class CostOptimizedModePolicy(Policy):
     """
     سياسة وضع التكلفة المحسّنة: تركز على تقليل التكلفة إلى أقصى حد ممكن، حتى لو كان ذلك على حساب السرعة أو الجودة.

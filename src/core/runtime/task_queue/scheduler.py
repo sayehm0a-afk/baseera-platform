@@ -13,8 +13,11 @@ class IScheduler(ABC):
 
     @abstractmethod
     async def schedule_task(
-        self, task_id: str, task_payload: Dict[str, Any],
-        delay_seconds: int = 0, priority: int = 0
+        self,
+        task_id: str,
+        task_payload: Dict[str, Any],
+        delay_seconds: int = 0,
+        priority: int = 0,
     ) -> None:
         """يجدول مهمة للتنفيذ.
 
@@ -40,9 +43,7 @@ class IScheduler(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_scheduled_tasks(
-        self, limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    async def get_scheduled_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
         """يسترد قائمة بالمهام المجدولة.
 
         Args:
@@ -65,8 +66,11 @@ class Scheduler(IScheduler):
         logger.info("Scheduler instance created.")
 
     async def schedule_task(
-        self, task_id: str, task_payload: Dict[str, Any],
-        delay_seconds: int = 0, priority: int = 0
+        self,
+        task_id: str,
+        task_payload: Dict[str, Any],
+        delay_seconds: int = 0,
+        priority: int = 0,
     ) -> None:
         if task_id in self._tasks:
             logger.warning("Task %s already scheduled. Overwriting.", task_id)
@@ -75,11 +79,13 @@ class Scheduler(IScheduler):
             "task_payload": task_payload,
             "delay_seconds": delay_seconds,
             "priority": priority,
-            "status": "scheduled"
+            "status": "scheduled",
         }
         logger.info(
             "Task %s scheduled with delay %d seconds and priority %d.",
-            task_id, delay_seconds, priority
+            task_id,
+            delay_seconds,
+            priority,
         )
 
     async def cancel_task(self, task_id: str) -> bool:
@@ -90,9 +96,7 @@ class Scheduler(IScheduler):
         logger.warning("Attempted to cancel non-existent task %s.", task_id)
         return False
 
-    async def get_scheduled_tasks(
-        self, limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    async def get_scheduled_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
         # For simplicity, return all tasks for now. In a real implementation,
         # this would involve sorting by schedule time and priority.
         return list(self._tasks.values())[:limit]

@@ -4,6 +4,7 @@ from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
+
 class IMessageRouter(ABC):
     """واجهة مجردة لـ Message Router.
 
@@ -52,11 +53,11 @@ class MessageRouter(IMessageRouter):
             raise ValueError(f"No route registered for message {message_type}")
 
         # افتراض أن الوجهة لديها طريقة dispatch أو publish_event
-        if hasattr(destination, 'dispatch'):
+        if hasattr(destination, "dispatch"):
             return await destination.dispatch(message_type, payload)
-        elif hasattr(destination, 'publish_event'):
+        elif hasattr(destination, "publish_event"):
             return await destination.publish_event(message_type, payload)
-        elif hasattr(destination, 'send_command'):
+        elif hasattr(destination, "send_command"):
             return await destination.send_command(message_type, payload)
 
         else:
@@ -65,6 +66,12 @@ class MessageRouter(IMessageRouter):
 
     async def register_route(self, message_type: str, destination: Any) -> None:
         if message_type in self._routes:
-            logger.warning("Route already registered for message %s. Overwriting.", message_type)
+            logger.warning(
+                "Route already registered for message %s. Overwriting.", message_type
+            )
         self._routes[message_type] = destination
-        logger.info("Registered route for message %s: %s", message_type, destination.__class__.__name__)
+        logger.info(
+            "Registered route for message %s: %s",
+            message_type,
+            destination.__class__.__name__,
+        )

@@ -7,16 +7,16 @@ including performance tuning and parameter adjustment.
 
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class OptimizationMetric(Enum):
     """Enumeration for optimization metrics."""
+
     LATENCY = "latency"
     THROUGHPUT = "throughput"
     ACCURACY = "accuracy"
@@ -28,29 +28,32 @@ class OptimizationMetric(Enum):
 @dataclass
 class PerformanceMetric:
     """Represents a performance metric."""
+
     metric_id: str
     metric_type: OptimizationMetric
     value: float
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class OptimizationResult:
     """Represents an optimization result."""
+
     optimization_id: str
     metric_type: OptimizationMetric
     baseline_value: float
     optimized_value: float
     improvement_percentage: float
     parameters_changed: Dict[str, Tuple[Any, Any]]  # {param: (old, new)}
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class SelfOptimizationConfig:
     """Configuration for Self-Optimization."""
+
     enable_auto_tuning: bool = True
     optimization_interval_seconds: int = 300
     min_improvement_threshold: float = 1.0  # 1% improvement
@@ -168,8 +171,7 @@ class SelfOptimization:
 
         # Get current metric value
         current_metrics = [
-            m for m in self.metrics.values()
-            if m.metric_type == metric_type
+            m for m in self.metrics.values() if m.metric_type == metric_type
         ]
 
         if not current_metrics:
@@ -185,8 +187,7 @@ class SelfOptimization:
 
             # Get new metric value
             new_metrics = [
-                m for m in self.metrics.values()
-                if m.metric_type == metric_type
+                m for m in self.metrics.values() if m.metric_type == metric_type
             ]
 
             if new_metrics:
@@ -214,9 +215,17 @@ class SelfOptimization:
                     self.optimizations[optimization_id] = result
                     logger.debug(f"Optimization completed: {optimization_id}")
                     return result
+                else:
+                    logger.debug(
+                        f"Optimization {optimization_id} did not meet minimum improvement threshold."
+                    )
+            else:
+                logger.warning(
+                    f"No new metrics found after optimization for: {metric_type}"
+                )
 
         except Exception as e:
-            logger.error(f"Optimization failed: {str(e)}")
+            logger.error(f"Optimization failed: {str(e)}", exc_info=True)
             # Rollback parameters
             self.parameters = old_parameters
 
@@ -243,7 +252,12 @@ class SelfOptimization:
             return 0.0
 
         # For some metrics, lower is better
-        if metric_type in [OptimizationMetric.LATENCY, OptimizationMetric.COST, OptimizationMetric.ERROR_RATE, OptimizationMetric.RESOURCE_USAGE]:
+        if metric_type in [
+            OptimizationMetric.LATENCY,
+            OptimizationMetric.COST,
+            OptimizationMetric.ERROR_RATE,
+            OptimizationMetric.RESOURCE_USAGE,
+        ]:
             improvement = ((old_value - new_value) / old_value) * 100
         else:
             improvement = ((new_value - old_value) / old_value) * 100
@@ -274,7 +288,9 @@ class SelfOptimization:
         """
         return self.optimizations.get(optimization_id)
 
-    def get_metrics_by_type(self, metric_type: OptimizationMetric) -> List[PerformanceMetric]:
+    def get_metrics_by_type(
+        self, metric_type: OptimizationMetric
+    ) -> List[PerformanceMetric]:
         """
         Get metrics by type.
 

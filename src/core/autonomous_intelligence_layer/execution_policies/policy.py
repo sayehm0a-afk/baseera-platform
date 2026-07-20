@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
+
 class Policy(ABC):
     """
     الفئة الأساسية المجردة لجميع سياسات التنفيذ.

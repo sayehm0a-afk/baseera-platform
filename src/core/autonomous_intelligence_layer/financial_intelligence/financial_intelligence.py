@@ -5,19 +5,19 @@ This module implements Financial Intelligence for analyzing financial metrics,
 budgets, costs, and financial forecasting for autonomous operations.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
-from basirah.src.core.shared_models.base_transaction import BaseTransaction
+from src.core.shared_models.base_transaction import BaseTransaction
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class TransactionType(Enum):
     """Enumeration for transaction types."""
+
     EXPENSE = "expense"
     REVENUE = "revenue"
     INVESTMENT = "investment"
@@ -26,6 +26,7 @@ class TransactionType(Enum):
 
 class FinancialMetric(Enum):
     """Enumeration for financial metrics."""
+
     TOTAL_COST = "total_cost"
     TOTAL_REVENUE = "total_revenue"
     PROFIT = "profit"
@@ -37,6 +38,7 @@ class FinancialMetric(Enum):
 @dataclass(kw_only=True)
 class Transaction(BaseTransaction):
     """Represents a financial transaction."""
+
     transaction_id: str
     transaction_type: TransactionType
 
@@ -44,6 +46,7 @@ class Transaction(BaseTransaction):
 @dataclass
 class Budget:
     """Represents a budget."""
+
     budget_id: str
     category: str
     allocated_amount: float
@@ -55,6 +58,7 @@ class Budget:
 @dataclass
 class FinancialReport:
     """Represents a financial report."""
+
     report_id: str
     period: str
     total_revenue: float
@@ -69,6 +73,7 @@ class FinancialReport:
 @dataclass
 class FinancialIntelligenceConfig:
     """Configuration for Financial Intelligence."""
+
     currency: str = "USD"
     enable_forecasting: bool = True
     enable_alerts: bool = True
@@ -122,7 +127,7 @@ class FinancialIntelligence:
             Transaction if recorded successfully, None otherwise
         """
         if len(self.transactions) >= self.config.max_transactions:
-            logger.error("Maximum transactions limit reached")
+            logger.error("Maximum transactions limit reached", exc_info=True)
             return None
 
         transaction = Transaction(
@@ -179,7 +184,7 @@ class FinancialIntelligence:
             True if updated successfully, False otherwise
         """
         if budget_id not in self.budgets:
-            logger.error(f"Budget {budget_id} not found")
+            logger.error(f"Budget {budget_id} not found", exc_info=True)
             return False
 
         budget = self.budgets[budget_id]
@@ -189,7 +194,9 @@ class FinancialIntelligence:
         if self.config.enable_alerts:
             spending_ratio = budget.spent_amount / budget.allocated_amount
             if spending_ratio >= self.config.alert_threshold:
-                logger.warning(f"Budget alert: {budget_id} spending at {spending_ratio:.1%}")
+                logger.warning(
+                    f"Budget alert: {budget_id} spending at {spending_ratio:.1%}"
+                )
 
         return True
 
@@ -270,7 +277,8 @@ class FinancialIntelligence:
         """
         # Simple forecasting: average of recent transactions
         relevant_transactions = [
-            t for t in self.transactions.values()
+            t
+            for t in self.transactions.values()
             if t.transaction_type == transaction_type
         ]
 
@@ -304,7 +312,7 @@ class FinancialIntelligence:
             Dictionary with budget status, or None if not found
         """
         if budget_id not in self.budgets:
-            logger.error(f"Budget {budget_id} not found")
+            logger.error(f"Budget {budget_id} not found", exc_info=True)
             return None
 
         budget = self.budgets[budget_id]

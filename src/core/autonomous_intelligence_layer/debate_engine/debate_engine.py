@@ -7,16 +7,16 @@ and arguments to explore different perspectives on complex problems.
 
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class ArgumentType(Enum):
     """Enumeration for argument types."""
+
     PRO = "pro"  # Supporting argument
     CON = "con"  # Opposing argument
     NEUTRAL = "neutral"  # Neutral perspective
@@ -26,6 +26,7 @@ class ArgumentType(Enum):
 
 class DebatePhase(Enum):
     """Enumeration for debate phases."""
+
     OPENING = "opening"  # Initial arguments
     DISCUSSION = "discussion"  # Back and forth discussion
     REBUTTAL = "rebuttal"  # Counter arguments
@@ -36,11 +37,12 @@ class DebatePhase(Enum):
 @dataclass
 class Argument:
     """Represents a single argument in a debate."""
+
     argument_id: str
     agent_id: str
     content: str
     argument_type: ArgumentType
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     confidence: float = 1.0  # 0.0 to 1.0
     supporting_evidence: List[str] = field(default_factory=list)
     references: List[str] = field(default_factory=list)
@@ -50,23 +52,25 @@ class Argument:
 @dataclass
 class DebateRound:
     """Represents a single round in a debate."""
+
     round_id: str
     round_number: int
     phase: DebatePhase
     arguments: List[Argument] = field(default_factory=list)
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class DebateSession:
     """Represents a complete debate session."""
+
     session_id: str
     topic: str
     participants: List[str]  # Agent IDs
     rounds: List[DebateRound] = field(default_factory=list)
     current_phase: DebatePhase = DebatePhase.OPENING
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     concluded_at: Optional[datetime] = None
     consensus_reached: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -75,6 +79,7 @@ class DebateSession:
 @dataclass
 class DebateConfig:
     """Configuration for Debate Engine."""
+
     max_rounds: int = 10
     max_arguments_per_round: int = 5
     max_argument_length: int = 5000
@@ -196,7 +201,10 @@ class DebateEngine:
             return None
 
         # Get or create current round
-        if not session.rounds or len(session.rounds[-1].arguments) >= self.config.max_arguments_per_round:
+        if (
+            not session.rounds
+            or len(session.rounds[-1].arguments) >= self.config.max_arguments_per_round
+        ):
             round_number = len(session.rounds) + 1
             new_round = DebateRound(
                 round_id=f"{session_id}_round_{round_number}",
@@ -231,7 +239,7 @@ class DebateEngine:
         session.current_phase = new_phase
 
         if new_phase == DebatePhase.CONCLUDED:
-            session.concluded_at = datetime.utcnow()
+            session.concluded_at = datetime.now(timezone.utc)
             self.debate_history.append(session)
 
         logger.debug(f"Debate phase advanced: {session_id} -> {new_phase.value}")
@@ -325,11 +333,15 @@ class DebateEngine:
 
                 # Count argument types
                 arg_type = argument.argument_type.value
-                analysis["argument_types"][arg_type] = analysis["argument_types"].get(arg_type, 0) + 1
+                analysis["argument_types"][arg_type] = (
+                    analysis["argument_types"].get(arg_type, 0) + 1
+                )
 
                 # Count agent contributions
                 agent_id = argument.agent_id
-                analysis["agent_contributions"][agent_id] = analysis["agent_contributions"].get(agent_id, 0) + 1
+                analysis["agent_contributions"][agent_id] = (
+                    analysis["agent_contributions"].get(agent_id, 0) + 1
+                )
 
         analysis["total_arguments"] = len(all_arguments)
 
@@ -337,7 +349,9 @@ class DebateEngine:
             analysis["average_confidence"] = total_confidence / len(all_arguments)
 
             # Find strongest and weakest arguments
-            sorted_args = sorted(all_arguments, key=lambda a: a.confidence, reverse=True)
+            sorted_args = sorted(
+                all_arguments, key=lambda a: a.confidence, reverse=True
+            )
             analysis["strongest_arguments"] = [
                 {
                     "id": arg.argument_id,
@@ -407,13 +421,20 @@ Current Phase: {session.current_phase.value}
         """
         # Check content length
         if len(argument.content) > self.config.max_argument_length:
-            logger.warning(f"Argument content exceeds maximum length: {argument.argument_id}")
+            logger.warning(
+                f"Argument content exceeds maximum length: {argument.argument_id}"
+            )
             return False
 
         # Check evidence requirement
         if self.config.enable_evidence_requirement:
-            if argument.argument_type == ArgumentType.EVIDENCE and not argument.supporting_evidence:
-                logger.warning(f"Evidence argument missing supporting evidence: {argument.argument_id}")
+            if (
+                argument.argument_type == ArgumentType.EVIDENCE
+                and not argument.supporting_evidence
+            ):
+                logger.warning(
+                    f"Evidence argument missing supporting evidence: {argument.argument_id}"
+                )
                 return False
 
         return True

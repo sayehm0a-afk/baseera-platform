@@ -1,0 +1,337 @@
+> from typing import Any, Dict, List, Optional, Tuple
+> from dataclasses import dataclass, field
+> from datetime import datetime, UTC
+> from enum import Enum
+> import logging
+  
+  
+> logger = logging.getLogger(__name__)
+  
+  
+> class LearningType(Enum):
+>     """Enumeration for learning types."""
+>     SUPERVISED = "supervised"
+>     UNSUPERVISED = "unsupervised"
+>     REINFORCEMENT = "reinforcement"
+>     TRANSFER = "transfer"
+  
+  
+> @dataclass
+> class Experience:
+>     """Represents a learning experience."""
+>     experience_id: str
+>     experience_type: str
+>     input_data: Dict[str, Any]
+>     output_data: Dict[str, Any]
+>     outcome: str  # "SUCCESS", "FAILURE", "PARTIAL"
+>     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+>     metadata: Dict[str, Any] = field(default_factory=dict)
+  
+  
+> @dataclass
+> class LearningPattern:
+>     """Represents a learned pattern."""
+>     pattern_id: str
+>     pattern_type: str
+>     pattern_data: Dict[str, Any]
+>     confidence: float  # 0.0 to 1.0
+>     occurrences: int
+>     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+>     metadata: Dict[str, Any] = field(default_factory=dict)
+  
+  
+> @dataclass
+> class LearningResult:
+>     """Represents a learning result."""
+>     learning_id: str
+>     learning_type: LearningType
+>     patterns_discovered: List[str]
+>     improvement_metrics: Dict[str, float]
+>     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+>     metadata: Dict[str, Any] = field(default_factory=dict)
+  
+  
+> @dataclass
+> class LearningEngineConfig:
+>     """Configuration for Learning Engine."""
+>     enable_pattern_recognition: bool = True
+>     min_pattern_confidence: float = 0.7
+>     max_experiences: int = 100000
+>     max_patterns: int = 10000
+  
+  
+> class LearningEngine:
+>     """
+>     Learning Engine for autonomous learning and improvement.
+  
+>     The Learning Engine is responsible for:
+>     - Recording experiences
+>     - Discovering patterns
+>     - Learning from successes and failures
+>     - Generating improvement recommendations
+>     - Tracking learning history
+>     - Adapting strategies based on learning
+>     """
+  
+>     def __init__(self, config: Optional[LearningEngineConfig] = None):
+>         """
+>         Initialize Learning Engine.
+  
+>         Args:
+>             config: LearningEngineConfig instance.
+>                    If None, uses default config.
+>         """
+>         self.config = config or LearningEngineConfig()
+>         self.experiences: Dict[str, Experience] = {}
+>         self.patterns: Dict[str, LearningPattern] = {}
+>         self.learning_results: Dict[str, LearningResult] = {}
+>         self.experience_history: List[Experience] = []
+  
+>     def record_experience(
+>         self,
+>         experience_id: str,
+>         experience_type: str,
+>         input_data: Dict[str, Any],
+>         output_data: Dict[str, Any],
+>         outcome: str,
+>     ) -> Optional[Experience]:
+>         """
+>         Record a learning experience.
+  
+>         Args:
+>             experience_id: Unique identifier for the experience
+>             experience_type: Type of experience
+>             input_data: Input data for the experience
+>             output_data: Output data from the experience
+>             outcome: Outcome of the experience
+  
+>         Returns:
+>             Experience if recorded successfully, None otherwise
+>         """
+!         if len(self.experiences) >= self.config.max_experiences:
+!             logger.error("Maximum experiences limit reached")
+!             return None
+  
+!         experience = Experience(
+!             experience_id=experience_id,
+!             experience_type=experience_type,
+!             input_data=input_data,
+!             output_data=output_data,
+!             outcome=outcome,
+!         )
+  
+!         self.experiences[experience_id] = experience
+!         self.experience_history.append(experience)
+!         logger.debug(f"Experience recorded: {experience_id}")
+!         return experience
+  
+>     def discover_pattern(
+>         self,
+>         pattern_id: str,
+>         pattern_type: str,
+>         pattern_data: Dict[str, Any],
+>         confidence: float,
+>     ) -> Optional[LearningPattern]:
+>         """
+>         Discover and record a pattern.
+  
+>         Args:
+>             pattern_id: Unique identifier for the pattern
+>             pattern_type: Type of pattern
+>             pattern_data: Pattern data
+>             confidence: Confidence level (0.0 to 1.0)
+  
+>         Returns:
+>             LearningPattern if discovered successfully, None otherwise
+>         """
+!         if len(self.patterns) >= self.config.max_patterns:
+!             logger.error("Maximum patterns limit reached")
+!             return None
+  
+!         if confidence < self.config.min_pattern_confidence:
+!             logger.debug(f"Pattern confidence below threshold: {confidence}")
+!             return None
+  
+!         pattern = LearningPattern(
+!             pattern_id=pattern_id,
+!             pattern_type=pattern_type,
+!             pattern_data=pattern_data,
+!             confidence=confidence,
+!             occurrences=1,
+!         )
+  
+!         self.patterns[pattern_id] = pattern
+!         logger.debug(f"Pattern discovered: {pattern_id}")
+!         return pattern
+  
+>     def learn_from_experiences(
+>         self,
+>         learning_id: str,
+>         learning_type: LearningType,
+>     ) -> Optional[LearningResult]:
+>         """
+>         Learn from recorded experiences.
+  
+>         Args:
+>             learning_id: Unique identifier for the learning
+>             learning_type: Type of learning
+  
+>         Returns:
+>             LearningResult if learning successful, None otherwise
+>         """
+!         if not self.experiences:
+!             logger.warning("No experiences to learn from")
+!             return None
+  
+          # Analyze experiences
+!         successful_experiences = [
+!             e for e in self.experiences.values()
+!             if e.outcome == "SUCCESS"
+!         ]
+  
+!         failed_experiences = [
+!             e for e in self.experiences.values()
+!             if e.outcome == "FAILURE"
+!         ]
+  
+!         success_rate = (
+!             len(successful_experiences) / len(self.experiences)
+!             if self.experiences
+!             else 0.0
+!         )
+  
+          # Discover patterns from successful experiences
+!         patterns_discovered = []
+!         for pattern_id, pattern in self.patterns.items():
+!             if pattern.confidence >= self.config.min_pattern_confidence:
+!                 patterns_discovered.append(pattern_id)
+  
+!         improvement_metrics = {
+!             "success_rate": success_rate,
+!             "successful_experiences": len(successful_experiences),
+!             "failed_experiences": len(failed_experiences),
+!             "patterns_discovered": len(patterns_discovered),
+!             "total_experiences": len(self.experiences),
+!         }
+  
+!         result = LearningResult(
+!             learning_id=learning_id,
+!             learning_type=learning_type,
+!             patterns_discovered=patterns_discovered,
+!             improvement_metrics=improvement_metrics,
+!         )
+  
+!         self.learning_results[learning_id] = result
+!         logger.debug(f"Learning completed: {learning_id}")
+!         return result
+  
+>     def get_experience(self, experience_id: str) -> Optional[Experience]:
+>         """
+>         Get an experience.
+  
+>         Args:
+>             experience_id: The experience ID
+  
+>         Returns:
+>             Experience if found, None otherwise
+>         """
+!         return self.experiences.get(experience_id)
+  
+>     def get_pattern(self, pattern_id: str) -> Optional[LearningPattern]:
+>         """
+>         Get a pattern.
+  
+>         Args:
+>             pattern_id: The pattern ID
+  
+>         Returns:
+>             LearningPattern if found, None otherwise
+>         """
+!         return self.patterns.get(pattern_id)
+  
+>     def get_learning_result(self, learning_id: str) -> Optional[LearningResult]:
+>         """
+>         Get a learning result.
+  
+>         Args:
+>             learning_id: The learning ID
+  
+>         Returns:
+>             LearningResult if found, None otherwise
+>         """
+!         return self.learning_results.get(learning_id)
+  
+>     def get_experience_history(self) -> List[Experience]:
+>         """
+>         Get experience history.
+  
+>         Returns:
+>             List of experiences
+>         """
+!         return self.experience_history
+  
+>     def get_successful_experiences(self) -> List[Experience]:
+>         """
+>         Get successful experiences.
+  
+>         Returns:
+>             List of successful experiences
+>         """
+!         return [e for e in self.experiences.values() if e.outcome == "SUCCESS"]
+  
+>     def get_failed_experiences(self) -> List[Experience]:
+>         """
+>         Get failed experiences.
+  
+>         Returns:
+>             List of failed experiences
+>         """
+!         return [e for e in self.experiences.values() if e.outcome == "FAILURE"]
+  
+>     def get_high_confidence_patterns(self) -> List[LearningPattern]:
+>         """
+>         Get high confidence patterns.
+  
+>         Returns:
+>             List of patterns with high confidence
+>         """
+!         return [
+!             p for p in self.patterns.values()
+!             if p.confidence >= self.config.min_pattern_confidence
+!         ]
+  
+>     def get_success_rate(self) -> float:
+>         """
+>         Get overall success rate.
+  
+>         Returns:
+>             Success rate (0.0 to 1.0)
+>         """
+!         if not self.experiences:
+!             return 0.0
+  
+!         successful = len(self.get_successful_experiences())
+!         return successful / len(self.experiences)
+  
+>     def recommend_strategy(self) -> Optional[Dict[str, Any]]:
+>         """
+>         Recommend a strategy based on learning.
+  
+>         Returns:
+>             Recommended strategy, or None if no recommendation
+>         """
+!         if not self.patterns:
+!             return None
+  
+          # Find most confident pattern
+!         best_pattern = max(
+!             self.patterns.values(),
+!             key=lambda p: p.confidence,
+!         )
+  
+!         return {
+!             "pattern_id": best_pattern.pattern_id,
+!             "pattern_type": best_pattern.pattern_type,
+!             "confidence": best_pattern.confidence,
+!             "pattern_data": best_pattern.pattern_data,
+!         }

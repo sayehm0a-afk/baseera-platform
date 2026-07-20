@@ -3,6 +3,7 @@
 تتولى هذه الوحدة مسؤولية تنفيذ تدفقات العمل (Workflows) خطوة بخطوة، وإدارة حالتها،
 وتنسيق التفاعلات بين الوكلاء والأدوات.
 """
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
@@ -17,8 +18,9 @@ class IWorkflowExecutor(ABC):
     """
 
     @abstractmethod
-    async def execute_workflow(self, workflow_id: str, workflow_definition: Dict[str, Any]) -> \
-            Dict[str, Any]:  # noqa: E501
+    async def execute_workflow(
+        self, workflow_id: str, workflow_definition: Dict[str, Any]
+    ) -> Dict[str, Any]:  # noqa: E501
         """تنفيذ تدفق عمل معين.
 
         Args:
@@ -68,11 +70,13 @@ class WorkflowExecutor(IWorkflowExecutor):
         self._active_workflows: Dict[str, Any] = {}
         logger.info("WorkflowExecutor instance created.")
 
-    async def execute_workflow(self, workflow_id: str, workflow_definition: Dict[str, Any]) -> \
-            Dict[str, Any]:  # noqa: E501
+    async def execute_workflow(
+        self, workflow_id: str, workflow_definition: Dict[str, Any]
+    ) -> Dict[str, Any]:  # noqa: E501
         logger.info(
             "Executing workflow '%s' with definition: %s",  # noqa: E501
-            workflow_id, workflow_definition
+            workflow_id,
+            workflow_definition,
         )
         # منطق تنفيذ تدفق العمل سيتم إضافته هنا.
         # حالياً، هو مجرد محاكاة لنتيجة.
@@ -80,18 +84,20 @@ class WorkflowExecutor(IWorkflowExecutor):
             "status": "RUNNING",
             "definition": workflow_definition,
             "current_step": 0,
-            "result": None
+            "result": None,
         }
         logger.info("Workflow '%s' started successfully.", workflow_id)  # noqa: E501
         return {
             "status": "COMPLETED",
             "workflow_id": workflow_id,
-            "result": "Simulated workflow completion"
+            "result": "Simulated workflow completion",
         }  # noqa: E501
 
     async def pause_workflow(self, workflow_id: str) -> None:  # noqa: E501
         if workflow_id not in self._active_workflows:
-            logger.warning("Workflow '%s' not found or not active. Cannot pause.", workflow_id)  # noqa: E501
+            logger.warning(
+                "Workflow '%s' not found or not active. Cannot pause.", workflow_id
+            )  # noqa: E501
             return
         self._active_workflows[workflow_id]["status"] = "PAUSED"
         logger.info("Workflow '%s' paused.", workflow_id)  # noqa: E501
@@ -100,7 +106,7 @@ class WorkflowExecutor(IWorkflowExecutor):
         if workflow_id not in self._active_workflows:
             logger.warning(
                 "Workflow '%s' not found or not paused. Cannot resume.",  # noqa: E501
-                workflow_id
+                workflow_id,
             )
             return
         self._active_workflows[workflow_id]["status"] = "RUNNING"
@@ -110,7 +116,7 @@ class WorkflowExecutor(IWorkflowExecutor):
         if workflow_id not in self._active_workflows:
             logger.warning(
                 "Workflow '%s' not found or not active. Cannot terminate.",  # noqa: E501
-                workflow_id
+                workflow_id,
             )
             return
         del self._active_workflows[workflow_id]

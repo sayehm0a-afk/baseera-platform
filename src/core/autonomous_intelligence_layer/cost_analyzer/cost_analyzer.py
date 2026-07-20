@@ -5,19 +5,19 @@ This module implements Cost Analyzer for analyzing operational costs,
 cost trends, and cost optimization recommendations.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
-from basirah.src.core.shared_models.base_transaction import BaseTransaction
+from core.shared_models.base_transaction import BaseTransaction
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class CostCategory(Enum):
     """Enumeration for cost categories."""
+
     COMPUTE = "compute"  # CPU, GPU, memory
     STORAGE = "storage"  # Database, file storage
     NETWORK = "network"  # Bandwidth, data transfer
@@ -31,6 +31,7 @@ class CostCategory(Enum):
 @dataclass(kw_only=True)
 class CostItem(BaseTransaction):
     """Represents a cost item."""
+
     cost_id: str
     category: CostCategory
 
@@ -38,6 +39,7 @@ class CostItem(BaseTransaction):
 @dataclass
 class CostAnalysis:
     """Represents cost analysis results."""
+
     analysis_id: str
     total_cost: float
     cost_by_category: Dict[CostCategory, float]
@@ -49,6 +51,7 @@ class CostAnalysis:
 @dataclass
 class CostOptimizerConfig:
     """Configuration for Cost Analyzer."""
+
     enable_trend_analysis: bool = True
     enable_optimization_suggestions: bool = True
     max_cost_items: int = 50000
@@ -98,7 +101,7 @@ class CostAnalyzer:
             CostItem if recorded successfully, None otherwise
         """
         if len(self.cost_items) >= self.config.max_cost_items:
-            logger.error("Maximum cost items limit reached")
+            logger.error("Maximum cost items limit reached", exc_info=True)
             return None
 
         cost_item = CostItem(
@@ -129,7 +132,8 @@ class CostAnalyzer:
         cost_by_category = {}
         for category in CostCategory:
             category_cost = sum(
-                item.amount for item in self.cost_items.values()
+                item.amount
+                for item in self.cost_items.values()
                 if item.category == category
             )
             if category_cost > 0:
@@ -139,7 +143,9 @@ class CostAnalyzer:
         cost_trends = self._analyze_trends()
 
         # Generate optimization opportunities
-        optimization_opportunities = self._generate_optimization_suggestions(cost_by_category)
+        optimization_opportunities = self._generate_optimization_suggestions(
+            cost_by_category
+        )
 
         analysis = CostAnalysis(
             analysis_id=analysis_id,
@@ -164,8 +170,7 @@ class CostAnalyzer:
 
         for category in CostCategory:
             category_items = [
-                item for item in self.cost_items.values()
-                if item.category == category
+                item for item in self.cost_items.values() if item.category == category
             ]
 
             if len(category_items) < 2:
@@ -175,8 +180,12 @@ class CostAnalyzer:
             sorted_items = sorted(category_items, key=lambda x: x.timestamp)
             mid_point = len(sorted_items) // 2
 
-            old_avg = sum(item.amount for item in sorted_items[:mid_point]) / max(mid_point, 1)
-            new_avg = sum(item.amount for item in sorted_items[mid_point:]) / max(len(sorted_items) - mid_point, 1)
+            old_avg = sum(item.amount for item in sorted_items[:mid_point]) / max(
+                mid_point, 1
+            )
+            new_avg = sum(item.amount for item in sorted_items[mid_point:]) / max(
+                len(sorted_items) - mid_point, 1
+            )
 
             trend_percentage = ((new_avg - old_avg) / max(old_avg, 0.1)) * 100
             trends[category.value] = trend_percentage
@@ -208,10 +217,14 @@ class CostAnalyzer:
             percentage = (cost / total_cost) * 100
 
             if category == CostCategory.COMPUTE and percentage > 40:
-                suggestions.append("Consider optimizing compute resources or using auto-scaling")
+                suggestions.append(
+                    "Consider optimizing compute resources or using auto-scaling"
+                )
 
             elif category == CostCategory.STORAGE and percentage > 30:
-                suggestions.append("Review storage usage and consider archiving old data")
+                suggestions.append(
+                    "Review storage usage and consider archiving old data"
+                )
 
             elif category == CostCategory.API_CALLS and percentage > 25:
                 suggestions.append("Optimize API call patterns or consider caching")
@@ -232,7 +245,8 @@ class CostAnalyzer:
 
         for category in CostCategory:
             category_cost = sum(
-                item.amount for item in self.cost_items.values()
+                item.amount
+                for item in self.cost_items.values()
                 if item.category == category
             )
             if category_cost > 0:

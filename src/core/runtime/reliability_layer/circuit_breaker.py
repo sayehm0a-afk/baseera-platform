@@ -2,15 +2,17 @@ import logging
 import asyncio
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Callable, Any, Dict
+from typing import Callable, Any
 import time
 
 logger = logging.getLogger(__name__)
+
 
 class CircuitBreakerState(Enum):
     CLOSED = "CLOSED"
     OPEN = "OPEN"
     HALF_OPEN = "HALF_OPEN"
+
 
 class ICircuitBreaker(ABC):
     """واجهة مجردة لقاطع الدائرة (Circuit Breaker).
@@ -38,8 +40,8 @@ class ICircuitBreaker(ABC):
 
 
 class CircuitBreakerOpenError(Exception):
-    """استثناء يتم رفعه عندما يكون قاطع الدائرة مفتوحًا.
-    """
+    """استثناء يتم رفعه عندما يكون قاطع الدائرة مفتوحًا."""
+
     pass
 
 
@@ -49,10 +51,12 @@ class CircuitBreaker(ICircuitBreaker):
     يحمي العمليات من الفشل المتكرر عن طريق فتح الدائرة مؤقتًا.
     """
 
-    def __init__(self,
-                 failure_threshold: int = 3,
-                 recovery_timeout: int = 5,  # seconds
-                 expected_successes: int = 1) -> None:
+    def __init__(
+        self,
+        failure_threshold: int = 3,
+        recovery_timeout: int = 5,  # seconds
+        expected_successes: int = 1,
+    ) -> None:
         self._failure_threshold = failure_threshold
         self._recovery_timeout = recovery_timeout
         self._expected_successes = expected_successes
@@ -63,8 +67,12 @@ class CircuitBreaker(ICircuitBreaker):
         self._success_count = 0
         self._lock = asyncio.Lock()
 
-        logger.info("CircuitBreaker instance created with failure_threshold=%d, recovery_timeout=%d, expected_successes=%d.",
-                    failure_threshold, recovery_timeout, expected_successes)
+        logger.info(
+            "CircuitBreaker instance created with failure_threshold=%d, recovery_timeout=%d, expected_successes=%d.",
+            failure_threshold,
+            recovery_timeout,
+            expected_successes,
+        )
 
     @property
     def state(self) -> CircuitBreakerState:
@@ -97,9 +105,11 @@ class CircuitBreaker(ICircuitBreaker):
         async with self._lock:
             current_state = self._state
             if current_state == CircuitBreakerState.OPEN:
-                if (time.monotonic() - self._last_failure_time) > self._recovery_timeout:
+                if (
+                    time.monotonic() - self._last_failure_time
+                ) > self._recovery_timeout:
                     await self._transition_to_half_open()
-                    current_state = self._state # Update current_state after transition
+                    current_state = self._state  # Update current_state after transition
                 else:
                     logger.warning("Circuit Breaker is OPEN. Operation prevented.")
                     raise CircuitBreakerOpenError("Circuit Breaker is OPEN")
@@ -113,8 +123,9 @@ class CircuitBreaker(ICircuitBreaker):
                         await self._transition_to_closed()
                 return result
             except Exception as e:
+                logger.error("Circuit breaker operation failed in HALF-OPEN state: %s", e, exc_info=True)
                 async with self._lock:
-                    self._failure_count += 1 # In HALF-OPEN, any failure opens it again
+                    self._failure_count += 1  # In HALF-OPEN, any failure opens it again
                     await self._transition_to_open()
                 raise
 
@@ -122,12 +133,17 @@ class CircuitBreaker(ICircuitBreaker):
         try:
             result = await func(*args, **kwargs)
             async with self._lock:
-                self._failure_count = 0 # Reset failure count on success
+                self._failure_count = 0  # Reset failure count on success
             return result
         except Exception as e:
+            logger.error("Circuit breaker operation failed in CLOSED state: %s", e, exc_info=True)
             async with self._lock:
                 self._failure_count += 1
-                logger.warning("Operation failed. Failure count: %d/%d", self._failure_count, self._failure_threshold)
+                logger.warning(
+                    "Operation failed. Failure count: %d/%d",
+                    self._failure_count,
+                    self._failure_threshold,
+                )
                 if self._failure_count >= self._failure_threshold:
                     await self._transition_to_open()
             raise

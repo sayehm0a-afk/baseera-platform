@@ -3,11 +3,10 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 from core.runtime.security_layer.permission_validation import (
-    IPermissionValidation, PermissionValidation
+    IPermissionValidation,
+    PermissionValidation,
 )
-from core.runtime.security_layer.agent_isolation import (
-    IAgentIsolation, AgentIsolation
-)
+from core.runtime.security_layer.agent_isolation import IAgentIsolation, AgentIsolation
 from core.runtime.security_layer.sandbox import ISandbox, Sandbox
 
 logger = logging.getLogger(__name__)
@@ -29,7 +28,7 @@ class ISecurityLayer(ABC):
         context: Optional[Dict[str, Any]] = None,
         use_sandbox: bool = False,
         sandbox_config: Optional[Dict[str, Any]] = None,
-        **func_kwargs
+        **func_kwargs,
     ) -> Any:
         """يقوم بالتحقق من الأذونات وتنفيذ الإجراء المطلوب.
 
@@ -68,11 +67,9 @@ class SecurityLayer(ISecurityLayer):
         self,
         permission_validation: Optional[IPermissionValidation] = None,
         agent_isolation: Optional[IAgentIsolation] = None,
-        sandbox: Optional[ISandbox] = None
+        sandbox: Optional[ISandbox] = None,
     ):
-        self._permission_validation = (
-            permission_validation or PermissionValidation()
-        )
+        self._permission_validation = permission_validation or PermissionValidation()
         self._agent_isolation = agent_isolation or AgentIsolation()
         self._sandbox = sandbox or Sandbox()
 
@@ -85,7 +82,7 @@ class SecurityLayer(ISecurityLayer):
         context: Optional[Dict[str, Any]] = None,
         use_sandbox: bool = False,
         sandbox_config: Optional[Dict[str, Any]] = None,
-        **func_kwargs
+        **func_kwargs,
     ) -> Any:
         if context is None:
             context = {}
@@ -99,21 +96,18 @@ class SecurityLayer(ISecurityLayer):
         if not is_allowed:
             raise PermissionError(
                 f"Agent '{agent_id}' is not authorized to "
-                f"perform capability \'{capability}\'"
+                f"perform capability '{capability}'"
             )
 
         # 2. التنفيذ (اختياريًا في صندوق رمل)
         if use_sandbox:
-            sandbox_id = await self._sandbox.create_sandbox(
-                agent_id, sandbox_config
-            )
+            sandbox_id = await self._sandbox.create_sandbox(agent_id, sandbox_config)
             try:
                 # تحويل الدالة إلى كود يمكن تنفيذه في الصندوق الرمل
                 # هذا تبسيط، في الواقع قد تحتاج إلى تسلسل الدالة ووسائطها
                 # أو استخدام آلية RPC بين المحرك والصندوق الرمل
                 code_to_execute = (
-                    "_result = local_vars[\'func\'](*local_vars[\'args\'], "
-
+                    "_result = local_vars['func'](*local_vars['args'], "
                     "**local_vars['kwargs'])"
                 )
                 # يجب أن تكون الدالة func متاحة في سياق الصندوق الرمل
@@ -121,11 +115,12 @@ class SecurityLayer(ISecurityLayer):
                 # أو أننا نمررها كجزء من السياق إذا كانت معقدة
                 # للتبسيط، سنقوم بتمريرها كمتغير محلي في exec
                 local_vars_for_sandbox = {
-                    "func": func, "args": func_args, "kwargs": func_kwargs
+                    "func": func,
+                    "args": func_args,
+                    "kwargs": func_kwargs,
                 }
                 result = await self._sandbox.execute_in_sandbox(
-                    sandbox_id, code_to_execute,
-                    local_vars=local_vars_for_sandbox
+                    sandbox_id, code_to_execute, local_vars=local_vars_for_sandbox
                 )
                 return result
             finally:

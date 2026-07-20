@@ -1,6 +1,7 @@
 from typing import Any, Dict
 from .policy import Policy
 
+
 class ProductionModePolicy(Policy):
     """
     سياسة وضع الإنتاج: تركز على الاستقرار والموثوقية والأداء في بيئة حية.

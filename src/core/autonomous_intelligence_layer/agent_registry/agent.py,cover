@@ -1,0 +1,105 @@
+> from typing import List, Dict, Any, Optional
+  
+> class Agent:
+>     """
+>     يمثل وكيلًا ذكيًا في نظام basirah.
+  
+>     يتضمن الوكيل معرفًا فريدًا، وقائمة بالقدرات، وحالة.
+>     """
+  
+>     def __init__(
+>         self,
+>         agent_id: str,
+>         capabilities: List[str],
+>         status: str = "IDLE",
+>         metadata: Optional[Dict[str, Any]] = None
+>     ):
+>         """
+>         يهيئ مثيلًا جديدًا للوكيل.
+  
+>         Args:
+>             agent_id (str): معرف فريد للوكيل.
+>             capabilities (List[str]): قائمة بالقدرات التي يمتلكها الوكيل (مثل "data_analysis", "report_generation").
+>             status (str): الحالة الأولية للوكيل (افتراضي: IDLE).
+>             metadata (Optional[Dict[str, Any]]): بيانات وصفية إضافية للوكيل.
+>         """
+>         if not isinstance(agent_id, str) or not agent_id:
+!             raise ValueError("معرف الوكيل (agent_id) يجب أن يكون سلسلة نصية غير فارغة.")
+>         if not isinstance(capabilities, list) or not all(isinstance(c, str) for c in capabilities):
+!             raise ValueError("القدرات (capabilities) يجب أن تكون قائمة من السلاسل النصية.")
+>         if not isinstance(status, str) or not status:
+!             raise ValueError("الحالة (status) يجب أن تكون سلسلة نصية غير فارغة.")
+>         if metadata is not None and not isinstance(metadata, dict):
+!             raise ValueError("البيانات الوصفية (metadata) يجب أن تكون قاموسًا أو لا شيء.")
+  
+>         self.id: str = agent_id
+>         self.capabilities: List[str] = capabilities
+>         self.status: str = status
+>         self.metadata: Dict[str, Any] = metadata if metadata is not None else {}
+  
+>     def update_status(self, new_status: str) -> None:
+>         """
+>         يحدث حالة الوكيل.
+  
+>         Args:
+>             new_status (str): الحالة الجديدة للوكيل.
+>         """
+!         if not isinstance(new_status, str) or not new_status:
+!             raise ValueError("الحالة الجديدة (new_status) يجب أن تكون سلسلة نصية غير فارغة.")
+!         self.status = new_status
+  
+>     def has_capability(self, capability: str) -> bool:
+>         """
+>         يتحقق مما إذا كان الوكيل يمتلك قدرة معينة.
+  
+>         Args:
+>             capability (str): القدرة المراد التحقق منها.
+  
+>         Returns:
+>             bool: True إذا كان الوكيل يمتلك القدرة، False بخلاف ذلك.
+>         """
+>         return capability in self.capabilities
+  
+>     def to_dict(self) -> Dict[str, Any]:
+>         """
+>         يحول الوكيل إلى قاموس.
+  
+>         Returns:
+>             Dict[str, Any]: تمثيل قاموسي للوكيل.
+>         """
+!         return {
+!             "id": self.id,
+!             "capabilities": self.capabilities,
+!             "status": self.status,
+!             "metadata": self.metadata
+!         }
+  
+>     @classmethod
+>     def from_dict(cls, data: Dict[str, Any]):
+>         """
+>         ينشئ مثيل وكيل من قاموس.
+  
+>         Args:
+>             data (Dict[str, Any]): قاموس يحتوي على بيانات الوكيل.
+  
+>         Returns:
+>             Agent: مثيل الوكيل.
+>         """
+!         return cls(
+!             agent_id=data["id"],
+!             capabilities=data["capabilities"],
+!             status=data.get("status", "IDLE"),
+!             metadata=data.get("metadata")
+!         )
+  
+>     def __repr__(self) -> str:
+!         return f"Agent(id=\'{self.id}\', status=\'{self.status}\', capabilities={self.capabilities})"
+  
+>     def __eq__(self, other: Any) -> bool:
+>         if not isinstance(other, Agent):
+!             return NotImplemented
+>         return self.id == other.id and self.capabilities == other.capabilities and \
+>                self.status == other.status and self.metadata == other.metadata
+  
+>     def __hash__(self) -> int:
+!         return hash((self.id, tuple(self.capabilities), self.status, frozenset(self.metadata.items())))

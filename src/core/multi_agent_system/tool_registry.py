@@ -2,12 +2,16 @@
 وحدة ToolRegistry لمنصة basirah.
 تدير تسجيل الأدوات وإلغاء تسجيلها واسترجاعها.
 """
+
 import logging
 from typing import Dict, List, Optional
 
-from core.multi_agent_system.base_tool import BaseTool # pylint: disable=E0402 # type: ignore
+from core.multi_agent_system.base_tool import (
+    BaseTool,
+)  # pylint: disable=E0402 # type: ignore
 
 logger = logging.getLogger(__name__)
+
 
 class ToolRegistry:
     """
@@ -57,5 +61,8 @@ class ToolRegistry:
         """
         يسترجع قائمة بالأدوات التي تحتوي أوصافها على كلمة مفتاحية معينة.
         """
-        return [tool for tool in self._tools.values() if
-                keyword.lower() in tool.description.lower()]
+        return [
+            tool
+            for tool in self._tools.values()
+            if keyword.lower() in tool.description.lower()
+        ]

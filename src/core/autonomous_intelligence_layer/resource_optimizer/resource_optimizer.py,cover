@@ -1,0 +1,450 @@
+> """
+> Resource Optimizer Module
+  
+> This module implements the Resource Optimizer, which optimizes the allocation
+> and usage of computational resources (CPU, memory, API calls, etc.) for
+> autonomous agent operations.
+> """
+  
+! from typing import Any, Dict, List, Optional
+! from dataclasses import dataclass, field
+! from datetime import datetime
+! from enum import Enum
+! import logging
+  
+  
+! logger = logging.getLogger(__name__)
+  
+  
+! class ResourceType(Enum):
+!     """Enumeration for resource types."""
+!     CPU = "cpu"  # CPU time in seconds
+!     MEMORY = "memory"  # Memory in MB
+!     API_CALLS = "api_calls"  # Number of API calls
+!     STORAGE = "storage"  # Storage in MB
+!     BANDWIDTH = "bandwidth"  # Bandwidth in MB
+!     TOKENS = "tokens"  # LLM tokens
+  
+  
+! class OptimizationStrategy(Enum):
+!     """Enumeration for optimization strategies."""
+!     GREEDY = "greedy"  # Greedy approach
+!     DYNAMIC_PROGRAMMING = "dynamic_programming"  # Dynamic programming
+!     GENETIC_ALGORITHM = "genetic_algorithm"  # Genetic algorithm
+!     SIMULATED_ANNEALING = "simulated_annealing"  # Simulated annealing
+!     LINEAR_PROGRAMMING = "linear_programming"  # Linear programming
+  
+  
+! @dataclass
+! class ResourceAllocation:
+!     """Represents a resource allocation."""
+!     allocation_id: str
+!     agent_id: str
+!     resource_type: ResourceType
+!     allocated_amount: float
+!     used_amount: float = 0.0
+!     timestamp: datetime = field(default_factory=datetime.utcnow)
+!     metadata: Dict[str, Any] = field(default_factory=dict)
+  
+  
+! @dataclass
+! class ResourceConstraint:
+!     """Represents a resource constraint."""
+!     constraint_id: str
+!     resource_type: ResourceType
+!     max_total: float  # Maximum total available
+!     max_per_agent: float  # Maximum per agent
+!     priority_weight: float = 1.0  # Priority weight for allocation
+  
+  
+! @dataclass
+! class OptimizationResult:
+!     """Represents optimization results."""
+!     optimization_id: str
+!     strategy: OptimizationStrategy
+!     allocations: List[ResourceAllocation]
+!     total_efficiency: float  # 0.0 to 1.0
+!     timestamp: datetime = field(default_factory=datetime.utcnow)
+!     metadata: Dict[str, Any] = field(default_factory=dict)
+  
+  
+! @dataclass
+! class ResourceOptimizerConfig:
+!     """Configuration for Resource Optimizer."""
+!     default_strategy: OptimizationStrategy = OptimizationStrategy.GREEDY
+!     enable_dynamic_reallocation: bool = True
+!     reallocation_interval_seconds: int = 300  # 5 minutes
+!     max_allocations: int = 10000
+!     efficiency_threshold: float = 0.7
+  
+  
+! class ResourceOptimizer:
+!     """
+!     Resource Optimizer for autonomous agent resource management.
+  
+!     The Resource Optimizer is responsible for:
+!     - Allocating resources to agents
+!     - Optimizing resource usage
+!     - Monitoring resource consumption
+!     - Reallocating resources dynamically
+!     - Predicting resource needs
+!     - Generating optimization recommendations
+!     """
+  
+!     def __init__(self, config: Optional[ResourceOptimizerConfig] = None):
+!         """
+!         Initialize the Resource Optimizer.
+  
+!         Args:
+!             config: ResourceOptimizerConfig instance for configuring optimization behavior.
+!                    If None, uses default config.
+!         """
+!         self.config = config or ResourceOptimizerConfig()
+!         self.allocations: Dict[str, ResourceAllocation] = {}
+!         self.constraints: Dict[str, ResourceConstraint] = {}
+!         self.optimization_history: List[OptimizationResult] = []
+  
+!     def add_constraint(
+!         self,
+!         constraint_id: str,
+!         resource_type: ResourceType,
+!         max_total: float,
+!         max_per_agent: float,
+!         priority_weight: float = 1.0,
+!     ) -> ResourceConstraint:
+!         """
+!         Add a resource constraint.
+  
+!         Args:
+!             constraint_id: Unique identifier for the constraint
+!             resource_type: Type of resource
+!             max_total: Maximum total available
+!             max_per_agent: Maximum per agent
+!             priority_weight: Priority weight for allocation
+  
+!         Returns:
+!             ResourceConstraint instance
+!         """
+!         constraint = ResourceConstraint(
+!             constraint_id=constraint_id,
+!             resource_type=resource_type,
+!             max_total=max_total,
+!             max_per_agent=max_per_agent,
+!             priority_weight=priority_weight,
+!         )
+  
+!         self.constraints[constraint_id] = constraint
+!         logger.debug(f"Resource constraint added: {constraint_id}")
+!         return constraint
+  
+!     def allocate_resource(
+!         self,
+!         allocation_id: str,
+!         agent_id: str,
+!         resource_type: ResourceType,
+!         amount: float,
+!     ) -> Optional[ResourceAllocation]:
+!         """
+!         Allocate a resource to an agent.
+  
+!         Args:
+!             allocation_id: Unique identifier for the allocation
+!             agent_id: ID of the agent
+!             resource_type: Type of resource
+!             amount: Amount to allocate
+  
+!         Returns:
+!             ResourceAllocation if successful, None otherwise
+!         """
+          # Find constraint for this resource type
+!         constraint = None
+!         for c in self.constraints.values():
+!             if c.resource_type == resource_type:
+!                 constraint = c
+!                 break
+  
+!         if constraint is None:
+!             logger.error(f"No constraint found for resource type: {resource_type.value}")
+!             return None
+  
+          # Check if allocation exceeds constraint
+!         if amount > constraint.max_per_agent:
+!             logger.warning(f"Allocation exceeds max per agent: {amount} > {constraint.max_per_agent}")
+!             return None
+  
+          # Check total usage
+!         total_usage = sum(
+!             a.allocated_amount for a in self.allocations.values()
+!             if a.resource_type == resource_type
+!         )
+  
+!         if total_usage + amount > constraint.max_total:
+!             logger.warning(f"Total allocation exceeds maximum: {total_usage + amount} > {constraint.max_total}")
+!             return None
+  
+          # Create allocation
+!         allocation = ResourceAllocation(
+!             allocation_id=allocation_id,
+!             agent_id=agent_id,
+!             resource_type=resource_type,
+!             allocated_amount=amount,
+!         )
+  
+!         self.allocations[allocation_id] = allocation
+!         logger.debug(f"Resource allocated: {allocation_id}")
+!         return allocation
+  
+!     def update_usage(
+!         self,
+!         allocation_id: str,
+!         used_amount: float,
+!     ) -> bool:
+!         """
+!         Update resource usage for an allocation.
+  
+!         Args:
+!             allocation_id: The allocation ID
+!             used_amount: Amount used
+  
+!         Returns:
+!             True if updated successfully, False otherwise
+!         """
+!         if allocation_id not in self.allocations:
+!             logger.error(f"Allocation {allocation_id} not found")
+!             return False
+  
+!         allocation = self.allocations[allocation_id]
+!         allocation.used_amount = min(used_amount, allocation.allocated_amount)
+!         return True
+  
+!     def optimize_allocation(
+!         self,
+!         optimization_id: str,
+!         agent_ids: List[str],
+!         strategy: Optional[OptimizationStrategy] = None,
+!     ) -> Optional[OptimizationResult]:
+!         """
+!         Optimize resource allocation for agents.
+  
+!         Args:
+!             optimization_id: Unique identifier for the optimization
+!             agent_ids: List of agent IDs to optimize for
+!             strategy: Optional optimization strategy (uses default if not provided)
+  
+!         Returns:
+!             OptimizationResult if optimization successful, None otherwise
+!         """
+!         if not agent_ids:
+!             logger.error("No agents to optimize")
+!             return None
+  
+!         strategy = strategy or self.config.default_strategy
+  
+          # Get current allocations for agents
+!         agent_allocations = [
+!             a for a in self.allocations.values()
+!             if a.agent_id in agent_ids
+!         ]
+  
+          # Apply optimization strategy
+!         optimized_allocations = self._apply_strategy(agent_allocations, strategy)
+  
+          # Calculate efficiency
+!         total_efficiency = self._calculate_efficiency(optimized_allocations)
+  
+          # Create optimization result
+!         result = OptimizationResult(
+!             optimization_id=optimization_id,
+!             strategy=strategy,
+!             allocations=optimized_allocations,
+!             total_efficiency=total_efficiency,
+!         )
+  
+!         self.optimization_history.append(result)
+  
+!         logger.debug(f"Optimization completed: {optimization_id}, efficiency: {total_efficiency:.2f}")
+!         return result
+  
+!     def _apply_strategy(
+!         self,
+!         allocations: List[ResourceAllocation],
+!         strategy: OptimizationStrategy,
+!     ) -> List[ResourceAllocation]:
+!         """
+!         Apply optimization strategy to allocations.
+  
+!         Args:
+!             allocations: List of allocations to optimize
+!             strategy: Strategy to apply
+  
+!         Returns:
+!             List of optimized allocations
+!         """
+!         if strategy == OptimizationStrategy.GREEDY:
+!             return self._greedy_optimization(allocations)
+!         elif strategy == OptimizationStrategy.DYNAMIC_PROGRAMMING:
+!             return self._dynamic_programming_optimization(allocations)
+!         elif strategy == OptimizationStrategy.GENETIC_ALGORITHM:
+!             return self._genetic_algorithm_optimization(allocations)
+!         elif strategy == OptimizationStrategy.SIMULATED_ANNEALING:
+!             return self._simulated_annealing_optimization(allocations)
+!         elif strategy == OptimizationStrategy.LINEAR_PROGRAMMING:
+!             return self._linear_programming_optimization(allocations)
+  
+!         return allocations
+  
+!     def _greedy_optimization(
+!         self,
+!         allocations: List[ResourceAllocation],
+!     ) -> List[ResourceAllocation]:
+!         """Greedy optimization strategy."""
+          # Sort by usage efficiency
+!         sorted_allocs = sorted(
+!             allocations,
+!             key=lambda a: a.used_amount / max(a.allocated_amount, 0.1),
+!             reverse=True,
+!         )
+  
+          # Reallocate based on usage
+!         optimized = []
+!         for alloc in sorted_allocs:
+!             efficiency = alloc.used_amount / max(alloc.allocated_amount, 0.1)
+!             if efficiency > 0.5:
+                  # Keep or increase allocation
+!                 new_alloc = ResourceAllocation(
+!                     allocation_id=alloc.allocation_id,
+!                     agent_id=alloc.agent_id,
+!                     resource_type=alloc.resource_type,
+!                     allocated_amount=alloc.allocated_amount * 1.1,
+!                     used_amount=alloc.used_amount,
+!                 )
+!             else:
+                  # Decrease allocation
+!                 new_alloc = ResourceAllocation(
+!                     allocation_id=alloc.allocation_id,
+!                     agent_id=alloc.agent_id,
+!                     resource_type=alloc.resource_type,
+!                     allocated_amount=alloc.allocated_amount * 0.9,
+!                     used_amount=alloc.used_amount,
+!                 )
+!             optimized.append(new_alloc)
+  
+!         return optimized
+  
+!     def _dynamic_programming_optimization(
+!         self,
+!         allocations: List[ResourceAllocation],
+!     ) -> List[ResourceAllocation]:
+!         """Dynamic programming optimization strategy."""
+          # Simplified DP approach
+!         return self._greedy_optimization(allocations)
+  
+!     def _genetic_algorithm_optimization(
+!         self,
+!         allocations: List[ResourceAllocation],
+!     ) -> List[ResourceAllocation]:
+!         """Genetic algorithm optimization strategy."""
+          # Simplified GA approach
+!         return self._greedy_optimization(allocations)
+  
+!     def _simulated_annealing_optimization(
+!         self,
+!         allocations: List[ResourceAllocation],
+!     ) -> List[ResourceAllocation]:
+!         """Simulated annealing optimization strategy."""
+          # Simplified SA approach
+!         return self._greedy_optimization(allocations)
+  
+!     def _linear_programming_optimization(
+!         self,
+!         allocations: List[ResourceAllocation],
+!     ) -> List[ResourceAllocation]:
+!         """Linear programming optimization strategy."""
+          # Simplified LP approach
+!         return self._greedy_optimization(allocations)
+  
+!     def _calculate_efficiency(
+!         self,
+!         allocations: List[ResourceAllocation],
+!     ) -> float:
+!         """
+!         Calculate overall efficiency of allocations.
+  
+!         Args:
+!             allocations: List of allocations
+  
+!         Returns:
+!             Efficiency score (0.0 to 1.0)
+!         """
+!         if not allocations:
+!             return 0.0
+  
+!         total_efficiency = 0.0
+!         for alloc in allocations:
+!             if alloc.allocated_amount > 0:
+!                 efficiency = alloc.used_amount / alloc.allocated_amount
+!                 total_efficiency += min(efficiency, 1.0)
+  
+!         return total_efficiency / len(allocations)
+  
+!     def predict_resource_needs(
+!         self,
+!         agent_id: str,
+!         historical_data: Dict[ResourceType, List[float]],
+!     ) -> Dict[ResourceType, float]:
+!         """
+!         Predict future resource needs for an agent.
+  
+!         Args:
+!             agent_id: The agent ID
+!             historical_data: Historical resource usage data
+  
+!         Returns:
+!             Dictionary of predicted resource needs
+!         """
+!         predictions = {}
+  
+!         for resource_type, usage_history in historical_data.items():
+!             if not usage_history:
+!                 continue
+  
+              # Simple prediction: average of recent usage
+!             avg_usage = sum(usage_history[-5:]) / len(usage_history[-5:])
+              # Add 20% buffer for safety
+!             predicted = avg_usage * 1.2
+!             predictions[resource_type] = predicted
+  
+!         return predictions
+  
+!     def get_allocation(self, allocation_id: str) -> Optional[ResourceAllocation]:
+!         """
+!         Get a resource allocation.
+  
+!         Args:
+!             allocation_id: The allocation ID
+  
+!         Returns:
+!             ResourceAllocation if found, None otherwise
+!         """
+!         return self.allocations.get(allocation_id)
+  
+!     def get_agent_allocations(self, agent_id: str) -> List[ResourceAllocation]:
+!         """
+!         Get all allocations for an agent.
+  
+!         Args:
+!             agent_id: The agent ID
+  
+!         Returns:
+!             List of allocations for the agent
+!         """
+!         return [a for a in self.allocations.values() if a.agent_id == agent_id]
+  
+!     def get_optimization_history(self) -> List[OptimizationResult]:
+!         """
+!         Get optimization history.
+  
+!         Returns:
+!             List of optimization results
+!         """
+!         return self.optimization_history

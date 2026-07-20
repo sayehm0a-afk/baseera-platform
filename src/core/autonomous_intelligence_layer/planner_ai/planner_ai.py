@@ -1,7 +1,11 @@
-from typing import Any, Dict, List, Optional
-from core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
-from core.autonomous_intelligence_layer.task_graph_engine.node import Node
-from core.autonomous_intelligence_layer.task_graph_engine.task import Task
+from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task
+from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node
+from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
+import logging
+from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
+
 
 class PlannerAI:
     """
@@ -14,7 +18,9 @@ class PlannerAI:
         """
         يهيئ مثيلًا جديدًا لـ PlannerAI.
         """
-        self.task_graph_engine = DAG() # استخدام محرك الرسم البياني للمهام لإنشاء وإدارة DAGs
+        self.task_graph_engine = (
+            DAG()
+        )  # استخدام محرك الرسم البياني للمهام لإنشاء وإدارة DAGs
 
     def decompose_goal(self, goal: str) -> List[Dict[str, Any]]:
         """
@@ -32,15 +38,29 @@ class PlannerAI:
         # مثال بسيط لتفكيك الهدف
         if "تحليل السوق" in goal:
             return [
-                {"task_id": "collect_market_data", "description": "جمع بيانات السوق", "payload": {"source": "API"}},
-                {"task_id": "process_market_data", "description": "معالجة بيانات السوق", "payload": {"format": "JSON"}},
-                {"task_id": "analyze_market_trends", "description": "تحليل اتجاهات السوق", "payload": {"method": "ML"}}
+                {
+                    "task_id": "collect_market_data",
+                    "description": "جمع بيانات السوق",
+                    "payload": {"source": "API"},
+                },
+                {
+                    "task_id": "process_market_data",
+                    "description": "معالجة بيانات السوق",
+                    "payload": {"format": "JSON"},
+                },
+                {
+                    "task_id": "analyze_market_trends",
+                    "description": "تحليل اتجاهات السوق",
+                    "payload": {"method": "ML"},
+                },
             ]
-        return [{
-            "task_id": "generic_task_1",
-            "description": f"مهمة عامة لتنفيذ {goal}",
-            "payload": {"input": goal}
-        }]
+        return [
+            {
+                "task_id": "generic_task_1",
+                "description": f"مهمة عامة لتنفيذ {goal}",
+                "payload": {"input": goal},
+            }
+        ]
 
     def plan_multi_step(self, decomposed_tasks: List[Dict[str, Any]]) -> DAG:
         """
@@ -50,9 +70,10 @@ class PlannerAI:
             decomposed_tasks (List[Dict[str, Any]]): قائمة بالمهام المفككة.
 
         Returns:
-            DAG: الرسم البياني الموجه غير الدوري (DAG) الذي يمثل خطة التنفيذ.
+            DAG: الرسم البياني الموجه غير الدوري (DAG) الذي يمثل التبعيات.
         """
-        new_dag = DAG()
+        new_dag = DAG(dag_id="multi_step_plan")
+
         nodes: Dict[str, Node] = {}
 
         for task_data in decomposed_tasks:
@@ -64,16 +85,22 @@ class PlannerAI:
         # مثال بسيط لإضافة التبعيات: المهام تنفذ بشكل تسلسلي افتراضيًا
         for i in range(len(decomposed_tasks) - 1):
             from_node_id = decomposed_tasks[i]["task_id"]
-            to_node_id = decomposed_tasks[i+1]["task_id"]
+            to_node_id = decomposed_tasks[i + 1]["task_id"]
             try:
                 new_dag.add_edge(from_node_id, to_node_id)
             except ValueError as e:
-                logger.warning(f"تحذير: لم يتمكن المخطط من إضافة حافة {from_node_id}->{to_node_id} بسبب: {e}")
+                logger.warning(
+                    f"تحذير: لم يتمكن المخطط من إضافة حافة {from_node_id}->{to_node_id} بسبب: {e}", exc_info=True
+                )
 
-        self.task_graph_engine = new_dag # تحديث محرك الرسم البياني للمهام بالخطة الجديدة
+        self.task_graph_engine = (
+            new_dag  # تحديث محرك الرسم البياني للمهام بالخطة الجديدة
+        )
         return new_dag
 
-    def create_dependency_graph(self, tasks_with_dependencies: List[Dict[str, Any]]) -> DAG:
+    def create_dependency_graph(
+        self, tasks_with_dependencies: List[Dict[str, Any]]
+    ) -> DAG:
         """
         ينشئ رسمًا بيانيًا للتبعيات بناءً على قائمة المهام المحددة بتبعياتها.
 
@@ -83,9 +110,11 @@ class PlannerAI:
         Returns:
             DAG: الرسم البياني الموجه غير الدوري (DAG) الذي يمثل التبعيات.
         """
-        new_dag = DAG()
+        new_dag = DAG(dag_id="dependency_graph")
         for task_data in tasks_with_dependencies:
-            task = Task(task_id=task_data["task_id"], payload=task_data.get("payload", {}))
+            task = Task(
+                task_id=task_data["task_id"], payload=task_data.get("payload", {})
+            )
             node = Node(node_id=task.id, task=task)
             new_dag.add_node(node)
 
@@ -96,7 +125,9 @@ class PlannerAI:
                 try:
                     new_dag.add_edge(dep_id, task_id)
                 except ValueError as e:
-                    logger.warning(f"تحذير: لم يتمكن المخطط من إضافة حافة {dep_id}->{task_id} بسبب: {e}")
+                    logger.warning(
+                        f"تحذير: لم يتمكن المخطط من إضافة حافة {dep_id}->{task_id} بسبب: {e}", exc_info=True
+                    )
 
         self.task_graph_engine = new_dag
         return new_dag
@@ -122,7 +153,7 @@ class PlannerAI:
             # هنا، نفترض أن كل مهمة في القائمة يمكن أن تكون في مستوى خاص بها مؤقتًا.
             return [[node] for node in sorted_nodes]
         except ValueError as e:
-            logger.error(f"خطأ في تخطيط التنفيذ المتوازي: {e}")
+            logger.error(f"خطأ في تخطيط التنفيذ المتوازي: {e}", exc_info=True)
             return []
 
     def plan_sequential_execution(self, dag: DAG) -> List[Node]:
@@ -139,10 +170,12 @@ class PlannerAI:
         try:
             return dag.topological_sort()
         except ValueError as e:
-            logger.error(f"خطأ في تخطيط التنفيذ المتسلسل: {e}")
+            logger.error(f"خطأ في تخطيط التنفيذ المتسلسل: {e}", exc_info=True)
             return []
 
-    def plan_conditional_execution(self, dag: DAG, condition_map: Dict[str, Any]) -> DAG:
+    def plan_conditional_execution(
+        self, dag: DAG, condition_map: Dict[str, Any]
+    ) -> DAG:
         """
         يخطط للتنفيذ الشرطي للمهام في DAG بناءً على شروط محددة.
 
@@ -157,19 +190,27 @@ class PlannerAI:
         """
         logger.info(f"تخطيط التنفيذ الشرطي باستخدام الشروط: {condition_map}")
         # مثال بسيط: إزالة المهام التي لا تستوفي الشروط
-        modified_dag = DAG()
+        modified_dag = DAG(dag_id="conditional_plan")
         for node_id, node in dag.nodes.items():
             # افتراض أن الشروط تحدد ما إذا كانت المهمة يجب أن تكون جزءًا من الخطة
-            if condition_map.get(node_id, True): # إذا لم يكن هناك شرط، يتم تضمينها
-                modified_dag.add_node(Node(node_id, node.task))
+            if condition_map.get(node_id, True):  # إذا لم يكن هناك شرط، يتم تضمينها
+
+                # عند إعادة إضافة العقدة، يجب التأكد من أن الكائن الذي يتم تمريره هو Task
+                # node.task هو بالفعل كائن Task من العقدة الأصلية
+                modified_dag.add_node(Node(node.id, node.task))
 
         for from_node_id in dag.adj:
             for to_node_id in dag.adj[from_node_id]:
-                if from_node_id in modified_dag.nodes and to_node_id in modified_dag.nodes:
+                if (
+                    from_node_id in modified_dag.nodes
+                    and to_node_id in modified_dag.nodes
+                ):
                     try:
                         modified_dag.add_edge(from_node_id, to_node_id)
                     except ValueError as e:
-                        logger.warning(f"تحذير: لم يتمكن المخطط من إضافة حافة {from_node_id}->{to_node_id} في التخطيط الشرطي بسبب: {e}")
+                        logger.warning(
+                            f"تحذير: لم يتمكن المخطط من إضافة حافة {from_node_id}->{to_node_id} في التخطيط الشرطي بسبب: {e}", exc_info=True
+                        )
         return modified_dag
 
     def plan_recursive(self, initial_goal: str, max_depth: int = 3) -> DAG:
@@ -190,7 +231,9 @@ class PlannerAI:
         decomposed = self.decompose_goal(initial_goal)
         return self.plan_multi_step(decomposed)
 
-    def replan_dynamically(self, current_dag: DAG, failed_task_id: str, new_information: Dict[str, Any]) -> DAG:
+    def replan_dynamically(
+        self, current_dag: DAG, failed_task_id: str, new_information: Dict[str, Any]
+    ) -> DAG:
         """
         يعيد التخطيط ديناميكيًا بناءً على معلومات جديدة أو فشل مهمة.
 
@@ -204,12 +247,16 @@ class PlannerAI:
         Returns:
             DAG: الرسم البياني الموجه غير الدوري المعاد تخطيطه.
         """
-        logger.info(f"إعادة التخطيط ديناميكيًا بعد فشل {failed_task_id} ومعلومات جديدة: {new_information}")
+        logger.info(
+            f"إعادة التخطيط ديناميكيًا بعد فشل {failed_task_id} ومعلومات جديدة: {new_information}"
+        )
         # مثال بسيط: إعادة بناء DAG من المهام المتبقية
         remaining_tasks_data = []
         for node_id, node in current_dag.nodes.items():
             if node_id != failed_task_id:
-                remaining_tasks_data.append({"task_id": node.task.id, "payload": node.task.payload})
+                remaining_tasks_data.append(
+                    {"task_id": node.task.id, "payload": node.task.payload}
+                )
 
         # هنا يمكن إضافة منطق لإعادة تفكيك المهام المتأثرة أو إضافة مهام جديدة
         return self.plan_multi_step(remaining_tasks_data)
@@ -246,8 +293,9 @@ class PlannerAI:
         logger.info("تقدير تكلفة الخطة...")
         # مثال بسيط لتقدير التكلفة
         num_tasks = len(dag.nodes)
-        estimated_cost = num_tasks * 10.0 # افتراض أن كل مهمة تكلف 10 وحدات
-        estimated_time = f"{num_tasks * 0.5}h" # افتراض أن كل مهمة تستغرق 0.5 ساعة
+        estimated_cost = num_tasks * 10.0  # افتراض أن كل مهمة تكلف 10 وحدات
+        # افتراض أن كل مهمة تستغرق 0.5 ساعة
+        estimated_time = f"{num_tasks * 0.5}h"
         return {"total_cost": estimated_cost, "estimated_time": estimated_time}
 
     def __repr__(self) -> str:

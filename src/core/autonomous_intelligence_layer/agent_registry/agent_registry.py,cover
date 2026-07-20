@@ -1,0 +1,118 @@
+> from typing import Dict, List, Optional
+> from .agent import Agent
+  
+> class AgentRegistry:
+>     """
+>     سجل مركزي لإدارة وكلاء الذكاء الاصطناعي المتاحين في منصة basirah.
+  
+>     يتيح اكتشاف الوكلاء وتسجيلهم وإلغاء تسجيلهم وتحديث حالاتهم.
+>     """
+  
+>     def __init__(self):
+>         """
+>         يهيئ مثيلًا جديدًا لـ AgentRegistry.
+>         """
+>         self._agents: Dict[str, Agent] = {}
+  
+>     def register_agent(self, agent: Agent) -> None:
+>         """
+>         يسجل وكيلًا جديدًا في السجل.
+  
+>         Args:
+>             agent (Agent): كائن الوكيل المراد تسجيله.
+  
+>         Raises:
+>             ValueError: إذا كان الوكيل موجودًا بالفعل.
+>         """
+>         if not isinstance(agent, Agent):
+!             raise ValueError("الوكيل يجب أن يكون من نوع Agent.")
+>         if agent.id in self._agents:
+>             raise ValueError(f"الوكيل ذو المعرف {agent.id} مسجل بالفعل.")
+>         self._agents[agent.id] = agent
+  
+>     def unregister_agent(self, agent_id: str) -> None:
+>         """
+>         يلغي تسجيل وكيل من السجل.
+  
+>         Args:
+>             agent_id (str): معرف الوكيل المراد إلغاء تسجيله.
+  
+>         Raises:
+>             ValueError: إذا لم يكن الوكيل موجودًا.
+>         """
+>         if not isinstance(agent_id, str) or not agent_id:
+!             raise ValueError("معرف الوكيل (agent_id) يجب أن يكون سلسلة نصية غير فارغة.")
+>         if agent_id not in self._agents:
+>             raise ValueError(f"الوكيل ذو المعرف {agent_id} غير مسجل.")
+>         del self._agents[agent_id]
+  
+>     def get_agent(self, agent_id: str) -> Agent:
+>         """
+>         يسترد وكيلًا بناءً على معرفه.
+  
+>         Args:
+>             agent_id (str): معرف الوكيل المطلوب.
+  
+>         Returns:
+>             Agent: كائن الوكيل المطابق.
+  
+>         Raises:
+>             ValueError: إذا لم يتم العثور على الوكيل.
+>         """
+>         if not isinstance(agent_id, str) or not agent_id:
+!             raise ValueError("معرف الوكيل (agent_id) يجب أن يكون سلسلة نصية غير فارغة.")
+>         agent = self._agents.get(agent_id)
+>         if agent is None:
+>             raise ValueError(f"الوكيل ذو المعرف {agent_id} غير موجود.")
+>         return agent
+  
+>     def discover_agents(self, capabilities: Optional[List[str]] = None, status: Optional[str] = None) -> List[Agent]:
+>         """
+>         يكتشف الوكلاء المتاحين بناءً على القدرات والحالة.
+  
+>         Args:
+>             capabilities (Optional[List[str]]): قائمة بالقدرات المطلوبة. إذا كانت None، يتم تجاهل القدرات.
+>             status (Optional[str]): الحالة المطلوبة للوكيل. إذا كانت None، يتم تجاهل الحالة.
+  
+>         Returns:
+>             List[Agent]: قائمة بالوكلاء المطابقين للمعايير.
+>         """
+>         found_agents = []
+>         for agent in self._agents.values():
+>             matches_capabilities = True
+>             if capabilities:
+>                 for cap in capabilities:
+>                     if not agent.has_capability(cap):
+>                         matches_capabilities = False
+>                         break
+  
+>             matches_status = True
+>             if status and agent.status != status:
+!                 matches_status = False
+  
+>             if matches_capabilities and matches_status:
+>                 found_agents.append(agent)
+>         return found_agents
+  
+>     def update_agent_status(self, agent_id: str, new_status: str) -> None:
+>         """
+>         يحدث حالة وكيل مسجل.
+  
+>         Args:
+>             agent_id (str): معرف الوكيل.
+>             new_status (str): الحالة الجديدة للوكيل.
+  
+>         Raises:
+>             ValueError: إذا لم يتم العثور على الوكيل.
+>         """
+!         agent = self.get_agent(agent_id) # سيقوم get_agent برفع ValueError إذا لم يتم العثور على الوكيل
+!         agent.update_status(new_status)
+  
+>     def __len__(self) -> int:
+!         return len(self._agents)
+  
+>     def __contains__(self, agent_id: str) -> bool:
+!         return agent_id in self._agents
+  
+>     def __repr__(self) -> str:
+!         return f"AgentRegistry(registered_agents={len(self._agents)})"

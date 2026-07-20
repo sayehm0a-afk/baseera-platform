@@ -1,18 +1,42 @@
-from typing import Any, Dict, List, Optional
-from core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
-from core.autonomous_intelligence_layer.task_graph_engine.node import Node
-from core.autonomous_intelligence_layer.task_graph_engine.task import Task
-from core.autonomous_intelligence_layer.context_manager.context_manager import ContextManager
-from core.autonomous_intelligence_layer.execution_policies.execution_policies import ExecutionPolicies
-from core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI
-from core.autonomous_intelligence_layer.agent_registry.agent_registry import AgentRegistry
+from core.autonomous_intelligence_layer.error_recovery.error_recovery import (
+    ErrorRecovery,
+)
+from core.autonomous_intelligence_layer.learning_engine.learning_engine import (
+    LearningEngine,
+)
+from core.autonomous_intelligence_layer.reflection_engine.reflection_engine import (
+    ReflectionEngine,
+)
+from core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import (
+    KnowledgeGraph,
+)
+from core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import (
+    EntityType,
+    RelationType,
+)
+from core.autonomous_intelligence_layer.memory_reasoning.memory_store import (
+    MemoryStore,
+    MemoryType,
+)
 from core.autonomous_intelligence_layer.agent_registry.agent import Agent
-from core.autonomous_intelligence_layer.memory_reasoning.memory_store import MemoryStore, MemoryType
-from core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import EntityType, RelationType
-from core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import KnowledgeGraph
-from core.autonomous_intelligence_layer.reflection_engine.reflection_engine import ReflectionEngine
-from core.autonomous_intelligence_layer.learning_engine.learning_engine import LearningEngine
-from core.autonomous_intelligence_layer.error_recovery.error_recovery import ErrorRecovery
+from core.autonomous_intelligence_layer.agent_registry.agent_registry import (
+    AgentRegistry,
+)
+from core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI
+from core.autonomous_intelligence_layer.execution_policies.execution_policies import (
+    ExecutionPolicies,
+)
+from core.autonomous_intelligence_layer.context_manager.context_manager import (
+    ContextManager,
+)
+from core.autonomous_intelligence_layer.task_graph_engine.task import Task
+
+from core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
+import logging
+from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
+
 
 class SupervisorAI:
     """
@@ -20,16 +44,18 @@ class SupervisorAI:
     يتولى مسؤولية الإشراف العام على تنفيذ المهام، وتنسيق الوكلاء، وإدارة السياق، وتطبيق السياسات.
     """
 
-    def __init__(self,
-                 context_manager: ContextManager,
-                 execution_policies: ExecutionPolicies,
-                 planner_ai: PlannerAI,
-                 agent_registry: AgentRegistry,
-                 memory_store: MemoryStore,
-                 knowledge_graph: KnowledgeGraph,
-                 reflection_engine: ReflectionEngine,
-                 learning_engine: LearningEngine,
-                 error_recovery: ErrorRecovery):
+    def __init__(
+        self,
+        context_manager: ContextManager,
+        execution_policies: ExecutionPolicies,
+        planner_ai: PlannerAI,
+        agent_registry: AgentRegistry,
+        memory_store: MemoryStore,
+        knowledge_graph: KnowledgeGraph,
+        reflection_engine: ReflectionEngine,
+        learning_engine: LearningEngine,
+        error_recovery: ErrorRecovery,
+    ):
         """
         يهيئ مثيلًا جديدًا لـ SupervisorAI.
 
@@ -50,7 +76,9 @@ class SupervisorAI:
         self.error_recovery = error_recovery
         self._current_task_dag: Optional[DAG] = None
 
-    def initialize_task(self, goal: str, initial_context: Optional[Dict[str, Any]] = None) -> str:
+    def initialize_task(
+        self, goal: str, initial_context: Optional[Dict[str, Any]] = None
+    ) -> str:
         """
         يبدأ مهمة جديدة من خلال تفكيك الهدف وإنشاء خطة أولية.
 
@@ -70,18 +98,29 @@ class SupervisorAI:
         self._current_task_dag = task_dag
 
         # 3. تخزين السياق الأولي للمهمة الرئيسية
-        task_id = task_dag.id # استخدام معرف DAG كمعرف للمهمة الرئيسية
+        task_id = task_dag.id  # استخدام معرف DAG كمعرف للمهمة الرئيسية
         context = initial_context if initial_context is not None else {}
         context["goal"] = goal
         context["status"] = "INITIALIZED"
         self.context_manager.store_isolated_context(task_id, context)
-        self.memory_store.store(content=goal, memory_type=MemoryType.WORKING, metadata={"task_id": task_id, "type": "goal"})
-        self.knowledge_graph.add_entity(entity_id=task_id, name=goal, entity_type=EntityType.OTHER, attributes={"goal": goal, "status": "INITIALIZED"})
+        self.memory_store.store(
+            content=goal,
+            memory_type=MemoryType.WORKING,
+            metadata={"task_id": task_id, "type": "goal"},
+        )
+        self.knowledge_graph.add_entity(
+            entity_id=task_id,
+            name=goal,
+            entity_type=EntityType.OTHER,
+            attributes={"goal": goal, "status": "INITIALIZED"},
+        )
 
         logger.info(f"SupervisorAI: تم تهيئة المهمة {task_id} بنجاح.")
         return task_id
 
-    def execute_task(self, task_id: str, policy_name: str = "BalancedMode") -> Dict[str, Any]:
+    def execute_task(
+        self, task_id: str, policy_name: str = "BalancedMode"
+    ) -> Dict[str, Any]:
         """
         ينفذ مهمة بناءً على خطة DAG وسياسة تنفيذ محددة.
 
@@ -95,7 +134,9 @@ class SupervisorAI:
         Raises:
             ValueError: إذا لم يتم العثور على المهمة أو السياسة.
         """
-        logger.info(f"SupervisorAI: تنفيذ المهمة {task_id} باستخدام السياسة {policy_name}.")
+        logger.info(
+            f"SupervisorAI: تنفيذ المهمة {task_id} باستخدام السياسة {policy_name}."
+        )
 
         # 1. استرداد السياق والسياسة
         task_context = self.context_manager.get_isolated_context(task_id)
@@ -103,13 +144,17 @@ class SupervisorAI:
 
         # 2. تطبيق السياسة على سياق المهمة
         modified_context = policy.apply(task_context)
-        self.context_manager.store_isolated_context(task_id, modified_context) # تحديث السياق المعدل
+        self.context_manager.store_isolated_context(
+            task_id, modified_context
+        )  # تحديث السياق المعدل
 
         # 3. استرداد DAG للمهمة
         # في هذا التنفيذ الوهمي، نفترض أن _current_task_dag هو DAG الصحيح.
         # في تطبيق حقيقي، قد نحتاج إلى استرداد DAG من مكان تخزين دائم باستخدام task_id.
         if self._current_task_dag is None or self._current_task_dag.id != task_id:
-            raise ValueError(f"لم يتم العثور على DAG للمهمة {task_id}. يرجى تهيئة المهمة أولاً.")
+            raise ValueError(
+                f"لم يتم العثور على DAG للمهمة {task_id}. يرجى تهيئة المهمة أولاً."
+            )
 
         dag_to_execute = self._current_task_dag
 
@@ -120,42 +165,72 @@ class SupervisorAI:
             # استخدام الفرز الطوبولوجي لتحديد ترتيب التنفيذ
             sorted_nodes = dag_to_execute.topological_sort()
             for node in sorted_nodes:
-                logger.info(f"SupervisorAI: تنفيذ المهمة الفرعية {node.id} من DAG {task_id}.")
+                logger.info(
+                    f"SupervisorAI: تنفيذ المهمة الفرعية {node.id} من DAG {task_id}."
+                )
                 # هنا يمكن أن يتم تعيين وكيل لتنفيذ المهمة الفرعية
                 # وتحديث حالة الوكيل وسياق المهمة الفرعية
-                agent = self._assign_agent_for_task(node.task) # تعيين وكيل (وهمي)
+                agent = self._assign_agent_for_task(node.task)  # تعيين وكيل (وهمي)
                 if agent:
                     agent.update_status("RUNNING")
-                    self.context_manager.update_isolated_context(task_id, {f"task_{node.id}_agent": agent.id, f"task_{node.id}_status": "RUNNING"})
+                    self.context_manager.update_isolated_context(
+                        task_id,
+                        {
+                            f"task_{node.id}_agent": agent.id,
+                            f"task_{node.id}_status": "RUNNING",
+                        },
+                    )
 
                 # تنفيذ المهمة الفرعية بواسطة الوكيل
                 agent_task_result = agent.execute_task(node.task.id, node.task.payload)
-                task_result = {"node_id": node.id, "output": agent_task_result.get("result", f"تم تنفيذ {node.id} بنجاح."), "agent_id": agent.id if agent else "None", "status": agent_task_result.get("status", "COMPLETED")}
+                task_result = {
+                    "node_id": node.id,
+                    "output": agent_task_result.get(
+                        "result", f"تم تنفيذ {node.id} بنجاح."
+                    ),
+                    "agent_id": agent.id if agent else "None",
+                    "status": agent_task_result.get("status", "COMPLETED"),
+                }
                 # إضافة كيان المهمة الفرعية إلى الرسم البياني المعرفي
-                self.knowledge_graph.add_entity(entity_id=node.id, name=node.task.id, entity_type=EntityType.OTHER, attributes={"description": node.task.payload.get("description", ""), "status": task_result["status"]})
+                self.knowledge_graph.add_entity(
+                    entity_id=node.id,
+                    name=node.task.id,
+                    entity_type=EntityType.OTHER,
+                    attributes={
+                        "description": node.task.payload.get("description", ""),
+                        "status": task_result["status"],
+                    },
+                )
                 # إضافة علاقة بين المهمة الرئيسية والمهمة الفرعية
                 self.knowledge_graph.add_relationship(
                     relationship_id=f"{task_id}_HAS_TASK_{node.id}",
                     source_entity_id=task_id,
                     target_entity_id=node.id,
                     relationship_type=RelationType.CHILD_OF,
-                    attributes={"status": task_result["status"]}
+                    attributes={"status": task_result["status"]},
                 )
                 execution_results["results"].append(task_result)
                 executed_nodes.append(node.id)
 
                 if agent:
                     agent.update_status("IDLE")
-                    self.context_manager.update_isolated_context(task_id, {f"task_{node.id}_status": "COMPLETED"})
+                    self.context_manager.update_isolated_context(
+                        task_id, {f"task_{node.id}_status": "COMPLETED"}
+                    )
 
-            self.context_manager.update_isolated_context(task_id, {"status": "COMPLETED", "final_results": execution_results["results"]})
+            self.context_manager.update_isolated_context(
+                task_id,
+                {"status": "COMPLETED", "final_results": execution_results["results"]},
+            )
             logger.info(f"SupervisorAI: تم الانتهاء من تنفيذ المهمة {task_id} بنجاح.")
 
         except ValueError as e:
             execution_results["status"] = "FAILED"
             execution_results["error"] = str(e)
-            self.context_manager.update_isolated_context(task_id, {"status": "FAILED", "error": str(e)})
-            logger.error(f"SupervisorAI: فشل تنفيذ المهمة {task_id}: {e}")
+            self.context_manager.update_isolated_context(
+                task_id, {"status": "FAILED", "error": str(e)}
+            )
+            logger.error(f"SupervisorAI: فشل تنفيذ المهمة {task_id}: {e}", exc_info=True)
 
         return execution_results
 
@@ -169,15 +244,21 @@ class SupervisorAI:
         Returns:
             Optional[Agent]: الوكيل المعين، أو None إذا لم يتم العثور على وكيل مناسب.
         """
-        logger.info(f"SupervisorAI: محاولة تعيين وكيل للمهمة {task.id} بمتطلبات: {task.payload.get('capabilities', ['generic'])}")
+        logger.info(
+            f"SupervisorAI: محاولة تعيين وكيل للمهمة {task.id} بمتطلبات: {task.payload.get('capabilities', ['generic'])}"
+        )
         # مثال بسيط: البحث عن وكيل لديه القدرة المطلوبة وحالته IDLE
         required_capabilities = task.payload.get("capabilities", ["generic"])
-        available_agents = self.agent_registry.discover_agents(capabilities=required_capabilities, status="IDLE")
+        available_agents = self.agent_registry.discover_agents(
+            capabilities=required_capabilities, status="IDLE"
+        )
 
         if available_agents:
             # اختيار أول وكيل متاح (يمكن تحسين هذا بمنطق اختيار أكثر تعقيدًا)
             selected_agent = available_agents[0]
-            logger.info(f"SupervisorAI: تم تعيين الوكيل {selected_agent.id} للمهمة {task.id}.")
+            logger.info(
+                f"SupervisorAI: تم تعيين الوكيل {selected_agent.id} للمهمة {task.id}."
+            )
             return selected_agent
         logger.warning(f"SupervisorAI: لم يتم العثور على وكيل مناسب للمهمة {task.id}.")
         return None

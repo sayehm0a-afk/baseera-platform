@@ -1,6 +1,7 @@
 from typing import Any, Dict
 from .policy import Policy
 
+
 class ResearchModePolicy(Policy):
     """
     سياسة وضع البحث: تركز على استكشاف الحلول الجديدة، وتجربة نماذج مختلفة، وجمع البيانات.

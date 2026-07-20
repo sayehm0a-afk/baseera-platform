@@ -1,8 +1,9 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Awaitable
+from typing import Any, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
+
 
 class IExecutor(ABC):
     """واجهة مجردة للمنفذ (Executor).
@@ -11,7 +12,9 @@ class IExecutor(ABC):
     """
 
     @abstractmethod
-    async def execute_task(self, task_id: str, task_function: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
+    async def execute_task(
+        self, task_id: str, task_function: Callable[..., Awaitable[Any]], **kwargs: Any
+    ) -> Any:
         """ينفذ مهمة معينة.
 
         Args:
@@ -37,8 +40,15 @@ class Executor(IExecutor):
     def __init__(self) -> None:
         logger.info("Executor instance created.")
 
-    async def execute_task(self, task_id: str, task_function: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
-        logger.info("Executing task %s with function %s and kwargs %s", task_id, task_function.__name__, kwargs)
+    async def execute_task(
+        self, task_id: str, task_function: Callable[..., Awaitable[Any]], **kwargs: Any
+    ) -> Any:
+        logger.info(
+            "Executing task %s with function %s and kwargs %s",
+            task_id,
+            task_function.__name__,
+            kwargs,
+        )
         try:
             result = await task_function(**kwargs)
             logger.info("Task %s completed successfully.", task_id)

@@ -1,6 +1,7 @@
 from typing import Any, Dict
 from .policy import Policy
 
+
 class FastModePolicy(Policy):
     """
     سياسة الوضع السريع: تركز على السرعة على حساب الدقة أو التكلفة.

@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Dict
 import logging
 import sys
+
 
 class ILoggingManager(ABC):
     @abstractmethod
@@ -28,15 +29,16 @@ class ILoggingManager(ABC):
         """
         raise NotImplementedError
 
+
 class LoggingManager(ILoggingManager):
     def __init__(self):
         self._loggers: Dict[str, logging.Logger] = {}
-        self.configure_logging() # Configure default logging on initialization
+        self.configure_logging()  # Configure default logging on initialization
 
     def get_logger(self, name: str) -> logging.Logger:
         if name not in self._loggers:
             logger = logging.getLogger(name)
-            logger.propagate = True # Allow messages to propagate to the root logger
+            logger.propagate = True  # Allow messages to propagate to the root logger
             self._loggers[name] = logger
         return self._loggers[name]
 
@@ -53,7 +55,9 @@ class LoggingManager(ILoggingManager):
         if effective_handlers is None:
             # Default handler: Console output (writes to sys.stderr by default)
             console_handler = logging.StreamHandler(sys.stdout)
-            formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            formatter = logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            )
             console_handler.setFormatter(formatter)
             effective_handlers = [console_handler]
 

@@ -2,11 +2,13 @@
 
 تتولى هذه الوحدة مسؤولية توفير سياق قابل للتغيير (mutable context) لتنفيذ المهام وسير العمل.
 """
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
 
 class IExecutionContext(ABC):
     """واجهة مجردة لـ Execution Context.
@@ -56,8 +58,7 @@ class IExecutionContext(ABC):
 
     @abstractmethod
     async def clear_context(self) -> None:
-        """يمسح جميع المتغيرات من سياق التنفيذ.
-        """
+        """يمسح جميع المتغيرات من سياق التنفيذ."""
         raise NotImplementedError
 
 
@@ -70,7 +71,10 @@ class ExecutionContext(IExecutionContext):
 
     def __init__(self, initial_context: Optional[Dict[str, Any]] = None):
         self._context: Dict[str, Any] = initial_context if initial_context else {}
-        logger.info("ExecutionContext instance created with initial context: %s", initial_context)
+        logger.info(
+            "ExecutionContext instance created with initial context: %s",
+            initial_context,
+        )
 
     async def get_variable(self, key: str) -> Optional[Any]:
         return self._context.get(key)

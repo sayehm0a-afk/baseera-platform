@@ -3,11 +3,13 @@
 تتولى هذه الوحدة مسؤولية إدارة دورة حياة الوكلاء الفرديين، بما في ذلك تفعيلهم،
 إلغاء تفعيلهم، وتنفيذ خطواتهم.
 """
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
 
 class IAgentRuntime(ABC):
     """واجهة مجردة لـ Agent Runtime.
@@ -16,7 +18,9 @@ class IAgentRuntime(ABC):
     """
 
     @abstractmethod
-    async def activate_agent(self, agent_id: str, config: Optional[Dict[str, Any]] = None) -> None:
+    async def activate_agent(
+        self, agent_id: str, config: Optional[Dict[str, Any]] = None
+    ) -> None:
         """تفعيل وكيل معين.
 
         مسؤولة عن تهيئة وتشغيل وكيل فردي.
@@ -74,19 +78,20 @@ class AgentRuntime(IAgentRuntime):
         self._active_agents: Dict[str, Any] = {}
         logger.info("AgentRuntime instance created.")
 
-    async def activate_agent(self, agent_id: str, config: Optional[Dict[str, Any]] = None) -> None:
+    async def activate_agent(
+        self, agent_id: str, config: Optional[Dict[str, Any]] = None
+    ) -> None:
         if agent_id in self._active_agents:
             logger.warning("Agent '%s' is already active.", agent_id)
             return
 
         logger.info("Activating agent '%s'...", agent_id)
-        # هنا سيتم إضافة منطق تفعيل الوكيل الفعلي، مثل تحميل تعريف الوكيل،
+        # هنا يتم تنفيذ منطق تفعيل الوكيل الفعلي، مثل تحميل تعريف الوكيل،
         # تهيئة LLM client الخاص به، وربطه بـ ToolRegistry.
-        # حالياً، هو مجرد محاكاة.
         self._active_agents[agent_id] = {
             "status": "ACTIVE",
             "config": config if config else {},
-            "last_activity": "N/A"
+            "last_activity": "N/A",
         }
         logger.info("Agent '%s' activated successfully.", agent_id)
 
@@ -104,7 +109,7 @@ class AgentRuntime(IAgentRuntime):
     async def get_agent_status(self, agent_id: str) -> Dict[str, Any]:
         if agent_id not in self._active_agents:
             return {"status": "INACTIVE", "agent_id": agent_id}
-        return self._active_agents[agent_id] # type: ignore[no-any-return]
+        return self._active_agents[agent_id]  # type: ignore[no-any-return]
 
     async def execute_agent_step(self, agent_id: str, step_data: Dict[str, Any]) -> Any:
         if agent_id not in self._active_agents:
@@ -112,9 +117,12 @@ class AgentRuntime(IAgentRuntime):
             raise RuntimeError(f"Agent '{agent_id}' is not active.")
 
         logger.info("Executing step for agent '%s': %s", agent_id, step_data)
-        # هنا سيتم إضافة منطق تنفيذ خطوة الوكيل الفعلي، مثل استدعاء LLM،
+        # هنا يتم تنفيذ منطق خطوة الوكيل الفعلي، مثل استدعاء LLM،
         # استخدام الأدوات، وتحديث حالة الوكيل.
-        # حالياً، هو مجرد محاكاة لنتيجة.
-        self._active_agents[agent_id]["last_activity"] = f"Executed step: {step_data.get("action")}"
-        return {"result": f"Step \'{step_data.get("action")}\' completed " \
-                            f"for agent \'{agent_id}\'"}
+        self._active_agents[agent_id][
+            "last_activity"
+        ] = f"Executed step: {step_data.get("action")}"
+        return {
+            "result": f"Step '{step_data.get("action")}' completed "
+            f"for agent '{agent_id}'"
+        }

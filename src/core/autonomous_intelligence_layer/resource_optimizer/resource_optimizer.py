@@ -8,16 +8,16 @@ autonomous agent operations.
 
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class ResourceType(Enum):
     """Enumeration for resource types."""
+
     CPU = "cpu"  # CPU time in seconds
     MEMORY = "memory"  # Memory in MB
     API_CALLS = "api_calls"  # Number of API calls
@@ -28,6 +28,7 @@ class ResourceType(Enum):
 
 class OptimizationStrategy(Enum):
     """Enumeration for optimization strategies."""
+
     GREEDY = "greedy"  # Greedy approach
     DYNAMIC_PROGRAMMING = "dynamic_programming"  # Dynamic programming
     GENETIC_ALGORITHM = "genetic_algorithm"  # Genetic algorithm
@@ -38,18 +39,20 @@ class OptimizationStrategy(Enum):
 @dataclass
 class ResourceAllocation:
     """Represents a resource allocation."""
+
     allocation_id: str
     agent_id: str
     resource_type: ResourceType
     allocated_amount: float
     used_amount: float = 0.0
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ResourceConstraint:
     """Represents a resource constraint."""
+
     constraint_id: str
     resource_type: ResourceType
     max_total: float  # Maximum total available
@@ -60,17 +63,19 @@ class ResourceConstraint:
 @dataclass
 class OptimizationResult:
     """Represents optimization results."""
+
     optimization_id: str
     strategy: OptimizationStrategy
     allocations: List[ResourceAllocation]
     total_efficiency: float  # 0.0 to 1.0
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ResourceOptimizerConfig:
     """Configuration for Resource Optimizer."""
+
     default_strategy: OptimizationStrategy = OptimizationStrategy.GREEDY
     enable_dynamic_reallocation: bool = True
     reallocation_interval_seconds: int = 300  # 5 minutes
@@ -164,22 +169,29 @@ class ResourceOptimizer:
                 break
 
         if constraint is None:
-            logger.error(f"No constraint found for resource type: {resource_type.value}")
+            logger.error(
+                f"No constraint found for resource type: {resource_type.value}", exc_info=True
+            )
             return None
 
         # Check if allocation exceeds constraint
         if amount > constraint.max_per_agent:
-            logger.warning(f"Allocation exceeds max per agent: {amount} > {constraint.max_per_agent}")
+            logger.warning(
+                f"Allocation exceeds max per agent: {amount} > {constraint.max_per_agent}"
+            )
             return None
 
         # Check total usage
         total_usage = sum(
-            a.allocated_amount for a in self.allocations.values()
+            a.allocated_amount
+            for a in self.allocations.values()
             if a.resource_type == resource_type
         )
 
         if total_usage + amount > constraint.max_total:
-            logger.warning(f"Total allocation exceeds maximum: {total_usage + amount} > {constraint.max_total}")
+            logger.warning(
+                f"Total allocation exceeds maximum: {total_usage + amount} > {constraint.max_total}"
+            )
             return None
 
         # Create allocation
@@ -210,7 +222,7 @@ class ResourceOptimizer:
             True if updated successfully, False otherwise
         """
         if allocation_id not in self.allocations:
-            logger.error(f"Allocation {allocation_id} not found")
+            logger.error(f"Allocation {allocation_id} not found", exc_info=True)
             return False
 
         allocation = self.allocations[allocation_id]
@@ -235,15 +247,14 @@ class ResourceOptimizer:
             OptimizationResult if optimization successful, None otherwise
         """
         if not agent_ids:
-            logger.error("No agents to optimize")
+            logger.error("No agents to optimize", exc_info=True)
             return None
 
         strategy = strategy or self.config.default_strategy
 
         # Get current allocations for agents
         agent_allocations = [
-            a for a in self.allocations.values()
-            if a.agent_id in agent_ids
+            a for a in self.allocations.values() if a.agent_id in agent_ids
         ]
 
         # Apply optimization strategy
@@ -262,7 +273,9 @@ class ResourceOptimizer:
 
         self.optimization_history.append(result)
 
-        logger.debug(f"Optimization completed: {optimization_id}, efficiency: {total_efficiency:.2f}")
+        logger.debug(
+            f"Optimization completed: {optimization_id}, efficiency: {total_efficiency:.2f}"
+        )
         return result
 
     def _apply_strategy(

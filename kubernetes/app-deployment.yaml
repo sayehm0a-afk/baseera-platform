@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: basirah-app
+  labels:
+    app: basirah
+    component: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: basirah
+      component: app
+  template:
+    metadata:
+      labels:
+        app: basirah
+        component: app
+    spec:
+      containers:
+      - name: basirah-app
+        image: basirah-app:latest # سيتم استبدال هذا بصورة مبنية في CI/CD
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: basirah-env
+              key: DATABASE_URL
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-secret
+              key: OPENAI_API_KEY
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10

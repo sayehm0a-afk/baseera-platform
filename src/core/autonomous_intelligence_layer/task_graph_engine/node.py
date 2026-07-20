@@ -1,5 +1,6 @@
 from typing import Any, Dict
-from .task import Task
+from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task
+
 
 class Node:
     """
@@ -18,6 +19,7 @@ class Node:
         """
         if not isinstance(node_id, str) or not node_id:
             raise ValueError("معرف العقدة (node_id) يجب أن يكون سلسلة نصية غير فارغة.")
+
         if not isinstance(task, Task):
             raise ValueError("المهمة (task) يجب أن تكون من نوع Task.")
 
@@ -31,10 +33,7 @@ class Node:
         Returns:
             Dict[str, Any]: تمثيل قاموسي للعقدة.
         """
-        return {
-            "id": self.id,
-            "task": self.task.to_dict()
-        }
+        return {"id": self.id, "task": self.task.to_dict()}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]):
@@ -47,13 +46,10 @@ class Node:
         Returns:
             Node: مثيل العقدة.
         """
-        return cls(
-            node_id=data["id"],
-            task=Task.from_dict(data["task"])
-        )
+        return cls(node_id=data["id"], task=Task.from_dict(data["task"]))
 
     def __repr__(self) -> str:
-        return f"Node(id=\'{self.id}\', task={self.task})"
+        return f"Node(id='{self.id}', task={self.task})"
 
     def __eq__(self, other: Any) -> bool:
         if not isinstance(other, Node):

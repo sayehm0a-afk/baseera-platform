@@ -65,7 +65,7 @@ async def test_validate_and_execute_permission_denied(
 
     mock_permission_validation.validate_permission.return_value = False
 
-    with pytest.raises(PermissionError, match=f"Agent '{agent_id}' is not authorized to perform capability '{capability}'."):
+    with pytest.raises(PermissionError, match=f"Agent '{agent_id}' is not authorized to perform capability '{capability}'"):
         await security_layer.validate_and_execute(
             agent_id, capability, mock_func, context=context, use_sandbox=False
         )

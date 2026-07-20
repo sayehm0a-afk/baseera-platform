@@ -6,18 +6,18 @@ and attributes with operations for ingestion, querying, traversal, entity resolu
 relationship extraction, conflict detection, and knowledge updates.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class EntityType(Enum):
     """Enumeration for entity types."""
+
     COMPANY = "company"
     PERSON = "person"
     FINANCIAL_INSTRUMENT = "financial_instrument"
@@ -30,6 +30,7 @@ class EntityType(Enum):
 
 class RelationType(Enum):
     """Enumeration for relationship types."""
+
     OWNS = "owns"
     MANAGES = "manages"
     WORKS_FOR = "works_for"
@@ -45,6 +46,7 @@ class RelationType(Enum):
 @dataclass
 class KnowledgeEntity:
     """Represents an entity in the knowledge graph."""
+
     entity_id: str
     name: str
     entity_type: EntityType
@@ -60,6 +62,7 @@ class KnowledgeEntity:
 @dataclass
 class KnowledgeRelationship:
     """Represents a relationship between entities."""
+
     relationship_id: str
     source_entity_id: str
     target_entity_id: str
@@ -76,6 +79,7 @@ class KnowledgeRelationship:
 @dataclass
 class KnowledgeGraphConfig:
     """Configuration for Knowledge Graph."""
+
     max_entities: int = 100000
     max_relationships: int = 500000
     enable_entity_resolution: bool = True
@@ -249,7 +253,8 @@ class KnowledgeGraph:
             List of KnowledgeEntity objects of the specified type
         """
         return [
-            entity for entity in self.entities.values()
+            entity
+            for entity in self.entities.values()
             if entity.entity_type == entity_type
         ]
 
@@ -330,21 +335,25 @@ class KnowledgeGraph:
                     continue
 
                 # Check if relationships are between same entities but different types
-                if (relationship.source_entity_id == other_rel.source_entity_id and
-                    relationship.target_entity_id == other_rel.target_entity_id and
-                    relationship.relationship_type != other_rel.relationship_type):
+                if (
+                    relationship.source_entity_id == other_rel.source_entity_id
+                    and relationship.target_entity_id == other_rel.target_entity_id
+                    and relationship.relationship_type != other_rel.relationship_type
+                ):
 
                     # Calculate conflict score
                     conflict_score = abs(relationship.confidence - other_rel.confidence)
 
                     if conflict_score > self.config.conflict_threshold:
-                        conflicts.append({
-                            "type": "relationship_conflict",
-                            "relationship_1": rel_id,
-                            "relationship_2": other_rel_id,
-                            "conflict_score": conflict_score,
-                            "timestamp": datetime.now(UTC),
-                        })
+                        conflicts.append(
+                            {
+                                "type": "relationship_conflict",
+                                "relationship_1": rel_id,
+                                "relationship_2": other_rel_id,
+                                "conflict_score": conflict_score,
+                                "timestamp": datetime.now(UTC),
+                            }
+                        )
 
         self.conflict_log.extend(conflicts)
         logger.debug(f"Detected {len(conflicts)} conflicts")
@@ -383,10 +392,13 @@ class KnowledgeGraph:
 
         relationship_types = {}
         for rel_type in RelationType:
-            count = len([
-                r for r in self.relationships.values()
-                if r.relationship_type == rel_type
-            ])
+            count = len(
+                [
+                    r
+                    for r in self.relationships.values()
+                    if r.relationship_type == rel_type
+                ]
+            )
             if count > 0:
                 relationship_types[rel_type.value] = count
 
@@ -450,3 +462,13 @@ class KnowledgeGraph:
         if relationship_id in self.relationships:
             self.relationships[relationship_id].is_valid = False
             logger.debug(f"Relationship invalidated: {relationship_id}")
+
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the KnowledgeGraph.
+        """
+        active_entities = sum(1 for entity in self.entities.values() if entity.is_valid)
+        active_relationships = sum(
+            1 for rel in self.relationships.values() if rel.is_valid
+        )
+        return f"KnowledgeGraph(active_entities={active_entities}, relationships={active_relationships})"

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: basirah-db
+  labels:
+    app: basirah
+    component: db
+spec:
+  selector:
+    app: basirah
+    component: db
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+  type: ClusterIP

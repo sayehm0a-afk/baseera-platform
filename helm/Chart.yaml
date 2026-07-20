@@ -1,0 +1,17 @@
+apiVersion: v2
+name: basirah
+description: Enterprise AI Platform for Saudi Financial Market Analysis
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - ai
+  - financial-market
+  - saudi
+  - analysis
+maintainers:
+  - name: Basirah Team
+    email: team@basirah.local
+home: https://basirah.local
+sources:
+  - https://github.com/basirah/basirah

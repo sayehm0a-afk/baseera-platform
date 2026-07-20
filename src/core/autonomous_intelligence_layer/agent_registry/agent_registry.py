@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 from .agent import Agent
 
+
 class AgentRegistry:
     """
     سجل مركزي لإدارة وكلاء الذكاء الاصطناعي المتاحين في منصة basirah.
@@ -66,7 +67,9 @@ class AgentRegistry:
             raise ValueError(f"الوكيل ذو المعرف {agent_id} غير موجود.")
         return agent
 
-    def discover_agents(self, capabilities: Optional[List[str]] = None, status: Optional[str] = None) -> List[Agent]:
+    def discover_agents(
+        self, capabilities: Optional[List[str]] = None, status: Optional[str] = None
+    ) -> List[Agent]:
         """
         يكتشف الوكلاء المتاحين بناءً على القدرات والحالة.
 
@@ -105,7 +108,9 @@ class AgentRegistry:
         Raises:
             ValueError: إذا لم يتم العثور على الوكيل.
         """
-        agent = self.get_agent(agent_id) # سيقوم get_agent برفع ValueError إذا لم يتم العثور على الوكيل
+        agent = self.get_agent(
+            agent_id
+        )  # سيقوم get_agent برفع ValueError إذا لم يتم العثور على الوكيل
         agent.update_status(new_status)
 
     def __len__(self) -> int:

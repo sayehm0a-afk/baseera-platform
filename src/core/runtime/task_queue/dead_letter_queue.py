@@ -63,7 +63,9 @@ class IDeadLetterQueue(ABC):
 class DeadLetterQueue(IDeadLetterQueue):
     """تنفيذ قائمة انتظار الرسائل الميتة (Dead Letter Queue).
 
-    مسؤول عن تخزين المهام الفاشلة التي لا يمكن إعادة محاولتها.
+    هذا التنفيذ يعتمد على الذاكرة. في بيئة الإنتاج، يجب استبدال هذا
+    بتنفيذ قائمة انتظار رسائل ميتة حقيقية تعتمد على نظام رسائل موزع (مثل RabbitMQ
+    أو Kafka، أو قاعدة بيانات مخصصة لتخزين الرسائل الميتة).
     """
 
     def __init__(self) -> None:
@@ -79,7 +81,7 @@ class DeadLetterQueue(IDeadLetterQueue):
             "task_id": task_id,
             "task_payload": task_payload,
             "error": error,
-            "timestamp": datetime.now(UTC)
+            "timestamp": datetime.now(UTC),
         }
         logger.info("Task %s enqueued to DLQ due to error: %s", task_id, error)
 
@@ -103,9 +105,7 @@ class DeadLetterQueue(IDeadLetterQueue):
             del self._dlq[task_id]
             logger.info("Task %s removed from DLQ.", task_id)
             return True
-        logger.warning(
-            "Attempted to remove non-existent task %s from DLQ.", task_id
-        )
+        logger.warning("Attempted to remove non-existent task %s from DLQ.", task_id)
         return False
 
     async def size(self) -> int:

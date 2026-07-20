@@ -2,12 +2,14 @@
 وحدة AgentRegistry لمنصة basirah.
 تدير تسجيل العملاء الذكيين وإلغاء تسجيلهم واسترجاعهم.
 """
+
 import logging
 from typing import Dict, List, Optional
 
-from core.base_agent.base_agent import BaseAgent # pylint: disable=E0402 # type: ignore
+from core.base_agent.base_agent import BaseAgent  # pylint: disable=E0402 # type: ignore
 
 logger = logging.getLogger(__name__)
+
 
 class AgentRegistry:
     """
@@ -27,7 +29,9 @@ class AgentRegistry:
             logger.warning("Agent with ID %s already registered.", agent.agent_id)
             return False
         self._agents[agent.agent_id] = agent
-        logger.info("Agent %s (%s) registered successfully.", agent.name, agent.agent_id)
+        logger.info(
+            "Agent %s (%s) registered successfully.", agent.name, agent.agent_id
+        )
         return True
 
     async def unregister_agent(self, agent_id: str) -> bool:
@@ -63,5 +67,8 @@ class AgentRegistry:
         """
         يسترجع قائمة بالعملاء الذين تحتوي أوصافهم على كلمة مفتاحية معينة.
         """
-        return [agent for agent in self._agents.values() if
-                keyword.lower() in agent.description.lower()]
+        return [
+            agent
+            for agent in self._agents.values()
+            if keyword.lower() in agent.description.lower()
+        ]

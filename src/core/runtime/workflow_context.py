@@ -3,6 +3,7 @@
 تتولى هذه الوحدة مسؤولية إدارة سياق تنفيذ تدفقات العمل (Workflows)،
 بما في ذلك البيانات، المتغيرات، وحالة التنفيذ.
 """
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
@@ -29,7 +30,9 @@ class IWorkflowContext(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def update_context(self, workflow_id: str, updates: Dict[str, Any]) -> None:  # noqa: E501
+    async def update_context(
+        self, workflow_id: str, updates: Dict[str, Any]
+    ) -> None:  # noqa: E501
         """تحديث سياق تدفق عمل معين.
 
         Args:
@@ -52,8 +55,12 @@ class WorkflowContext(IWorkflowContext):
     async def get_context(self, workflow_id: str) -> Dict[str, Any]:  # noqa: E501
         return self._contexts.get(workflow_id, {})
 
-    async def update_context(self, workflow_id: str, updates: Dict[str, Any]) -> None:  # noqa: E501
+    async def update_context(
+        self, workflow_id: str, updates: Dict[str, Any]
+    ) -> None:  # noqa: E501
         if workflow_id not in self._contexts:
             self._contexts[workflow_id] = {}
         self._contexts[workflow_id].update(updates)
-        logger.info("Workflow \"%s\" context updated with: %s", workflow_id, updates)  # noqa: E501
+        logger.info(
+            'Workflow "%s" context updated with: %s', workflow_id, updates
+        )  # noqa: E501

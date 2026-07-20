@@ -1,6 +1,7 @@
 from typing import Any, Dict
 from .policy import Policy
 
+
 class BalancedModePolicy(Policy):
     """
     سياسة الوضع المتوازن: تسعى لتحقيق توازن بين السرعة والدقة والتكلفة.

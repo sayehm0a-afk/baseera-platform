@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import logging
 from typing import Dict, Any
 
+
 class IMetricsManager(ABC):
     @abstractmethod
     def record_metric(self, name: str, value: Any, tags: Dict[str, str] = None):
@@ -38,7 +39,9 @@ class IMetricsManager(ABC):
         """
         raise NotImplementedError
 
+
 logger = logging.getLogger(__name__)
+
 
 class MetricsManager(IMetricsManager):
     def __init__(self):

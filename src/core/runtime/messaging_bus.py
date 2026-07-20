@@ -1,8 +1,9 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Type, Union
+from typing import Any, Callable, Dict, List
 
 logger = logging.getLogger(__name__)
+
 
 class IMessagingBus(ABC):
     """واجهة مجردة لـ Messaging Bus.
@@ -34,7 +35,9 @@ class IMessagingBus(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def register_event_handler(self, event_type: str, handler: Callable[..., Any]) -> None:
+    async def register_event_handler(
+        self, event_type: str, handler: Callable[..., Any]
+    ) -> None:
         """يسجل معالجًا لحدث معين.
 
         Args:
@@ -44,7 +47,9 @@ class IMessagingBus(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def register_command_handler(self, command_type: str, handler: Callable[..., Any]) -> None:
+    async def register_command_handler(
+        self, command_type: str, handler: Callable[..., Any]
+    ) -> None:
         """يسجل معالجًا لأمر معين.
 
         Args:
@@ -71,8 +76,13 @@ class MessagingBus(IMessagingBus):
         for handler in handlers:
             try:
                 await handler(payload)
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("Error handling event %s with handler %s: %s", event_type, handler.__name__, e)
+            except Exception as e:
+                logger.error(
+                    "Error handling event %s with handler %s: %s",
+                    event_type,
+                    handler.__name__,
+                    e,
+                )
 
     async def send_command(self, command_type: str, payload: Dict[str, Any]) -> Any:
         logger.info("Sending command %s with payload %s", command_type, payload)
@@ -82,18 +92,31 @@ class MessagingBus(IMessagingBus):
             raise ValueError(f"No handler registered for command {command_type}")
         try:
             return await handler(payload)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Error handling command %s with handler %s: %s", command_type, handler.__name__, e)
+        except Exception as e:
+            logger.error(
+                "Error handling command %s with handler %s: %s",
+                command_type,
+                handler.__name__,
+                e,
+            )
             raise
 
-    async def register_event_handler(self, event_type: str, handler: Callable[..., Any]) -> None:
+    async def register_event_handler(
+        self, event_type: str, handler: Callable[..., Any]
+    ) -> None:
         if event_type not in self._event_handlers:
             self._event_handlers[event_type] = []
         self._event_handlers[event_type].append(handler)
         logger.info("Registered event handler for %s: %s", event_type, handler.__name__)
 
-    async def register_command_handler(self, command_type: str, handler: Callable[..., Any]) -> None:
+    async def register_command_handler(
+        self, command_type: str, handler: Callable[..., Any]
+    ) -> None:
         if command_type in self._command_handlers:
-            logger.warning("Command handler already registered for %s. Overwriting.", command_type)
+            logger.warning(
+                "Command handler already registered for %s. Overwriting.", command_type
+            )
         self._command_handlers[command_type] = handler
-        logger.info("Registered command handler for %s: %s", command_type, handler.__name__)
+        logger.info(
+            "Registered command handler for %s: %s", command_type, handler.__name__
+        )

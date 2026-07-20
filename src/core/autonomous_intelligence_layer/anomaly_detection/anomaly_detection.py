@@ -7,17 +7,17 @@ and behaviors in system operations.
 
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
 import statistics
-
 
 logger = logging.getLogger(__name__)
 
 
 class AnomalyType(Enum):
     """Enumeration for anomaly types."""
+
     STATISTICAL = "statistical"
     BEHAVIORAL = "behavioral"
     CONTEXTUAL = "contextual"
@@ -26,6 +26,7 @@ class AnomalyType(Enum):
 
 class AnomalySeverity(Enum):
     """Enumeration for anomaly severity levels."""
+
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -35,28 +36,31 @@ class AnomalySeverity(Enum):
 @dataclass
 class DataPoint:
     """Represents a data point for analysis."""
+
     point_id: str
     value: float
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Anomaly:
     """Represents an anomaly."""
+
     anomaly_id: str
     anomaly_type: AnomalyType
     severity: AnomalySeverity
     description: str
     data_point_id: str
     confidence: float  # 0.0 to 1.0
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class AnomalyDetectionConfig:
     """Configuration for Anomaly Detection."""
+
     detection_method: str = "statistical"  # "statistical", "behavioral", "contextual"
     z_score_threshold: float = 3.0
     iqr_multiplier: float = 1.5
@@ -106,7 +110,7 @@ class AnomalyDetection:
             DataPoint if recorded successfully, None otherwise
         """
         if len(self.data_points) >= self.config.max_data_points:
-            logger.error("Maximum data points limit reached")
+            logger.error("Maximum data points limit reached", exc_info=True)
             return None
 
         data_point = DataPoint(
@@ -209,7 +213,7 @@ class AnomalyDetection:
                     anomaly_id=f"anom_{point_id}",
                     anomaly_type=AnomalyType.BEHAVIORAL,
                     severity=severity,
-                    description=f"Behavioral anomaly detected (IQR method)",
+                    description="Behavioral anomaly detected (IQR method)",
                     data_point_id=point_id,
                     confidence=0.8,
                 )

@@ -103,25 +103,24 @@ async def test_task_queue_execute_task_success(task_queue: TaskQueue, mock_sched
     handler = AsyncMock()
     handler.return_value = None
 
-    mock_scheduler.get_scheduled_tasks.return_value = [{
-        "task_id": task_id,
-        "task_payload": {"payload": task_payload, "handler_id": task_id},
-        "delay_seconds": 0,
-        "priority": 0,
-        "status": "scheduled"
-    }]
-    mock_scheduler.cancel_task.return_value = True
-    mock_priority_queue.empty.side_effect = [False, True] # PQ not empty first, then empty
-    mock_priority_queue.get.return_value = {
-        "task_id": task_id,
-        "payload": task_payload,
-        "handler_id": task_id,
-        "priority": 0
-    }
-
     await task_queue.enqueue_task(task_id, task_payload, handler)
     await task_queue.start()
-    await asyncio.sleep(0.01)
+
+    # Simulate worker fetching and executing the task
+    mock_priority_queue.empty.return_value = False
+    mock_priority_queue.get.return_value = {
+        "task_id": task_id,
+        "task_payload": {"payload": task_payload, "handler_id": task_id},
+        "priority": 0
+    }
+    
+    fetched_task = await task_queue.get_task("test_worker_id")
+    assert fetched_task is not None
+    assert fetched_task["task_id"] == task_id
+
+    # Manually call _execute_task as the worker would
+    await task_queue._execute_task(task_id, task_payload, handler)
+
     await task_queue.stop()
 
     handler.assert_called_once_with(task_payload)
@@ -137,25 +136,24 @@ async def test_task_queue_execute_task_failure_retry(task_queue: TaskQueue, mock
     mock_retry_policy.should_retry.return_value = True
     mock_retry_policy.get_delay_seconds.return_value = 1
 
-    mock_scheduler.get_scheduled_tasks.return_value = [{
-        "task_id": task_id,
-        "task_payload": {"payload": task_payload, "handler_id": task_id},
-        "delay_seconds": 0,
-        "priority": 0,
-        "status": "scheduled"
-    }]
-    mock_scheduler.cancel_task.return_value = True
-    mock_priority_queue.empty.side_effect = [False, True] # PQ not empty first, then empty
+    await task_queue.enqueue_task(task_id, task_payload, handler)
+    await task_queue.start()
+
+    # Simulate worker fetching and executing the task
+    mock_priority_queue.empty.return_value = False
     mock_priority_queue.get.return_value = {
         "task_id": task_id,
-        "payload": task_payload,
-        "handler_id": task_id,
+        "task_payload": {"payload": task_payload, "handler_id": task_id},
         "priority": 0
     }
 
-    await task_queue.enqueue_task(task_id, task_payload, handler)
-    await task_queue.start()
-    await asyncio.sleep(0.01)
+    fetched_task = await task_queue.get_task("test_worker_id")
+    assert fetched_task is not None
+    assert fetched_task["task_id"] == task_id
+
+    # Manually call _execute_task as the worker would
+    await task_queue._execute_task(task_id, task_payload, handler)
+
     await task_queue.stop()
 
     handler.assert_called_once_with(task_payload)
@@ -177,25 +175,24 @@ async def test_task_queue_execute_task_failure_dlq(task_queue: TaskQueue, mock_s
 
     mock_retry_policy.should_retry.return_value = False # No retry
 
-    mock_scheduler.get_scheduled_tasks.return_value = [{
-        "task_id": task_id,
-        "task_payload": {"payload": task_payload, "handler_id": task_id},
-        "delay_seconds": 0,
-        "priority": 0,
-        "status": "scheduled"
-    }]
-    mock_scheduler.cancel_task.return_value = True
-    mock_priority_queue.empty.side_effect = [False, True] # PQ not empty first, then empty
+    await task_queue.enqueue_task(task_id, task_payload, handler)
+    await task_queue.start()
+
+    # Simulate worker fetching and executing the task
+    mock_priority_queue.empty.return_value = False
     mock_priority_queue.get.return_value = {
         "task_id": task_id,
-        "payload": task_payload,
-        "handler_id": task_id,
+        "task_payload": {"payload": task_payload, "handler_id": task_id},
         "priority": 0
     }
 
-    await task_queue.enqueue_task(task_id, task_payload, handler)
-    await task_queue.start()
-    await asyncio.sleep(0.01)
+    fetched_task = await task_queue.get_task("test_worker_id")
+    assert fetched_task is not None
+    assert fetched_task["task_id"] == task_id
+
+    # Manually call _execute_task as the worker would
+    await task_queue._execute_task(task_id, task_payload, handler)
+
     await task_queue.stop()
 
     handler.assert_called_once_with(task_payload)
@@ -207,28 +204,22 @@ async def test_task_queue_handler_not_found(task_queue: TaskQueue, mock_schedule
     task_id = "no_handler_task"
     task_payload = {"data": "no_handler"}
     
-    mock_scheduler.get_scheduled_tasks.return_value = [{
-        "task_id": task_id,
-        "task_payload": {"payload": task_payload, "handler_id": "non_existent_handler"},
-        "delay_seconds": 0,
-        "priority": 0,
-        "status": "scheduled"
-    }]
-    mock_scheduler.cancel_task.return_value = True
-    mock_priority_queue.empty.side_effect = [False, True] # PQ not empty first, then empty
+    await task_queue.enqueue_task(task_id, task_payload, AsyncMock())
+    del task_queue._handlers[task_id]
+    await task_queue.start()
+
+    # Simulate worker fetching the task
+    mock_priority_queue.empty.return_value = False
     mock_priority_queue.get.return_value = {
         "task_id": task_id,
-        "payload": task_payload,
-        "handler_id": "non_existent_handler",
+        "task_payload": {"payload": task_payload, "handler_id": "non_existent_handler"},
         "priority": 0
     }
 
-    # Enqueue the task with a handler, then remove it to simulate a missing handler
-    await task_queue.enqueue_task(task_id, task_payload, AsyncMock())
-    del task_queue._handlers[task_id]
+    # The get_task method itself should handle the missing handler and enqueue to DLQ
+    fetched_task = await task_queue.get_task("test_worker_id")
+    assert fetched_task is None
 
-    await task_queue.start()
-    await asyncio.sleep(0.01)
     await task_queue.stop()
 
     mock_dead_letter_queue.enqueue.assert_called_once_with(task_id, task_payload, "Handler not found")

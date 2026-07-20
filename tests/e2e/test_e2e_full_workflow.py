@@ -5,21 +5,23 @@ sys.path.insert(0,
 import json
 from datetime import datetime, UTC
 from unittest.mock import MagicMock, patch
-from core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI
-from core.autonomous_intelligence_layer.supervisor_ai.supervisor_ai import SupervisorAI
-from core.autonomous_intelligence_layer.reflection_engine.reflection_engine import ReflectionEngine
-from core.autonomous_intelligence_layer.memory_reasoning.memory_store import MemoryStore
-from core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import KnowledgeGraph
-from core.autonomous_intelligence_layer.context_manager.context_manager import ContextManager
-from core.autonomous_intelligence_layer.agent_registry.agent_registry import AgentRegistry
+from src.core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI
+from src.core.autonomous_intelligence_layer.supervisor_ai.supervisor_ai import SupervisorAI
+from src.core.autonomous_intelligence_layer.reflection_engine.reflection_engine import ReflectionEngine
+from src.core.autonomous_intelligence_layer.memory_reasoning.memory_store import MemoryStore, MemoryType
 
-from core.autonomous_intelligence_layer.learning_engine.learning_engine import LearningEngine
-from core.autonomous_intelligence_layer.error_recovery.error_recovery import ErrorRecovery
-from core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
-from core.autonomous_intelligence_layer.task_graph_engine.task import Task
-from core.autonomous_intelligence_layer.task_graph_engine.node import Node
-from core.autonomous_intelligence_layer.agent_registry.agent import Agent
-from core.autonomous_intelligence_layer.execution_policies.execution_policies import ExecutionPolicies
+
+from src.core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import KnowledgeGraph
+from src.core.autonomous_intelligence_layer.context_manager.context_manager import ContextManager
+from src.core.autonomous_intelligence_layer.agent_registry.agent_registry import AgentRegistry
+
+from src.core.autonomous_intelligence_layer.learning_engine.learning_engine import LearningEngine
+from src.core.autonomous_intelligence_layer.error_recovery.error_recovery import ErrorRecovery
+from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
+from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task
+from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node
+from src.core.autonomous_intelligence_layer.agent_registry.agent import Agent
+from src.core.autonomous_intelligence_layer.execution_policies.execution_policies import ExecutionPolicies
 
 # Fixtures for real components
 @pytest.fixture
@@ -45,15 +47,21 @@ def planner_ai():
 
 @pytest.fixture
 def memory_store():
-    return MemoryStore()
+    ms = MemoryStore()
+    return ms
+
 
 @pytest.fixture
 def knowledge_graph():
     return KnowledgeGraph()
 
 @pytest.fixture
-def reflection_engine():
-    return ReflectionEngine()
+def reflection_engine(memory_store, knowledge_graph):
+    from unittest.mock import Mock, AsyncMock
+    from src.core.llm_abstraction.base_llm_client import BaseLLMClient
+    mock_llm_client = Mock(spec=BaseLLMClient)
+    mock_llm_client.generate_text = AsyncMock(return_value="Mocked reflection output")
+    return ReflectionEngine(llm_client=mock_llm_client, memory_store=memory_store, knowledge_graph=knowledge_graph)
 
 
 
@@ -83,6 +91,7 @@ def supervisor_ai(context_manager, planner_ai, agent_registry, memory_store, kno
 async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, knowledge_graph, planner_ai, benchmark):
     """اختبار تدفق العمل الكامل للوحدة 5 من البداية إلى النهاية."""
     def run_workflow():
+        print(f"ID of MemoryType.WORKING in run_workflow: {id(MemoryType.WORKING)}")
         goal = "إنشاء تقرير شهري عن أداء المنتج"
 
         # 1. PlannerAI يخطط للمهمة
@@ -127,7 +136,11 @@ async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, k
         json.dumps(stored_context) # Should not raise an error
 
         # Verify memory persistence
-        retrieved_memory = memory_store.search(query=goal)
+
+
+
+        print(f"ID of MemoryType.WORKING before search: {id(MemoryType.WORKING)}")
+        retrieved_memory = memory_store.search(query=goal, memory_types=[MemoryType.WORKING])
         assert len(retrieved_memory) > 0
 
         # Verify knowledge graph updates

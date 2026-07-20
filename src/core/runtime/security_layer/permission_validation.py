@@ -2,9 +2,12 @@ from abc import ABC, abstractmethod
 import logging
 from typing import Dict, Any
 
+
 class IPermissionValidation(ABC):
     @abstractmethod
-    async def validate_permission(self, agent_id: str, capability: str, context: Dict[str, Any]) -> bool:
+    async def validate_permission(
+        self, agent_id: str, capability: str, context: Dict[str, Any]
+    ) -> bool:
         """
         يتحقق من أن الوكيل لديه الإذن اللازم لتنفيذ قدرة معينة.
 
@@ -18,11 +21,17 @@ class IPermissionValidation(ABC):
         """
         raise NotImplementedError
 
+
 logger = logging.getLogger(__name__)
 
+
 class PermissionValidation(IPermissionValidation):
-    async def validate_permission(self, agent_id: str, capability: str, context: Dict[str, Any]) -> bool:
+    async def validate_permission(
+        self, agent_id: str, capability: str, context: Dict[str, Any]
+    ) -> bool:
         # منطق التحقق من الإذن الافتراضي: السماح بكل شيء حاليًا
         # في تطبيق حقيقي، سيتم استشارة نظام إدارة الهوية والوصول (IAM)
-        logger.info(f"[PermissionValidation] Validating permission for agent \'{agent_id}\' to execute capability \'{capability}\' with context: {context}")
+        logger.info(
+            f"[PermissionValidation] Validating permission for agent '{agent_id}' to execute capability '{capability}' with context: {context}"
+        )
         return True

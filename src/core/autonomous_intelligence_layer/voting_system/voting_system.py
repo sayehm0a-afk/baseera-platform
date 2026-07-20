@@ -5,18 +5,18 @@ This module implements the Voting System, which allows agents to vote on decisio
 options, or proposals with various voting mechanisms and aggregation strategies.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class VotingMechanism(Enum):
     """Enumeration for voting mechanisms."""
+
     SIMPLE_MAJORITY = "simple_majority"  # More than 50%
     ABSOLUTE_MAJORITY = "absolute_majority"  # More than 50% of all voters
     QUALIFIED_MAJORITY = "qualified_majority"  # 2/3 or 3/4 majority
@@ -26,6 +26,7 @@ class VotingMechanism(Enum):
 
 class VoteType(Enum):
     """Enumeration for vote types."""
+
     YES = "yes"
     NO = "no"
     ABSTAIN = "abstain"
@@ -35,25 +36,27 @@ class VoteType(Enum):
 @dataclass
 class Vote:
     """Represents a single vote."""
+
     vote_id: str
     voter_id: str
     proposal_id: str
     vote_type: VoteType
     confidence: float = 1.0  # 0.0 to 1.0
     reasoning: Optional[str] = None
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Proposal:
     """Represents a proposal to be voted on."""
+
     proposal_id: str
     title: str
     description: str
     options: List[str]  # Available voting options
     proposer_id: str
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     deadline: Optional[datetime] = None
     voting_mechanism: VotingMechanism = VotingMechanism.SIMPLE_MAJORITY
     required_majority: float = 0.5  # Percentage required for approval
@@ -66,6 +69,7 @@ class Proposal:
 @dataclass
 class VotingConfig:
     """Configuration for Voting System."""
+
     default_voting_mechanism: VotingMechanism = VotingMechanism.SIMPLE_MAJORITY
     default_required_majority: float = 0.5
     enable_weighted_voting: bool = True
@@ -129,7 +133,7 @@ class VotingSystem:
         """
         # Check proposal limit
         if len(self.proposals) >= self.config.max_proposals:
-            logger.error("Maximum proposals limit reached")
+            logger.error("Maximum proposals limit reached", exc_info=True)
             return None
 
         proposal = Proposal(
@@ -139,7 +143,8 @@ class VotingSystem:
             options=options,
             proposer_id=proposer_id,
             voting_mechanism=voting_mechanism or self.config.default_voting_mechanism,
-            required_majority=required_majority or self.config.default_required_majority,
+            required_majority=required_majority
+            or self.config.default_required_majority,
             deadline=deadline,
         )
 
@@ -171,7 +176,7 @@ class VotingSystem:
             Vote if cast successfully, None otherwise
         """
         if proposal_id not in self.proposals:
-            logger.error(f"Proposal {proposal_id} not found")
+            logger.error(f"Proposal {proposal_id} not found", exc_info=True)
             return None
 
         proposal = self.proposals[proposal_id]
@@ -215,7 +220,7 @@ class VotingSystem:
             True if proposal closed successfully, False otherwise
         """
         if proposal_id not in self.proposals:
-            logger.error(f"Proposal {proposal_id} not found")
+            logger.error(f"Proposal {proposal_id} not found", exc_info=True)
             return False
 
         proposal = self.proposals[proposal_id]
@@ -242,7 +247,7 @@ class VotingSystem:
             Dictionary with vote type counts
         """
         if proposal_id not in self.proposals:
-            logger.error(f"Proposal {proposal_id} not found")
+            logger.error(f"Proposal {proposal_id} not found", exc_info=True)
             return {}
 
         proposal = self.proposals[proposal_id]
@@ -298,7 +303,7 @@ class VotingSystem:
             Dictionary with weighted vote counts
         """
         if proposal_id not in self.proposals:
-            logger.error(f"Proposal {proposal_id} not found")
+            logger.error(f"Proposal {proposal_id} not found", exc_info=True)
             return {}
 
         proposal = self.proposals[proposal_id]
@@ -325,7 +330,7 @@ class VotingSystem:
             Dictionary containing voting analysis
         """
         if proposal_id not in self.proposals:
-            logger.error(f"Proposal {proposal_id} not found")
+            logger.error(f"Proposal {proposal_id} not found", exc_info=True)
             return {}
 
         proposal = self.proposals[proposal_id]
@@ -347,7 +352,9 @@ class VotingSystem:
         }
 
         if proposal.votes:
-            avg_confidence = sum(v.confidence for v in proposal.votes) / len(proposal.votes)
+            avg_confidence = sum(v.confidence for v in proposal.votes) / len(
+                proposal.votes
+            )
             analysis["average_confidence"] = avg_confidence
 
         return analysis
@@ -370,10 +377,8 @@ class VotingSystem:
 
         yes_votes = vote_counts["yes"]
         no_votes = vote_counts["no"]
-        abstain_votes = vote_counts["abstain"]
 
         # Calculate voting percentage
-        voting_percentage = (yes_votes + no_votes) / total_votes if total_votes > 0 else 0
 
         # Apply voting mechanism
         if proposal.voting_mechanism == VotingMechanism.SIMPLE_MAJORITY:

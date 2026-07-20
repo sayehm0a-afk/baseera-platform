@@ -1,15 +1,15 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class LearningType(Enum):
     """Enumeration for learning types."""
+
     SUPERVISED = "supervised"
     UNSUPERVISED = "unsupervised"
     REINFORCEMENT = "reinforcement"
@@ -19,6 +19,7 @@ class LearningType(Enum):
 @dataclass
 class Experience:
     """Represents a learning experience."""
+
     experience_id: str
     experience_type: str
     input_data: Dict[str, Any]
@@ -31,6 +32,7 @@ class Experience:
 @dataclass
 class LearningPattern:
     """Represents a learned pattern."""
+
     pattern_id: str
     pattern_type: str
     pattern_data: Dict[str, Any]
@@ -43,6 +45,7 @@ class LearningPattern:
 @dataclass
 class LearningResult:
     """Represents a learning result."""
+
     learning_id: str
     learning_type: LearningType
     patterns_discovered: List[str]
@@ -54,6 +57,7 @@ class LearningResult:
 @dataclass
 class LearningEngineConfig:
     """Configuration for Learning Engine."""
+
     enable_pattern_recognition: bool = True
     min_pattern_confidence: float = 0.7
     max_experiences: int = 100000
@@ -109,7 +113,7 @@ class LearningEngine:
             Experience if recorded successfully, None otherwise
         """
         if len(self.experiences) >= self.config.max_experiences:
-            logger.error("Maximum experiences limit reached")
+            logger.error("Maximum experiences limit reached", exc_info=True)
             return None
 
         experience = Experience(
@@ -145,7 +149,7 @@ class LearningEngine:
             LearningPattern if discovered successfully, None otherwise
         """
         if len(self.patterns) >= self.config.max_patterns:
-            logger.error("Maximum patterns limit reached")
+            logger.error("Maximum patterns limit reached", exc_info=True)
             return None
 
         if confidence < self.config.min_pattern_confidence:
@@ -185,13 +189,11 @@ class LearningEngine:
 
         # Analyze experiences
         successful_experiences = [
-            e for e in self.experiences.values()
-            if e.outcome == "SUCCESS"
+            e for e in self.experiences.values() if e.outcome == "SUCCESS"
         ]
 
         failed_experiences = [
-            e for e in self.experiences.values()
-            if e.outcome == "FAILURE"
+            e for e in self.experiences.values() if e.outcome == "FAILURE"
         ]
 
         success_rate = (
@@ -296,7 +298,8 @@ class LearningEngine:
             List of patterns with high confidence
         """
         return [
-            p for p in self.patterns.values()
+            p
+            for p in self.patterns.values()
             if p.confidence >= self.config.min_pattern_confidence
         ]
 

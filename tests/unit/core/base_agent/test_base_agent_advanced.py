@@ -92,7 +92,7 @@ def test_base_agent_concurrent_activations():
 @pytest.mark.asyncio
 async def test_base_agent_concurrent_status_changes():
     agent = BaseAgent()
-    agent.activate()
+    await agent.activate()
 
     async def toggle_status_async():
         for _ in range(100):
@@ -136,13 +136,14 @@ async def test_base_agent_memory_stress():
 
 # --- Additional Coverage Tests ---
 
-def test_base_agent_init_internal_methods_coverage():
+@pytest.mark.asyncio
+async def test_base_agent_init_internal_methods_coverage():
     # Directly test the placeholder internal methods for coverage
     agent = BaseAgent()
     agent._load_config()
     agent._initialize_memory()
-    agent._initialize_tools()
-    agent._initialize_llm_client()
+    await agent._initialize_tools()
+    await agent._initialize_llm_client()
     # These should just run without error as they are placeholders
     assert True
 

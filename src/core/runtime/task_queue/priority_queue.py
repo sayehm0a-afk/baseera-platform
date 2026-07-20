@@ -58,7 +58,9 @@ class IPriorityQueue(ABC):
 class PriorityQueue(IPriorityQueue):
     """تنفيذ قائمة الانتظار ذات الأولوية (Priority Queue).
 
-    تستخدم heapq للحفاظ على ترتيب الأولوية.
+    هذا التنفيذ يعتمد على الذاكرة ويستخدم `heapq`. في بيئة الإنتاج، يجب استبدال هذا
+    بتنفيذ قائمة انتظار ذات أولوية حقيقية تعتمد على نظام رسائل موزع (مثل RabbitMQ
+    أو Kafka مع تكوين الأولوية، أو Redis Streams مع منطق الأولوية المخصص).
     """
 
     def __init__(self) -> None:

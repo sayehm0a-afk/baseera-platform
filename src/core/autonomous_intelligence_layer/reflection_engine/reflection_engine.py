@@ -6,18 +6,32 @@ agent outputs, identifying gaps and inconsistencies, and providing recommendatio
 for improvement.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from enum import Enum
 import logging
+import json
 
+
+from src.core.llm_abstraction.base_llm_client import BaseLLMClient
+from src.core.autonomous_intelligence_layer.memory_reasoning.memory_store import (
+    MemoryStore,
+    MemoryType,
+)
+
+from src.core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import (
+    KnowledgeGraph,
+    EntityType,
+    RelationType,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ReflectionScoreLevel(Enum):
     """Enumeration for reflection score levels."""
+
     EXCELLENT = "excellent"  # Score >= 0.9
     GOOD = "good"  # Score >= 0.7 and < 0.9
     ACCEPTABLE = "acceptable"  # Score >= 0.5 and < 0.7
@@ -27,6 +41,7 @@ class ReflectionScoreLevel(Enum):
 @dataclass
 class ReflectionResult:
     """Represents the result of a reflection evaluation."""
+
     reflection_id: str
     task_id: str
     reflection_score: float  # 0.0 to 1.0
@@ -43,6 +58,7 @@ class ReflectionResult:
 @dataclass
 class ReflectionPolicy:
     """Configuration for reflection evaluation."""
+
     contradiction_weight: float = 0.3
     hallucination_weight: float = 0.3
     missing_evidence_weight: float = 0.2
@@ -69,7 +85,13 @@ class ReflectionEngine:
     - Recording reflection history
     """
 
-    def __init__(self, policy: Optional[ReflectionPolicy] = None):
+    def __init__(
+        self,
+        llm_client: BaseLLMClient,
+        memory_store: MemoryStore,
+        knowledge_graph: KnowledgeGraph,
+        policy: Optional[ReflectionPolicy] = None,
+    ):
         """
         Initialize the Reflection Engine.
 
@@ -77,11 +99,14 @@ class ReflectionEngine:
             policy: ReflectionPolicy instance for configuring reflection behavior.
                    If None, uses default policy.
         """
+        self.llm_client = llm_client
+        self.memory_store = memory_store
+        self.knowledge_graph = knowledge_graph
         self.policy = policy or ReflectionPolicy()
         self.reflection_history: List[ReflectionResult] = []
         self.reflection_iteration_count: Dict[str, int] = {}
 
-    def evaluate(
+    async def evaluate(
         self,
         task_id: str,
         agent_output: str,
@@ -194,8 +219,8 @@ class ReflectionEngine:
             List of detected contradictions
         """
         contradictions = []
-        # Placeholder implementation - in production, this would use NLP techniques
-        # to detect logical contradictions in the output
+        # في تطبيق حقيقي، سيستخدم هذا تقنيات معالجة اللغة الطبيعية (NLP)
+        # لاكتشاف التناقضات المنطقية في المخرجات.
         if "but" in agent_output.lower() and "however" in agent_output.lower():
             contradictions.append("Potential logical contradiction detected")
         return contradictions
@@ -216,12 +241,9 @@ class ReflectionEngine:
             List of detected hallucinations
         """
         hallucinations = []
-        # Placeholder implementation - in production, this would verify claims
-        # against known facts and context
-        if context and "verified_facts" in context:
-            verified_facts = context["verified_facts"]
-            # Check if output contains claims not in verified facts
-            # This is a simplified check
+        # في تطبيق حقيقي، سيتحقق هذا من الادعاءات
+        # مقابل الحقائق والسياق المعروفين.
+        if context and "verified_facts" in context:  # This line is kept for context, but the variable is removed.
             pass
         return hallucinations
 
@@ -241,8 +263,8 @@ class ReflectionEngine:
             List of missing or weak evidence
         """
         missing_evidence = []
-        # Placeholder implementation - in production, this would check if
-        # claims are properly supported by evidence
+        # في تطبيق حقيقي، سيتحقق هذا مما إذا كانت
+        # الادعاءات مدعومة بشكل صحيح بالأدلة.
         if len(agent_output) < 100:
             missing_evidence.append("Output is too short; may lack sufficient evidence")
         return missing_evidence
@@ -265,8 +287,8 @@ class ReflectionEngine:
             List of weak reasoning issues
         """
         weak_reasoning = []
-        # Placeholder implementation - in production, this would analyze
-        # the logical flow and reasoning in the output
+        # في تطبيق حقيقي، سيحلل هذا
+        # التدفق المنطقي والتفكير في المخرجات.
         if objective and objective.lower() not in agent_output.lower():
             weak_reasoning.append("Output does not directly address the objective")
         return weak_reasoning
@@ -348,7 +370,9 @@ class ReflectionEngine:
         recommendations = []
 
         if contradictions:
-            recommendations.append("Review and resolve logical contradictions in the output")
+            recommendations.append(
+                "Review and resolve logical contradictions in the output"
+            )
 
         if hallucinations:
             recommendations.append("Verify claims against known facts and context")
@@ -388,10 +412,169 @@ class ReflectionEngine:
             hallucinations=[],
             missing_evidence=[],
             weak_reasoning=[],
-            recommendations=["Max reflection iterations reached. Manual review recommended."],
+            recommendations=[
+                "Max reflection iterations reached. Manual review recommended."
+            ],
         )
 
-    def get_reflection_history(self, task_id: Optional[str] = None) -> List[ReflectionResult]:
+    async def reflect_on_memories(
+        self, agent_id: str, initial_goal: str
+    ) -> Optional[str]:
+        logger.info(f"Agent {agent_id} reflecting on memories for goal: {initial_goal}")
+        recent_memories = self.memory_store.retrieve_memories(agent_id, limit=10)
+
+        if not recent_memories:
+            logger.info(
+                f"No recent memories found for agent {agent_id}. Skipping reflection."
+            )
+            return None
+
+        reflection_prompt = self._generate_reflection_prompt(agent_id, initial_goal)
+        reflection_output = await self.llm_client.generate_text(reflection_prompt)
+
+        if reflection_output:
+            self.memory_store.store(
+                content=reflection_output,
+                memory_type=MemoryType.REFLECTION,
+                source=agent_id,
+                metadata={"source_goal": initial_goal},
+            )
+            logger.info(f"Reflection memory added for agent {agent_id}.")
+        return reflection_output
+
+    async def update_knowledge_graph_from_reflection(
+        self, reflection_data: Dict[str, Any]
+    ):
+        entities = reflection_data.get("entities", [])
+        relationships = reflection_data.get("relationships", [])
+
+        for entity_data in entities:
+            entity_id = entity_data.get("entity_id")
+            name = entity_data.get("name")
+            entity_type_str = entity_data.get("entity_type")
+            attributes = entity_data.get("attributes", {})
+
+            if not all([entity_id, name, entity_type_str]):
+                logger.warning(f"Skipping entity due to missing data: {entity_data}")
+                continue
+
+            try:
+                entity_type = EntityType[entity_type_str.upper().strip()]
+                self.knowledge_graph.add_entity(
+                    entity_id=entity_id,
+                    name=name,
+                    entity_type=entity_type,
+                    attributes=attributes,
+                )
+            except KeyError:
+                logger.warning(
+                    f"Invalid EntityType: {entity_type_str}. Skipping entity {entity_id}."
+                )
+
+        for rel_data in relationships:
+            rel_id = rel_data.get("relationship_id")
+            source_id = rel_data.get("source_entity_id")
+            target_id = rel_data.get("target_entity_id")
+            rel_type_str = rel_data.get("relationship_type")
+            attributes = rel_data.get("attributes", {})
+
+            if not all([rel_id, source_id, target_id, rel_type_str]):
+                logger.warning(f"Skipping relationship due to missing data: {rel_data}")
+                continue
+
+            # Check if source and target entities exist before adding relationship
+            source_entity = self.knowledge_graph.query_entity(source_id)
+            target_entity = self.knowledge_graph.query_entity(target_id)
+
+            if not source_entity or not target_entity:
+                logger.warning(
+                    f"Skipping relationship {rel_id}: Source or target entity does not exist."
+                )
+                continue
+
+            try:
+                rel_type = RelationType[rel_type_str.upper().strip()]
+                self.knowledge_graph.add_relationship(
+                    relationship_id=rel_id,
+                    source_entity_id=source_id,
+                    target_entity_id=target_id,
+                    relationship_type=rel_type,
+                    attributes=attributes,
+                )
+            except KeyError:
+                logger.warning(
+                    f"Invalid RelationType: {rel_type_str}. Skipping relationship {rel_id}."
+                )
+
+    async def perform_reflection_cycle(self, agent_id: str, initial_goal: str):
+        logger.info(
+            f"Starting reflection cycle for agent {agent_id} on goal: {initial_goal}"
+        )
+        reflection_output = await self.reflect_on_memories(agent_id, initial_goal)
+
+        if reflection_output:
+            knowledge_data = await self._extract_knowledge_from_reflection(
+                reflection_output
+            )
+            await self.update_knowledge_graph_from_reflection(knowledge_data)
+            logger.info(
+                f"Knowledge graph updated from reflection for agent {agent_id}."
+            )
+        else:
+            logger.info(
+                f"No reflection output generated for agent {agent_id}. Skipping knowledge graph update."
+            )
+
+    def _generate_reflection_prompt(self, agent_id: str, initial_goal: str) -> str:
+        summary = self.memory_store.summarize_memories(agent_id)
+        prompt = (
+            f"Agent {agent_id} is working on the goal: {initial_goal}. "
+            f"Here is a summary of recent events and memories:\n{summary}\n\n"
+            "Based on this information, generate a concise reflection. "
+            "Identify any inconsistencies, missing information, or areas for improvement. "
+            "Also, extract new knowledge in JSON format with 'entities' and 'relationships' keys. "
+            "Example: {'entities': [{'entity_id': 'id1', 'name': 'Name', 'entity_type': 'PERSON'}], 'relationships': [{'relationship_id': 'rel1', 'source_entity_id': 'id1', 'target_entity_id': 'id2', 'relationship_type': 'KNOWS'}]}"
+        )
+        return prompt
+
+    async def _extract_knowledge_from_reflection(
+        self, reflection_text: str
+    ) -> Dict[str, Any]:
+        knowledge = {"entities": [], "relationships": []}
+
+        # Attempt to extract JSON from potentially malformed string
+        json_str = ""
+        if reflection_text.startswith("```json") and reflection_text.endswith("```"):
+            json_str = reflection_text[7:-3].strip()
+        else:
+            # Try to find the first and last curly braces to extract JSON
+            start_idx = reflection_text.find("{")
+            end_idx = reflection_text.rfind("}") + 1
+            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                json_str = reflection_text[start_idx:end_idx]
+
+        if json_str:
+            try:
+                knowledge = json.loads(json_str)
+            except json.JSONDecodeError:
+                logger.warning("Invalid JSON found in reflection text.")
+
+        if "entities" not in knowledge:
+            knowledge["entities"] = []
+        if "relationships" not in knowledge:
+            knowledge["relationships"] = []
+
+        return knowledge
+
+    async def _process_reflection_output(self, reflection_output: str):
+        knowledge_data = await self._extract_knowledge_from_reflection(
+            reflection_output
+        )
+        await self.update_knowledge_graph_from_reflection(knowledge_data)
+
+    def get_reflection_history(
+        self, task_id: Optional[str] = None
+    ) -> List[ReflectionResult]:
         """
         Retrieve reflection history.
 

@@ -1,6 +1,7 @@
 from typing import Any, Dict
 from .policy import Policy
 
+
 class QualityModePolicy(Policy):
     """
     سياسة وضع الجودة: تركز على تحقيق أعلى دقة وجودة ممكنة، حتى لو كان ذلك على حساب السرعة أو التكلفة.

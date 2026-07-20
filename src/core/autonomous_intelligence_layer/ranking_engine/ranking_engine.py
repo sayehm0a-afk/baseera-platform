@@ -7,26 +7,28 @@ solutions based on multiple criteria and scoring mechanisms.
 
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class RankingMethod(Enum):
     """Enumeration for ranking methods."""
+
     WEIGHTED_SUM = "weighted_sum"  # Sum of weighted scores
     MULTIPLICATIVE = "multiplicative"  # Product of scores
     LEXICOGRAPHIC = "lexicographic"  # Lexicographic ordering
     BORDA = "borda"  # Borda count method
-    TOPSIS = "topsis"  # TOPSIS (Technique for Order Preference by Similarity to Ideal Solution)
+    # TOPSIS (Technique for Order Preference by Similarity to Ideal Solution)
+    TOPSIS = "topsis"
 
 
 @dataclass
 class Criterion:
     """Represents a ranking criterion."""
+
     criterion_id: str
     name: str
     weight: float = 1.0  # Importance weight
@@ -39,6 +41,7 @@ class Criterion:
 @dataclass
 class RankingItem:
     """Represents an item to be ranked."""
+
     item_id: str
     name: str
     scores: Dict[str, float]  # criterion_id -> score
@@ -48,17 +51,19 @@ class RankingItem:
 @dataclass
 class RankingResult:
     """Represents ranking results."""
+
     ranking_id: str
     items: List[Tuple[str, float]]  # (item_id, final_score) sorted by score
     method: RankingMethod
     criteria: List[Criterion]
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class RankingConfig:
     """Configuration for Ranking Engine."""
+
     default_ranking_method: RankingMethod = RankingMethod.WEIGHTED_SUM
     enable_normalization: bool = True
     enable_tie_breaking: bool = True
@@ -110,7 +115,7 @@ class RankingEngine:
             RankingResult if ranking successful, None otherwise
         """
         if not items or not criteria:
-            logger.error("Items and criteria are required")
+            logger.error("Items and criteria are required", exc_info=True)
             return None
 
         method = method or self.config.default_ranking_method
@@ -249,7 +254,7 @@ class RankingEngine:
                 score = item.scores.get(criterion.criterion_id, 0)
                 # Avoid zero scores
                 score = max(0.01, score)
-                product_score *= (score ** (criterion.weight / 10.0))
+                product_score *= score ** (criterion.weight / 10.0)
             scores[item.item_id] = product_score
 
         return scores
@@ -267,7 +272,7 @@ class RankingEngine:
             lex_score = 0.0
             for j, criterion in enumerate(sorted_criteria):
                 score = item.scores.get(criterion.criterion_id, 0)
-                lex_score += score * (1.0 / (10 ** j))
+                lex_score += score * (1.0 / (10**j))
             scores[item.item_id] = lex_score
 
         return scores
@@ -326,17 +331,19 @@ class RankingEngine:
                 diff_ideal = (score - ideal[criterion.criterion_id]) ** 2
                 diff_anti_ideal = (score - anti_ideal[criterion.criterion_id]) ** 2
 
-                distance_to_ideal += diff_ideal * (criterion.weight ** 2)
-                distance_to_anti_ideal += diff_anti_ideal * (criterion.weight ** 2)
+                distance_to_ideal += diff_ideal * (criterion.weight**2)
+                distance_to_anti_ideal += diff_anti_ideal * (criterion.weight**2)
 
-            distance_to_ideal = distance_to_ideal ** 0.5
-            distance_to_anti_ideal = distance_to_anti_ideal ** 0.5
+            distance_to_ideal = distance_to_ideal**0.5
+            distance_to_anti_ideal = distance_to_anti_ideal**0.5
 
             # Calculate TOPSIS score
             if distance_to_ideal + distance_to_anti_ideal == 0:
                 topsis_score = 0.5
             else:
-                topsis_score = distance_to_anti_ideal / (distance_to_ideal + distance_to_anti_ideal)
+                topsis_score = distance_to_anti_ideal / (
+                    distance_to_ideal + distance_to_anti_ideal
+                )
 
             scores[item.item_id] = topsis_score
 
@@ -370,8 +377,12 @@ class RankingEngine:
                 sorted_group = sorted(
                     group,
                     key=lambda iid: next(
-                        (item.scores.get(first_criterion.criterion_id, 0) for item in items if item.item_id == iid),
-                        0
+                        (
+                            item.scores.get(first_criterion.criterion_id, 0)
+                            for item in items
+                            if item.item_id == iid
+                        ),
+                        0,
                     ),
                     reverse=True,
                 )
@@ -392,7 +403,7 @@ class RankingEngine:
             Dictionary containing analysis results
         """
         if ranking_id not in self.rankings:
-            logger.error(f"Ranking {ranking_id} not found")
+            logger.error(f"Ranking {ranking_id} not found", exc_info=True)
             return {}
 
         result = self.rankings[ranking_id]

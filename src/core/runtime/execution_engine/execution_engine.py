@@ -1,12 +1,19 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Callable, Awaitable, Optional
+from typing import Any, Dict, Optional
 
 from core.runtime.execution_engine.executor import IExecutor, Executor
-from core.runtime.execution_engine.dependency_resolver import IDependencyResolver, DependencyResolver
-from core.runtime.execution_engine.execution_graph import IExecutionGraph, ExecutionGraph
+from core.runtime.execution_engine.dependency_resolver import (
+    IDependencyResolver,
+    DependencyResolver,
+)
+from core.runtime.execution_engine.execution_graph import (
+    IExecutionGraph,
+    ExecutionGraph,
+)
 
 logger = logging.getLogger(__name__)
+
 
 class IExecutionEngine(ABC):
     """واجهة مجردة لمحرك التنفيذ (Execution Engine).
@@ -15,7 +22,9 @@ class IExecutionEngine(ABC):
     """
 
     @abstractmethod
-    async def execute_workflow(self, workflow_definition: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    async def execute_workflow(
+        self, workflow_definition: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
         """ينفذ سير عمل (workflow) معقدًا يتكون من مهام مترابطة.
 
         Args:
@@ -41,16 +50,22 @@ class ExecutionEngine(IExecutionEngine):
     مسؤول عن تنسيق تنفيذ سير العمل المعقد، باستخدام Executor و DependencyResolver و ExecutionGraph.
     """
 
-    def __init__(self,
-                 executor: Optional[IExecutor] = None,
-                 dependency_resolver: Optional[IDependencyResolver] = None,
-                 execution_graph: Optional[IExecutionGraph] = None) -> None:
+    def __init__(
+        self,
+        executor: Optional[IExecutor] = None,
+        dependency_resolver: Optional[IDependencyResolver] = None,
+        execution_graph: Optional[IExecutionGraph] = None,
+    ) -> None:
         self._executor = executor or Executor()
         self._dependency_resolver = dependency_resolver or DependencyResolver()
-        self._execution_graph = execution_graph or ExecutionGraph(self._executor, self._dependency_resolver)
+        self._execution_graph = execution_graph or ExecutionGraph(
+            self._executor, self._dependency_resolver
+        )
         logger.info("ExecutionEngine instance created.")
 
-    async def execute_workflow(self, workflow_definition: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    async def execute_workflow(
+        self, workflow_definition: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
         logger.info("Executing workflow with definition: %s", workflow_definition)
         try:
             results = await self._execution_graph.execute_graph(workflow_definition)

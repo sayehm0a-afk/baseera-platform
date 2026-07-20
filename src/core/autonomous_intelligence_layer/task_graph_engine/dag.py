@@ -1,7 +1,8 @@
 from collections import defaultdict, deque
-from typing import Dict, List, Set, Any, Optional
+from typing import Dict, List, Set, Optional
 import uuid
-from .node import Node
+from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node
+
 
 class DAG:
     """
@@ -16,7 +17,8 @@ class DAG:
         """
         self.id: str = dag_id if dag_id else str(uuid.uuid4())
         self.nodes: Dict[str, Node] = {}
-        self.adj: Dict[str, List[str]] = defaultdict(list)  # قائمة التجاور: node_id -> [dependent_node_ids]
+        # قائمة التجاور: node_id -> [dependent_node_ids]
+        self.adj: Dict[str, List[str]] = defaultdict(list)
         self.in_degree: Dict[str, int] = defaultdict(int)  # درجة الدخول لكل عقدة
 
     def add_node(self, node: Node) -> None:
@@ -32,9 +34,11 @@ class DAG:
         if not isinstance(node, Node):
             raise ValueError("العقدة يجب أن تكون من نوع Node.")
         if node.id in self.nodes:
-            raise ValueError(f"العقدة ذات المعرف {node.id} موجودة بالفعل في الرسم البياني.")
+            raise ValueError(
+                f"العقدة ذات المعرف {node.id} موجودة بالفعل في الرسم البياني."
+            )
         self.nodes[node.id] = node
-        self.in_degree[node.id] = 0 # تهيئة درجة الدخول للعقدة الجديدة
+        self.in_degree[node.id] = 0  # تهيئة درجة الدخول للعقدة الجديدة
 
     def add_edge(self, from_node_id: str, to_node_id: str) -> None:
         """
@@ -62,7 +66,9 @@ class DAG:
             # التراجع عن إضافة الحافة إذا تسببت في دورة
             self.adj[from_node_id].pop()
             self.in_degree[to_node_id] -= 1
-            raise ValueError(f"إضافة حافة من {from_node_id} إلى {to_node_id} ستنشئ دورة في الرسم البياني.")
+            raise ValueError(
+                f"إضافة حافة من {from_node_id} إلى {to_node_id} ستنشئ دورة في الرسم البياني."
+            )
 
     def get_dependencies(self, node_id: str) -> List[Node]:
         """
@@ -123,7 +129,9 @@ class DAG:
                     return True
         return False
 
-    def _dfs_cycle_check(self, node_id: str, visited: Set[str], recursion_stack: Set[str]) -> bool:
+    def _dfs_cycle_check(
+        self, node_id: str, visited: Set[str], recursion_stack: Set[str]
+    ) -> bool:
         """
         وظيفة مساعدة لـ DFS لاكتشاف الدورات.
         """
@@ -151,7 +159,9 @@ class DAG:
             ValueError: إذا كان الرسم البياني يحتوي على دورة.
         """
         if self.has_cycle():
-            raise ValueError("لا يمكن إجراء الفرز الطوبولوجي على رسم بياني يحتوي على دورة.")
+            raise ValueError(
+                "لا يمكن إجراء الفرز الطوبولوجي على رسم بياني يحتوي على دورة."
+            )
 
         q = deque()
         current_in_degree = self.in_degree.copy()
@@ -173,7 +183,9 @@ class DAG:
         if len(sorted_nodes) != len(self.nodes):
             # هذا الشرط يجب أن يكون صحيحًا فقط إذا كان هناك دورة، ولكننا نتحقق من الدورات مسبقًا.
             # ومع ذلك، هو فحص إضافي للتأكد.
-            raise ValueError("الرسم البياني يحتوي على دورة، لا يمكن إجراء الفرز الطوبولوجي.")
+            raise ValueError(
+                "الرسم البياني يحتوي على دورة، لا يمكن إجراء الفرز الطوبولوجي."
+            )
 
         return sorted_nodes
 
@@ -184,6 +196,4 @@ class DAG:
         return node_id in self.nodes
 
     def __repr__(self) -> str:
-        nodes_str = ", ".join(self.nodes.keys())
-        edges_str = ", ".join([f"{u}->{v}" for u, vs in self.adj.items() for v in vs])
-        return f"DAG(nodes=[{nodes_str}], edges=[{edges_str}])"
+        return f"DAG(id='{self.id}', nodes_count={len(self.nodes)})"

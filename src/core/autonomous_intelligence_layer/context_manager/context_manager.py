@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 from .context_store import ContextStore
 
+
 class ContextManager:
     """
     يدير السياق بذكاء بين الوكلاء والمهام في طبقة الذكاء الاصطناعي المستقل.
@@ -8,7 +9,11 @@ class ContextManager:
     يوفر آليات للسياق المشترك، المعزول، والموروث، بالإضافة إلى ضغط السياق، وتصفيته، ودمجه.
     """
 
-    def __init__(self, global_context: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        global_context: Optional[Dict[str, Any]] = None,
+        context_store: Optional[ContextStore] = None,
+    ):
         """
         يهيئ مثيلًا جديدًا لـ ContextManager.
 
@@ -16,7 +21,9 @@ class ContextManager:
             global_context (Optional[Dict[str, Any]]): السياق العام الأولي الذي يمكن مشاركته.
         """
         self._global_context = global_context if global_context is not None else {}
-        self._context_store = ContextStore()
+        self._context_store = (
+            context_store if context_store is not None else ContextStore()
+        )
 
     def get_shared_context(self) -> Dict[str, Any]:
         """
@@ -48,7 +55,9 @@ class ContextManager:
         """
         return self._context_store.retrieve_context(context_id) or {}
 
-    def store_isolated_context(self, context_id: str, context_data: Dict[str, Any]) -> None:
+    def store_isolated_context(
+        self, context_id: str, context_data: Dict[str, Any]
+    ) -> None:
         """
         يخزن سياقًا معزولًا بمعرف محدد.
 
@@ -58,7 +67,9 @@ class ContextManager:
         """
         self._context_store.store_context(context_id, context_data)
 
-    def get_inherited_context(self, parent_context_id: str, current_context_id: str) -> Dict[str, Any]:
+    def get_inherited_context(
+        self, parent_context_id: str, current_context_id: str
+    ) -> Dict[str, Any]:
         """
         يسترد سياقًا موروثًا من سياق أب، مع دمج السياق الحالي.
 
@@ -75,7 +86,9 @@ class ContextManager:
         inherited_context = {**parent_context, **current_context}
         return inherited_context
 
-    def compress_context(self, context: Dict[str, Any], strategy: str = "default") -> Dict[str, Any]:
+    def compress_context(
+        self, context: Dict[str, Any], strategy: str = "default"
+    ) -> Dict[str, Any]:
         """
         يضغط السياق بناءً على استراتيجية محددة.
 
@@ -92,9 +105,11 @@ class ContextManager:
             # مثال بسيط: إزالة المفاتيح الكبيرة جدًا أو غير الضرورية
             compressed_context = {k: v for k, v in context.items() if len(str(v)) < 100}
             return compressed_context
-        return context # لا يوجد ضغط إذا لم يتم التعرف على الاستراتيجية
+        return context  # لا يوجد ضغط إذا لم يتم التعرف على الاستراتيجية
 
-    def filter_context(self, context: Dict[str, Any], keys_to_keep: Optional[List[str]] = None) -> Dict[str, Any]:
+    def filter_context(
+        self, context: Dict[str, Any], keys_to_keep: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
         """
         يقوم بتصفية السياق للاحتفاظ بمفاتيح محددة فقط.
 

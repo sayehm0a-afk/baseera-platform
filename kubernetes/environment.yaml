@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: basirah-env
+data:
+  DATABASE_URL: "postgresql+asyncpg://user:password@basirah-db:5432/basirah_db"
+  REDIS_HOST: "basirah-redis"
+  REDIS_PORT: "6379"
+  # يمكن إضافة متغيرات بيئة أخرى هنا

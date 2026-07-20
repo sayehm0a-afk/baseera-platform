@@ -7,16 +7,16 @@ sources (debates, votes, rankings) into a final unified decision.
 
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import logging
-
 
 logger = logging.getLogger(__name__)
 
 
 class FusionMethod(Enum):
     """Enumeration for decision fusion methods."""
+
     WEIGHTED_AVERAGE = "weighted_average"  # Weighted average of inputs
     MAJORITY_VOTING = "majority_voting"  # Majority rule
     CONSENSUS = "consensus"  # Consensus-based
@@ -26,6 +26,7 @@ class FusionMethod(Enum):
 
 class DecisionSource(Enum):
     """Enumeration for decision sources."""
+
     DEBATE = "debate"
     VOTING = "voting"
     RANKING = "ranking"
@@ -36,33 +37,38 @@ class DecisionSource(Enum):
 @dataclass
 class DecisionInput:
     """Represents a single decision input from a source."""
+
     input_id: str
     source: DecisionSource
     source_id: str  # ID of the source (debate_id, voting_id, etc.)
     decision: str  # The decision/recommendation
     confidence: float = 1.0  # 0.0 to 1.0
     supporting_data: Dict[str, Any] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class FusedDecision:
     """Represents a fused decision."""
+
     decision_id: str
     final_decision: str
     confidence: float
     supporting_inputs: List[DecisionInput]
     fusion_method: FusionMethod
     reasoning: str
-    alternatives: List[Tuple[str, float]] = field(default_factory=list)  # (decision, score)
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    alternatives: List[Tuple[str, float]] = field(
+        default_factory=list
+    )  # (decision, score)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class DecisionFusionConfig:
     """Configuration for Decision Fusion."""
+
     default_fusion_method: FusionMethod = FusionMethod.WEIGHTED_AVERAGE
     confidence_threshold: float = 0.5  # Minimum confidence for decision
     enable_alternative_ranking: bool = True
@@ -153,8 +159,11 @@ class DecisionFusion:
         Returns:
             FusedDecision if fusion successful, None otherwise
         """
-        if decision_id not in self.pending_inputs or not self.pending_inputs[decision_id]:
-            logger.error(f"No inputs for decision {decision_id}")
+        if (
+            decision_id not in self.pending_inputs
+            or not self.pending_inputs[decision_id]
+        ):
+            logger.error(f"No inputs for decision {decision_id}", exc_info=True)
             return None
 
         inputs = self.pending_inputs[decision_id]
@@ -258,7 +267,9 @@ class DecisionFusion:
         # Count votes
         decision_counts = {}
         for input_obj in inputs:
-            decision_counts[input_obj.decision] = decision_counts.get(input_obj.decision, 0) + 1
+            decision_counts[input_obj.decision] = (
+                decision_counts.get(input_obj.decision, 0) + 1
+            )
 
         if not decision_counts:
             return "NO_DECISION", 0.0
@@ -281,7 +292,9 @@ class DecisionFusion:
         all_agree = all(input_obj.decision == first_decision for input_obj in inputs)
 
         if all_agree:
-            avg_confidence = sum(input_obj.confidence for input_obj in inputs) / len(inputs)
+            avg_confidence = sum(input_obj.confidence for input_obj in inputs) / len(
+                inputs
+            )
             return first_decision, avg_confidence
         else:
             return "NO_CONSENSUS", 0.0
@@ -420,7 +433,7 @@ class DecisionFusion:
             Dictionary containing analysis results
         """
         if decision_id not in self.decisions:
-            logger.error(f"Decision {decision_id} not found")
+            logger.error(f"Decision {decision_id} not found", exc_info=True)
             return {}
 
         fused = self.decisions[decision_id]
@@ -437,11 +450,15 @@ class DecisionFusion:
         # Count sources
         for input_obj in fused.supporting_inputs:
             source = input_obj.source.value
-            analysis["source_distribution"][source] = analysis["source_distribution"].get(source, 0) + 1
+            analysis["source_distribution"][source] = (
+                analysis["source_distribution"].get(source, 0) + 1
+            )
 
         # Calculate average confidence
         if fused.supporting_inputs:
-            avg_conf = sum(inp.confidence for inp in fused.supporting_inputs) / len(fused.supporting_inputs)
+            avg_conf = sum(inp.confidence for inp in fused.supporting_inputs) / len(
+                fused.supporting_inputs
+            )
             analysis["average_input_confidence"] = avg_conf
 
         return analysis

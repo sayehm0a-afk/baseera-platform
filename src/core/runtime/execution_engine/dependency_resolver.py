@@ -1,8 +1,9 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Set
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
+
 
 class IDependencyResolver(ABC):
     """واجهة مجردة لمحلل التبعيات (Dependency Resolver).
@@ -49,12 +50,16 @@ class DependencyResolver(IDependencyResolver):
                 if dep not in all_task_ids:
                     # Handle external dependencies not defined as tasks
                     all_task_ids.add(dep)
-                    in_degree[dep] = 0 # External dependencies have 0 in-degree
-                adj.setdefault(dep, []).append(task_id) # dep is a prerequisite for task_id
+                    # External dependencies have 0 in-degree
+                    in_degree[dep] = 0
+                # dep is a prerequisite for task_id
+                adj.setdefault(dep, []).append(task_id)
                 in_degree[task_id] += 1
 
         # Kahn's algorithm for topological sort
-        queue: List[str] = [task_id for task_id, degree in in_degree.items() if degree == 0]
+        queue: List[str] = [
+            task_id for task_id, degree in in_degree.items() if degree == 0
+        ]
         result: List[str] = []
 
         while queue:

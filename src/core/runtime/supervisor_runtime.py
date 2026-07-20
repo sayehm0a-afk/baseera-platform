@@ -3,6 +3,7 @@
 تتولى هذه الوحدة مسؤولية الإشراف على الوكلاء، توزيع المهام،
     وإدارة سير العمل على مستوى عالٍ.
 """
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
@@ -18,9 +19,7 @@ class ISupervisorRuntime(ABC):
     """
 
     @abstractmethod
-    async def start_supervision(
-        self, config: Optional[Dict[str, Any]] = None
-    ) -> None:
+    async def start_supervision(self, config: Optional[Dict[str, Any]] = None) -> None:
         """بدء عملية الإشراف.
 
         مسؤولة عن بدء مراقبة وإدارة الوكلاء والمهام.
@@ -60,29 +59,28 @@ class SupervisorRuntime(ISupervisorRuntime):
         self._config: Dict[str, Any] = {}
         logger.info("SupervisorRuntime instance created.")
 
-    async def start_supervision(
-        self, config: Optional[Dict[str, Any]] = None
-    ) -> None:
+    async def start_supervision(self, config: Optional[Dict[str, Any]] = None) -> None:
         if self._is_supervising:
             logger.warning("SupervisorRuntime already supervising.")
             return
 
         logger.info("Starting SupervisorRuntime supervision...")
         self._config = config if config else {}
-        # هنا سيتم إضافة منطق بدء الإشراف الفعلي، مثل تهيئة AgentRegistry،
-        # ToolRegistry، وربطها بـ Event Bus لتلقي الأحداث.
+        # في بيئة الإنتاج، يجب استبدال هذا المنطق بتنفيذ حقيقي
+        # يتضمن تهيئة AgentRegistry، ToolRegistry، وربطها بـ Event Bus لتلقي الأحداث.
+        logger.warning("SupervisorRuntime is using simulated logic for supervision. This must be replaced with a real implementation in production.")
         self._is_supervising = True
         logger.info("SupervisorRuntime supervision started successfully.")
 
     async def stop_supervision(self) -> None:
         if not self._is_supervising:
-            logger.warning("SupervisorRuntime is not supervising. "
-                           "Nothing to stop.")
+            logger.warning("SupervisorRuntime is not supervising. " "Nothing to stop.")
             return
 
         logger.info("Stopping SupervisorRuntime supervision...")
-        # هنا سيتم إضافة منطق إيقاف الإشراف الفعلي، مثل إلغاء ربط Event Bus،
-        # إيقاف أي عمليات مراقبة مستمرة.
+        # في بيئة الإنتاج، يجب استبدال هذا المنطق بتنفيذ حقيقي
+        # يتضمن إلغاء ربط Event Bus، وإيقاف أي عمليات مراقبة مستمرة.
+        logger.warning("SupervisorRuntime is using simulated logic for stopping supervision. This must be replaced with a real implementation in production.")
         self._is_supervising = False
         logger.info("SupervisorRuntime supervision stopped successfully.")
 
@@ -90,6 +88,6 @@ class SupervisorRuntime(ISupervisorRuntime):
         return {
             "supervising": self._is_supervising,
             "config": self._config,
-            "active_agents": 0,  # Placeholder, will be dynamic
-            "pending_tasks": 0   # Placeholder, will be dynamic
+            "active_agents": 0,  # في بيئة الإنتاج، سيكون هذا ديناميكيًا ويعكس عدد العملاء النشطين.
+            "pending_tasks": 0,  # في بيئة الإنتاج، سيكون هذا ديناميكيًا ويعكس عدد المهام المعلقة.
         }

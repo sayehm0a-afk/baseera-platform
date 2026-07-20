@@ -1,0 +1,345 @@
+> """
+> Financial Intelligence Module
+  
+> This module implements Financial Intelligence for analyzing financial metrics,
+> budgets, costs, and financial forecasting for autonomous operations.
+> """
+  
+! from typing import Any, Dict, List, Optional, Tuple
+! from dataclasses import dataclass, field
+! from datetime import datetime, UTC
+! from basirah.src.core.shared_models.base_transaction import BaseTransaction
+! from enum import Enum
+! import logging
+  
+  
+! logger = logging.getLogger(__name__)
+  
+  
+! class TransactionType(Enum):
+!     """Enumeration for transaction types."""
+!     EXPENSE = "expense"
+!     REVENUE = "revenue"
+!     INVESTMENT = "investment"
+!     REFUND = "refund"
+  
+  
+! class FinancialMetric(Enum):
+!     """Enumeration for financial metrics."""
+!     TOTAL_COST = "total_cost"
+!     TOTAL_REVENUE = "total_revenue"
+!     PROFIT = "profit"
+!     MARGIN = "margin"
+!     ROI = "roi"
+!     BURN_RATE = "burn_rate"
+  
+  
+! @dataclass(kw_only=True)
+! class Transaction(BaseTransaction):
+!     """Represents a financial transaction."""
+!     transaction_id: str
+!     transaction_type: TransactionType
+  
+  
+! @dataclass
+! class Budget:
+!     """Represents a budget."""
+!     budget_id: str
+!     category: str
+!     allocated_amount: float
+!     spent_amount: float = 0.0
+!     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+!     metadata: Dict[str, Any] = field(default_factory=dict)
+  
+  
+! @dataclass
+! class FinancialReport:
+!     """Represents a financial report."""
+!     report_id: str
+!     period: str
+!     total_revenue: float
+!     total_expenses: float
+!     profit: float
+!     margin: float
+!     transactions: List[Transaction]
+!     budgets: List[Budget]
+!     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+  
+  
+! @dataclass
+! class FinancialIntelligenceConfig:
+!     """Configuration for Financial Intelligence."""
+!     currency: str = "USD"
+!     enable_forecasting: bool = True
+!     enable_alerts: bool = True
+!     alert_threshold: float = 0.9  # Alert when spending reaches 90% of budget
+!     max_transactions: int = 100000
+  
+  
+! class FinancialIntelligence:
+!     """
+!     Financial Intelligence for autonomous financial management.
+  
+!     The Financial Intelligence is responsible for:
+!     - Recording financial transactions
+!     - Managing budgets
+!     - Calculating financial metrics
+!     - Generating financial reports
+!     - Forecasting financial trends
+!     - Providing financial alerts
+!     """
+  
+!     def __init__(self, config: Optional[FinancialIntelligenceConfig] = None):
+!         """
+!         Initialize Financial Intelligence.
+  
+!         Args:
+!             config: FinancialIntelligenceConfig instance.
+!                    If None, uses default config.
+!         """
+!         self.config = config or FinancialIntelligenceConfig()
+!         self.transactions: Dict[str, Transaction] = {}
+!         self.budgets: Dict[str, Budget] = {}
+!         self.reports: Dict[str, FinancialReport] = {}
+  
+!     def record_transaction(
+!         self,
+!         transaction_id: str,
+!         transaction_type: TransactionType,
+!         amount: float,
+!         description: str,
+!     ) -> Optional[Transaction]:
+!         """
+!         Record a financial transaction.
+  
+!         Args:
+!             transaction_id: Unique identifier for the transaction
+!             transaction_type: Type of transaction
+!             amount: Transaction amount
+!             description: Transaction description
+  
+!         Returns:
+!             Transaction if recorded successfully, None otherwise
+!         """
+!         if len(self.transactions) >= self.config.max_transactions:
+!             logger.error("Maximum transactions limit reached")
+!             return None
+  
+!         transaction = Transaction(
+!             transaction_id=transaction_id,
+!             transaction_type=transaction_type,
+!             amount=amount,
+!             description=description,
+!         )
+  
+!         self.transactions[transaction_id] = transaction
+!         logger.debug(f"Transaction recorded: {transaction_id}")
+!         return transaction
+  
+!     def create_budget(
+!         self,
+!         budget_id: str,
+!         category: str,
+!         allocated_amount: float,
+!     ) -> Budget:
+!         """
+!         Create a budget.
+  
+!         Args:
+!             budget_id: Unique identifier for the budget
+!             category: Budget category
+!             allocated_amount: Allocated amount
+  
+!         Returns:
+!             Budget instance
+!         """
+!         budget = Budget(
+!             budget_id=budget_id,
+!             category=category,
+!             allocated_amount=allocated_amount,
+!         )
+  
+!         self.budgets[budget_id] = budget
+!         logger.debug(f"Budget created: {budget_id}")
+!         return budget
+  
+!     def update_budget_spending(
+!         self,
+!         budget_id: str,
+!         amount: float,
+!     ) -> bool:
+!         """
+!         Update budget spending.
+  
+!         Args:
+!             budget_id: The budget ID
+!             amount: Amount spent
+  
+!         Returns:
+!             True if updated successfully, False otherwise
+!         """
+!         if budget_id not in self.budgets:
+!             logger.error(f"Budget {budget_id} not found")
+!             return False
+  
+!         budget = self.budgets[budget_id]
+!         budget.spent_amount += amount
+  
+          # Check alert threshold
+!         if self.config.enable_alerts:
+!             spending_ratio = budget.spent_amount / budget.allocated_amount
+!             if spending_ratio >= self.config.alert_threshold:
+!                 logger.warning(f"Budget alert: {budget_id} spending at {spending_ratio:.1%}")
+  
+!         return True
+  
+!     def calculate_metrics(self) -> Dict[FinancialMetric, float]:
+!         """
+!         Calculate financial metrics.
+  
+!         Returns:
+!             Dictionary of financial metrics
+!         """
+!         total_revenue = 0.0
+!         total_expenses = 0.0
+  
+!         for transaction in self.transactions.values():
+!             if transaction.transaction_type == TransactionType.REVENUE:
+!                 total_revenue += transaction.amount
+!             elif transaction.transaction_type == TransactionType.EXPENSE:
+!                 total_expenses += transaction.amount
+  
+!         profit = total_revenue - total_expenses
+!         margin = (profit / total_revenue * 100) if total_revenue > 0 else 0.0
+  
+!         metrics = {
+!             FinancialMetric.TOTAL_REVENUE: total_revenue,
+!             FinancialMetric.TOTAL_COST: total_expenses,
+!             FinancialMetric.PROFIT: profit,
+!             FinancialMetric.MARGIN: margin,
+!         }
+  
+!         return metrics
+  
+!     def generate_report(
+!         self,
+!         report_id: str,
+!         period: str,
+!     ) -> FinancialReport:
+!         """
+!         Generate a financial report.
+  
+!         Args:
+!             report_id: Unique identifier for the report
+!             period: Reporting period
+  
+!         Returns:
+!             FinancialReport instance
+!         """
+!         metrics = self.calculate_metrics()
+  
+!         report = FinancialReport(
+!             report_id=report_id,
+!             period=period,
+!             total_revenue=metrics[FinancialMetric.TOTAL_REVENUE],
+!             total_expenses=metrics[FinancialMetric.TOTAL_COST],
+!             profit=metrics[FinancialMetric.PROFIT],
+!             margin=metrics[FinancialMetric.MARGIN],
+!             transactions=list(self.transactions.values()),
+!             budgets=list(self.budgets.values()),
+!         )
+  
+!         self.reports[report_id] = report
+!         logger.debug(f"Report generated: {report_id}")
+!         return report
+  
+!     def forecast_trend(
+!         self,
+!         transaction_type: TransactionType,
+!         historical_periods: int = 5,
+!     ) -> float:
+!         """
+!         Forecast financial trend.
+  
+!         Args:
+!             transaction_type: Type of transaction to forecast
+!             historical_periods: Number of historical periods to consider
+  
+!         Returns:
+!             Forecasted amount
+!         """
+          # Simple forecasting: average of recent transactions
+!         relevant_transactions = [
+!             t for t in self.transactions.values()
+!             if t.transaction_type == transaction_type
+!         ]
+  
+!         if not relevant_transactions:
+!             return 0.0
+  
+          # Get recent transactions
+!         recent = sorted(
+!             relevant_transactions,
+!             key=lambda t: t.timestamp,
+!             reverse=True,
+!         )[:historical_periods]
+  
+!         if not recent:
+!             return 0.0
+  
+!         avg_amount = sum(t.amount for t in recent) / len(recent)
+          # Add 10% growth forecast
+!         forecasted = avg_amount * 1.1
+  
+!         return forecasted
+  
+!     def get_budget_status(self, budget_id: str) -> Optional[Dict[str, Any]]:
+!         """
+!         Get budget status.
+  
+!         Args:
+!             budget_id: The budget ID
+  
+!         Returns:
+!             Dictionary with budget status, or None if not found
+!         """
+!         if budget_id not in self.budgets:
+!             logger.error(f"Budget {budget_id} not found")
+!             return None
+  
+!         budget = self.budgets[budget_id]
+!         remaining = budget.allocated_amount - budget.spent_amount
+!         spending_ratio = budget.spent_amount / budget.allocated_amount
+  
+!         return {
+!             "budget_id": budget_id,
+!             "category": budget.category,
+!             "allocated": budget.allocated_amount,
+!             "spent": budget.spent_amount,
+!             "remaining": remaining,
+!             "spending_ratio": spending_ratio,
+!         }
+  
+!     def get_transaction(self, transaction_id: str) -> Optional[Transaction]:
+!         """
+!         Get a transaction.
+  
+!         Args:
+!             transaction_id: The transaction ID
+  
+!         Returns:
+!             Transaction if found, None otherwise
+!         """
+!         return self.transactions.get(transaction_id)
+  
+!     def get_report(self, report_id: str) -> Optional[FinancialReport]:
+!         """
+!         Get a financial report.
+  
+!         Args:
+!             report_id: The report ID
+  
+!         Returns:
+!             FinancialReport if found, None otherwise
+!         """
+!         return self.reports.get(report_id)

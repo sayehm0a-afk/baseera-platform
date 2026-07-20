@@ -1,0 +1,74 @@
+> import logging
+> from abc import ABC, abstractmethod
+> from typing import Any, Dict, List, Set
+  
+> logger = logging.getLogger(__name__)
+  
+> class IDependencyResolver(ABC):
+>     """واجهة مجردة لمحلل التبعيات (Dependency Resolver).
+  
+>     تحدد هذه الواجهة الحد الأدنى من الوظائف المطلوبة لأي تنفيذ لمحلل التبعيات.
+>     """
+  
+>     @abstractmethod
+>     def resolve(self, tasks: Dict[str, List[str]]) -> List[str]:
+>         """يحل التبعيات بين المهام ويعيد ترتيبًا طوبولوجيًا.
+  
+>         Args:
+>             tasks (Dict[str, List[str]]): قاموس يمثل المهام وتبعاتها.
+>                                         المفتاح هو معرف المهمة، والقيمة هي قائمة بمعرفات المهام التي تعتمد عليها.
+  
+>         Returns:
+>             List[str]: قائمة بمعرفات المهام بترتيب طوبولوجي.
+  
+>         Raises:
+>             ValueError: إذا تم اكتشاف تبعية دائرية.
+>         """
+!         raise NotImplementedError
+  
+  
+> class DependencyResolver(IDependencyResolver):
+>     """تنفيذ محلل التبعيات (Dependency Resolver).
+  
+>     مسؤول عن تحديد ترتيب تنفيذ المهام بناءً على تبعياتها.
+>     """
+  
+>     def __init__(self) -> None:
+>         logger.info("DependencyResolver instance created.")
+  
+>     def resolve(self, tasks: Dict[str, List[str]]) -> List[str]:
+          # Create an adjacency list where an edge from A to B means B depends on A
+>         adj: Dict[str, List[str]] = {task_id: [] for task_id in tasks}
+          # Also collect all unique task IDs, including those that are only dependencies
+>         all_task_ids = set(tasks.keys())
+  
+          # Calculate in-degrees and build adjacency list
+>         in_degree: Dict[str, int] = {task_id: 0 for task_id in all_task_ids}
+>         for task_id, deps in tasks.items():
+>             for dep in deps:
+>                 if dep not in all_task_ids:
+                      # Handle external dependencies not defined as tasks
+!                     all_task_ids.add(dep)
+!                     in_degree[dep] = 0 # External dependencies have 0 in-degree
+>                 adj.setdefault(dep, []).append(task_id) # dep is a prerequisite for task_id
+>                 in_degree[task_id] += 1
+  
+          # Kahn's algorithm for topological sort
+>         queue: List[str] = [task_id for task_id, degree in in_degree.items() if degree == 0]
+>         result: List[str] = []
+  
+>         while queue:
+>             current_task = queue.pop(0)
+>             result.append(current_task)
+  
+              # For each task that depends on current_task, decrement its in-degree
+>             for neighbor_task in adj.get(current_task, []):
+>                 in_degree[neighbor_task] -= 1
+>                 if in_degree[neighbor_task] == 0:
+>                     queue.append(neighbor_task)
+  
+>         if len(result) != len(all_task_ids):
+>             raise ValueError("Circular dependency detected in tasks.")
+  
+>         logger.info("Dependencies resolved successfully. Order: %s", result)
+>         return result

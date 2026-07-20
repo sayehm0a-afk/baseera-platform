@@ -2,12 +2,14 @@
 وحدة BaseLLMClient الأساسية لمنصة basirah.
 توفر واجهة موحدة للتعامل مع نماذج اللغة الكبيرة (LLMs).
 """
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 import asyncio
 
 logger = logging.getLogger(__name__)
+
 
 class BaseLLMClient(ABC):
     """
@@ -21,7 +23,9 @@ class BaseLLMClient(ABC):
         logger.info("BaseLLMClient initialized for model: %s", self.model_name)
 
     @abstractmethod
-    async def generate_response(self, messages: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
+    async def generate_response(
+        self, messages: List[Dict[str, str]], **kwargs
+    ) -> Dict[str, Any]:
         """
         ينشئ استجابة من نموذج اللغة الكبيرة.
 
@@ -67,8 +71,12 @@ class BaseLLMClient(ABC):
         for i in range(max_retries):
             try:
                 return await func(*args, **kwargs)
-            except (asyncio.TimeoutError, ConnectionError, Exception) as e:  # pylint: disable=W0718,broad-exception-caught
-            # Catching broad Exception here is intentional for retry mechanism robustness.
+            except (
+                asyncio.TimeoutError,
+                ConnectionError,
+                Exception,
+            ) as e:  # pylint: disable=W0718,broad-exception-caught
+                # Catching broad Exception here is intentional for retry mechanism robustness.
                 logger.warning("Attempt %d failed: %s", i + 1, e)
                 if i < max_retries - 1:
                     await asyncio.sleep(delay)

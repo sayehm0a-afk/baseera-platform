@@ -2,11 +2,13 @@
 وحدة BaseTool لمنصة basirah.
 تحدد الواجهة الأساسية لجميع الأدوات التي يمكن للعملاء الذكيين استخدامها.
 """
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
 
 class BaseTool(ABC):
     """
@@ -14,7 +16,9 @@ class BaseTool(ABC):
     يجب على جميع الأدوات أن ترث من هذا الصنف وتطبق التوابع المجردة.
     """
 
-    def __init__(self, name: str, description: str, parameters: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self, name: str, description: str, parameters: Optional[Dict[str, Any]] = None
+    ):
         self.name = name
         self.description = description
         self.parameters = parameters if parameters is not None else {}
@@ -27,7 +31,8 @@ class BaseTool(ABC):
         يجب أن يتم تجاوز هذا التابع بواسطة الأدوات المتخصصة.
         """
         raise NotImplementedError(
-            "execute method must be implemented by subclasses") # pragma: no cover
+            "execute method must be implemented by subclasses"
+        )  # pragma: no cover
 
     def get_info(self) -> Dict[str, Any]:
         """
@@ -36,5 +41,5 @@ class BaseTool(ABC):
         return {
             "name": self.name,
             "description": self.description,
-            "parameters": self.parameters
-        } # pylint: disable=C0301
+            "parameters": self.parameters,
+        }  # pylint: disable=C0301

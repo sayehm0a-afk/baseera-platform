@@ -13,8 +13,7 @@ class IRetryPolicy(ABC):
 
     @abstractmethod
     async def should_retry(
-        self, task_id: str, attempt_count: int,
-        error: Exception
+        self, task_id: str, attempt_count: int, error: Exception
     ) -> bool:
         """يحدد ما إذا كان يجب إعادة محاولة مهمة فاشلة.
 
@@ -29,9 +28,7 @@ class IRetryPolicy(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_delay_seconds(
-        self, task_id: str, attempt_count: int
-    ) -> int:
+    async def get_delay_seconds(self, task_id: str, attempt_count: int) -> int:
         """يحصل على وقت التأخير بالثواني قبل إعادة المحاولة التالية.
 
         Args:
@@ -51,8 +48,7 @@ class ExponentialBackoffRetryPolicy(IRetryPolicy):
     """
 
     def __init__(
-        self, max_attempts: int = 3, initial_delay: int = 1,
-        max_delay: int = 60
+        self, max_attempts: int = 3, initial_delay: int = 1, max_delay: int = 60
     ) -> None:
         self._max_attempts = max_attempts
         self._initial_delay = initial_delay
@@ -60,32 +56,36 @@ class ExponentialBackoffRetryPolicy(IRetryPolicy):
         logger.info(
             "ExponentialBackoffRetryPolicy instance created with "
             "max_attempts=%d, initial_delay=%d, max_delay=%d.",
-            max_attempts, initial_delay, max_delay
+            max_attempts,
+            initial_delay,
+            max_delay,
         )
 
     async def should_retry(
-        self, task_id: str, attempt_count: int,
-        error: Exception
+        self, task_id: str, attempt_count: int, error: Exception
     ) -> bool:
         if attempt_count < self._max_attempts:
             logger.debug(
                 "Task %s (attempt %d) should retry. Error: %s",
-                task_id, attempt_count, error
+                task_id,
+                attempt_count,
+                error,
             )
             return True
         logger.warning(
-            "Task %s (attempt %d) will not retry. Max attempts "
-            "reached. Error: %s",
-            task_id, attempt_count, error
+            "Task %s (attempt %d) will not retry. Max attempts " "reached. Error: %s",
+            task_id,
+            attempt_count,
+            error,
         )
         return False
 
     async def get_delay_seconds(self, task_id: str, attempt_count: int) -> int:
-        delay = min(
-            self._max_delay, self._initial_delay * (2 ** (attempt_count - 1))
-        )
+        delay = min(self._max_delay, self._initial_delay * (2 ** (attempt_count - 1)))
         logger.debug(
             "Task %s (attempt %d) will retry after %d seconds.",
-            task_id, attempt_count, delay
+            task_id,
+            attempt_count,
+            delay,
         )
         return delay
