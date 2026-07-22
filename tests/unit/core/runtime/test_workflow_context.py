@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from core.runtime.workflow_context import WorkflowContext, IWorkflowContext
+from src.core.runtime.workflow_context import WorkflowContext, IWorkflowContext
 from typing import Dict, Any, Optional
 import logging
 

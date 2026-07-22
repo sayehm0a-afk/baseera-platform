@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 import os
 from typing import List, Dict, Any
 
-from core.llm_abstraction.base_llm_client import BaseLLMClient
-from core.llm_abstraction.openai_llm_client import OpenAILLMClient
+from src.core.llm_abstraction.base_llm_client import BaseLLMClient
+from src.core.llm_abstraction.openai_llm_client import OpenAILLMClient
 
 # Mock the tiktoken import for environments where it might not be installed
 class MockEncoding:
@@ -131,7 +131,7 @@ async def test_openai_llm_client_generate_response(openai_api_key):
 async def test_openai_llm_client_count_tokens(openai_api_key):
     client = OpenAILLMClient(model_name="gpt-3.5-turbo")
     text = "هذا نص تجريبي لحساب التوكنات."
-    with patch("core.llm_abstraction.openai_llm_client._tiktoken", new=MockTiktoken()):
+    with patch("src.core.llm_abstraction.openai_llm_client._tiktoken", new=MockTiktoken()):
         tokens = await client.count_tokens(text)
         assert tokens == 5
 

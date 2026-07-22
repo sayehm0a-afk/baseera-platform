@@ -8,11 +8,11 @@ import re
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Any
 
-from core.multi_agent_system.supervisor_agent import SupervisorAgent
-from core.multi_agent_system.agent_registry import AgentRegistry
-from core.multi_agent_system.base_tool import BaseTool
-from core.multi_agent_system.tool_registry import ToolRegistry
-from core.base_agent.base_agent import BaseAgent
+from src.core.multi_agent_system.supervisor_agent import SupervisorAgent
+from src.core.multi_agent_system.agent_registry import AgentRegistry
+from src.core.multi_agent_system.base_tool import BaseTool
+from src.core.multi_agent_system.tool_registry import ToolRegistry
+from src.core.base_agent.base_agent import BaseAgent
 
 class _TestTool(BaseTool):
     async def execute(self, **kwargs) -> Any:
@@ -311,7 +311,7 @@ async def test_supervisor_agent_initialize_llm_client_logging(caplog):
         # Check if the specific log message from SupervisorAgent's _initialize_llm_client is present
         found_log = False
         for record in caplog.records:
-               if record.name == "core.multi_agent_system.supervisor_agent" and \
+               if record.name == "src.core.multi_agent_system.supervisor_agent" and \
                re.match(r"LLM client for SupervisorAgent .* set to None \(or specialized later\).", record.message):
                 found_log = True
                 break

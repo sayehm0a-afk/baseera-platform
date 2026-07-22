@@ -3,13 +3,13 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, Optional
 
-from core.runtime.task_queue.scheduler import IScheduler, Scheduler
-from core.runtime.task_queue.priority_queue import IPriorityQueue, PriorityQueue
-from core.runtime.task_queue.retry_policy import (
+from src.core.runtime.task_queue.scheduler import IScheduler, Scheduler
+from src.core.runtime.task_queue.priority_queue import IPriorityQueue, PriorityQueue
+from src.core.runtime.task_queue.retry_policy import (
     IRetryPolicy,
     ExponentialBackoffRetryPolicy,
 )
-from core.runtime.task_queue.dead_letter_queue import IDeadLetterQueue, DeadLetterQueue
+from src.core.runtime.task_queue.dead_letter_queue import IDeadLetterQueue, DeadLetterQueue
 
 logger = logging.getLogger(__name__)
 

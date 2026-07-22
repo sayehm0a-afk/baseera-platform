@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime, UTC
-from core.autonomous_intelligence_layer.cost_analyzer.cost_analyzer import (
+from src.core.autonomous_intelligence_layer.cost_analyzer.cost_analyzer import (
     CostAnalyzer,
     CostOptimizerConfig,
     CostCategory,

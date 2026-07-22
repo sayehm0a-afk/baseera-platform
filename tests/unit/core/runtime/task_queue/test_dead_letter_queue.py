@@ -1,6 +1,6 @@
 import pytest
 import logging
-from core.runtime.task_queue.dead_letter_queue import DeadLetterQueue, IDeadLetterQueue
+from src.core.runtime.task_queue.dead_letter_queue import DeadLetterQueue, IDeadLetterQueue
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 import logging
-from core.runtime.observability_layer.logging_manager import LoggingManager, ILoggingManager
+from src.core.runtime.observability_layer.logging_manager import LoggingManager, ILoggingManager
 
 @pytest.fixture
 def logging_manager() -> ILoggingManager:

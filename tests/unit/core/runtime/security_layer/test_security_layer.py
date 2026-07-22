@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from core.runtime.security_layer.security_layer import SecurityLayer, ISecurityLayer
-from core.runtime.security_layer.permission_validation import IPermissionValidation
-from core.runtime.security_layer.agent_isolation import IAgentIsolation
-from core.runtime.security_layer.sandbox import ISandbox
+from src.core.runtime.security_layer.security_layer import SecurityLayer, ISecurityLayer
+from src.core.runtime.security_layer.permission_validation import IPermissionValidation
+from src.core.runtime.security_layer.agent_isolation import IAgentIsolation
+from src.core.runtime.security_layer.sandbox import ISandbox
 
 @pytest.fixture
 def mock_permission_validation() -> AsyncMock:

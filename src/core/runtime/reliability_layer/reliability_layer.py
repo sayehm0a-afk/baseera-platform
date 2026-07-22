@@ -2,16 +2,16 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Optional, Awaitable
 
-from core.runtime.reliability_layer.circuit_breaker import (
+from src.core.runtime.reliability_layer.circuit_breaker import (
     ICircuitBreaker,
     CircuitBreaker,
     CircuitBreakerOpenError,
 )
-from core.runtime.reliability_layer.failure_recovery import (
+from src.core.runtime.reliability_layer.failure_recovery import (
     IFailureRecovery,
     FailureRecovery,
 )
-from core.runtime.reliability_layer.compensation import ICompensation, Compensation
+from src.core.runtime.reliability_layer.compensation import ICompensation, Compensation
 
 logger = logging.getLogger(__name__)
 

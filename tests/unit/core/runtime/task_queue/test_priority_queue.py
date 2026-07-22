@@ -1,6 +1,6 @@
 import pytest
 import logging
-from core.runtime.task_queue.priority_queue import PriorityQueue, IPriorityQueue
+from src.core.runtime.task_queue.priority_queue import PriorityQueue, IPriorityQueue
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

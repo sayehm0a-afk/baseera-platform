@@ -1,7 +1,7 @@
 import pytest
 import logging
 from unittest.mock import AsyncMock, MagicMock
-from core.runtime.security_layer.sandbox import Sandbox, ISandbox
+from src.core.runtime.security_layer.sandbox import Sandbox, ISandbox
 
 @pytest.fixture
 def sandbox_instance() -> ISandbox:

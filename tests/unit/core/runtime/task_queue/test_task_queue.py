@@ -3,11 +3,11 @@ import logging
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from core.runtime.task_queue.task_queue import TaskQueue
-from core.runtime.task_queue.scheduler import IScheduler
-from core.runtime.task_queue.priority_queue import IPriorityQueue
-from core.runtime.task_queue.retry_policy import IRetryPolicy
-from core.runtime.task_queue.dead_letter_queue import IDeadLetterQueue
+from src.core.runtime.task_queue.task_queue import TaskQueue
+from src.core.runtime.task_queue.scheduler import IScheduler
+from src.core.runtime.task_queue.priority_queue import IPriorityQueue
+from src.core.runtime.task_queue.retry_policy import IRetryPolicy
+from src.core.runtime.task_queue.dead_letter_queue import IDeadLetterQueue
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

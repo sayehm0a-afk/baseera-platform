@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
-from core.runtime.security_layer.permission_validation import PermissionValidation, IPermissionValidation
+from src.core.runtime.security_layer.permission_validation import PermissionValidation, IPermissionValidation
 
 @pytest.fixture
 def permission_validation() -> IPermissionValidation:

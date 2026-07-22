@@ -1,7 +1,7 @@
 import pytest
 import logging
 from unittest.mock import AsyncMock, MagicMock
-from core.runtime.message_dispatcher import MessageDispatcher
+from src.core.runtime.message_dispatcher import MessageDispatcher
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

@@ -3,10 +3,10 @@ import logging
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from core.runtime.reliability_layer.reliability_layer import ReliabilityLayer, IReliabilityLayer
-from core.runtime.reliability_layer.circuit_breaker import ICircuitBreaker, CircuitBreakerOpenError
-from core.runtime.reliability_layer.failure_recovery import IFailureRecovery
-from core.runtime.reliability_layer.compensation import ICompensation
+from src.core.runtime.reliability_layer.reliability_layer import ReliabilityLayer, IReliabilityLayer
+from src.core.runtime.reliability_layer.circuit_breaker import ICircuitBreaker, CircuitBreakerOpenError
+from src.core.runtime.reliability_layer.failure_recovery import IFailureRecovery
+from src.core.runtime.reliability_layer.compensation import ICompensation
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

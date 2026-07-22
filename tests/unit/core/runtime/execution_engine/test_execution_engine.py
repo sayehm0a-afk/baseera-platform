@@ -2,10 +2,10 @@ import pytest
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
-from core.runtime.execution_engine.execution_engine import ExecutionEngine, IExecutionEngine
-from core.runtime.execution_engine.executor import IExecutor
-from core.runtime.execution_engine.dependency_resolver import IDependencyResolver
-from core.runtime.execution_engine.execution_graph import IExecutionGraph
+from src.core.runtime.execution_engine.execution_engine import ExecutionEngine, IExecutionEngine
+from src.core.runtime.execution_engine.executor import IExecutor
+from src.core.runtime.execution_engine.dependency_resolver import IDependencyResolver
+from src.core.runtime.execution_engine.execution_graph import IExecutionGraph
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

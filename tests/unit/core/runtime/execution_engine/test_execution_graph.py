@@ -3,9 +3,9 @@ import logging
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from core.runtime.execution_engine.execution_graph import ExecutionGraph, IExecutionGraph
-from core.runtime.execution_engine.executor import IExecutor
-from core.runtime.execution_engine.dependency_resolver import IDependencyResolver
+from src.core.runtime.execution_engine.execution_graph import ExecutionGraph, IExecutionGraph
+from src.core.runtime.execution_engine.executor import IExecutor
+from src.core.runtime.execution_engine.dependency_resolver import IDependencyResolver
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

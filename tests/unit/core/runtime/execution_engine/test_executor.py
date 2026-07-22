@@ -3,7 +3,7 @@ import logging
 import asyncio
 from unittest.mock import AsyncMock
 
-from core.runtime.execution_engine.executor import Executor, IExecutor
+from src.core.runtime.execution_engine.executor import Executor, IExecutor
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

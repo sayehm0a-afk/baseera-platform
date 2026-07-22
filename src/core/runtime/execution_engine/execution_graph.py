@@ -2,8 +2,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
-from core.runtime.execution_engine.executor import IExecutor, Executor
-from core.runtime.execution_engine.dependency_resolver import (
+from src.core.runtime.execution_engine.executor import IExecutor, Executor
+from src.core.runtime.execution_engine.dependency_resolver import (
     IDependencyResolver,
     DependencyResolver,
 )

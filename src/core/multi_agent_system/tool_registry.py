@@ -6,7 +6,7 @@
 import logging
 from typing import Dict, List, Optional
 
-from core.multi_agent_system.base_tool import (
+from src.core.multi_agent_system.base_tool import (
     BaseTool,
 )  # pylint: disable=E0402 # type: ignore
 
