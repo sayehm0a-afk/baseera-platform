@@ -124,7 +124,7 @@ async def test_execution_graph_with_kwargs(execution_graph: ExecutionGraph, mock
 @pytest.mark.asyncio
 async def test_execution_graph_dependency_result_injection_with_kwargs(execution_graph: ExecutionGraph, mock_executor: AsyncMock, mock_dependency_resolver: MagicMock):
     async def task_a_func(): return "A_data"
-    async def task_b_func(**kwargs): return f"B_data from {kwargs["dep_TaskA_result"]} and {kwargs["fixed_param"]}"
+    async def task_b_func(**kwargs): return f"B_data from {kwargs['dep_TaskA_result']} and {kwargs['fixed_param']}"
 
     graph_definition = {
         "TaskA": {"function": task_a_func, "dependencies": []},

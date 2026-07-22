@@ -117,7 +117,7 @@ class SupervisorAgent(BaseAgent):
                 "Target agent %s not found for delegation.",
                 task_data["target_agent_id"],
             )
-            raise ValueError(f"Target agent {task_data["target_agent_id"]} not found")
+            raise ValueError(f"Target agent {task_data['target_agent_id']} not found")
 
         logger.warning(
             "SupervisorAgent received a task without a specific target_agent_id. Handling internally."

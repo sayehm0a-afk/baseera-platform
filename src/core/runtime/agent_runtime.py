@@ -121,8 +121,8 @@ class AgentRuntime(IAgentRuntime):
         # استخدام الأدوات، وتحديث حالة الوكيل.
         self._active_agents[agent_id][
             "last_activity"
-        ] = f"Executed step: {step_data.get("action")}"
+        ] = f"Executed step: {step_data.get('action')}"
         return {
-            "result": f"Step '{step_data.get("action")}' completed "
+            "result": f"Step '{step_data.get('action')}' completed "
             f"for agent '{agent_id}'"
         }
