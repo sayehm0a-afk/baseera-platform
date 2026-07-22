@@ -68,19 +68,20 @@ def get_container() -> DependencyContainer:
 
 def setup_production_dependencies() -> DependencyContainer:
     """Setup production dependencies."""
-    from src.core.db.database import get_session, SessionLocal, engine
+    from src.core.db.database import get_session, get_session_factory, get_engine
     from src.core.messaging.redis_message_bus import RedisMessageBus
     from src.core.runtime.task_queue.real_task_queue import RealTaskQueue
     from src.core.runtime.worker.real_worker import RealWorker
     from src.core.runtime.real_agent_runtime import RealAgentRuntime
     from src.core.runtime.real_service_layer import RealServiceLayer
-    
+
     container = get_container()
-    
+
     try:
-        # Register database
-        container.register_instance("db_engine", engine)
-        container.register_instance("db_session_factory", SessionLocal)
+        # Register database (get_engine()/get_session_factory() initialize the
+        # engine here, at explicit startup time, not as an import side effect)
+        container.register_instance("db_engine", get_engine())
+        container.register_instance("db_session_factory", get_session_factory())
         container.register_service("db_session", get_session, singleton=False)
         
         # Register message bus

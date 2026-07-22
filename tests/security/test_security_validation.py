@@ -17,8 +17,8 @@ class TestSecurityValidation:
         assert "postgresql" in DATABASE_URL
         
         # Verify that connection pooling is enabled
-        from src.core.db.database import engine
-        assert engine.pool is not None
+        from src.core.db.database import get_engine
+        assert get_engine().pool is not None
     
     def test_redis_connection_security(self):
         """Test Redis connection security."""

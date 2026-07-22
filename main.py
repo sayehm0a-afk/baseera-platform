@@ -112,10 +112,13 @@ async def shutdown_event():
     
     try:
         logger.info("Shutting down Basirah...")
-        
+
         if kernel:
             await kernel.stop()
-        
+
+        from src.core.db.database import shutdown_engine
+        shutdown_engine()
+
         logger.info("Basirah shut down successfully")
     
     except Exception as e:
