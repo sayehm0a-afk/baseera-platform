@@ -2,8 +2,17 @@
 Security validation tests for production-grade components.
 """
 
+from pathlib import Path
+
 import pytest
 from unittest.mock import MagicMock, patch
+
+# Repository root, computed from this file's location rather than
+# hardcoded, so these tests work in any checkout (previously hardcoded
+# to /home/ubuntu/basirah/, which does not exist outside the original
+# author's machine and made these tests fail in every other environment,
+# including CI).
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestSecurityValidation:
@@ -42,7 +51,7 @@ class TestSecurityValidation:
         import re
         
         # Read main.py and check for hardcoded credentials
-        with open('/home/ubuntu/basirah/main.py', 'r') as f:
+        with open(REPO_ROOT / 'main.py', 'r') as f:
             content = f.read()
             
             # Check for common credential patterns
@@ -100,10 +109,10 @@ class TestProductionDeploymentSecurity:
         import os
         
         # Check if Dockerfile exists
-        assert os.path.exists('/home/ubuntu/basirah/Dockerfile')
-        
+        assert os.path.exists(REPO_ROOT / 'Dockerfile')
+
         # Read Dockerfile and check for security best practices
-        with open('/home/ubuntu/basirah/Dockerfile', 'r') as f:
+        with open(REPO_ROOT / 'Dockerfile', 'r') as f:
             content = f.read()
             
             # Check for non-root user (if applicable)
@@ -116,7 +125,7 @@ class TestProductionDeploymentSecurity:
         import yaml
         
         # Check if Kubernetes manifests exist
-        k8s_dir = '/home/ubuntu/basirah/kubernetes'
+        k8s_dir = REPO_ROOT / 'kubernetes'
         assert os.path.exists(k8s_dir)
         
         # Check for security-related files
@@ -134,10 +143,10 @@ class TestProductionDeploymentSecurity:
         import os
         
         # Check if environment configuration exists
-        assert os.path.exists('/home/ubuntu/basirah/kubernetes/environment.yaml')
-        
+        assert os.path.exists(REPO_ROOT / 'kubernetes' / 'environment.yaml')
+
         # Read environment file
-        with open('/home/ubuntu/basirah/kubernetes/environment.yaml', 'r') as f:
+        with open(REPO_ROOT / 'kubernetes' / 'environment.yaml', 'r') as f:
             content = f.read()
             
             # Verify that environment configuration is present
