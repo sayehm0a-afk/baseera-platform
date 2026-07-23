@@ -21,6 +21,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core.db.database import Base
+import src.domain.models  # noqa: E402,F401 -- registers all models on Base.metadata
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
