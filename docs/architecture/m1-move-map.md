@@ -177,12 +177,30 @@ are left in place. The two new categories are scaffolded empty
 
 ## 7. Empty Arabic engineering skeletons → `docs/archive/legacy-structure/`
 
-`العملاء_الذكيين/`, `الملقنات/`, `الأدوات_والنصوص/`, `البنية_التحتية/`,
-`السجلات/`, `الاختبارات/`, `الإعدادات/`, and the now-emptied
-`الوثائق_الرئيسية/` shell (see §3) are moved as-is (only `__init__.py` /
-`.gitkeep` files, verified zero real content) to
+Verified by inspecting every file in each of the 7 named directories
+(not assumed from the earlier audit): 5 are confirmed entirely empty
+(`__init__.py`/`.gitkeep` only) — `العملاء_الذكيين/`, `الملقنات/`,
+`البنية_التحتية/`, `الاختبارات/`, `الإعدادات/` — and, together with the
+now-emptied `الوثائق_الرئيسية/` shell (see §3), are moved as-is to
 `docs/archive/legacy-structure/`, preserving their names. No Python code
 is introduced into them. They are not deleted.
+
+**2 of the 7 are not actually empty** and are therefore *not* moved in
+this step, since the instruction is to relocate skeletons only "if they
+are still entirely empty":
+- `الأدوات_والنصوص/النسخ_الاحتياطي/backup.sh` — a real 28-line backup
+  script, hardcoding a nonexistent path (`/home/ubuntu/بصيرة/...`, the
+  same fictional-environment pattern found and fixed for test paths in
+  M0). Not referenced by any script, CI workflow, or Docker/Compose/K8s
+  config anywhere in the repo (verified by grep).
+- `السجلات/config/logging_config.yml` — a real, plausible Python
+  `logging.config.dictConfig`-style YAML config. Not referenced by
+  `src/core/monitoring/structured_logging.py` or anywhere else (verified
+  by grep) — the actual logging setup is done in code, not via this file.
+
+Both are left exactly where they are, untouched, and flagged here as a
+finding for a future decision (wire them in, or archive them) rather than
+silently swept into the "empty skeleton" bucket they don't belong in.
 
 ## 8. Infrastructure and config path references
 
