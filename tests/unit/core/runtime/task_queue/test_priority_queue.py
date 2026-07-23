@@ -2,13 +2,16 @@ import pytest
 import logging
 from src.core.runtime.task_queue.priority_queue import PriorityQueue, IPriorityQueue
 
+
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.task_queue.priority_queue").setLevel(logging.INFO)
 
+
 @pytest.fixture
 def priority_queue() -> PriorityQueue:
     return PriorityQueue()
+
 
 @pytest.mark.asyncio
 async def test_priority_queue_put_and_get_basic(priority_queue: PriorityQueue):
@@ -20,10 +23,12 @@ async def test_priority_queue_put_and_get_basic(priority_queue: PriorityQueue):
     assert await priority_queue.get() == "medium_priority_item"
     assert await priority_queue.get() == "low_priority_item"
 
+
 @pytest.mark.asyncio
 async def test_priority_queue_get_empty(priority_queue: PriorityQueue):
     with pytest.raises(IndexError, match="get from an empty priority queue"):
         await priority_queue.get()
+
 
 @pytest.mark.asyncio
 async def test_priority_queue_qsize(priority_queue: PriorityQueue):
@@ -35,6 +40,7 @@ async def test_priority_queue_qsize(priority_queue: PriorityQueue):
     await priority_queue.get()
     assert await priority_queue.qsize() == 1
 
+
 @pytest.mark.asyncio
 async def test_priority_queue_empty(priority_queue: PriorityQueue):
     assert await priority_queue.empty() is True
@@ -42,6 +48,7 @@ async def test_priority_queue_empty(priority_queue: PriorityQueue):
     assert await priority_queue.empty() is False
     await priority_queue.get()
     assert await priority_queue.empty() is True
+
 
 @pytest.mark.asyncio
 async def test_priority_queue_same_priority_order(priority_queue: PriorityQueue):
@@ -53,6 +60,7 @@ async def test_priority_queue_same_priority_order(priority_queue: PriorityQueue)
     assert await priority_queue.get() == "item_a"
     assert await priority_queue.get() == "item_b"
     assert await priority_queue.get() == "item_c"
+
 
 @pytest.mark.asyncio
 async def test_priority_queue_mixed_priorities(priority_queue: PriorityQueue):

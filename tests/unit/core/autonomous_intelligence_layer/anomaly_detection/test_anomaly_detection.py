@@ -9,10 +9,12 @@ from src.core.autonomous_intelligence_layer.anomaly_detection.anomaly_detection 
     Anomaly
 )
 
+
 @pytest.fixture
 def anomaly_detector():
     config = AnomalyDetectionConfig(min_data_points=3)
     return AnomalyDetection(config)
+
 
 def test_record_data_point(anomaly_detector):
     point = anomaly_detector.record_data_point("p1", 10.5)
@@ -22,6 +24,7 @@ def test_record_data_point(anomaly_detector):
     assert len(anomaly_detector.data_points) == 1
     assert len(anomaly_detector.data_history) == 1
 
+
 def test_record_data_point_max_limit():
     config = AnomalyDetectionConfig(max_data_points=2)
     detector = AnomalyDetection(config)
@@ -30,6 +33,7 @@ def test_record_data_point_max_limit():
     point = detector.record_data_point("p3", 30.0)
     assert point is None
     assert len(detector.data_points) == 2
+
 
 def test_detect_statistical_anomalies(anomaly_detector):
     anomaly_detector.config.detection_method = "statistical"
@@ -48,6 +52,7 @@ def test_detect_statistical_anomalies(anomaly_detector):
     assert anomalies[0].anomaly_type == AnomalyType.STATISTICAL
     assert anomalies[0].data_point_id == "p4"
 
+
 def test_detect_behavioral_anomalies(anomaly_detector):
     anomaly_detector.config.detection_method = "behavioral"
     anomaly_detector.config.iqr_multiplier = 1.0
@@ -64,6 +69,7 @@ def test_detect_behavioral_anomalies(anomaly_detector):
     assert anomalies[0].anomaly_type == AnomalyType.BEHAVIORAL
     assert anomalies[0].data_point_id == "p_anom"
 
+
 def test_detect_contextual_anomalies(anomaly_detector):
     anomaly_detector.config.detection_method = "contextual"
     for i in range(5):
@@ -72,16 +78,19 @@ def test_detect_contextual_anomalies(anomaly_detector):
     anomalies = anomaly_detector.detect_anomalies()
     assert len(anomalies) == 0
 
+
 def test_insufficient_data_points(anomaly_detector):
     anomaly_detector.record_data_point("p1", 10.0)
     anomalies = anomaly_detector.detect_anomalies()
     assert len(anomalies) == 0
+
 
 def test_calculate_severity(anomaly_detector):
     assert anomaly_detector._calculate_severity(3.0) == AnomalySeverity.LOW
     assert anomaly_detector._calculate_severity(4.5) == AnomalySeverity.MEDIUM
     assert anomaly_detector._calculate_severity(5.5) == AnomalySeverity.HIGH
     assert anomaly_detector._calculate_severity(6.5) == AnomalySeverity.CRITICAL
+
 
 def test_getters(anomaly_detector):
     anomaly_detector.config.detection_method = "statistical"

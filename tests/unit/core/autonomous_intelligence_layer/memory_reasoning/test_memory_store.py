@@ -3,6 +3,7 @@ from unittest.mock import Mock
 from src.core.autonomous_intelligence_layer.memory_reasoning.memory_store import MemoryStore, MemoryType, MemoryEntry, MemoryStoreConfig
 from datetime import datetime, timedelta, UTC
 
+
 class TestMemoryStore:
     @pytest.fixture
     def memory_store(self):

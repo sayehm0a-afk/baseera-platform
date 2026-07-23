@@ -2,6 +2,7 @@ import pytest
 from src.core.autonomous_intelligence_layer.agent_registry.agent_registry import AgentRegistry
 from src.core.autonomous_intelligence_layer.agent_registry.agent import Agent
 
+
 class TestAgentRegistry:
     @pytest.fixture
     def registry(self):

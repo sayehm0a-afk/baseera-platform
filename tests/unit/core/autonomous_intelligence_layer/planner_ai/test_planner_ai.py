@@ -5,6 +5,7 @@ from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
 from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node
 from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task
 
+
 class TestPlannerAI:
     @pytest.fixture
     def planner_ai(self):

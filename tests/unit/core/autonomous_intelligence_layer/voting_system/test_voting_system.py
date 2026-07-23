@@ -9,9 +9,11 @@ from src.core.autonomous_intelligence_layer.voting_system.voting_system import (
     Vote
 )
 
+
 @pytest.fixture
 def voting_system():
     return VotingSystem()
+
 
 def test_create_proposal(voting_system):
     proposal = voting_system.create_proposal(
@@ -23,6 +25,7 @@ def test_create_proposal(voting_system):
     assert proposal.proposer_id == "agent1"
     assert len(voting_system.proposals) == 1
 
+
 def test_create_proposal_max_limit():
     config = VotingConfig(max_proposals=1)
     system = VotingSystem(config)
@@ -30,6 +33,7 @@ def test_create_proposal_max_limit():
     proposal = system.create_proposal("p2", "Test Proposal 2", "Description", ["B"], "agent2")
     assert proposal is None
     assert len(system.proposals) == 1
+
 
 def test_cast_vote(voting_system):
     proposal = voting_system.create_proposal(
@@ -43,9 +47,11 @@ def test_cast_vote(voting_system):
     assert vote.vote_type == VoteType.YES
     assert len(proposal.votes) == 1
 
+
 def test_cast_vote_proposal_not_found(voting_system):
     vote = voting_system.cast_vote("v1", "voter1", "p_nonexistent", VoteType.YES)
     assert vote is None
+
 
 def test_cast_vote_proposal_closed(voting_system):
     proposal = voting_system.create_proposal(
@@ -55,6 +61,7 @@ def test_cast_vote_proposal_closed(voting_system):
     vote = voting_system.cast_vote("v1", "voter1", "p1", VoteType.YES)
     assert vote is None
 
+
 def test_cast_vote_no_revoting(voting_system):
     voting_system.config.enable_revoting = False
     proposal = voting_system.create_proposal(
@@ -63,6 +70,7 @@ def test_cast_vote_no_revoting(voting_system):
     voting_system.cast_vote("v1", "voter1", "p1", VoteType.YES)
     vote = voting_system.cast_vote("v2", "voter1", "p1", VoteType.NO)
     assert vote is None
+
 
 def test_close_proposal_simple_majority(voting_system):
     proposal = voting_system.create_proposal(
@@ -76,6 +84,7 @@ def test_close_proposal_simple_majority(voting_system):
     assert proposal.is_closed is True
     assert proposal.result == "APPROVED"
     assert len(voting_system.voting_history) == 1
+
 
 def test_close_proposal_absolute_majority(voting_system):
     proposal = voting_system.create_proposal(
@@ -91,6 +100,7 @@ def test_close_proposal_absolute_majority(voting_system):
     assert proposal.is_closed is True
     assert proposal.result == "REJECTED" # 2/4 = 0.5, not > 0.5
 
+
 def test_close_proposal_qualified_majority(voting_system):
     proposal = voting_system.create_proposal(
         "p3", "Test Proposal", "Description", ["Option A", "Option B"], "agent1",
@@ -105,6 +115,7 @@ def test_close_proposal_qualified_majority(voting_system):
     assert proposal.is_closed is True
     assert proposal.result == "APPROVED" # 3/4 = 0.75, which is >= 2/3
 
+
 def test_close_proposal_consensus(voting_system):
     proposal = voting_system.create_proposal(
         "p4", "Test Proposal", "Description", ["Option A", "Option B"], "agent1",
@@ -118,6 +129,7 @@ def test_close_proposal_consensus(voting_system):
     assert proposal.is_closed is True
     assert proposal.result == "APPROVED"
 
+
 def test_close_proposal_weighted(voting_system):
     voting_system.config.enable_weighted_voting = True
     proposal = voting_system.create_proposal(
@@ -130,6 +142,7 @@ def test_close_proposal_weighted(voting_system):
     assert voting_system.close_proposal("p5") is True
     assert proposal.is_closed is True
     assert proposal.result == "APPROVED"
+
 
 def test_get_vote_count(voting_system):
     proposal = voting_system.create_proposal(
@@ -146,6 +159,7 @@ def test_get_vote_count(voting_system):
     assert counts["abstain"] == 1
     assert counts["total"] == 4
 
+
 def test_get_vote_percentage(voting_system):
     proposal = voting_system.create_proposal(
         "p1", "Test Proposal", "Description", ["Option A", "Option B"], "agent1"
@@ -160,6 +174,7 @@ def test_get_vote_percentage(voting_system):
     assert percentages["no"] == 25.0
     assert percentages["abstain"] == 25.0
 
+
 def test_get_weighted_votes(voting_system):
     voting_system.config.enable_weighted_voting = True
     proposal = voting_system.create_proposal(
@@ -172,6 +187,7 @@ def test_get_weighted_votes(voting_system):
     weighted_votes = voting_system.get_weighted_votes("p1")
     assert weighted_votes["yes"] == pytest.approx(1.6) # 0.9 + 0.7
     assert weighted_votes["no"] == 0.8
+
 
 def test_analyze_voting(voting_system):
     proposal = voting_system.create_proposal(
@@ -188,6 +204,7 @@ def test_analyze_voting(voting_system):
     assert analysis["weighted_votes"]["yes"] == pytest.approx(1.7)
     assert analysis["total_voters"] == 3
     assert analysis["average_confidence"] == pytest.approx((0.9 + 0.8 + 0.7) / 3, rel=1e-2)
+
 
 def test_getters(voting_system):
     proposal = voting_system.create_proposal(

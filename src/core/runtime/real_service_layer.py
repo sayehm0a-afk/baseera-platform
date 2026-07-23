@@ -5,6 +5,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+
 class RealServiceLayer:
     """Production-grade service layer for coordinating components."""
 

@@ -12,6 +12,8 @@ from typing import List, Dict, Any
 from src.core.llm_abstraction.openai_llm_client import OpenAILLMClient, _tiktoken
 
 # Mock the tiktoken import for environments where it might not be installed
+
+
 @pytest.fixture
 def mock_tiktoken_module():
     with patch("src.core.llm_abstraction.openai_llm_client._tiktoken", new_callable=MagicMock) as mock_tiktoken_module:
@@ -20,11 +22,13 @@ def mock_tiktoken_module():
         mock_tiktoken_module.encoding_for_model.return_value = mock_encoder
         yield mock_tiktoken_module
 
+
 @pytest.fixture
 def openai_api_key():
     os.environ["OPENAI_API_KEY"] = "test_api_key"
     yield
     del os.environ["OPENAI_API_KEY"]
+
 
 @pytest.mark.asyncio
 async def test_openai_llm_client_initialization_no_api_key():
@@ -33,12 +37,14 @@ async def test_openai_llm_client_initialization_no_api_key():
     with pytest.raises(ValueError, match="OPENAI_API_KEY environment variable not set."):
         OpenAILLMClient(model_name="gpt-3.5-turbo")
 
+
 @pytest.mark.asyncio
 async def test_openai_llm_client_initialization_with_api_key(openai_api_key):
     client = OpenAILLMClient(model_name="gpt-3.5-turbo")
     assert client.model_name == "gpt-3.5-turbo"
     assert client.api_key == "test_api_key"
     assert client.client is not None
+
 
 @pytest.mark.asyncio
 async def test_openai_llm_client_generate_response_success(openai_api_key):
@@ -62,6 +68,7 @@ async def test_openai_llm_client_generate_response_success(openai_api_key):
         assert response["model"] == "gpt-3.5-turbo"
         mock_create.assert_called_once_with(model="gpt-3.5-turbo", messages=messages)
 
+
 @pytest.mark.asyncio
 async def test_openai_llm_client_generate_response_no_choices(openai_api_key):
     client = OpenAILLMClient(model_name="gpt-3.5-turbo")
@@ -79,6 +86,7 @@ async def test_openai_llm_client_generate_response_no_choices(openai_api_key):
         assert "usage" not in response
         assert "model" not in response
 
+
 @pytest.mark.asyncio
 async def test_openai_llm_client_generate_response_error(openai_api_key):
     client = OpenAILLMClient(model_name="gpt-3.5-turbo")
@@ -88,6 +96,7 @@ async def test_openai_llm_client_generate_response_error(openai_api_key):
         with pytest.raises(Exception, match="API Error"):
             await client.generate_response(messages)
 
+
 @pytest.mark.asyncio
 async def test_openai_llm_client_count_tokens_with_tiktoken(openai_api_key, mock_tiktoken_module):
     client = OpenAILLMClient(model_name="gpt-3.5-turbo")
@@ -96,6 +105,7 @@ async def test_openai_llm_client_count_tokens_with_tiktoken(openai_api_key, mock
     assert tokens == 5
     mock_tiktoken_module.encoding_for_model.assert_called_once_with(client.model_name)
     mock_tiktoken_module.encoding_for_model.return_value.encode.assert_called_once_with(text)
+
 
 @pytest.mark.asyncio
 async def test_openai_llm_client_count_tokens_no_tiktoken(openai_api_key):
@@ -107,6 +117,7 @@ async def test_openai_llm_client_count_tokens_no_tiktoken(openai_api_key):
         # The warning message is logged when tiktoken is None, so no call to encoding_for_model
         # No assertion for encoding_for_model as it should not be called when tiktoken is None.
 
+
 @pytest.mark.asyncio
 async def test_openai_llm_client_get_model_info(openai_api_key):
     client = OpenAILLMClient(model_name="gpt-3.5-turbo")
@@ -115,6 +126,7 @@ async def test_openai_llm_client_get_model_info(openai_api_key):
     assert info["provider"] == "OpenAI"
     assert "pricing_input_per_1k_tokens" in info
 
+
 @pytest.mark.asyncio
 async def test_openai_llm_client_get_model_info_gpt4(openai_api_key):
     client = OpenAILLMClient(model_name="gpt-4")
@@ -122,12 +134,14 @@ async def test_openai_llm_client_get_model_info_gpt4(openai_api_key):
     assert info["model_name"] == "gpt-4"
     assert info["pricing_input_per_1k_tokens"] == 0.03
 
+
 @pytest.mark.asyncio
 async def test_openai_llm_client_get_model_info_gpt35(openai_api_key):
     client = OpenAILLMClient(model_name="gpt-3.5-turbo-0125")
     info = await client.get_model_info()
     assert info["model_name"] == "gpt-3.5-turbo-0125"
     assert info["pricing_input_per_1k_tokens"] == 0.0005
+
 
 @pytest.mark.asyncio
 async def test_openai_llm_client_handle_retry_success(openai_api_key):
@@ -137,6 +151,7 @@ async def test_openai_llm_client_handle_retry_success(openai_api_key):
     assert result == "success"
     mock_func.assert_called_once_with("arg1", kwarg1="value1")
 
+
 @pytest.mark.asyncio
 async def test_openai_llm_client_handle_retry_failure(openai_api_key):
     client = OpenAILLMClient(model_name="gpt-3.5-turbo", config={"max_retries": 3, "retry_delay": 0.01})
@@ -144,6 +159,7 @@ async def test_openai_llm_client_handle_retry_failure(openai_api_key):
     result = await client._handle_retry(mock_func, "arg1")
     assert result == "success"
     assert mock_func.call_count == 3
+
 
 @pytest.mark.asyncio
 async def test_openai_llm_client_handle_retry_exhausted(openai_api_key):

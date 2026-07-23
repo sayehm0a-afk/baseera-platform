@@ -2,13 +2,16 @@ import pytest
 import logging
 from src.core.runtime.task_queue.dead_letter_queue import DeadLetterQueue, IDeadLetterQueue
 
+
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.task_queue.dead_letter_queue").setLevel(logging.INFO)
 
+
 @pytest.fixture
 def dlq() -> DeadLetterQueue:
     return DeadLetterQueue()
+
 
 @pytest.mark.asyncio
 async def test_dlq_enqueue_and_size(dlq: DeadLetterQueue):
@@ -24,9 +27,11 @@ async def test_dlq_enqueue_and_size(dlq: DeadLetterQueue):
     assert enqueued_task["task_payload"] == task_payload
     assert enqueued_task["error"] == error
 
+
 @pytest.mark.asyncio
 async def test_dlq_dequeue_empty(dlq: DeadLetterQueue):
     assert await dlq.dequeue() == []
+
 
 @pytest.mark.asyncio
 async def test_dlq_remove_task(dlq: DeadLetterQueue):
@@ -38,11 +43,13 @@ async def test_dlq_remove_task(dlq: DeadLetterQueue):
     assert removed is True
     assert await dlq.size() == 0
 
+
 @pytest.mark.asyncio
 async def test_dlq_remove_non_existent_task(dlq: DeadLetterQueue):
     task_id = "non_existent"
     removed = await dlq.remove(task_id)
     assert removed is False
+
 
 @pytest.mark.asyncio
 async def test_dlq_overwrite_enqueue(dlq: DeadLetterQueue, caplog):
@@ -60,6 +67,7 @@ async def test_dlq_overwrite_enqueue(dlq: DeadLetterQueue, caplog):
     assert enqueued_task["task_payload"] == payload_2
     assert enqueued_task["error"] == error_2
     assert "Task overwrite_task already in DLQ. Overwriting." in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_dlq_dequeue_limit(dlq: DeadLetterQueue):

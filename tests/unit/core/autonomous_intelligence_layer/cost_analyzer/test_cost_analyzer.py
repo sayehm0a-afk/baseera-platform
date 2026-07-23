@@ -8,9 +8,11 @@ from src.core.autonomous_intelligence_layer.cost_analyzer.cost_analyzer import (
     CostAnalysis
 )
 
+
 @pytest.fixture
 def cost_analyzer():
     return CostAnalyzer()
+
 
 def test_record_cost(cost_analyzer):
     cost = cost_analyzer.record_cost("c1", CostCategory.COMPUTE, 100.0, "Compute cost")
@@ -20,6 +22,7 @@ def test_record_cost(cost_analyzer):
     assert cost.amount == 100.0
     assert len(cost_analyzer.cost_items) == 1
 
+
 def test_record_cost_max_limit():
     config = CostOptimizerConfig(max_cost_items=1)
     analyzer = CostAnalyzer(config)
@@ -27,6 +30,7 @@ def test_record_cost_max_limit():
     cost = analyzer.record_cost("c2", CostCategory.STORAGE, 50.0, "Storage cost")
     assert cost is None
     assert len(analyzer.cost_items) == 1
+
 
 def test_analyze_costs(cost_analyzer):
     cost_analyzer.record_cost("c1", CostCategory.COMPUTE, 100.0, "Compute cost")
@@ -41,6 +45,7 @@ def test_analyze_costs(cost_analyzer):
     assert analysis.cost_by_category[CostCategory.STORAGE] == 50.0
     assert len(analysis.optimization_opportunities) > 0
 
+
 def test_analyze_trends(cost_analyzer):
     cost_analyzer.record_cost("c1", CostCategory.COMPUTE, 100.0, "Compute cost")
     cost_analyzer.record_cost("c2", CostCategory.COMPUTE, 120.0, "Compute cost")
@@ -49,6 +54,7 @@ def test_analyze_trends(cost_analyzer):
     trends = cost_analyzer._analyze_trends()
     assert CostCategory.COMPUTE.value in trends
     assert trends[CostCategory.COMPUTE.value] > 0 # Should be increasing trend
+
 
 def test_generate_optimization_suggestions(cost_analyzer):
     cost_by_category = {
@@ -59,6 +65,7 @@ def test_generate_optimization_suggestions(cost_analyzer):
     suggestions = cost_analyzer._generate_optimization_suggestions(cost_by_category)
     assert len(suggestions) > 0
     assert "Consider optimizing compute resources or using auto-scaling" in suggestions
+
 
 def test_getters(cost_analyzer):
     cost_analyzer.record_cost("c1", CostCategory.COMPUTE, 100.0, "Compute cost")

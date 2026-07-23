@@ -3,9 +3,11 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 from src.core.runtime.security_layer.agent_isolation import AgentIsolation, IAgentIsolation
 
+
 @pytest.fixture
 def agent_isolation() -> IAgentIsolation:
     return AgentIsolation()
+
 
 @pytest.mark.asyncio
 async def test_create_isolated_environment(agent_isolation: IAgentIsolation):
@@ -20,6 +22,7 @@ async def test_create_isolated_environment(agent_isolation: IAgentIsolation):
     assert agent_isolation._environments[environment_id]["agent_id"] == agent_id
     assert agent_isolation._environments[environment_id]["config"] == config
 
+
 @pytest.mark.asyncio
 async def test_execute_in_isolated_environment_success(agent_isolation: IAgentIsolation):
     agent_id = "test_agent_2"
@@ -31,6 +34,7 @@ async def test_execute_in_isolated_environment_success(agent_isolation: IAgentIs
 
     assert result == {"simulated_result": "Code submitted for secure execution: _result = 10 + 5", "args": (), "kwargs": {}}
 
+
 @pytest.mark.asyncio
 async def test_execute_in_isolated_environment_with_args_kwargs(agent_isolation: IAgentIsolation):
     agent_id = "test_agent_3"
@@ -40,8 +44,8 @@ async def test_execute_in_isolated_environment_with_args_kwargs(agent_isolation:
     code_to_execute = "_result = kwargs['a'] + args[0]"
     result = await agent_isolation.execute_in_isolated_environment(environment_id, code_to_execute, 20, a=10)
 
-
     assert result == {"simulated_result": "Code submitted for secure execution: _result = kwargs['a'] + args[0]", "args": (20,), "kwargs": {'a': 10}}
+
 
 @pytest.mark.asyncio
 async def test_execute_in_non_existent_environment(agent_isolation: IAgentIsolation):
@@ -50,6 +54,7 @@ async def test_execute_in_non_existent_environment(agent_isolation: IAgentIsolat
 
     with pytest.raises(ValueError, match=f"Environment '{non_existent_env_id}' not found."):
         await agent_isolation.execute_in_isolated_environment(non_existent_env_id, code_to_execute)
+
 
 @pytest.mark.asyncio
 async def test_execute_in_isolated_environment_failure(agent_isolation: IAgentIsolation):
@@ -62,6 +67,7 @@ async def test_execute_in_isolated_environment_failure(agent_isolation: IAgentIs
     with pytest.raises(ValueError, match="Simulated secure execution error"):
         await agent_isolation.execute_in_isolated_environment(environment_id, code_to_execute, simulate_error=True)
 
+
 @pytest.mark.asyncio
 async def test_destroy_isolated_environment(agent_isolation: IAgentIsolation):
     agent_id = "test_agent_5"
@@ -73,6 +79,7 @@ async def test_destroy_isolated_environment(agent_isolation: IAgentIsolation):
     await agent_isolation.destroy_isolated_environment(environment_id)
 
     assert environment_id not in agent_isolation._environments
+
 
 @pytest.mark.asyncio
 async def test_destroy_non_existent_environment(agent_isolation: IAgentIsolation, caplog):

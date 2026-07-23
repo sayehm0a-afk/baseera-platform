@@ -24,9 +24,12 @@ from src.core.autonomous_intelligence_layer.agent_registry.agent import Agent
 from src.core.autonomous_intelligence_layer.execution_policies.execution_policies import ExecutionPolicies
 
 # Fixtures for real components
+
+
 @pytest.fixture
 def context_manager():
     return ContextManager()
+
 
 @pytest.fixture
 def agent_registry():
@@ -37,13 +40,16 @@ def agent_registry():
     ar.register_agent(mock_agent_instance)
     return ar
 
+
 @pytest.fixture
 def execution_policies():
     return ExecutionPolicies()
 
+
 @pytest.fixture
 def planner_ai():
     return PlannerAI()
+
 
 @pytest.fixture
 def memory_store():
@@ -55,6 +61,7 @@ def memory_store():
 def knowledge_graph():
     return KnowledgeGraph()
 
+
 @pytest.fixture
 def reflection_engine(memory_store, knowledge_graph):
     from unittest.mock import Mock, AsyncMock
@@ -64,14 +71,15 @@ def reflection_engine(memory_store, knowledge_graph):
     return ReflectionEngine(llm_client=mock_llm_client, memory_store=memory_store, knowledge_graph=knowledge_graph)
 
 
-
 @pytest.fixture
 def learning_engine():
     return LearningEngine()
 
+
 @pytest.fixture
 def error_recovery():
     return ErrorRecovery()
+
 
 @pytest.fixture
 def supervisor_ai(context_manager, planner_ai, agent_registry, memory_store, knowledge_graph, reflection_engine, learning_engine, error_recovery, execution_policies):
@@ -86,6 +94,7 @@ def supervisor_ai(context_manager, planner_ai, agent_registry, memory_store, kno
         error_recovery=error_recovery,
         execution_policies=execution_policies
     )
+
 
 @pytest.mark.asyncio
 async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, knowledge_graph, planner_ai, benchmark):
@@ -136,8 +145,6 @@ async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, k
         json.dumps(stored_context) # Should not raise an error
 
         # Verify memory persistence
-
-
 
         print(f"ID of MemoryType.WORKING before search: {id(MemoryType.WORKING)}")
         retrieved_memory = memory_store.search(query=goal, memory_types=[MemoryType.WORKING])

@@ -4,13 +4,16 @@ import asyncio
 from unittest.mock import AsyncMock
 from src.core.runtime.reliability_layer.compensation import Compensation, ICompensation
 
+
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.reliability_layer.compensation").setLevel(logging.INFO)
 
+
 @pytest.fixture
 def compensation_manager() -> Compensation:
     return Compensation()
+
 
 @pytest.mark.asyncio
 async def test_compensation_register_and_run_success(compensation_manager: Compensation):
@@ -23,12 +26,14 @@ async def test_compensation_register_and_run_success(compensation_manager: Compe
     mock_compensation_func.assert_called_once_with("arg1", kwarg1="val1")
     assert operation_id not in compensation_manager._compensations
 
+
 @pytest.mark.asyncio
 async def test_compensation_run_non_existent_operation(compensation_manager: Compensation, caplog):
     operation_id = "non_existent_op"
     await compensation_manager.run_compensation(operation_id)
 
     assert f"No compensation registered for operation {operation_id}." in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_compensation_run_failure(compensation_manager: Compensation, caplog):
@@ -42,6 +47,7 @@ async def test_compensation_run_failure(compensation_manager: Compensation, capl
     assert f"Compensation for operation {operation_id} failed: Compensation failed" in caplog.text
     assert operation_id not in compensation_manager._compensations
 
+
 @pytest.mark.asyncio
 async def test_compensation_clear_compensation(compensation_manager: Compensation):
     mock_compensation_func = AsyncMock()
@@ -53,12 +59,14 @@ async def test_compensation_clear_compensation(compensation_manager: Compensatio
     await compensation_manager.clear_compensation(operation_id)
     assert operation_id not in compensation_manager._compensations
 
+
 @pytest.mark.asyncio
 async def test_compensation_clear_non_existent_compensation(compensation_manager: Compensation, caplog):
     operation_id = "non_existent_clear"
     await compensation_manager.clear_compensation(operation_id)
 
     assert f"No compensation to clear for operation {operation_id}." in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_compensation_register_multiple_compensations(compensation_manager: Compensation):

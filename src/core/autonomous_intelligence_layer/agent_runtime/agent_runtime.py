@@ -4,10 +4,12 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+
 class IAgentRuntime(ABC):
     @abstractmethod
     async def execute_agent_task(self, agent_id: str, task_payload: Dict[str, Any]) -> Any:
         raise NotImplementedError
+
 
 class AgentRuntime(IAgentRuntime):
     def __init__(self):

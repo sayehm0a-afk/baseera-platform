@@ -4,17 +4,21 @@ import asyncio
 from unittest.mock import AsyncMock
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreaker, CircuitBreakerState, CircuitBreakerOpenError
 
+
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.reliability_layer.circuit_breaker").setLevel(logging.INFO)
+
 
 @pytest.fixture
 def circuit_breaker() -> CircuitBreaker:
     return CircuitBreaker(failure_threshold=3, recovery_timeout=0.1, expected_successes=1)
 
+
 @pytest.mark.asyncio
 async def test_circuit_breaker_initial_state_closed(circuit_breaker: CircuitBreaker):
     assert circuit_breaker.state == CircuitBreakerState.CLOSED
+
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_closed_to_open_on_failures(circuit_breaker: CircuitBreaker):
@@ -28,6 +32,7 @@ async def test_circuit_breaker_closed_to_open_on_failures(circuit_breaker: Circu
     with pytest.raises(ValueError):
         await circuit_breaker.execute(mock_func)
     assert circuit_breaker.state == CircuitBreakerState.OPEN
+
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_open_prevents_execution(circuit_breaker: CircuitBreaker):
@@ -43,6 +48,7 @@ async def test_circuit_breaker_open_prevents_execution(circuit_breaker: CircuitB
     with pytest.raises(CircuitBreakerOpenError):
         await circuit_breaker.execute(mock_func)
     assert mock_func.call_count == circuit_breaker._failure_threshold # Should not be called again
+
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_open_to_half_open_after_timeout(circuit_breaker: CircuitBreaker):
@@ -63,6 +69,7 @@ async def test_circuit_breaker_open_to_half_open_after_timeout(circuit_breaker: 
     assert result == "Success"
     assert circuit_breaker.state == CircuitBreakerState.CLOSED # Should immediately close on success
 
+
 @pytest.mark.asyncio
 async def test_circuit_breaker_half_open_to_open_on_failure(circuit_breaker: CircuitBreaker):
     mock_func = AsyncMock(side_effect=ValueError("Simulated failure"))
@@ -79,6 +86,7 @@ async def test_circuit_breaker_half_open_to_open_on_failure(circuit_breaker: Cir
     with pytest.raises(ValueError):
         await circuit_breaker.execute(mock_func)
     assert circuit_breaker.state == CircuitBreakerState.OPEN # Should go back to OPEN
+
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_half_open_to_closed_on_success(circuit_breaker: CircuitBreaker):
@@ -99,6 +107,7 @@ async def test_circuit_breaker_half_open_to_closed_on_success(circuit_breaker: C
     assert result == "Success"
     assert circuit_breaker.state == CircuitBreakerState.CLOSED # Should close
 
+
 @pytest.mark.asyncio
 async def test_circuit_breaker_closed_on_success_resets_failures(circuit_breaker: CircuitBreaker):
     mock_func = AsyncMock(side_effect=[ValueError("Fail 1"), ValueError("Fail 2"), "Success"])
@@ -116,6 +125,7 @@ async def test_circuit_breaker_closed_on_success_resets_failures(circuit_breaker
     assert result == "Success"
     assert circuit_breaker._failure_count == 0
     assert circuit_breaker.state == CircuitBreakerState.CLOSED
+
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_multiple_expected_successes_half_open_to_closed():

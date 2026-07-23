@@ -3,9 +3,11 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 from src.core.runtime.security_layer.sandbox import Sandbox, ISandbox
 
+
 @pytest.fixture
 def sandbox_instance() -> ISandbox:
     return Sandbox()
+
 
 @pytest.mark.asyncio
 async def test_create_sandbox(sandbox_instance: ISandbox):
@@ -20,6 +22,7 @@ async def test_create_sandbox(sandbox_instance: ISandbox):
     assert sandbox_instance._sandboxes[sandbox_id]["agent_id"] == agent_id
     assert sandbox_instance._sandboxes[sandbox_id]["config"] == config
 
+
 @pytest.mark.asyncio
 async def test_execute_in_sandbox_success(sandbox_instance: ISandbox):
     agent_id = "test_agent_2"
@@ -30,6 +33,7 @@ async def test_execute_in_sandbox_success(sandbox_instance: ISandbox):
     result = await sandbox_instance.execute_in_sandbox(sandbox_id, code_to_execute)
 
     assert result == {"simulated_result": "Code submitted for secure execution: _result = 20 + 10", "local_vars": None, "args": (), "kwargs": {}}
+
 
 @pytest.mark.asyncio
 async def test_execute_in_sandbox_with_args_kwargs(sandbox_instance: ISandbox):
@@ -42,6 +46,7 @@ async def test_execute_in_sandbox_with_args_kwargs(sandbox_instance: ISandbox):
 
     assert result == {"simulated_result": "Code submitted for secure execution: _result = kwargs['b'] * args[0]", "local_vars": None, "args": (5,), "kwargs": {'b': 6}}
 
+
 @pytest.mark.asyncio
 async def test_execute_in_non_existent_sandbox(sandbox_instance: ISandbox):
     non_existent_sandbox_id = "non_existent_sandbox"
@@ -49,6 +54,7 @@ async def test_execute_in_non_existent_sandbox(sandbox_instance: ISandbox):
 
     with pytest.raises(ValueError, match=f"Sandbox \'{non_existent_sandbox_id}\' not found."):
         await sandbox_instance.execute_in_sandbox(non_existent_sandbox_id, code_to_execute)
+
 
 @pytest.mark.asyncio
 async def test_execute_in_sandbox_failure(sandbox_instance: ISandbox):
@@ -61,6 +67,7 @@ async def test_execute_in_sandbox_failure(sandbox_instance: ISandbox):
     with pytest.raises(ValueError, match="Simulated secure execution error"):
         await sandbox_instance.execute_in_sandbox(sandbox_id, code_to_execute, simulate_error=True)
 
+
 @pytest.mark.asyncio
 async def test_destroy_sandbox(sandbox_instance: ISandbox):
     agent_id = "test_agent_5"
@@ -72,6 +79,7 @@ async def test_destroy_sandbox(sandbox_instance: ISandbox):
     await sandbox_instance.destroy_sandbox(sandbox_id)
 
     assert sandbox_id not in sandbox_instance._sandboxes
+
 
 @pytest.mark.asyncio
 async def test_destroy_non_existent_sandbox(sandbox_instance: ISandbox, caplog):

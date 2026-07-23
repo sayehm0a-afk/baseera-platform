@@ -33,6 +33,7 @@ app = FastAPI(
 kernel = None
 container = None
 
+
 class TaskRequest(BaseModel):
     """Task request model."""
     task_id: str
@@ -40,11 +41,13 @@ class TaskRequest(BaseModel):
     task_type: str
     data: dict
 
+
 class TaskResponse(BaseModel):
     """Task response model."""
     status: str
     message: str
     task_id: str
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -105,6 +108,7 @@ async def startup_event():
         logger.error(f"Error during startup: {e}", exc_info=True)
         raise
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Shutdown event handler."""
@@ -124,10 +128,12 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"Error during shutdown: {e}", exc_info=True)
 
+
 @app.get("/health/live")
 async def liveness_check():
     """Liveness check endpoint."""
     return {"status": "healthy"}
+
 
 @app.get("/health/ready")
 async def readiness_check():
@@ -146,6 +152,7 @@ async def readiness_check():
     except Exception as e:
         logger.error(f"Readiness check error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
+
 
 @app.get("/metrics")
 async def metrics():
@@ -167,6 +174,7 @@ async def get_stats():
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/tasks", response_model=TaskResponse)
 async def submit_task(task_request: TaskRequest):
@@ -199,6 +207,7 @@ async def submit_task(task_request: TaskRequest):
         logger.error(f"Error submitting task: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/tasks/{task_id}")
 async def get_task_status(task_id: str):
     """Get task status."""
@@ -218,6 +227,7 @@ async def get_task_status(task_id: str):
     except Exception as e:
         logger.error(f"Error getting task status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/agents/{agent_id}")
 async def get_agent_status(agent_id: str):

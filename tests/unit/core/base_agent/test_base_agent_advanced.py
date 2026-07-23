@@ -7,20 +7,25 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from src.core.base_agent.base_agent import BaseAgent
 
 # Mock logging to prevent console output during tests
+
+
 @pytest.fixture(autouse=True)
 def no_logging(caplog):
     caplog.set_level(logging.CRITICAL)
 
 # --- Edge Case Tests ---
 
+
 def test_base_agent_with_very_long_name():
     long_name = "A" * 1000
     agent = BaseAgent(name=long_name)
     assert agent.name == long_name
 
+
 def test_base_agent_with_empty_description():
     agent = BaseAgent(description="")
     assert agent.description == ""
+
 
 def test_base_agent_with_none_id():
     agent = BaseAgent(agent_id=None)
@@ -29,16 +34,19 @@ def test_base_agent_with_none_id():
 
 # --- Failure Tests ---
 
+
 def test_base_agent_pause_from_initialized():
     agent = BaseAgent()
     assert agent.pause() is False
     assert agent.status == "initialized"
+
 
 def test_base_agent_pause_from_terminated():
     agent = BaseAgent()
     agent.terminate()
     assert agent.pause() is False
     assert agent.status == "terminated"
+
 
 @pytest.mark.asyncio
 async def test_base_agent_activate_from_terminated():
@@ -47,6 +55,7 @@ async def test_base_agent_activate_from_terminated():
     assert await agent.activate() is False
     assert agent.status == "terminated"
 
+
 @pytest.mark.asyncio
 async def test_base_agent_process_task_when_paused():
     agent = BaseAgent()
@@ -54,6 +63,7 @@ async def test_base_agent_process_task_when_paused():
     agent.pause()
     with pytest.raises(RuntimeError, match="Agent not active"):
         agent.process_task({"task_id": "1"})
+
 
 @pytest.mark.asyncio
 async def test_base_agent_call_tool_none_name():
@@ -66,6 +76,7 @@ async def test_base_agent_call_tool_none_name():
         await agent._call_tool(None)
 
 # --- Concurrency Tests ---
+
 
 def test_base_agent_concurrent_activations():
     agent = BaseAgent()
@@ -88,6 +99,7 @@ def test_base_agent_concurrent_activations():
     # In our current implementation, activate() returns False if already 'active'
     assert results.count(True) >= 1
     assert agent.status == "active"
+
 
 @pytest.mark.asyncio
 async def test_base_agent_concurrent_status_changes():
@@ -112,10 +124,12 @@ async def test_base_agent_concurrent_status_changes():
 
 # --- Stress Tests ---
 
+
 def test_base_agent_mass_initialization():
     agents = [BaseAgent(name=f"Agent_{i}") for i in range(1000)]
     assert len(agents) == 1000
     assert agents[999].name == "Agent_999"
+
 
 @pytest.mark.asyncio
 async def test_base_agent_rapid_status_cycling():
@@ -124,6 +138,7 @@ async def test_base_agent_rapid_status_cycling():
         await agent.activate()
         agent.pause()
     assert agent.status == "paused"
+
 
 @pytest.mark.asyncio
 async def test_base_agent_memory_stress():
@@ -136,6 +151,7 @@ async def test_base_agent_memory_stress():
 
 # --- Additional Coverage Tests ---
 
+
 @pytest.mark.asyncio
 async def test_base_agent_init_internal_methods_coverage():
     # Directly test the placeholder internal methods for coverage
@@ -146,6 +162,7 @@ async def test_base_agent_init_internal_methods_coverage():
     await agent._initialize_llm_client()
     # These should just run without error as they are placeholders
     assert True
+
 
 def test_base_agent_main_block_coverage():
     # To cover the 'if __name__ == "__main__":' block, we can't easily run it via pytest

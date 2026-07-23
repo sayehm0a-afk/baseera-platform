@@ -3,15 +3,18 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 from src.core.runtime.messaging_bus import MessagingBus
 
+
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.messaging_bus").setLevel(logging.INFO)
     logging.getLogger("src.core.runtime.message_dispatcher").setLevel(logging.INFO)
     logging.getLogger("src.core.runtime.message_router").setLevel(logging.INFO)
 
+
 @pytest.fixture
 def messaging_bus():
     return MessagingBus()
+
 
 @pytest.mark.asyncio
 async def test_messaging_bus_publish_event(messaging_bus):
@@ -24,6 +27,7 @@ async def test_messaging_bus_publish_event(messaging_bus):
     handler1.assert_called_once_with(payload)
     handler2.assert_called_once_with(payload)
 
+
 @pytest.mark.asyncio
 async def test_messaging_bus_publish_event_no_handlers(messaging_bus, caplog):
     payload = {"data": "test"}
@@ -31,6 +35,7 @@ async def test_messaging_bus_publish_event_no_handlers(messaging_bus, caplog):
     assert "Publishing event" in caplog.text
     assert "non_existent_event" in caplog.text
     assert "test" in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_messaging_bus_publish_event_handler_raises_exception(messaging_bus, caplog):
@@ -43,6 +48,7 @@ async def test_messaging_bus_publish_event_handler_raises_exception(messaging_bu
     assert "error_event" in caplog.text
     assert "Handler error" in caplog.text
 
+
 @pytest.mark.asyncio
 async def test_messaging_bus_send_command(messaging_bus):
     handler = AsyncMock(return_value="Command Result")
@@ -52,11 +58,13 @@ async def test_messaging_bus_send_command(messaging_bus):
     handler.assert_called_once_with(payload)
     assert result == "Command Result"
 
+
 @pytest.mark.asyncio
 async def test_messaging_bus_send_command_no_handler(messaging_bus):
     payload = {"action": "do_something"}
     with pytest.raises(ValueError, match="No handler registered for command non_existent_command"):
         await messaging_bus.send_command("non_existent_command", payload)
+
 
 @pytest.mark.asyncio
 async def test_messaging_bus_send_command_handler_raises_exception(messaging_bus, caplog):
@@ -70,6 +78,7 @@ async def test_messaging_bus_send_command_handler_raises_exception(messaging_bus
     assert "error_command" in caplog.text
     assert "Command processing error" in caplog.text
 
+
 @pytest.mark.asyncio
 async def test_messaging_bus_register_event_handler(messaging_bus, caplog):
     handler = AsyncMock()
@@ -78,6 +87,7 @@ async def test_messaging_bus_register_event_handler(messaging_bus, caplog):
     assert "new_event" in caplog.text
     assert handler in messaging_bus._event_handlers["new_event"]
 
+
 @pytest.mark.asyncio
 async def test_messaging_bus_register_command_handler(messaging_bus, caplog):
     handler = AsyncMock()
@@ -85,6 +95,7 @@ async def test_messaging_bus_register_command_handler(messaging_bus, caplog):
     assert "Registered command handler for" in caplog.text
     assert "new_command" in caplog.text
     assert messaging_bus._command_handlers["new_command"] == handler
+
 
 @pytest.mark.asyncio
 async def test_messaging_bus_register_command_handler_overwrite(messaging_bus, caplog):

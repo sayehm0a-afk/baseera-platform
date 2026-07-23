@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 from src.core.autonomous_intelligence_layer.context_manager.context_manager import ContextManager
 from src.core.autonomous_intelligence_layer.context_manager.context_store import ContextStore
 
+
 class TestContextManager:
     @pytest.fixture
     def context_store_mock(self):

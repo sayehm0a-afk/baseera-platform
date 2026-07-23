@@ -4,6 +4,7 @@ from typing import Any, Dict, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
 
+
 class IMessageBus(ABC):
     @abstractmethod
     async def publish(self, topic: str, message: Dict[str, Any]) -> None:
@@ -12,6 +13,7 @@ class IMessageBus(ABC):
     @abstractmethod
     async def subscribe(self, topic: str, handler: Callable[[Dict[str, Any]], Awaitable[None]]) -> None:
         raise NotImplementedError
+
 
 class InMemoryMessageBus(IMessageBus):
     def __init__(self):

@@ -8,6 +8,7 @@ from redis.connection import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
+
 class RedisMessageBus:
     """Production-grade message bus using Redis."""
 

@@ -6,15 +6,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 @pytest.fixture
 def workflow_executor() -> WorkflowExecutor:
     """Fixture لإنشاء مثيل WorkflowExecutor."""
     return WorkflowExecutor()
 
+
 @pytest.mark.asyncio
 async def test_workflow_executor_instance(workflow_executor: WorkflowExecutor):
     """اختبار أن WorkflowExecutor هو مثيل لـ IWorkflowExecutor."""
     assert isinstance(workflow_executor, IWorkflowExecutor)
+
 
 @pytest.mark.asyncio
 async def test_workflow_executor_execute_workflow_success(workflow_executor: WorkflowExecutor, caplog):
@@ -29,6 +32,7 @@ async def test_workflow_executor_execute_workflow_success(workflow_executor: Wor
     assert workflow_executor._active_workflows[workflow_id]["status"] == "RUNNING"
     assert "Workflow \'test_workflow_1\' started successfully." in caplog.text
 
+
 @pytest.mark.asyncio
 async def test_workflow_executor_pause_workflow_success(workflow_executor: WorkflowExecutor, caplog):
     """اختبار إيقاف تدفق عمل مؤقتاً بنجاح."""
@@ -41,6 +45,7 @@ async def test_workflow_executor_pause_workflow_success(workflow_executor: Workf
     assert workflow_executor._active_workflows[workflow_id]["status"] == "PAUSED"
     assert "Workflow \'test_workflow_2\' paused." in caplog.text
 
+
 @pytest.mark.asyncio
 async def test_workflow_executor_pause_workflow_not_found(workflow_executor: WorkflowExecutor, caplog):
     """اختبار محاولة إيقاف تدفق عمل غير موجود."""
@@ -49,6 +54,7 @@ async def test_workflow_executor_pause_workflow_not_found(workflow_executor: Wor
     await workflow_executor.pause_workflow(workflow_id)
 
     assert "Workflow \'non_existent_workflow\' not found or not active. Cannot pause." in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_workflow_executor_resume_workflow_success(workflow_executor: WorkflowExecutor, caplog):
@@ -63,6 +69,7 @@ async def test_workflow_executor_resume_workflow_success(workflow_executor: Work
     assert workflow_executor._active_workflows[workflow_id]["status"] == "RUNNING"
     assert "Workflow \'test_workflow_3\' resumed." in caplog.text
 
+
 @pytest.mark.asyncio
 async def test_workflow_executor_resume_workflow_not_found(workflow_executor: WorkflowExecutor, caplog):
     """اختبار محاولة استئناف تدفق عمل غير موجود."""
@@ -71,6 +78,7 @@ async def test_workflow_executor_resume_workflow_not_found(workflow_executor: Wo
     await workflow_executor.resume_workflow(workflow_id)
 
     assert "Workflow \'non_existent_workflow_resume\' not found or not paused. Cannot resume." in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_workflow_executor_terminate_workflow_success(workflow_executor: WorkflowExecutor, caplog):
@@ -83,6 +91,7 @@ async def test_workflow_executor_terminate_workflow_success(workflow_executor: W
 
     assert workflow_id not in workflow_executor._active_workflows
     assert "Workflow \'test_workflow_4\' terminated." in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_workflow_executor_terminate_workflow_not_found(workflow_executor: WorkflowExecutor, caplog):

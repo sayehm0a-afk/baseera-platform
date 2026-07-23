@@ -7,6 +7,7 @@ from redis import Redis
 
 logger = logging.getLogger(__name__)
 
+
 class RealTaskQueue:
     """Production-grade task queue using Redis."""
 

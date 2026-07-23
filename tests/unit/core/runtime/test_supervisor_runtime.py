@@ -6,10 +6,12 @@ from src.core.runtime.supervisor_runtime import SupervisorRuntime, ISupervisorRu
 
 logger = logging.getLogger(__name__)
 
+
 @pytest.fixture
 def supervisor_runtime() -> SupervisorRuntime:
     """Fixture لتوفير مثيل SupervisorRuntime."""
     return SupervisorRuntime()
+
 
 @pytest.mark.asyncio
 async def test_supervisor_runtime_initial_state(supervisor_runtime: SupervisorRuntime):
@@ -20,6 +22,7 @@ async def test_supervisor_runtime_initial_state(supervisor_runtime: SupervisorRu
     assert status["active_agents"] == 0
     assert status["pending_tasks"] == 0
 
+
 @pytest.mark.asyncio
 async def test_supervisor_runtime_start_supervision(supervisor_runtime: SupervisorRuntime):
     """اختبار بدء الإشراف في SupervisorRuntime."""
@@ -28,6 +31,7 @@ async def test_supervisor_runtime_start_supervision(supervisor_runtime: Supervis
     status = await supervisor_runtime.get_supervised_status()
     assert status["supervising"] is True
     assert status["config"] == config
+
 
 @pytest.mark.asyncio
 async def test_supervisor_runtime_start_supervision_already_supervising(supervisor_runtime: SupervisorRuntime, caplog):
@@ -39,6 +43,7 @@ async def test_supervisor_runtime_start_supervision_already_supervising(supervis
     status = await supervisor_runtime.get_supervised_status()
     assert status["supervising"] is True
 
+
 @pytest.mark.asyncio
 async def test_supervisor_runtime_stop_supervision(supervisor_runtime: SupervisorRuntime):
     """اختبار إيقاف الإشراف في SupervisorRuntime."""
@@ -46,6 +51,7 @@ async def test_supervisor_runtime_stop_supervision(supervisor_runtime: Superviso
     await supervisor_runtime.stop_supervision()
     status = await supervisor_runtime.get_supervised_status()
     assert status["supervising"] is False
+
 
 @pytest.mark.asyncio
 async def test_supervisor_runtime_stop_supervision_not_supervising(supervisor_runtime: SupervisorRuntime, caplog):
@@ -56,6 +62,7 @@ async def test_supervisor_runtime_stop_supervision_not_supervising(supervisor_ru
     status = await supervisor_runtime.get_supervised_status()
     assert status["supervising"] is False
 
+
 @pytest.mark.asyncio
 async def test_supervisor_runtime_get_supervised_status(supervisor_runtime: SupervisorRuntime):
     """اختبار الحصول على حالة الإشراف في SupervisorRuntime."""
@@ -65,6 +72,7 @@ async def test_supervisor_runtime_get_supervised_status(supervisor_runtime: Supe
     assert "config" in status
     assert "active_agents" in status
     assert "pending_tasks" in status
+
 
 @pytest.mark.asyncio
 async def test_isupervisor_runtime_abstract_methods():

@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+
 class DependencyContainer:
     """Production-grade dependency injection container."""
 
@@ -59,12 +60,15 @@ class DependencyContainer:
         self._singletons.clear()
         logger.debug("Dependency container cleared")
 
+
 # Global dependency container
 _container = DependencyContainer()
+
 
 def get_container() -> DependencyContainer:
     """Get the global dependency container."""
     return _container
+
 
 def setup_production_dependencies() -> DependencyContainer:
     """Setup production dependencies."""

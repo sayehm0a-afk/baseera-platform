@@ -3,15 +3,18 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 from src.core.runtime.message_dispatcher import MessageDispatcher
 
+
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.messaging_bus").setLevel(logging.INFO)
     logging.getLogger("src.core.runtime.message_dispatcher").setLevel(logging.INFO)
     logging.getLogger("src.core.runtime.message_router").setLevel(logging.INFO)
 
+
 @pytest.fixture
 def message_dispatcher():
     return MessageDispatcher()
+
 
 @pytest.mark.asyncio
 async def test_message_dispatcher_dispatch(message_dispatcher):
@@ -22,11 +25,13 @@ async def test_message_dispatcher_dispatch(message_dispatcher):
     handler.assert_called_once_with(payload)
     assert result == "Dispatch Result"
 
+
 @pytest.mark.asyncio
 async def test_message_dispatcher_dispatch_no_handler(message_dispatcher):
     payload = {"data": "dispatch_test"}
     with pytest.raises(ValueError, match="No handler registered for message non_existent_message"):
         await message_dispatcher.dispatch("non_existent_message", payload)
+
 
 @pytest.mark.asyncio
 async def test_message_dispatcher_dispatch_handler_raises_exception(message_dispatcher, caplog):
@@ -40,6 +45,7 @@ async def test_message_dispatcher_dispatch_handler_raises_exception(message_disp
     assert "error_message" in caplog.text
     assert "Dispatch error" in caplog.text
 
+
 @pytest.mark.asyncio
 async def test_message_dispatcher_register_handler(message_dispatcher, caplog):
     handler = AsyncMock()
@@ -47,6 +53,7 @@ async def test_message_dispatcher_register_handler(message_dispatcher, caplog):
     assert "Registered handler for message" in caplog.text
     assert "new_message" in caplog.text
     assert message_dispatcher._handlers["new_message"] == handler
+
 
 @pytest.mark.asyncio
 async def test_message_dispatcher_register_handler_overwrite(message_dispatcher, caplog):

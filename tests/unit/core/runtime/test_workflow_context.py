@@ -6,15 +6,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 @pytest.fixture
 def workflow_context() -> WorkflowContext:
     """Fixture لإنشاء مثيل WorkflowContext."""
     return WorkflowContext()
 
+
 @pytest.mark.asyncio
 async def test_workflow_context_instance(workflow_context: WorkflowContext):
     """اختبار أن WorkflowContext هو مثيل لـ IWorkflowContext."""
     assert isinstance(workflow_context, IWorkflowContext)
+
 
 @pytest.mark.asyncio
 async def test_workflow_context_initial_empty_context(workflow_context: WorkflowContext):
@@ -22,6 +25,7 @@ async def test_workflow_context_initial_empty_context(workflow_context: Workflow
     workflow_id = "new_workflow"
     context = await workflow_context.get_context(workflow_id)
     assert context == {}
+
 
 @pytest.mark.asyncio
 async def test_workflow_context_update_context_new_workflow(workflow_context: WorkflowContext, caplog):
@@ -34,6 +38,7 @@ async def test_workflow_context_update_context_new_workflow(workflow_context: Wo
     context = await workflow_context.get_context(workflow_id)
     assert context == updates
     assert "Workflow \"test_workflow_1\" context updated with: {\'user_id\': \'123\', \'status\': \'STARTED\'}" in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_workflow_context_update_context_existing_workflow(workflow_context: WorkflowContext, caplog):
@@ -50,6 +55,7 @@ async def test_workflow_context_update_context_existing_workflow(workflow_contex
     context = await workflow_context.get_context(workflow_id)
     assert context == expected_context
     assert "Workflow \"test_workflow_2\" context updated with: {\'step\': 2, \'result\': \'success\'}" in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_workflow_context_get_context_existing_workflow(workflow_context: WorkflowContext):

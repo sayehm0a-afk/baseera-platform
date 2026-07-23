@@ -5,9 +5,11 @@ from src.core.autonomous_intelligence_layer.resource_optimizer.resource_optimize
     ResourceAllocation, ResourceConstraint, OptimizationResult
 )
 
+
 @pytest.fixture
 def optimizer():
     return ResourceOptimizer()
+
 
 @pytest.fixture
 def sample_config():
@@ -19,6 +21,7 @@ def sample_config():
         efficiency_threshold=0.8
     )
 
+
 def test_resource_optimizer_init(optimizer, sample_config):
     assert isinstance(optimizer.config, ResourceOptimizerConfig)
     assert not optimizer.allocations
@@ -28,6 +31,7 @@ def test_resource_optimizer_init(optimizer, sample_config):
     custom_optimizer = ResourceOptimizer(config=sample_config)
     assert custom_optimizer.config == sample_config
 
+
 def test_add_constraint(optimizer):
     constraint = optimizer.add_constraint(
         "cpu_limit", ResourceType.CPU, 100.0, 10.0, 0.9
@@ -35,6 +39,7 @@ def test_add_constraint(optimizer):
     assert isinstance(constraint, ResourceConstraint)
     assert constraint.constraint_id == "cpu_limit"
     assert optimizer.constraints["cpu_limit"] == constraint
+
 
 def test_allocate_resource_success(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 100.0, 10.0)
@@ -45,11 +50,13 @@ def test_allocate_resource_success(optimizer):
     assert allocation.allocated_amount == 5.0
     assert optimizer.allocations["alloc1"] == allocation
 
+
 def test_allocate_resource_no_constraint(optimizer):
     allocation = optimizer.allocate_resource(
         "alloc1", "agent1", ResourceType.CPU, 5.0
     )
     assert allocation is None
+
 
 def test_allocate_resource_exceeds_per_agent_limit(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 100.0, 10.0)
@@ -58,6 +65,7 @@ def test_allocate_resource_exceeds_per_agent_limit(optimizer):
     )
     assert allocation is None
 
+
 def test_allocate_resource_exceeds_total_limit(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 10.0, 10.0)
     optimizer.allocate_resource("alloc1", "agent1", ResourceType.CPU, 7.0)
@@ -65,6 +73,7 @@ def test_allocate_resource_exceeds_total_limit(optimizer):
         "alloc2", "agent2", ResourceType.CPU, 5.0
     )
     assert allocation is None
+
 
 def test_update_usage(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 100.0, 10.0)
@@ -76,9 +85,11 @@ def test_update_usage(optimizer):
     assert updated is True
     assert optimizer.allocations["alloc1"].used_amount == 3.0
 
+
 def test_update_usage_not_found(optimizer):
     updated = optimizer.update_usage("non_existent_alloc", 3.0)
     assert updated is False
+
 
 def test_optimize_allocation_greedy(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 100.0, 10.0)
@@ -97,9 +108,11 @@ def test_optimize_allocation_greedy(optimizer):
     assert alloc1_optimized.allocated_amount > 5.0
     assert alloc2_optimized.allocated_amount < 5.0
 
+
 def test_optimize_allocation_no_agents(optimizer):
     result = optimizer.optimize_allocation("opt1", [])
     assert result is None
+
 
 def test_calculate_efficiency(optimizer):
     alloc1 = ResourceAllocation("id1", "agent1", ResourceType.CPU, 10.0, 8.0)
@@ -110,9 +123,11 @@ def test_calculate_efficiency(optimizer):
     # (0.8 + 0.25 + 0.0) / 3 = 0.35
     assert efficiency == pytest.approx((0.8 + 0.25 + 0.0) / 3)
 
+
 def test_calculate_efficiency_empty_allocations(optimizer):
     efficiency = optimizer._calculate_efficiency([])
     assert efficiency == 0.0
+
 
 def test_predict_resource_needs(optimizer):
     historical_data = {
@@ -125,6 +140,7 @@ def test_predict_resource_needs(optimizer):
     assert predictions[ResourceType.CPU] == pytest.approx(14.4)
     assert predictions[ResourceType.MEMORY] == pytest.approx(126.0)
 
+
 def test_predict_resource_needs_empty_history(optimizer):
     historical_data = {
         ResourceType.CPU: [],
@@ -134,12 +150,14 @@ def test_predict_resource_needs_empty_history(optimizer):
     assert ResourceType.CPU not in predictions
     assert predictions[ResourceType.MEMORY] == pytest.approx(120.0) # 100 * 1.2
 
+
 def test_get_allocation(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 100.0, 10.0)
     alloc = optimizer.allocate_resource("alloc1", "agent1", ResourceType.CPU, 5.0)
     retrieved_alloc = optimizer.get_allocation("alloc1")
     assert retrieved_alloc == alloc
     assert optimizer.get_allocation("non_existent") is None
+
 
 def test_get_agent_allocations(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 100.0, 10.0)
@@ -152,6 +170,7 @@ def test_get_agent_allocations(optimizer):
     assert len(agent1_allocs) == 2
     assert alloc1 in agent1_allocs
     assert alloc3 in agent1_allocs
+
 
 def test_get_optimization_history(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 100.0, 10.0)

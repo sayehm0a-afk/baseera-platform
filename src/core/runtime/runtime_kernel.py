@@ -152,6 +152,7 @@ class RuntimeKernel(IRuntimeKernel):
         await self._task_queue.start()
         logger.info("Task queue started within RuntimeKernel.")
         # تهيئة وبدء تشغيل العامل
+
         async def agent_worker_handler(task_data: Dict[str, Any]):
             logger.info(f"[RuntimeKernel] Agent worker received task: {task_data}")
             task_payload = task_data.get("payload", {})

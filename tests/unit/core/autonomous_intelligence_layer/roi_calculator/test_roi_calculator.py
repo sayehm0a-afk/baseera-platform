@@ -5,9 +5,11 @@ from src.core.autonomous_intelligence_layer.roi_calculator.roi_calculator import
     ROICalculator, ROICalculatorConfig, Investment, Return, ROIAnalysis, InvestmentType
 )
 
+
 @pytest.fixture
 def roi_calculator():
     return ROICalculator()
+
 
 @pytest.fixture
 def sample_config():
@@ -16,6 +18,7 @@ def sample_config():
         enable_payback_analysis=True,
         max_investments=10
     )
+
 
 def test_roi_calculator_init(roi_calculator, sample_config):
     assert isinstance(roi_calculator.config, ROICalculatorConfig)
@@ -26,6 +29,7 @@ def test_roi_calculator_init(roi_calculator, sample_config):
     custom_calculator = ROICalculator(config=sample_config)
     assert custom_calculator.config == sample_config
 
+
 def test_record_investment_success(roi_calculator):
     investment = roi_calculator.record_investment(
         "inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure"
@@ -33,6 +37,7 @@ def test_record_investment_success(roi_calculator):
     assert isinstance(investment, Investment)
     assert investment.investment_id == "inv1"
     assert roi_calculator.get_investment("inv1") == investment
+
 
 def test_record_investment_limit_reached(roi_calculator, sample_config):
     custom_calculator = ROICalculator(config=sample_config)
@@ -44,6 +49,7 @@ def test_record_investment_limit_reached(roi_calculator, sample_config):
     )
     assert investment is None
 
+
 def test_record_return_success(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure")
     ret = roi_calculator.record_return("ret1", "inv1", 200.0, "Savings from efficiency")
@@ -51,9 +57,11 @@ def test_record_return_success(roi_calculator):
     assert ret.return_id == "ret1"
     assert roi_calculator.get_return("ret1") == ret
 
+
 def test_record_return_investment_not_found(roi_calculator):
     ret = roi_calculator.record_return("ret1", "non_existent_inv", 200.0, "Savings")
     assert ret is None
+
 
 def test_calculate_roi_positive(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure")
@@ -67,6 +75,7 @@ def test_calculate_roi_positive(roi_calculator):
     assert analysis.roi_status == "POSITIVE"
     assert analysis.payback_period_days is not None
 
+
 def test_calculate_roi_negative(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure")
     roi_calculator.record_return("ret1", "inv1", 200.0, "Savings 1")
@@ -77,6 +86,7 @@ def test_calculate_roi_negative(roi_calculator):
     assert analysis.net_profit == -800.0
     assert analysis.roi_status == "NEGATIVE"
     assert analysis.payback_period_days is None
+
 
 def test_calculate_roi_break_even(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure")
@@ -89,6 +99,7 @@ def test_calculate_roi_break_even(roi_calculator):
     assert analysis.roi_status == "BREAK_EVEN"
     assert analysis.payback_period_days is not None
 
+
 def test_calculate_roi_no_returns(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure")
 
@@ -99,9 +110,11 @@ def test_calculate_roi_no_returns(roi_calculator):
     assert analysis.roi_status == "NEGATIVE"
     assert analysis.payback_period_days is None
 
+
 def test_calculate_roi_investment_not_found(roi_calculator):
     analysis = roi_calculator.calculate_roi("analysis1", "non_existent_inv")
     assert analysis is None
+
 
 def test_payback_period_calculation(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure")
@@ -115,6 +128,7 @@ def test_payback_period_calculation(roi_calculator):
     analysis = roi_calculator.calculate_roi("analysis1", "inv1")
     assert analysis.payback_period_days == pytest.approx(0) # Because the last return makes it break even on the same day
 
+
 def test_payback_period_disabled(roi_calculator):
     roi_calculator.config.enable_payback_analysis = False
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure")
@@ -122,10 +136,12 @@ def test_payback_period_disabled(roi_calculator):
     analysis = roi_calculator.calculate_roi("analysis1", "inv1")
     assert analysis.payback_period_days is None
 
+
 def test_get_investment(roi_calculator):
     inv = roi_calculator.record_investment("inv1", InvestmentType.TOOL, 500.0, "Tool A")
     assert roi_calculator.get_investment("inv1") == inv
     assert roi_calculator.get_investment("non_existent") is None
+
 
 def test_get_return(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.TOOL, 500.0, "Tool A")
@@ -133,12 +149,14 @@ def test_get_return(roi_calculator):
     assert roi_calculator.get_return("ret1") == ret
     assert roi_calculator.get_return("non_existent") is None
 
+
 def test_get_analysis(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure")
     roi_calculator.record_return("ret1", "inv1", 1200.0, "Savings")
     analysis = roi_calculator.calculate_roi("analysis1", "inv1")
     assert roi_calculator.get_analysis("analysis1") == analysis
     assert roi_calculator.get_analysis("non_existent") is None
+
 
 def test_get_investment_returns(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "New server infrastructure")
@@ -150,6 +168,7 @@ def test_get_investment_returns(roi_calculator):
     assert len(investment_returns) == 2
     assert ret1 in investment_returns
     assert ret2 in investment_returns
+
 
 def test_compare_investments(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "Infra")
@@ -165,6 +184,7 @@ def test_compare_investments(roi_calculator):
     assert comparison["inv2"]["roi_percentage"] == pytest.approx(-20.0)
     assert "inv3" not in comparison
 
+
 def test_get_best_roi_investment(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "Infra")
     roi_calculator.record_return("ret1", "inv1", 1500.0, "R1") # ROI 50%
@@ -177,6 +197,7 @@ def test_get_best_roi_investment(roi_calculator):
 
     best_inv = roi_calculator.get_best_roi_investment()
     assert best_inv in ["inv1", "inv2"] # Both have 50% ROI, order might vary
+
 
 def test_get_best_roi_investment_empty(roi_calculator):
     best_inv = roi_calculator.get_best_roi_investment()

@@ -8,6 +8,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+
 class RealWorker:
     """Production-grade worker for processing tasks."""
 

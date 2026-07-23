@@ -7,6 +7,7 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+
 class AgentStatus(Enum):
     """Agent status enumeration."""
     IDLE = "idle"
@@ -14,6 +15,7 @@ class AgentStatus(Enum):
     PAUSED = "paused"
     FAILED = "failed"
     TERMINATED = "terminated"
+
 
 class RealAgentRuntime:
     """Production-grade agent runtime for managing agent lifecycle."""

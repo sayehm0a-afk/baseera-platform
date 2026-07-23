@@ -9,9 +9,11 @@ from src.core.runtime.task_queue.priority_queue import IPriorityQueue
 from src.core.runtime.task_queue.retry_policy import IRetryPolicy
 from src.core.runtime.task_queue.dead_letter_queue import IDeadLetterQueue
 
+
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.task_queue.task_queue").setLevel(logging.INFO)
+
 
 @pytest.fixture
 def mock_scheduler() -> AsyncMock:
@@ -19,11 +21,13 @@ def mock_scheduler() -> AsyncMock:
     mock.get_scheduled_tasks.return_value = []
     return mock
 
+
 @pytest.fixture
 def mock_priority_queue() -> AsyncMock:
     mock = AsyncMock(spec=IPriorityQueue)
     mock.empty.return_value = True
     return mock
+
 
 @pytest.fixture
 def mock_retry_policy() -> AsyncMock:
@@ -31,10 +35,12 @@ def mock_retry_policy() -> AsyncMock:
     mock.should_retry.return_value = False
     return mock
 
+
 @pytest.fixture
 def mock_dead_letter_queue() -> AsyncMock:
     mock = AsyncMock(spec=IDeadLetterQueue)
     return mock
+
 
 @pytest.fixture
 def task_queue(mock_scheduler, mock_priority_queue, mock_retry_policy, mock_dead_letter_queue) -> TaskQueue:
@@ -44,6 +50,7 @@ def task_queue(mock_scheduler, mock_priority_queue, mock_retry_policy, mock_dead
         retry_policy=mock_retry_policy,
         dead_letter_queue=mock_dead_letter_queue
     )
+
 
 @pytest.mark.asyncio
 async def test_task_queue_enqueue_task(task_queue: TaskQueue, mock_scheduler: AsyncMock):
@@ -61,6 +68,7 @@ async def test_task_queue_enqueue_task(task_queue: TaskQueue, mock_scheduler: As
     )
     assert task_queue._handlers[task_id] == handler
 
+
 @pytest.mark.asyncio
 async def test_task_queue_start_and_stop(task_queue: TaskQueue):
     await task_queue.start()
@@ -70,6 +78,7 @@ async def test_task_queue_start_and_stop(task_queue: TaskQueue):
     await task_queue.stop()
     assert task_queue._running is False
     assert task_queue._processing_task.done() is True
+
 
 @pytest.mark.asyncio
 async def test_task_queue_process_tasks_from_scheduler_to_priority_queue(task_queue: TaskQueue, mock_scheduler: AsyncMock, mock_priority_queue: AsyncMock):
@@ -95,6 +104,7 @@ async def test_task_queue_process_tasks_from_scheduler_to_priority_queue(task_qu
     mock_scheduler.get_scheduled_tasks.assert_called()
     mock_scheduler.cancel_task.assert_called_once_with(task_id)
     mock_priority_queue.put.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_task_queue_execute_task_success(task_queue: TaskQueue, mock_scheduler: AsyncMock, mock_priority_queue: AsyncMock):
@@ -126,6 +136,7 @@ async def test_task_queue_execute_task_success(task_queue: TaskQueue, mock_sched
     handler.assert_called_once_with(task_payload)
     mock_scheduler.schedule_task.assert_called_once() # For initial enqueue
     mock_priority_queue.get.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_task_queue_execute_task_failure_retry(task_queue: TaskQueue, mock_scheduler: AsyncMock, mock_priority_queue: AsyncMock, mock_retry_policy: AsyncMock):
@@ -167,6 +178,7 @@ async def test_task_queue_execute_task_failure_retry(task_queue: TaskQueue, mock
         0
     )
 
+
 @pytest.mark.asyncio
 async def test_task_queue_execute_task_failure_dlq(task_queue: TaskQueue, mock_scheduler: AsyncMock, mock_priority_queue: AsyncMock, mock_retry_policy: AsyncMock, mock_dead_letter_queue: AsyncMock):
     task_id = "exec_task_dlq"
@@ -199,6 +211,7 @@ async def test_task_queue_execute_task_failure_dlq(task_queue: TaskQueue, mock_s
     mock_retry_policy.should_retry.assert_called_once()
     mock_dead_letter_queue.enqueue.assert_called_once_with(task_id, task_payload, "Simulated error")
 
+
 @pytest.mark.asyncio
 async def test_task_queue_handler_not_found(task_queue: TaskQueue, mock_scheduler: AsyncMock, mock_priority_queue: AsyncMock, mock_dead_letter_queue: AsyncMock, caplog):
     task_id = "no_handler_task"
@@ -225,10 +238,12 @@ async def test_task_queue_handler_not_found(task_queue: TaskQueue, mock_schedule
     mock_dead_letter_queue.enqueue.assert_called_once_with(task_id, task_payload, "Handler not found")
     assert "Handler for task no_handler_task not found. Moving to DLQ." in caplog.text
 
+
 @pytest.mark.asyncio
 async def test_task_queue_stop_not_running(task_queue: TaskQueue, caplog):
     await task_queue.stop()
     assert "TaskQueue is not running." in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_task_queue_start_already_running(task_queue: TaskQueue, caplog):
