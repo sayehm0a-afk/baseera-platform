@@ -1,0 +1,23 @@
+# Review-governance recommendation, not a verified enforcement mechanism.
+#
+# GitHub auto-requests a review from the listed owner(s) on any PR that
+# touches a matching path. That much is guaranteed by this file alone.
+# Whether it actually *blocks* merging without that review depends on
+# this repository's branch protection settings ("Require review from
+# Code Owners") -- a setting this file cannot configure or verify, and
+# which has not been confirmed as enabled. Treat the paths below as
+# "must get a human's attention," not as a proven hard gate, until
+# someone with repository admin access confirms the branch protection
+# setting is on.
+#
+# Owner is a placeholder ("@OWNER") -- replace with the real GitHub
+# username/team before this offers any actual auto-request behavior.
+
+# The CI workflow, and specifically its flake8 regression-gate baseline
+# (FLAKE8_BASELINE), must not be silently raised in the same PR that
+# introduces the violations it's meant to catch.
+/.github/workflows/ci.yml   @OWNER
+
+# The authoritative status document should not drift from what the code
+# actually verifies.
+/docs/architecture/current-status.md   @OWNER

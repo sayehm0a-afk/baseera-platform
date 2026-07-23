@@ -12,12 +12,23 @@ on:
   push:
     branches: [main]
 
-# Pre-existing repo-wide flake8 violation count as of this milestone,
+# Pre-existing repo-wide flake8 violation count as of the M0 milestone,
 # recorded so new violations are blocked without requiring an immediate
-# repo-wide reformat (out of M0's scope). Recompute locally with:
+# repo-wide reformat (out of M0/M1 scope -- see the planned M1.5 "Lint
+# Debt Reduction" milestone in docs/architecture/current-status.md and
+# the M1 PR description). Recompute locally with:
 #   flake8 src/ tests/ main.py --count
-# and update this value only when deliberately reducing debt, never to
-# silence a real regression.
+#
+# ANY CHANGE TO THIS NUMBER REQUIRES EXPLICIT HUMAN REVIEW. This value is
+# a real merge gate: raising it silently (in the same PR that adds the
+# violations it's meant to block) defeats the gate entirely. This file is
+# listed in CODEOWNERS specifically so changes to it are flagged for
+# review -- that only auto-requests a reviewer, it does not by itself
+# block merging; blocking requires this repository's branch protection to
+# additionally require CODEOWNERS review, which is a GitHub repository
+# setting this workflow file cannot configure or verify from here.
+# Lower this value only when deliberately reducing debt (M1.5), never to
+# silence a regression.
 env:
   FLAKE8_BASELINE: 1515
 
