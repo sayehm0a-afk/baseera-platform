@@ -99,8 +99,19 @@ None contain code. None are placeholder implementations.
   without a live Redis; 729 passed / 0 skipped / 0 failed with one.
   730 total test functions in the repository.
 - flake8: 1515 pre-existing violations, enforced in CI as a regression
-  ceiling (not reduced in M0 or M1 — see the M1 PR description for the
-  planned M1.5 follow-up).
+  ceiling (not reduced in M0 or M1).
+
+## Planned: M1.5 — Lint Debt Reduction
+
+Not started. Scope: reduce the 1515 pre-existing flake8 violations
+(breakdown by rule code in `docs/architecture/m0-build-status.md` §5),
+deliberately kept separate from M0 (build stability) and M1 (structural
+moves) because mixing a repo-wide reformat with either would make those
+diffs unreviewable. Must run after M1 is merged and before any M2
+feature code begins, so new code is written against a clean baseline
+rather than inheriting the debt. `.github/workflows/ci.yml`'s
+`FLAKE8_BASELINE` should only be lowered as part of this milestone, never
+silently raised elsewhere.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
