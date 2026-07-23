@@ -98,11 +98,16 @@ subfolder grouping preserved under the new parent for readability:
 - `الوثائق_الرئيسية/Technical_Design_Specification_v1.0.md` → `docs/governance/Technical_Design_Specification_v1.0.md`
 - `الوثائق_الرئيسية/سياسة_حفظ_واسترجاع_بصيرة.md` → `docs/governance/سياسة_حفظ_واسترجاع_بصيرة.md`
 - `الوثائق_الرئيسية/مواصفات_متطلبات_البرمجيات_SRS.md` → `docs/governance/مواصفات_متطلبات_البرمجيات_SRS.md`
-- `الوثائق_الرئيسية/الحوكمة_والقرارات/*` (DECISIONS_LOG.md, LESSONS_LEARNED.md, 8 ADRs under `سجلات_القرارات_المعمارية/`) → `docs/governance/الحوكمة_والقرارات/...` (same relative structure)
+- `الوثائق_الرئيسية/الحوكمة_والقرارات/*` (DECISIONS_LOG.md, LESSONS_LEARNED.md, 9 ADRs under `سجلات_القرارات_المعمارية/` — note: two of the nine are both numbered `0003` in the original source, `0003-runtime-orchestration-messaging.md` and `0003-technical-design-specification.md`; this numbering collision predates M1 and was not introduced or corrected by this move) → `docs/governance/الحوكمة_والقرارات/...` (same relative structure)
 - `الوثائق_الرئيسية/المعمارية/تصميم_معمارية_BaseAgent.md` → `docs/governance/المعمارية/تصميم_معمارية_BaseAgent.md`
 - `الوثائق_الرئيسية/توثيق_الوحدات/*` (2 files) → `docs/governance/توثيق_الوحدات/...`
 - `الوثائق_الرئيسية/خارطة_الطريق/خارطة_بصيرة_2030.md` → `docs/governance/خارطة_الطريق/خارطة_بصيرة_2030.md`
 - `الوثائق_الرئيسية/معايير_التطوير/*` (2 files) → `docs/governance/معايير_التطوير/...`
+
+**Total moved to `docs/governance/`: 23 files** (6 single top-level
+documents + 9 ADRs + `DECISIONS_LOG.md` + `LESSONS_LEARNED.md` + 1
+architecture design doc + 2 module-documentation files + 1 roadmap + 2
+standards documents = 23; verified by `find docs/governance -type f`).
 
 After these moves, `الوثائق_الرئيسية/` contains only `__init__.py` /
 `.gitkeep` placeholders and an empty `واجهات_برمجة_التطبيقات/` subfolder —

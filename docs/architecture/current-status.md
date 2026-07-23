@@ -25,6 +25,15 @@ As of M1 (branch `chore/m1-repository-restructure`, based on `main` at
 - **LLM abstraction**: a real `OpenAILLMClient` wrapper — but not wired
   into any agent by default (`BaseAgent.llm_client` is `None` unless
   explicitly supplied).
+- **`src/core/base_agent/base_agent.py`**: directly imported and
+  instantiated by `main.py` at application startup (a sample `BaseAgent`
+  is created and registered with the agent runtime) — this makes it
+  **canonical, reachable runtime code**, not legacy/orphaned. It remains
+  only a generic agent base with no domain logic (no LLM client attached
+  by default, no stock-analysis or agent-specific behavior). Distinct
+  from `multi_agent_system.SupervisorAgent`, which subclasses it but is
+  itself not reachable from `main.py` (see "Partially implemented" below
+  and `docs/architecture/runtime-ownership.md`).
 - **FastAPI application shell**: `main.py` boots, exposes health/metrics/
   generic task-and-agent CRUD endpoints. No domain-specific routes exist.
 

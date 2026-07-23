@@ -46,10 +46,17 @@ structural-only milestone.
 
 ## Beyond the `runtime_kernel`/`worker`/`task_queue`/`service_layer` cluster
 
-Two related files outside that specific cluster, checked for completeness
-per the instruction to include "`agent_runtime.py` and related legacy
-variants":
+Three related files outside that specific cluster, checked for
+completeness per the instruction to include "`agent_runtime.py` and
+related legacy variants":
 
+- `src/core/base_agent/base_agent.py` — **canonical runtime**, not
+  legacy. Directly imported by `main.py` (`from
+  src.core.base_agent.base_agent import BaseAgent`) and instantiated
+  there to create and register a sample agent at startup. This is
+  distinct from `multi_agent_system.SupervisorAgent`, which subclasses
+  `BaseAgent` but is itself only reachable from its own test (see below)
+  — the base class is live, its one existing subclass is not.
 - `src/core/multi_agent_system/supervisor_agent.py` — the other file with
   a syntax error fixed in M0. Imported by
   `tests/unit/core/multi_agent_system/test_multi_agent_system.py` only;
