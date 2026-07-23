@@ -13,7 +13,7 @@ def is_redis_available():
         r = redis.Redis(host='localhost', port=6379, socket_connect_timeout=1)
         r.ping()
         return True
-    except:
+    except Exception:
         return False
 
 

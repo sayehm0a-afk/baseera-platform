@@ -40,7 +40,7 @@ class TestSecurityValidation:
             assert bus.connection_pool is not None
 
             bus.close()
-        except:
+        except Exception:
             # Redis not available, skip this test
             pass
 
@@ -76,7 +76,7 @@ class TestSecurityValidation:
 
             message_bus.close()
             task_queue.close()
-        except:
+        except Exception:
             # Redis not available, skip this test
             pass
 
@@ -170,7 +170,7 @@ class TestDependencySecurityValidation:
                 # There might be vulnerabilities, but this is not a hard failure
                 # In production, this should be a hard requirement
                 pass
-        except:
+        except Exception:
             # pip-audit not available, skip this test
             pass
 
