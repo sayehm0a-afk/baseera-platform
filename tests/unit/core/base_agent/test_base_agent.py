@@ -34,7 +34,7 @@ async def test_base_agent_activate_success():
     agent = BaseAgent()
     with patch.object(agent, '_load_config') as mock_load_config:
         with patch.object(agent, '_initialize_memory') as mock_init_memory:
-            with patch.object(agent, '_initialize_tools', new_callable=pytest.MonkeyPatch) as mock_init_tools:
+            with patch.object(agent, '_initialize_tools', new_callable=pytest.MonkeyPatch):
                 # We need to mock the async method properly
                 async def mock_async_init_tools(*args, **kwargs):
                     pass

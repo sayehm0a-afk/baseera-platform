@@ -162,7 +162,7 @@ def test_get_agent_allocations(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 100.0, 10.0)
     optimizer.add_constraint("memory_limit", ResourceType.MEMORY, 200.0, 50.0)
     alloc1 = optimizer.allocate_resource("alloc1", "agent1", ResourceType.CPU, 5.0)
-    alloc2 = optimizer.allocate_resource("alloc2", "agent2", ResourceType.CPU, 5.0)
+    optimizer.allocate_resource("alloc2", "agent2", ResourceType.CPU, 5.0)
     alloc3 = optimizer.allocate_resource("alloc3", "agent1", ResourceType.MEMORY, 20.0)
 
     agent1_allocs = optimizer.get_agent_allocations("agent1")

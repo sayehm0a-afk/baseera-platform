@@ -192,7 +192,7 @@ def test_get_successful_experiences(learning_engine):
 def test_get_failed_experiences(learning_engine):
     learning_engine.record_experience("exp1", "type1", {"in": 1}, {"out": 1}, "SUCCESS")
     exp2 = learning_engine.record_experience("exp2", "type2", {"in": 2}, {"out": 2}, "FAILURE")
-    exp3 = learning_engine.record_experience("exp3", "type3", {"in": 3}, {"out": 3}, "PARTIAL")
+    learning_engine.record_experience("exp3", "type3", {"in": 3}, {"out": 3}, "PARTIAL")
     assert learning_engine.get_failed_experiences() == [exp2]
 
 

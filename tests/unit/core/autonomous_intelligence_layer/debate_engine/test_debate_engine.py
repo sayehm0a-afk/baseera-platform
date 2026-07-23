@@ -38,14 +38,14 @@ def test_add_argument_session_not_found(debate_engine):
 
 
 def test_add_argument_concluded_session(debate_engine):
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     debate_engine.advance_phase("s1", DebatePhase.CONCLUDED)
     arg = debate_engine.add_argument("s1", "arg1", "agent1", "Content 1", ArgumentType.PRO)
     assert arg is None
 
 
 def test_add_argument_max_rounds_reached(debate_engine):
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     debate_engine.add_argument("s1", "arg1", "agent1", "Content 1", ArgumentType.PRO)
     debate_engine.add_argument("s1", "arg2", "agent2", "Content 2", ArgumentType.CON)
     debate_engine.add_argument("s1", "arg3", "agent1", "Content 3", ArgumentType.PRO)
@@ -56,7 +56,7 @@ def test_add_argument_max_rounds_reached(debate_engine):
 
 
 def test_add_argument_max_argument_length(debate_engine):
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     long_content = "a" * (debate_engine.config.max_argument_length + 1)
     arg = debate_engine.add_argument("s1", "arg1", "agent1", long_content, ArgumentType.PRO)
     assert arg is None
@@ -64,7 +64,7 @@ def test_add_argument_max_argument_length(debate_engine):
 
 def test_add_argument_evidence_requirement(debate_engine):
     debate_engine.config.enable_evidence_requirement = True
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     arg = debate_engine.add_argument("s1", "arg1", "agent1", "Content", ArgumentType.EVIDENCE, supporting_evidence=[])
     assert arg is None
     arg = debate_engine.add_argument("s1", "arg2", "agent1", "Content", ArgumentType.EVIDENCE, supporting_evidence=["evidence1"])
@@ -86,14 +86,14 @@ def test_advance_phase_session_not_found(debate_engine):
 
 
 def test_detect_consensus_no_arguments(debate_engine):
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     consensus, score = debate_engine.detect_consensus("s1")
     assert consensus is False
     assert score == 0.0
 
 
 def test_detect_consensus_pro_con(debate_engine):
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     debate_engine.add_argument("s1", "arg1", "agent1", "Pro 1", ArgumentType.PRO, confidence=0.9)
     debate_engine.add_argument("s1", "arg2", "agent2", "Con 1", ArgumentType.CON, confidence=0.1)
     debate_engine.add_argument("s1", "arg3", "agent1", "Pro 2", ArgumentType.PRO, confidence=0.8)
@@ -111,7 +111,7 @@ def test_detect_consensus_pro_con(debate_engine):
 
 
 def test_detect_consensus_reached(debate_engine):
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     debate_engine.add_argument("s1", "arg1", "agent1", "Pro 1", ArgumentType.PRO, confidence=0.9)
     debate_engine.add_argument("s1", "arg2", "agent1", "Pro 2", ArgumentType.PRO, confidence=0.8)
     debate_engine.add_argument("s1", "arg3", "agent2", "Pro 3", ArgumentType.PRO, confidence=0.7)
@@ -122,7 +122,7 @@ def test_detect_consensus_reached(debate_engine):
 
 
 def test_analyze_arguments(debate_engine):
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     debate_engine.add_argument("s1", "arg1", "agent1", "Pro 1", ArgumentType.PRO, confidence=0.9)
     debate_engine.add_argument("s1", "arg2", "agent2", "Con 1", ArgumentType.CON, confidence=0.1)
     debate_engine.add_argument("s1", "arg3", "agent1", "Pro 2", ArgumentType.PRO, confidence=0.8)
@@ -139,7 +139,7 @@ def test_analyze_arguments(debate_engine):
 
 
 def test_generate_summary(debate_engine):
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     debate_engine.add_argument("s1", "arg1", "agent1", "Pro 1", ArgumentType.PRO, confidence=0.9)
     debate_engine.add_argument("s1", "arg2", "agent2", "Con 1", ArgumentType.CON, confidence=0.1)
 
@@ -150,7 +150,7 @@ def test_generate_summary(debate_engine):
 
 
 def test_getters(debate_engine):
-    session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
+    debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     assert debate_engine.get_session("s1") is not None
     assert debate_engine.get_session("nonexistent") is None
 

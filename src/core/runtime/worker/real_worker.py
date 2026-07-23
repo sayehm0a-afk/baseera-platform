@@ -76,9 +76,9 @@ class RealWorker:
             try:
                 # Execute handler
                 if asyncio.iscoroutinefunction(handler):
-                    result = await handler(task)
+                    await handler(task)
                 else:
-                    result = handler(task)
+                    handler(task)
 
                 logger.info(f"Worker {self.worker_id} completed task {task_id}")
                 self.processed_count += 1

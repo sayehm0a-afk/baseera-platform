@@ -99,7 +99,7 @@ def test_analyze_decision(decision_fusion_system):
     decision_fusion_system.add_input("d1", "i1", DecisionSource.DEBATE, "debate1", "Option A", 0.8)
     decision_fusion_system.add_input("d1", "i2", DecisionSource.VOTING, "vote1", "Option A", 0.9)
     decision_fusion_system.add_input("d1", "i3", DecisionSource.RANKING, "rank1", "Option B", 0.7)
-    fused_decision = decision_fusion_system.fuse_decision("d1", FusionMethod.WEIGHTED_AVERAGE)
+    decision_fusion_system.fuse_decision("d1", FusionMethod.WEIGHTED_AVERAGE)
 
     analysis = decision_fusion_system.analyze_decision("d1")
     assert analysis["decision_id"] == "d1"

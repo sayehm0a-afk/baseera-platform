@@ -243,7 +243,7 @@ async def test_full_core_workflow_integration(mock_planner_ai, supervisor_ai, re
 
     # 1. PlannerAI يخطط للمهمة
     decomposed_tasks = mock_planner_ai.decompose_goal(goal)
-    task_dag = mock_planner_ai.plan_multi_step(decomposed_tasks)
+    mock_planner_ai.plan_multi_step(decomposed_tasks)
 
     # 2. SupervisorAI ينفذ المهام المخطط لها
     with patch.object(supervisor_ai.agent_registry, 'get_agent') as mock_get_agent:

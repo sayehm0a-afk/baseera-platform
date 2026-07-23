@@ -158,7 +158,7 @@ def test_get_optimization(self_optimization):
 def test_get_metrics_by_type(self_optimization):
     metric1 = self_optimization.record_metric("lat1", OptimizationMetric.LATENCY, 100.0)
     metric2 = self_optimization.record_metric("lat2", OptimizationMetric.LATENCY, 90.0)
-    metric3 = self_optimization.record_metric("thr1", OptimizationMetric.THROUGHPUT, 500.0)
+    self_optimization.record_metric("thr1", OptimizationMetric.THROUGHPUT, 500.0)
 
     latency_metrics = self_optimization.get_metrics_by_type(OptimizationMetric.LATENCY)
     assert len(latency_metrics) == 2
@@ -184,7 +184,7 @@ def test_get_best_optimization(self_optimization):
     def opt_func2():
         self_optimization.record_metric("lat_opt2", OptimizationMetric.LATENCY, 75.0)
 
-    opt_result1 = self_optimization.optimize_parameters("opt1", OptimizationMetric.LATENCY, opt_func1)
+    self_optimization.optimize_parameters("opt1", OptimizationMetric.LATENCY, opt_func1)
     opt_result2 = self_optimization.optimize_parameters("opt2", OptimizationMetric.LATENCY, opt_func2)
 
     best_opt = self_optimization.get_best_optimization()

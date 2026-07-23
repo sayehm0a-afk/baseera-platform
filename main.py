@@ -76,7 +76,7 @@ async def startup_event():
             raise RuntimeError("Failed to initialize runtime kernel")
 
         # Create and register workers
-        message_bus = container.get_service("message_bus")
+        container.get_service("message_bus")  # instantiate the singleton at startup
         task_queue = container.get_service("task_queue")
 
         worker_count = int(os.getenv("WORKER_COUNT", 2))

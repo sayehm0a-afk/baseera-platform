@@ -51,7 +51,7 @@ def test_cast_vote_proposal_not_found(voting_system):
 
 
 def test_cast_vote_proposal_closed(voting_system):
-    proposal = voting_system.create_proposal(
+    voting_system.create_proposal(
         "p1", "Test Proposal", "Description", ["Option A", "Option B"], "agent1"
     )
     voting_system.close_proposal("p1")
@@ -61,7 +61,7 @@ def test_cast_vote_proposal_closed(voting_system):
 
 def test_cast_vote_no_revoting(voting_system):
     voting_system.config.enable_revoting = False
-    proposal = voting_system.create_proposal(
+    voting_system.create_proposal(
         "p1", "Test Proposal", "Description", ["Option A", "Option B"], "agent1"
     )
     voting_system.cast_vote("v1", "voter1", "p1", VoteType.YES)
@@ -142,7 +142,7 @@ def test_close_proposal_weighted(voting_system):
 
 
 def test_get_vote_count(voting_system):
-    proposal = voting_system.create_proposal(
+    voting_system.create_proposal(
         "p1", "Test Proposal", "Description", ["Option A", "Option B"], "agent1"
     )
     voting_system.cast_vote("v1", "voter1", "p1", VoteType.YES)
@@ -158,7 +158,7 @@ def test_get_vote_count(voting_system):
 
 
 def test_get_vote_percentage(voting_system):
-    proposal = voting_system.create_proposal(
+    voting_system.create_proposal(
         "p1", "Test Proposal", "Description", ["Option A", "Option B"], "agent1"
     )
     voting_system.cast_vote("v1", "voter1", "p1", VoteType.YES)
@@ -174,7 +174,7 @@ def test_get_vote_percentage(voting_system):
 
 def test_get_weighted_votes(voting_system):
     voting_system.config.enable_weighted_voting = True
-    proposal = voting_system.create_proposal(
+    voting_system.create_proposal(
         "p1", "Test Proposal", "Description", ["Option A", "Option B"], "agent1"
     )
     voting_system.cast_vote("v1", "voter1", "p1", VoteType.YES, confidence=0.9)
@@ -187,7 +187,7 @@ def test_get_weighted_votes(voting_system):
 
 
 def test_analyze_voting(voting_system):
-    proposal = voting_system.create_proposal(
+    voting_system.create_proposal(
         "p1", "Test Proposal", "Description", ["Option A", "Option B"], "agent1"
     )
     voting_system.cast_vote("v1", "voter1", "p1", VoteType.YES, confidence=0.9)
@@ -204,7 +204,7 @@ def test_analyze_voting(voting_system):
 
 
 def test_getters(voting_system):
-    proposal = voting_system.create_proposal(
+    voting_system.create_proposal(
         "p1", "Test Proposal", "Description", ["Option A", "Option B"], "agent1"
     )
     assert voting_system.get_proposal("p1") is not None

@@ -353,7 +353,7 @@ async def test_supervisor_agent_get_registered_agents_no_registry(caplog):
 async def test_supervisor_agent_initialize_llm_client_logging(caplog):
     """Test _initialize_llm_client logs the correct message."""
     with caplog.at_level(logging.INFO):
-        supervisor = SupervisorAgent()
+        SupervisorAgent()
         # Check if the specific log message from SupervisorAgent's _initialize_llm_client is present
         found_log = False
         for record in caplog.records:
