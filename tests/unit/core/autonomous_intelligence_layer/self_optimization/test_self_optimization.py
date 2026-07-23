@@ -1,7 +1,5 @@
 
 import pytest
-from datetime import datetime, timedelta, UTC
-from unittest.mock import MagicMock
 from src.core.autonomous_intelligence_layer.self_optimization.self_optimization import (
     SelfOptimization, SelfOptimizationConfig, PerformanceMetric, OptimizationResult, OptimizationMetric
 )

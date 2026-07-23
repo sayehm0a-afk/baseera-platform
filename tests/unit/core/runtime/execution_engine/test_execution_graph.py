@@ -1,9 +1,8 @@
 import pytest
 import logging
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from src.core.runtime.execution_engine.execution_graph import ExecutionGraph, IExecutionGraph
+from src.core.runtime.execution_engine.execution_graph import ExecutionGraph
 from src.core.runtime.execution_engine.executor import IExecutor
 from src.core.runtime.execution_engine.dependency_resolver import IDependencyResolver
 

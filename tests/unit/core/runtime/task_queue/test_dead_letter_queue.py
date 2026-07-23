@@ -1,6 +1,6 @@
 import pytest
 import logging
-from src.core.runtime.task_queue.dead_letter_queue import DeadLetterQueue, IDeadLetterQueue
+from src.core.runtime.task_queue.dead_letter_queue import DeadLetterQueue
 
 
 @pytest.fixture(autouse=True)

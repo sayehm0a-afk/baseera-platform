@@ -9,7 +9,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from enum import Enum
 
 import aiohttp
@@ -45,32 +45,26 @@ class IMarketDataProvider(ABC):
     @abstractmethod
     async def authenticate(self) -> bool:
         """Authenticate with the provider."""
-        pass
 
     @abstractmethod
     async def get_stock_data(self, symbol: str) -> Dict[str, Any]:
         """Get stock data for a symbol."""
-        pass
 
     @abstractmethod
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:
         """Get index data."""
-        pass
 
     @abstractmethod
     async def get_market_news(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent market news."""
-        pass
 
     @abstractmethod
     async def health_check(self) -> ProviderHealth:
         """Check provider health."""
-        pass
 
     @abstractmethod
     async def disconnect(self) -> None:
         """Disconnect from the provider."""
-        pass
 
 
 class SaudiMarketDataProvider(IMarketDataProvider):

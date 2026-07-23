@@ -1,6 +1,6 @@
 import pytest
 import logging
-from src.core.runtime.execution_engine.dependency_resolver import DependencyResolver, IDependencyResolver
+from src.core.runtime.execution_engine.dependency_resolver import DependencyResolver
 
 
 @pytest.fixture(autouse=True)

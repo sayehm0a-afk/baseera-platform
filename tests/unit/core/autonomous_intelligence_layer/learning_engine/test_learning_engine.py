@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, UTC
+from datetime import datetime
 from src.core.autonomous_intelligence_layer.learning_engine.learning_engine import (
     LearningType, Experience, LearningPattern, LearningResult, LearningEngineConfig, LearningEngine
 )

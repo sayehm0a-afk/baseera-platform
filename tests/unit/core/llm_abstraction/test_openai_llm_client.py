@@ -2,7 +2,6 @@
 اختبارات الوحدة لعميل OpenAI LLM.
 """
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 import os
 import sys
@@ -10,9 +9,8 @@ import sys
 # (out of M1.5 lint-debt scope) -- imports below are noqa'd rather than
 # reordered so this fix carries zero behavior-change risk.
 sys.path.insert(0, '/home/ubuntu/basirah')
-from typing import List, Dict, Any  # noqa: E402
 
-from src.core.llm_abstraction.openai_llm_client import OpenAILLMClient, _tiktoken  # noqa: E402
+from src.core.llm_abstraction.openai_llm_client import OpenAILLMClient  # noqa: E402
 
 # Mock the tiktoken import for environments where it might not be installed
 

@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 from enum import Enum
 from datetime import datetime, timedelta, timezone
 from src.core.autonomous_intelligence_layer.error_recovery.error_recovery import (
-    ErrorRecovery, ErrorRecoveryConfig, ErrorRecord, RecoveryAction, ErrorSeverity, RetryStrategy
+    ErrorRecovery, ErrorRecoveryConfig, ErrorSeverity, RetryStrategy
 )
 
 

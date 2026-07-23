@@ -15,7 +15,7 @@ import logging.handlers
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Dict
 
 
 class JSONFormatter(logging.Formatter):

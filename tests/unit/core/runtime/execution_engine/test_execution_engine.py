@@ -2,7 +2,7 @@ import pytest
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
-from src.core.runtime.execution_engine.execution_engine import ExecutionEngine, IExecutionEngine
+from src.core.runtime.execution_engine.execution_engine import ExecutionEngine
 from src.core.runtime.execution_engine.executor import IExecutor
 from src.core.runtime.execution_engine.dependency_resolver import IDependencyResolver
 from src.core.runtime.execution_engine.execution_graph import IExecutionGraph

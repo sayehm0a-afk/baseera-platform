@@ -1,12 +1,9 @@
 import pytest
-from datetime import datetime, timedelta, UTC
 from src.core.autonomous_intelligence_layer.voting_system.voting_system import (
     VotingSystem,
     VotingConfig,
     VotingMechanism,
-    VoteType,
-    Proposal,
-    Vote
+    VoteType
 )
 
 

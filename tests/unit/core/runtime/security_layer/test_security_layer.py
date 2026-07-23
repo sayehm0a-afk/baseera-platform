@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from src.core.runtime.security_layer.security_layer import SecurityLayer, ISecurityLayer
 from src.core.runtime.security_layer.permission_validation import IPermissionValidation
 from src.core.runtime.security_layer.agent_isolation import IAgentIsolation

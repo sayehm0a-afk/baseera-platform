@@ -1,6 +1,5 @@
-import asyncio
 import logging
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

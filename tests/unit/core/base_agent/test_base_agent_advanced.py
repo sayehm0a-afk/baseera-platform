@@ -2,8 +2,7 @@ import pytest
 import logging
 import threading
 import asyncio
-import time
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, AsyncMock
 from src.core.base_agent.base_agent import BaseAgent
 
 # Mock logging to prevent console output during tests

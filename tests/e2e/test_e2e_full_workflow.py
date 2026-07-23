@@ -6,7 +6,6 @@ import sys
 sys.path.insert(0,
 '/home/ubuntu/basirah')
 import json  # noqa: E402
-from datetime import datetime, UTC  # noqa: E402
 from unittest.mock import MagicMock, patch  # noqa: E402
 from src.core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI  # noqa: E402
 from src.core.autonomous_intelligence_layer.supervisor_ai.supervisor_ai import SupervisorAI  # noqa: E402
@@ -176,13 +175,11 @@ async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, k
         with patch.object(supervisor_ai.learning_engine, 'learn_from_experiences') as mock_learn:
             mock_learn.return_value = None
             # Similar to reflection, check if invoked if part of execute_task
-            pass
 
         # Verify recovery system (mocked for now)
         with patch.object(supervisor_ai.error_recovery, 'execute_recovery') as mock_execute_recovery:
             mock_execute_recovery.return_value = (True, None)
             # Similar to reflection, check if invoked if part of execute_task
-            pass
 
         # Verify decision fusion, voting, ranking (these are internal to SupervisorAI or other components)
         # For E2E, we verify their *outcome* through the overall execution_results.

@@ -1,12 +1,9 @@
 import pytest
-from datetime import datetime, UTC
 from src.core.autonomous_intelligence_layer.ranking_engine.ranking_engine import (
     RankingEngine,
-    RankingConfig,
     RankingItem,
     Criterion,
-    RankingMethod,
-    RankingResult
+    RankingMethod
 )
 
 

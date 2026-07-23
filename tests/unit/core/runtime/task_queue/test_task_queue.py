@@ -1,7 +1,7 @@
 import pytest
 import logging
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from src.core.runtime.task_queue.task_queue import TaskQueue
 from src.core.runtime.task_queue.scheduler import IScheduler

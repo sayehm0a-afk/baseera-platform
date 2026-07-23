@@ -1,6 +1,6 @@
 import pytest
 import logging
-from src.core.runtime.task_queue.retry_policy import ExponentialBackoffRetryPolicy, IRetryPolicy
+from src.core.runtime.task_queue.retry_policy import ExponentialBackoffRetryPolicy
 
 
 @pytest.fixture(autouse=True)

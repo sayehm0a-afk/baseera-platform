@@ -1,7 +1,6 @@
 import pytest
 import logging
-from unittest.mock import AsyncMock, MagicMock
-from src.core.runtime.task_queue.scheduler import Scheduler, IScheduler
+from src.core.runtime.task_queue.scheduler import Scheduler
 
 
 @pytest.fixture(autouse=True)

@@ -1,9 +1,7 @@
 import asyncio
 import logging
-import os
 import signal
-import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

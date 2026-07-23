@@ -1,8 +1,7 @@
 import pytest
 import logging
-import asyncio
 from unittest.mock import AsyncMock
-from src.core.runtime.reliability_layer.failure_recovery import FailureRecovery, IFailureRecovery
+from src.core.runtime.reliability_layer.failure_recovery import FailureRecovery
 
 
 @pytest.fixture(autouse=True)

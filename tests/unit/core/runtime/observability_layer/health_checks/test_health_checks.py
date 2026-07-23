@@ -3,7 +3,7 @@ import logging
 from src.core.runtime.observability_layer.health_checks.health_checks import (
     HealthCheckManager, HealthStatus, HealthCheckResult, IHealthCheck, DatabaseHealthCheck, ServiceHealthCheck
 )
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 
 @pytest.fixture

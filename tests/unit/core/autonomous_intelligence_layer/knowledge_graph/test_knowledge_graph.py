@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import Mock
 from src.core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import KnowledgeGraph, KnowledgeGraphConfig, KnowledgeEntity, KnowledgeRelationship, EntityType, RelationType
 
 

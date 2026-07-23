@@ -1,12 +1,8 @@
 import pytest
-from datetime import datetime, UTC
 from src.core.autonomous_intelligence_layer.decision_fusion.decision_fusion import (
     DecisionFusion,
-    DecisionFusionConfig,
-    DecisionInput,
     DecisionSource,
-    FusionMethod,
-    FusedDecision
+    FusionMethod
 )
 
 

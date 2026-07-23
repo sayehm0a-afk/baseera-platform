@@ -1,7 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
-import logging
-from src.core.runtime.observability_layer.tracing.tracing import Tracer, Span, get_tracer, ITracer, ISpan
+from src.core.runtime.observability_layer.tracing.tracing import Tracer, Span, get_tracer, ITracer
 
 
 @pytest.fixture

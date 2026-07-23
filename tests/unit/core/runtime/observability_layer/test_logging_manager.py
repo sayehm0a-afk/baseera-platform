@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import logging
 from src.core.runtime.observability_layer.logging_manager import LoggingManager, ILoggingManager
 

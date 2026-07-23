@@ -1,6 +1,6 @@
 import pytest
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from src.core.runtime.messaging_bus import MessagingBus
 
 

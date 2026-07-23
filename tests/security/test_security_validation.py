@@ -5,7 +5,6 @@ Security validation tests for production-grade components.
 from pathlib import Path
 
 import pytest
-from unittest.mock import MagicMock, patch
 
 # Repository root, computed from this file's location rather than
 # hardcoded, so these tests work in any checkout (previously hardcoded
@@ -47,8 +46,6 @@ class TestSecurityValidation:
 
     def test_no_hardcoded_credentials(self):
         """Test that there are no hardcoded credentials."""
-        import os
-        import re
 
         # Read main.py and check for hardcoded credentials
         with open(REPO_ROOT / 'main.py', 'r') as f:
@@ -122,7 +119,6 @@ class TestProductionDeploymentSecurity:
     def test_kubernetes_security(self):
         """Test Kubernetes security configuration."""
         import os
-        import yaml
 
         # Check if Kubernetes manifests exist
         k8s_dir = REPO_ROOT / 'kubernetes'

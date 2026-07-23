@@ -2,10 +2,9 @@
 اختبارات الوحدة لنظام العملاء المتعددين (Multi-Agent System).
 """
 import pytest
-import asyncio
 import logging
 import re
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from typing import Any
 
 from src.core.multi_agent_system.supervisor_agent import SupervisorAgent

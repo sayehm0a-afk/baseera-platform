@@ -1,7 +1,7 @@
 import pytest
 from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
 from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node
-from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task, TaskType, TaskStatus
+from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task, TaskStatus
 
 
 @pytest.fixture

@@ -1,8 +1,7 @@
 import pytest
 import logging
-from unittest.mock import patch
 from src.core.runtime.observability_layer.metrics.metrics import MetricsManager, IMetricsManager
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 @pytest.fixture

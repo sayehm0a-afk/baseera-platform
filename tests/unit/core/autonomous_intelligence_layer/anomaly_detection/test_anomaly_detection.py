@@ -1,12 +1,9 @@
 import pytest
-from datetime import datetime
 from src.core.autonomous_intelligence_layer.anomaly_detection.anomaly_detection import (
     AnomalyDetection,
     AnomalyDetectionConfig,
     AnomalyType,
-    AnomalySeverity,
-    DataPoint,
-    Anomaly
+    AnomalySeverity
 )
 
 

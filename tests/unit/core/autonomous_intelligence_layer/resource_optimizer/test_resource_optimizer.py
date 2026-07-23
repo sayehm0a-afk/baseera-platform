@@ -1,5 +1,4 @@
 import pytest
-from datetime import datetime, UTC
 from src.core.autonomous_intelligence_layer.resource_optimizer.resource_optimizer import (
     ResourceOptimizer, ResourceOptimizerConfig, ResourceType, OptimizationStrategy,
     ResourceAllocation, ResourceConstraint, OptimizationResult

@@ -2,10 +2,8 @@
 Integration tests for production-grade components.
 """
 
-import asyncio
 import pytest
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 def is_redis_available():

@@ -1,9 +1,8 @@
 import json
 import logging
 import os
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 import redis
-from redis import Redis
 
 logger = logging.getLogger(__name__)
 

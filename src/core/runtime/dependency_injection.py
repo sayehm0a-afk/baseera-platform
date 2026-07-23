@@ -75,7 +75,6 @@ def setup_production_dependencies() -> DependencyContainer:
     from src.core.db.database import get_session, get_session_factory, get_engine
     from src.core.messaging.redis_message_bus import RedisMessageBus
     from src.core.runtime.task_queue.real_task_queue import RealTaskQueue
-    from src.core.runtime.worker.real_worker import RealWorker
     from src.core.runtime.real_agent_runtime import RealAgentRuntime
     from src.core.runtime.real_service_layer import RealServiceLayer
 

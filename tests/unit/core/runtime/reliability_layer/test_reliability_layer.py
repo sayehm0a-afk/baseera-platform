@@ -1,9 +1,8 @@
 import pytest
 import logging
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-from src.core.runtime.reliability_layer.reliability_layer import ReliabilityLayer, IReliabilityLayer
+from src.core.runtime.reliability_layer.reliability_layer import ReliabilityLayer
 from src.core.runtime.reliability_layer.circuit_breaker import ICircuitBreaker, CircuitBreakerOpenError
 from src.core.runtime.reliability_layer.failure_recovery import IFailureRecovery
 from src.core.runtime.reliability_layer.compensation import ICompensation

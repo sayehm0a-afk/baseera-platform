@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import MagicMock
 from src.core.runtime.observability_layer.observability_layer import ObservabilityLayer
 from src.core.runtime.observability_layer.metrics.metrics import IMetricsManager, MetricsManager
 from src.core.runtime.observability_layer.tracing.tracing import ITracer, Tracer

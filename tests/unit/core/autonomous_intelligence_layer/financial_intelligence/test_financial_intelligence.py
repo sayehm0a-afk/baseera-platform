@@ -1,9 +1,8 @@
 import pytest
-from unittest.mock import MagicMock, patch
-from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+from datetime import datetime, timezone
 from src.core.autonomous_intelligence_layer.financial_intelligence.financial_intelligence import (
-    FinancialIntelligence, FinancialIntelligenceConfig, Transaction, Budget, FinancialReport,
-    TransactionType, FinancialMetric
+    FinancialIntelligence, FinancialIntelligenceConfig, TransactionType, FinancialMetric
 )
 from src.core.shared_models.base_transaction import BaseTransaction
 
