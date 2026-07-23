@@ -58,7 +58,10 @@ class DevMarketDataProvider(IMarketDataProvider):
         return True
 
     async def get_stock_data(self, symbol: str) -> Dict[str, Any]:
-        today = datetime.now(timezone.utc).date().isoformat()
+        day_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        today = day_start.date().isoformat()
         base = _seeded_value(f"{symbol}:{today}", 10.0, 200.0)
         spread = base * 0.02
         open_price = round(base, 2)
@@ -73,13 +76,20 @@ class DevMarketDataProvider(IMarketDataProvider):
             "low": low_price,
             "close": close_price,
             "volume": volume,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            # Anchored to the start of the day, not the call instant, so
+            # repeated calls for the same symbol on the same day produce
+            # the same bar identity (matches the OHLC values above, which
+            # are already seeded by date, not by instant).
+            "timestamp": day_start.isoformat(),
             "source": "dev-synthetic",
             "is_synthetic": True,
         }
 
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:
-        today = datetime.now(timezone.utc).date().isoformat()
+        day_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        today = day_start.date().isoformat()
         value = round(_seeded_value(f"{index_name}:{today}", 8000.0, 13000.0), 2)
         change = round(_seeded_value(f"{index_name}:{today}:change", -100.0, 100.0), 2)
         change_percent = round((change / value) * 100, 4) if value else 0.0
@@ -88,7 +98,7 @@ class DevMarketDataProvider(IMarketDataProvider):
             "value": value,
             "change": change,
             "change_percent": change_percent,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": day_start.isoformat(),
             "source": "dev-synthetic",
             "is_synthetic": True,
         }
