@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 import logging
-from core.runtime.observability_layer.tracing.tracing import Tracer, Span, get_tracer, ITracer, ISpan
+from src.core.runtime.observability_layer.tracing.tracing import Tracer, Span, get_tracer, ITracer, ISpan
 
 @pytest.fixture
 def tracer() -> ITracer:
@@ -103,7 +103,7 @@ async def test_span_events_after_end(tracer: ITracer):
 # Mock for _global_tracer to ensure test isolation
 @pytest.fixture(autouse=True)
 def reset_global_tracer():
-    from core.runtime.observability_layer.tracing.tracing import _global_tracer
+    from src.core.runtime.observability_layer.tracing.tracing import _global_tracer
     _global_tracer.current_span_instance = []
     yield
     _global_tracer.current_span_instance = []

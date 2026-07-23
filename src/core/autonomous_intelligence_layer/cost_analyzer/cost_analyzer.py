@@ -8,7 +8,7 @@ cost trends, and cost optimization recommendations.
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
-from core.shared_models.base_transaction import BaseTransaction
+from src.core.shared_models.base_transaction import BaseTransaction
 from enum import Enum
 import logging
 

@@ -6,7 +6,7 @@
 import logging
 from typing import Dict, List, Optional
 
-from core.base_agent.base_agent import BaseAgent  # pylint: disable=E0402 # type: ignore
+from src.core.base_agent.base_agent import BaseAgent  # pylint: disable=E0402 # type: ignore
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@ import pytest
 import logging
 from unittest.mock import AsyncMock
 from typing import Any, Callable, Dict, Optional
-from core.runtime.runtime_kernel import RuntimeKernel, IRuntimeKernel
+from src.core.runtime.runtime_kernel import RuntimeKernel, IRuntimeKernel
 from src.core.db.database import init_db, engine, Base
 from src.core.runtime.message_bus.message_bus import IMessageBus
 from src.core.runtime.task_queue.task_queue import ITaskQueue

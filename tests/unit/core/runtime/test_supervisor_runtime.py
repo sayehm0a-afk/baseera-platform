@@ -2,7 +2,7 @@ import pytest
 import logging
 from unittest.mock import AsyncMock
 from typing import Any, Dict, Optional
-from core.runtime.supervisor_runtime import SupervisorRuntime, ISupervisorRuntime
+from src.core.runtime.supervisor_runtime import SupervisorRuntime, ISupervisorRuntime
 
 logger = logging.getLogger(__name__)
 

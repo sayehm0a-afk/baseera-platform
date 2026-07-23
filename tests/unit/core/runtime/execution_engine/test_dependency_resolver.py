@@ -1,6 +1,6 @@
 import pytest
 import logging
-from core.runtime.execution_engine.dependency_resolver import DependencyResolver, IDependencyResolver
+from src.core.runtime.execution_engine.dependency_resolver import DependencyResolver, IDependencyResolver
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

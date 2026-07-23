@@ -9,12 +9,12 @@ import sys
 sys.path.insert(0, '/home/ubuntu/basirah')
 from typing import List, Dict, Any
 
-from core.llm_abstraction.openai_llm_client import OpenAILLMClient, _tiktoken
+from src.core.llm_abstraction.openai_llm_client import OpenAILLMClient, _tiktoken
 
 # Mock the tiktoken import for environments where it might not be installed
 @pytest.fixture
 def mock_tiktoken_module():
-    with patch("core.llm_abstraction.openai_llm_client._tiktoken", new_callable=MagicMock) as mock_tiktoken_module:
+    with patch("src.core.llm_abstraction.openai_llm_client._tiktoken", new_callable=MagicMock) as mock_tiktoken_module:
         mock_encoder = MagicMock()
         mock_encoder.encode.return_value = [1, 2, 3, 4, 5]  # Simulate 5 tokens
         mock_tiktoken_module.encoding_for_model.return_value = mock_encoder
@@ -101,7 +101,7 @@ async def test_openai_llm_client_count_tokens_with_tiktoken(openai_api_key, mock
 async def test_openai_llm_client_count_tokens_no_tiktoken(openai_api_key):
     client = OpenAILLMClient(model_name="gpt-3.5-turbo")
     text = "هذا نص تجريبي لحساب التوكنات."
-    with patch("core.llm_abstraction.openai_llm_client._tiktoken", new=None):
+    with patch("src.core.llm_abstraction.openai_llm_client._tiktoken", new=None):
         tokens = await client.count_tokens(text)
         assert tokens == 6 # Rough estimate: len(text.split()) * 4 // 3 for "هذا نص تجريبي لحساب التوكنات." is 6
         # The warning message is logged when tiktoken is None, so no call to encoding_for_model

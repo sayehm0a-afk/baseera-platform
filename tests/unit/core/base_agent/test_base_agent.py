@@ -2,7 +2,7 @@ import pytest
 import logging
 from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime
-from core.base_agent.base_agent import BaseAgent
+from src.core.base_agent.base_agent import BaseAgent
 
 # Mock logging to prevent console output during tests
 @pytest.fixture(autouse=True)

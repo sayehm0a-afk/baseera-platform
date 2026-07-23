@@ -3,9 +3,9 @@ import logging
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from core.runtime.execution_engine.execution_graph import ExecutionGraph, IExecutionGraph
-from core.runtime.execution_engine.executor import IExecutor
-from core.runtime.execution_engine.dependency_resolver import IDependencyResolver
+from src.core.runtime.execution_engine.execution_graph import ExecutionGraph, IExecutionGraph
+from src.core.runtime.execution_engine.executor import IExecutor
+from src.core.runtime.execution_engine.dependency_resolver import IDependencyResolver
 
 @pytest.fixture(autouse=True)
 def set_logging_level():
@@ -124,7 +124,7 @@ async def test_execution_graph_with_kwargs(execution_graph: ExecutionGraph, mock
 @pytest.mark.asyncio
 async def test_execution_graph_dependency_result_injection_with_kwargs(execution_graph: ExecutionGraph, mock_executor: AsyncMock, mock_dependency_resolver: MagicMock):
     async def task_a_func(): return "A_data"
-    async def task_b_func(**kwargs): return f"B_data from {kwargs["dep_TaskA_result"]} and {kwargs["fixed_param"]}"
+    async def task_b_func(**kwargs): return f"B_data from {kwargs['dep_TaskA_result']} and {kwargs['fixed_param']}"
 
     graph_definition = {
         "TaskA": {"function": task_a_func, "dependencies": []},

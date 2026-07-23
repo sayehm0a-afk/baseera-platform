@@ -2,7 +2,7 @@ import pytest
 import logging
 import asyncio
 from unittest.mock import AsyncMock
-from core.runtime.reliability_layer.circuit_breaker import CircuitBreaker, CircuitBreakerState, CircuitBreakerOpenError
+from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreaker, CircuitBreakerState, CircuitBreakerOpenError
 
 @pytest.fixture(autouse=True)
 def set_logging_level():

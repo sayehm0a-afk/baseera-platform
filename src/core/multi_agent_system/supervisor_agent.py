@@ -6,7 +6,7 @@
 import logging
 from typing import Dict, Any, Optional
 
-from core.base_agent.base_agent import BaseAgent  # pylint: disable=E0402 # type: ignore
+from src.core.base_agent.base_agent import BaseAgent  # pylint: disable=E0402 # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ class SupervisorAgent(BaseAgent):
                 "Target agent %s not found for delegation.",
                 task_data["target_agent_id"],
             )
-            raise ValueError(f"Target agent {task_data["target_agent_id"]} not found")
+            raise ValueError(f"Target agent {task_data['target_agent_id']} not found")
 
         logger.warning(
             "SupervisorAgent received a task without a specific target_agent_id. Handling internally."

@@ -2,12 +2,12 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
-from core.runtime.security_layer.permission_validation import (
+from src.core.runtime.security_layer.permission_validation import (
     IPermissionValidation,
     PermissionValidation,
 )
-from core.runtime.security_layer.agent_isolation import IAgentIsolation, AgentIsolation
-from core.runtime.security_layer.sandbox import ISandbox, Sandbox
+from src.core.runtime.security_layer.agent_isolation import IAgentIsolation, AgentIsolation
+from src.core.runtime.security_layer.sandbox import ISandbox, Sandbox
 
 logger = logging.getLogger(__name__)
 

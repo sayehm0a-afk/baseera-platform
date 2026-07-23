@@ -1,7 +1,7 @@
 import pytest
 import logging
 from unittest.mock import AsyncMock, MagicMock
-from core.runtime.security_layer.agent_isolation import AgentIsolation, IAgentIsolation
+from src.core.runtime.security_layer.agent_isolation import AgentIsolation, IAgentIsolation
 
 @pytest.fixture
 def agent_isolation() -> IAgentIsolation:
