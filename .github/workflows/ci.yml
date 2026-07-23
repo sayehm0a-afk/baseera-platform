@@ -30,7 +30,7 @@ on:
 # Lower this value only when deliberately reducing debt (M1.5), never to
 # silence a regression.
 env:
-  FLAKE8_BASELINE: 1515
+  FLAKE8_BASELINE: 0
 
 jobs:
   build-and-test:
