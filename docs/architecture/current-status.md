@@ -9,8 +9,8 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.1 (branch `feature/m2-saudi-stock-analysis-engine`, based on
-`main` at `4567c9fb7c0c509a098b84faaa26b10f4d90f281`, M2.0's merge
+As of M2.2 (branch `feature/m2.2-technical-analysis-engine`, based on
+`main` at `5887d4949ce0fa51c65791e2cfd36959180c903c`, M2.1's merge
 commit):
 
 ## Implemented
@@ -52,6 +52,29 @@ commit):
   into `RealWorker`/`RealTaskQueue`/`main.py` — its signature is
   handler-compatible for a later milestone to register, but that wiring
   itself is out of M2.1's scope.
+- **Technical Analysis Engine** (M2.2): `src/analysis/technical_analysis_engine.py`
+  computes 11 indicators — SMA, EMA, ADX, SuperTrend (trend); RSI, MACD
+  (momentum); Bollinger Bands, ATR (volatility); OBV, Volume SMA
+  (volume); 5 candlestick patterns (Doji, Hammer, Shooting Star,
+  Bullish/Bearish Engulfing) — against one OHLCV `DataFrame`, all
+  implemented directly on `pandas`/`numpy` (no new dependency).
+  `src/analysis/registry.py`'s `IndicatorRegistry`/`IndicatorSpec` is
+  the extension point: a future indicator (including a Smart Money/ICT/
+  Wyckoff-style one) is one pure function plus one registry entry, with
+  no change to the engine or any existing indicator.
+  `TechnicalAnalysisResult.latest_snapshot()` gives the flat "current
+  value of everything" shape a future Signal Engine/Confidence Scoring/
+  AI Decision Layer would consume. `ohlcv_loader.py` bridges `PriceBar`
+  (M2.1) to this pure-computation layer and is the only module in
+  `src/analysis/` that touches a database session. **Not included**:
+  no persistence of computed indicator values (nothing is written back
+  to the database), no API route exposes any of this yet, no
+  support/resistance detection, no trend-strength beyond what ADX/
+  SuperTrend already provide, and no signal generation or confidence
+  scoring — those are later layers this milestone only prepared the
+  extension point for. Depends entirely on `DevMarketDataProvider`'s
+  synthetic data via `ohlcv_loader.py`; no real Tadawul vendor is
+  contracted (unchanged from M2.1).
 
 ## Partially implemented
 
@@ -79,11 +102,13 @@ commit):
 
 ## Not implemented
 
-- **Saudi Stock Analysis Engine**: RSI, MACD, EMA, SMA, Bollinger Bands,
-  ATR, ADX, SuperTrend, volume analysis, candlestick pattern detection,
-  support/resistance, trend detection, signal generation, confidence
-  scoring — none of this exists anywhere in the repository, in any form.
-  `src/analysis/{indicators,price_action,volume}/` are empty scaffolding.
+- **Composite Indicator Engine, Signal Engine, Confidence Scoring,
+  Explainable Signals, AI Decision Layer**: none of these exist yet.
+  M2.2's `IndicatorRegistry`/`IndicatorOutput` extension point was
+  built specifically so these can be added later without modifying any
+  existing indicator, but no such layer has been written.
+- **Support/resistance detection**: not implemented — distinct from the
+  trend-strength/direction ADX and SuperTrend already provide.
 - **Expert agent system** (the 15-agent organization described in the
   approved recovery plan: Chief Investment Intelligence, Market Regime,
   Technical Analysis, Price Action, Volume/Liquidity, Fundamental,
@@ -112,29 +137,31 @@ directory's own `README.md`.
 
 ## Empty future subsystems (scaffolded, not implemented)
 
-`src/market_data/{validators,schemas}/`, `src/analysis/*`,
-`src/agents/base/`, `src/pipeline/`, `src/learning/`, `prompts/`,
-`frontend/`, `tests/{financial_validation,operational}/` — created in M1
-as directory scaffolding only (`.gitkeep`/empty `__init__.py`), per the
+`src/market_data/{validators,schemas}/`, `src/agents/base/`,
+`src/pipeline/`, `src/learning/`, `prompts/`, `frontend/`,
+`tests/{financial_validation,operational}/` — created in M1 as
+directory scaffolding only (`.gitkeep`/empty `__init__.py`), per the
 canonical target architecture. None contain code. None are placeholder
 implementations. (`src/domain/` and `migrations/versions/` are no
-longer empty as of M2.1 — see "Implemented" above.)
+longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
+M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.1)
+## Verified test/build state (M2.2)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
-- Boot smoke test: `import main` succeeds, 11 routes, no `PYTHONPATH`
-  manipulation required.
-- Full test suite: 735 passed / 12 skipped (Redis unavailable) / 0 failed
-  without a live Redis; 747 passed / 0 skipped / 0 failed with one.
-  747 total test functions in the repository (up from 730 at M1.5's
-  close — 18 new tests for the M2.1 domain models, dev market-data
-  provider, and ingestion job; zero existing tests modified).
+- Boot smoke test: `import main` succeeds, 11 routes (unchanged from
+  M2.1), no `PYTHONPATH` manipulation required.
+- Full test suite: 795 passed / 12 skipped (Redis unavailable) / 0 failed
+  without a live Redis; 807 passed / 0 skipped / 0 failed with one.
+  807 total test functions in the repository (up from 747 at M2.1's
+  close — 60 new tests for the M2.2 indicators, registry, OHLCV loader,
+  and engine facade; zero existing tests modified).
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
   CI at `FLAKE8_BASELINE: 0` since M2.0 (see "Completed: M2.0" below).
 - Migration cycle (`alembic upgrade head` → `downgrade base` →
   `upgrade head`) verified against a real local Postgres 16 instance
-  matching `database.py`'s default `DATABASE_URL` exactly.
+  matching `database.py`'s default `DATABASE_URL` exactly (unchanged
+  by M2.2 — no new migration in this milestone).
 
 ## Completed: M1.5 — Lint Debt Reduction
 
@@ -204,6 +231,43 @@ docstring, in every dict it returns (`source="dev-synthetic"`,
 `is_synthetic=True`), and in `.env.example`'s comment next to
 `TADAWUL_API_KEY` — it must never be mistaken for, or silently promoted
 to, a real data source.
+
+## Completed: M2.2 — Technical Analysis Engine
+
+11 technical indicators plus a registry-based extension point and an
+engine facade — see "Implemented" above for exactly what each is and
+isn't. Nine `[M2.2]`-prefixed commits on
+`feature/m2.2-technical-analysis-engine`, PR #6.
+
+Before implementation began, one architectural enhancement was made to
+the approved spec by explicit instruction: the engine must not become
+just a collection of indicators, but the permanent foundation later
+layers (Composite Indicator Engine, Signal Engine, Confidence Scoring,
+Explainable Signals, AI Decision Layer, future Smart Money/ICT/Wyckoff
+modules) build on, without any of them needing to modify an existing
+indicator. `src/analysis/types.py`'s `IndicatorOutput` and
+`src/analysis/registry.py`'s `IndicatorRegistry`/`IndicatorSpec` are
+that extension point, verified directly in
+`tests/unit/analysis/test_technical_analysis_engine.py`: a hand-built
+custom registry with a placeholder "future indicator" runs through the
+unmodified engine correctly, and building a custom registry never
+mutates the shared default one.
+
+Per the spec's own risk assessment ("indicator math has a subtle
+off-by-one or window-edge bug" as the single highest-likelihood defect
+class for this milestone), every indicator has hand-computed reference
+values, and the most deeply recursive/stateful ones (EMA, ADX, RSI,
+MACD) additionally have independent, freshly-written non-vectorized
+loop implementations cross-checked against the production code —
+plain compile success and one ad hoc smoke test were treated as
+explicitly insufficient verification.
+
+**Deliberately out of scope, same "no data vendor" gap as M2.1**: no
+indicator values are persisted, no API route exposes any of this, and
+every computation still runs on `DevMarketDataProvider`'s synthetic
+data — no real Tadawul vendor is contracted. Support/resistance
+detection, signal generation, and confidence scoring do not exist yet;
+this milestone only prepared the extension point they will plug into.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
