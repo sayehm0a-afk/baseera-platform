@@ -76,7 +76,7 @@ async def test_task_queue_process_tasks_from_scheduler_to_priority_queue(task_qu
     task_id = "scheduled_task"
     task_payload = {"data": "scheduled"}
     handler = AsyncMock()
-    
+
     mock_scheduler.get_scheduled_tasks.return_value = [{
         "task_id": task_id,
         "task_payload": {"payload": task_payload, "handler_id": task_id},
@@ -113,7 +113,7 @@ async def test_task_queue_execute_task_success(task_queue: TaskQueue, mock_sched
         "task_payload": {"payload": task_payload, "handler_id": task_id},
         "priority": 0
     }
-    
+
     fetched_task = await task_queue.get_task("test_worker_id")
     assert fetched_task is not None
     assert fetched_task["task_id"] == task_id
@@ -203,7 +203,7 @@ async def test_task_queue_execute_task_failure_dlq(task_queue: TaskQueue, mock_s
 async def test_task_queue_handler_not_found(task_queue: TaskQueue, mock_scheduler: AsyncMock, mock_priority_queue: AsyncMock, mock_dead_letter_queue: AsyncMock, caplog):
     task_id = "no_handler_task"
     task_payload = {"data": "no_handler"}
-    
+
     await task_queue.enqueue_task(task_id, task_payload, AsyncMock())
     del task_queue._handlers[task_id]
     await task_queue.start()

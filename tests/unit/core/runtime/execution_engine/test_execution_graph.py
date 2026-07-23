@@ -154,5 +154,3 @@ async def test_execution_graph_undefined_dependency_in_graph_definition(executio
     assert "Skipping task UndefinedDep as it is a dependency but not a defined task in the graph." in caplog.text
     assert "TaskA" in results
     assert "UndefinedDep" not in results
-
-

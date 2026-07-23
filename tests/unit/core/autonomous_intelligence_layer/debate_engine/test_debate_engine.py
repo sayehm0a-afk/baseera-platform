@@ -89,7 +89,7 @@ def test_detect_consensus_pro_con(debate_engine):
     debate_engine.add_argument("s1", "arg1", "agent1", "Pro 1", ArgumentType.PRO, confidence=0.9)
     debate_engine.add_argument("s1", "arg2", "agent2", "Con 1", ArgumentType.CON, confidence=0.1)
     debate_engine.add_argument("s1", "arg3", "agent1", "Pro 2", ArgumentType.PRO, confidence=0.8)
-    
+
     consensus, score = debate_engine.detect_consensus("s1")
     assert consensus is False # 2 pro, 1 con, threshold 0.7 -> 2/3 = 0.66, which is < 0.7
     # The current implementation of detect_consensus only counts pro/con arguments, not confidence for consensus score.
@@ -106,7 +106,7 @@ def test_detect_consensus_reached(debate_engine):
     debate_engine.add_argument("s1", "arg1", "agent1", "Pro 1", ArgumentType.PRO, confidence=0.9)
     debate_engine.add_argument("s1", "arg2", "agent1", "Pro 2", ArgumentType.PRO, confidence=0.8)
     debate_engine.add_argument("s1", "arg3", "agent2", "Pro 3", ArgumentType.PRO, confidence=0.7)
-    
+
     consensus, score = debate_engine.detect_consensus("s1")
     assert consensus is True # 3 pro, 0 con, threshold 0.7 -> 3/3 = 1.0
     assert score == 1.0
@@ -116,7 +116,7 @@ def test_analyze_arguments(debate_engine):
     debate_engine.add_argument("s1", "arg1", "agent1", "Pro 1", ArgumentType.PRO, confidence=0.9)
     debate_engine.add_argument("s1", "arg2", "agent2", "Con 1", ArgumentType.CON, confidence=0.1)
     debate_engine.add_argument("s1", "arg3", "agent1", "Pro 2", ArgumentType.PRO, confidence=0.8)
-    
+
     analysis = debate_engine.analyze_arguments("s1")
     assert analysis["total_arguments"] == 3
     assert analysis["argument_types"][ArgumentType.PRO.value] == 2
@@ -131,7 +131,7 @@ def test_generate_summary(debate_engine):
     session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     debate_engine.add_argument("s1", "arg1", "agent1", "Pro 1", ArgumentType.PRO, confidence=0.9)
     debate_engine.add_argument("s1", "arg2", "agent2", "Con 1", ArgumentType.CON, confidence=0.1)
-    
+
     summary = debate_engine.generate_summary("s1")
     assert "Debate Summary: Topic A" in summary
     assert "Total Arguments: 2" in summary
@@ -141,6 +141,6 @@ def test_getters(debate_engine):
     session = debate_engine.create_session("s1", "Topic A", ["agent1", "agent2"])
     assert debate_engine.get_session("s1") is not None
     assert debate_engine.get_session("nonexistent") is None
-    
+
     debate_engine.advance_phase("s1", DebatePhase.CONCLUDED)
     assert len(debate_engine.get_debate_history()) == 1

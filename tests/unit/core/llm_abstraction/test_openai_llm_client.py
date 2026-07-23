@@ -152,4 +152,3 @@ async def test_openai_llm_client_handle_retry_exhausted(openai_api_key):
     with pytest.raises(Exception, match="fail"):
         await client._handle_retry(mock_func, "arg1")
         assert mock_func.call_count == 2
-

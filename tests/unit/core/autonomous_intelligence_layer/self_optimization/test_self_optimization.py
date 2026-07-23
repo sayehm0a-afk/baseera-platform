@@ -44,7 +44,7 @@ def test_set_parameter_limit_reached(self_optimization, sample_config):
     custom_optimizer = SelfOptimization(config=sample_config)
     for i in range(sample_config.max_parameters):
         custom_optimizer.set_parameter(f"param{i}", i)
-    
+
     assert not custom_optimizer.set_parameter("param_exceed", 10)
 
 def test_get_parameter(self_optimization):
@@ -142,7 +142,7 @@ def test_get_metrics_by_type(self_optimization):
     metric1 = self_optimization.record_metric("lat1", OptimizationMetric.LATENCY, 100.0)
     metric2 = self_optimization.record_metric("lat2", OptimizationMetric.LATENCY, 90.0)
     metric3 = self_optimization.record_metric("thr1", OptimizationMetric.THROUGHPUT, 500.0)
-    
+
     latency_metrics = self_optimization.get_metrics_by_type(OptimizationMetric.LATENCY)
     assert len(latency_metrics) == 2
     assert metric1 in latency_metrics

@@ -1,6 +1,6 @@
 import pytest
 import sys
-sys.path.insert(0, 
+sys.path.insert(0,
 '/home/ubuntu/basirah')
 import json
 from datetime import datetime, UTC
@@ -183,4 +183,3 @@ async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, k
 
     benchmark(run_workflow)
     """اختبار تدفق العمل الكامل للوحدة 5 من البداية إلى النهاية."""
-

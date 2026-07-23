@@ -65,7 +65,7 @@ async def test_dlq_overwrite_enqueue(dlq: DeadLetterQueue, caplog):
 async def test_dlq_dequeue_limit(dlq: DeadLetterQueue):
     for i in range(5):
         await dlq.enqueue(f"task_{i}", {"data": i}, f"Error {i}")
-    
+
     dequeued_tasks = await dlq.dequeue(limit=3)
     assert len(dequeued_tasks) == 3
     assert await dlq.size() == 2

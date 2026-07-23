@@ -28,7 +28,7 @@ class ServiceLayer(IServiceLayer):
         # TODO: استبدال هذا بمنطق حقيقي لتنفيذ عملية الخدمة
         if service_name not in self._services:
             raise ValueError(f"Service \'{service_name}\' not found.")
-        
+
         # محاكاة تنفيذ العملية
         await asyncio.sleep(0.2)
         return {"service_name": service_name, "operation": operation, "status": "completed", "result": f"Operation \'{operation}\' executed with {params}"}

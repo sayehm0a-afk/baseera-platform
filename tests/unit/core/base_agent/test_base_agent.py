@@ -145,7 +145,7 @@ async def test_base_agent_call_tool_success():
     mock_tool = AsyncMock()
     mock_tool.execute = AsyncMock(return_value="Result from test_tool")
     agent.tool_registry.get_tool = AsyncMock(return_value=mock_tool)
-    
+
     result = await agent._call_tool("test_tool", arg1="val1")
     assert result == "Result from test_tool"
     mock_tool.execute.assert_called_once_with(arg1="val1")

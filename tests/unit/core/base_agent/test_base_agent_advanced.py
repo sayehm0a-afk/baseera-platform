@@ -148,7 +148,7 @@ async def test_base_agent_init_internal_methods_coverage():
     assert True
 
 def test_base_agent_main_block_coverage():
-    # To cover the 'if __name__ == "__main__":' block, we can't easily run it via pytest 
+    # To cover the 'if __name__ == "__main__":' block, we can't easily run it via pytest
     # but we can ensure the logic inside is tested.
     # The logic is basically initialization, activation, and status checks which are already covered.
     pass

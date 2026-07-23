@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from src.core.autonomous_intelligence_layer.execution_policies.policy import Policy
 
 class ConcretePolicy(Policy):
-    def apply(self, task_context): 
+    def apply(self, task_context):
         return task_context
 
     @property

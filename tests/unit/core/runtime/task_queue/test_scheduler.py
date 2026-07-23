@@ -58,7 +58,7 @@ async def test_scheduler_cancel_non_existent_task(scheduler: Scheduler):
 async def test_scheduler_get_scheduled_tasks_limit(scheduler: Scheduler):
     for i in range(5):
         await scheduler.schedule_task(f"task_{i}", {"data": i})
-    
+
     tasks = await scheduler.get_scheduled_tasks(limit=3)
     assert len(tasks) == 3
     assert tasks[0]["task_id"] == "task_0"

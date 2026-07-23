@@ -83,7 +83,7 @@ async def test_validate_and_execute_with_sandbox_success(
     capability = "execute_script"
     mock_func = AsyncMock(return_value="script_executed")
     sandbox_config = {"timeout": 60}
-    
+
     mock_permission_validation.validate_permission.return_value = True
     mock_sandbox.create_sandbox.return_value = "sandbox_123"
     mock_sandbox.execute_in_sandbox.return_value = "script_executed"
@@ -108,7 +108,7 @@ async def test_validate_and_execute_with_sandbox_failure(
     agent_id = "failing_sandbox_agent"
     capability = "risky_operation"
     mock_func = AsyncMock(side_effect=ValueError("Sandbox error"))
-    
+
     mock_permission_validation.validate_permission.return_value = True
     mock_sandbox.create_sandbox.return_value = "sandbox_456"
     mock_sandbox.execute_in_sandbox.side_effect = ValueError("Sandbox execution failed")

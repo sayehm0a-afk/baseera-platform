@@ -75,7 +75,7 @@ async def test_message_router_route_message_invalid_destination(message_router, 
     message_type = "invalid.destination"
     payload = {"data": "invalid"}
     invalid_destination = MagicMock(spec=[]) # Ensure it has no dispatch, publish_event, or send_command methods
-    
+
     await message_router.register_route(message_type, invalid_destination)
     with pytest.raises(TypeError, match=f"Invalid destination type for message {message_type}"):
         await message_router.route_message(message_type, payload)

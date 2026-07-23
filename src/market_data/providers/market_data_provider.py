@@ -76,7 +76,7 @@ class IMarketDataProvider(ABC):
 class SaudiMarketDataProvider(IMarketDataProvider):
     """
     Implementation of market data provider for Saudi market.
-    
+
     Supports:
     - Authentication with API credentials
     - Automatic reconnection on connection loss

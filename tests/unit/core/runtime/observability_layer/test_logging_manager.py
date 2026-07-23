@@ -74,7 +74,7 @@ async def test_configure_logging_clears_old_handlers(logging_manager: ILoggingMa
 
     # Old handler should not have been called again
     mock_handler_old.handle.assert_not_called()
-    
+
     # New message should go to console
     captured = capsys.readouterr()
     assert "New message" in captured.out
@@ -83,7 +83,7 @@ async def test_configure_logging_clears_old_handlers(logging_manager: ILoggingMa
 async def test_logger_propagation(logging_manager: ILoggingManager):
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
-    
+
     mock_root_handler = MagicMock(spec=logging.Handler)
     mock_root_handler.level = logging.DEBUG
     root_logger.addHandler(mock_root_handler)

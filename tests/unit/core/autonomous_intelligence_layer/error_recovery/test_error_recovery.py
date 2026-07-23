@@ -216,5 +216,3 @@ def test_get_recent_errors(error_recovery_instance):
 
     all_errors = error_recovery_instance.get_recent_errors(minutes=100)
     assert len(all_errors) == 2
-
-

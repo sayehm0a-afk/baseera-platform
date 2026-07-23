@@ -133,5 +133,3 @@ class TestMemoryStore:
         assert len(memory_store_with_config.memory[MemoryType.WORKING.value]) == 1
         assert entry1 not in memory_store_with_config.memory[MemoryType.WORKING.value]
         assert entry2 in memory_store_with_config.memory[MemoryType.WORKING.value]
-
-
