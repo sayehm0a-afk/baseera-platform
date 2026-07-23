@@ -4,7 +4,7 @@ import sys
 # (out of M1.5 lint-debt scope) -- imports below are noqa'd rather than
 # reordered so this fix carries zero behavior-change risk.
 sys.path.insert(0,
-'/home/ubuntu/basirah')
+                '/home/ubuntu/basirah')
 import json  # noqa: E402
 from unittest.mock import MagicMock, patch  # noqa: E402
 from src.core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI  # noqa: E402

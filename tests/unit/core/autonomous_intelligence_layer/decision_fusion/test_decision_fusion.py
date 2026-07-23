@@ -42,7 +42,7 @@ def test_fuse_decision_majority_voting(decision_fusion_system):
     fused_decision = decision_fusion_system.fuse_decision("d2", FusionMethod.MAJORITY_VOTING)
     assert fused_decision is not None
     assert fused_decision.final_decision == "Option A"
-    assert fused_decision.confidence == pytest.approx(2/3)
+    assert fused_decision.confidence == pytest.approx(2 / 3)
 
 
 def test_fuse_decision_consensus(decision_fusion_system):
