@@ -1,8 +1,8 @@
 """initial domain models: stocks, price_bars, market_snapshots
 
-Revision ID: cf40a12ee0c4
+Revision ID: b0d5a7f91ccb
 Revises: 
-Create Date: 2026-07-23 16:32:56.777448
+Create Date: 2026-07-23 17:15:25.555992
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'cf40a12ee0c4'
+revision: str = 'b0d5a7f91ccb'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -30,7 +30,7 @@ def upgrade() -> None:
     sa.Column('change_percent', sa.Numeric(precision=9, scale=4), nullable=True),
     sa.Column('volume', sa.BigInteger(), nullable=True),
     sa.Column('market_cap', sa.Numeric(precision=24, scale=4), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('index_name', 'timestamp', name='uq_market_snapshot_identity')
     )
@@ -42,12 +42,12 @@ def upgrade() -> None:
     sa.Column('name_en', sa.String(length=255), nullable=False),
     sa.Column('name_ar', sa.String(length=255), nullable=True),
     sa.Column('sector', sa.String(length=128), nullable=True),
-    sa.Column('currency', sa.String(length=3), nullable=False),
-    sa.Column('lot_size', sa.Integer(), nullable=False),
-    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('currency', sa.String(length=3), server_default='SAR', nullable=False),
+    sa.Column('lot_size', sa.Integer(), server_default='1', nullable=False),
+    sa.Column('is_active', sa.Boolean(), server_default='true', nullable=False),
     sa.Column('listed_at', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_stocks_symbol'), 'stocks', ['symbol'], unique=True)
@@ -60,8 +60,8 @@ def upgrade() -> None:
     sa.Column('high', sa.Numeric(precision=18, scale=4), nullable=False),
     sa.Column('low', sa.Numeric(precision=18, scale=4), nullable=False),
     sa.Column('close', sa.Numeric(precision=18, scale=4), nullable=False),
-    sa.Column('volume', sa.BigInteger(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('volume', sa.BigInteger(), server_default='0', nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['stock_id'], ['stocks.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('stock_id', 'timeframe', 'timestamp', name='uq_price_bar_identity')

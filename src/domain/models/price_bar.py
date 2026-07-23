@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 
 from src.core.db.database import Base
 
@@ -44,9 +45,14 @@ class PriceBar(Base):
     high = Column(Numeric(18, 4), nullable=False)
     low = Column(Numeric(18, 4), nullable=False)
     close = Column(Numeric(18, 4), nullable=False)
-    volume = Column(BigInteger, nullable=False, default=0)
+    volume = Column(BigInteger, nullable=False, default=0, server_default="0")
+    # server_default so a non-ORM insert still satisfies NOT NULL --
+    # see stock.py for the same reasoning.
     created_at = Column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
     )
 
     stock = relationship("Stock", back_populates="price_bars")
