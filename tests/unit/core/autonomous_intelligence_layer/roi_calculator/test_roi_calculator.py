@@ -126,7 +126,7 @@ def test_payback_period_calculation(roi_calculator):
     roi_calculator.returns["ret3"] = Return("ret3", "inv1", 500.0, "R3", timestamp=now)
 
     analysis = roi_calculator.calculate_roi("analysis1", "inv1")
-    assert analysis.payback_period_days == pytest.approx(0) # Because the last return makes it break even on the same day
+    assert analysis.payback_period_days == pytest.approx(0)  # Because the last return makes it break even on the same day
 
 
 def test_payback_period_disabled(roi_calculator):
@@ -187,16 +187,16 @@ def test_compare_investments(roi_calculator):
 
 def test_get_best_roi_investment(roi_calculator):
     roi_calculator.record_investment("inv1", InvestmentType.INFRASTRUCTURE, 1000.0, "Infra")
-    roi_calculator.record_return("ret1", "inv1", 1500.0, "R1") # ROI 50%
+    roi_calculator.record_return("ret1", "inv1", 1500.0, "R1")  # ROI 50%
 
     roi_calculator.record_investment("inv2", InvestmentType.TOOL, 500.0, "Tool")
-    roi_calculator.record_return("ret2", "inv2", 750.0, "R2") # ROI 50%
+    roi_calculator.record_return("ret2", "inv2", 750.0, "R2")  # ROI 50%
 
     roi_calculator.record_investment("inv3", InvestmentType.RESEARCH, 2000.0, "Research")
-    roi_calculator.record_return("ret3", "inv3", 1000.0, "R3") # ROI -50%
+    roi_calculator.record_return("ret3", "inv3", 1000.0, "R3")  # ROI -50%
 
     best_inv = roi_calculator.get_best_roi_investment()
-    assert best_inv in ["inv1", "inv2"] # Both have 50% ROI, order might vary
+    assert best_inv in ["inv1", "inv2"]  # Both have 50% ROI, order might vary
 
 
 def test_get_best_roi_investment_empty(roi_calculator):

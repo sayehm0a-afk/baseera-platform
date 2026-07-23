@@ -22,7 +22,7 @@ class AgentRuntime(IAgentRuntime):
         # واستخدام PlannerAI لتخطيط المهمة، و ExecutionEngine لتنفيذ الخطوات،
         # و SecurityLayer لتنفيذ آمن.
         logger.warning(f"[AgentRuntime] Executing task for agent \'{agent_id}\' using simulated logic. This must be replaced with a real implementation in production.")
-        await asyncio.sleep(0.1) # محاكاة عمل الوكيل
+        await asyncio.sleep(0.1)  # محاكاة عمل الوكيل
         result = {"agent_id": agent_id, "task_status": "completed_simulated", "output": f"Simulated processing of {task_payload.get('task_name', 'unknown task')}"}
         logger.info(f"[AgentRuntime] Agent \'{agent_id}\' completed simulated task with result: {result}")
         return result

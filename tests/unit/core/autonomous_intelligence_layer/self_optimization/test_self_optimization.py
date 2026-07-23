@@ -17,7 +17,7 @@ def sample_config():
     return SelfOptimizationConfig(
         enable_auto_tuning=True,
         optimization_interval_seconds=60,
-        min_improvement_threshold=2.0, # Changed to 2.0 to make 1% improvement not meet the threshold
+        min_improvement_threshold=2.0,  # Changed to 2.0 to make 1% improvement not meet the threshold
         max_parameters=5
     )
 
@@ -87,7 +87,7 @@ def test_optimize_parameters_no_improvement(sample_config):
 
     def mock_optimization_func():
         self_optimization.set_parameter("buffer_size", 2048)
-        self_optimization.record_metric("lat2", OptimizationMetric.LATENCY, 99.0) # Only 1% improvement
+        self_optimization.record_metric("lat2", OptimizationMetric.LATENCY, 99.0)  # Only 1% improvement
 
     result = self_optimization.optimize_parameters(
         "opt1", OptimizationMetric.LATENCY, mock_optimization_func
@@ -118,7 +118,7 @@ def test_optimize_parameters_exception_rollback(self_optimization):
         "opt1", OptimizationMetric.LATENCY, mock_optimization_func_with_error
     )
     assert result is None
-    assert self_optimization.parameters == old_parameters # Parameters should be rolled back
+    assert self_optimization.parameters == old_parameters  # Parameters should be rolled back
 
 
 def test_calculate_improvement_latency_lower_is_better(self_optimization):

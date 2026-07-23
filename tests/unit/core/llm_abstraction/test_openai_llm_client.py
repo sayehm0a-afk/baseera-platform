@@ -6,10 +6,13 @@ import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 import os
 import sys
+# Pre-existing hardcoded path from an earlier dev environment; left as-is
+# (out of M1.5 lint-debt scope) -- imports below are noqa'd rather than
+# reordered so this fix carries zero behavior-change risk.
 sys.path.insert(0, '/home/ubuntu/basirah')
-from typing import List, Dict, Any
+from typing import List, Dict, Any  # noqa: E402
 
-from src.core.llm_abstraction.openai_llm_client import OpenAILLMClient, _tiktoken
+from src.core.llm_abstraction.openai_llm_client import OpenAILLMClient, _tiktoken  # noqa: E402
 
 # Mock the tiktoken import for environments where it might not be installed
 
@@ -113,7 +116,7 @@ async def test_openai_llm_client_count_tokens_no_tiktoken(openai_api_key):
     text = "هذا نص تجريبي لحساب التوكنات."
     with patch("src.core.llm_abstraction.openai_llm_client._tiktoken", new=None):
         tokens = await client.count_tokens(text)
-        assert tokens == 6 # Rough estimate: len(text.split()) * 4 // 3 for "هذا نص تجريبي لحساب التوكنات." is 6
+        assert tokens == 6  # Rough estimate: len(text.split()) * 4 // 3 for "هذا نص تجريبي لحساب التوكنات." is 6
         # The warning message is logged when tiktoken is None, so no call to encoding_for_model
         # No assertion for encoding_for_model as it should not be called when tiktoken is None.
 

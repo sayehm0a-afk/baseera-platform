@@ -29,8 +29,8 @@ def test_rank_weighted_sum(ranking_engine):
     assert result is not None
     assert result.ranking_id == "rank1"
     assert len(result.items) == 2
-    assert result.items[0][0] == "item1" # (0.8*0.6 + 0.9*0.4) = 0.48 + 0.36 = 0.84
-    assert result.items[1][0] == "item2" # (0.7*0.6 + 0.95*0.4) = 0.42 + 0.38 = 0.80
+    assert result.items[0][0] == "item1"  # (0.8*0.6 + 0.9*0.4) = 0.48 + 0.36 = 0.84
+    assert result.items[1][0] == "item2"  # (0.7*0.6 + 0.95*0.4) = 0.42 + 0.38 = 0.80
 
 
 def test_rank_multiplicative(ranking_engine):

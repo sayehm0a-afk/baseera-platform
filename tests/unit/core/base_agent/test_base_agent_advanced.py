@@ -68,10 +68,10 @@ async def test_base_agent_process_task_when_paused():
 @pytest.mark.asyncio
 async def test_base_agent_call_tool_none_name():
     agent = BaseAgent()
-    agent.tool_registry = AsyncMock() # Mock ToolRegistry
+    agent.tool_registry = AsyncMock()  # Mock ToolRegistry
     mock_tool = MagicMock()
     mock_tool.execute = AsyncMock()
-    agent.tool_registry.get_tool.return_value = mock_tool # Mock a tool
+    agent.tool_registry.get_tool.return_value = mock_tool  # Mock a tool
     with pytest.raises(ValueError):
         await agent._call_tool(None)
 

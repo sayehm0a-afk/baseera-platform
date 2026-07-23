@@ -94,11 +94,11 @@ async def test_task_queue_process_tasks_from_scheduler_to_priority_queue(task_qu
         "status": "scheduled"
     }]
     mock_scheduler.cancel_task.return_value = True
-    mock_priority_queue.empty.return_value = True # Ensure nothing is in PQ initially
+    mock_priority_queue.empty.return_value = True  # Ensure nothing is in PQ initially
 
     await task_queue.enqueue_task(task_id, task_payload, handler)
     await task_queue.start()
-    await asyncio.sleep(0.01) # Allow some time for the processing loop to run
+    await asyncio.sleep(0.01)  # Allow some time for the processing loop to run
     await task_queue.stop()
 
     mock_scheduler.get_scheduled_tasks.assert_called()
@@ -134,7 +134,7 @@ async def test_task_queue_execute_task_success(task_queue: TaskQueue, mock_sched
     await task_queue.stop()
 
     handler.assert_called_once_with(task_payload)
-    mock_scheduler.schedule_task.assert_called_once() # For initial enqueue
+    mock_scheduler.schedule_task.assert_called_once()  # For initial enqueue
     mock_priority_queue.get.assert_called_once()
 
 
@@ -185,7 +185,7 @@ async def test_task_queue_execute_task_failure_dlq(task_queue: TaskQueue, mock_s
     task_payload = {"data": "fail_to_dlq"}
     handler = AsyncMock(side_effect=ValueError("Simulated error"))
 
-    mock_retry_policy.should_retry.return_value = False # No retry
+    mock_retry_policy.should_retry.return_value = False  # No retry
 
     await task_queue.enqueue_task(task_id, task_payload, handler)
     await task_queue.start()

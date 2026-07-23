@@ -155,13 +155,13 @@ class TestKnowledgeGraph:
         knowledge_graph.add_entity(entity_id=entity2.entity_id, name=entity2.name, entity_type=entity2.entity_type, attributes=entity2.attributes)
         knowledge_graph.add_relationship(relationship_id=sample_relationship.relationship_id, source_entity_id=sample_relationship.source_entity_id, target_entity_id=sample_relationship.target_entity_id, relationship_type=sample_relationship.relationship_type, attributes=sample_relationship.attributes)
         traversal_result = knowledge_graph.traverse(start_entity_id=sample_node.entity_id, max_depth=1)
-        assert len(traversal_result["entities"]) == 2 # Includes start node and neighbor
+        assert len(traversal_result["entities"]) == 2  # Includes start node and neighbor
         assert entity2.entity_id in traversal_result["entities"]
 
     def test_traverse_no_neighbors(self, knowledge_graph, sample_node):
         knowledge_graph.add_entity(entity_id=sample_node.entity_id, name=sample_node.name, entity_type=sample_node.entity_type, attributes=sample_node.attributes)
         traversal_result = knowledge_graph.traverse(start_entity_id=sample_node.entity_id, max_depth=1)
-        assert len(traversal_result["entities"]) == 1 # Only includes start node
+        assert len(traversal_result["entities"]) == 1  # Only includes start node
 
     # The KnowledgeGraph class does not have a get_path method. Skipping this test.
 
@@ -179,7 +179,7 @@ class TestKnowledgeGraph:
         assert len(knowledge_graph.entities) == 1
         knowledge_graph.add_entity(entity_id="node2", name="Bob", entity_type=EntityType.PERSON, attributes={"name": "Bob"})
         knowledge_graph.add_relationship(relationship_id=sample_relationship.relationship_id, source_entity_id=sample_relationship.source_entity_id, target_entity_id=sample_relationship.target_entity_id, relationship_type=sample_relationship.relationship_type, attributes=sample_relationship.attributes)
-        assert len(knowledge_graph.entities) == 2 # Only entities are counted in len
+        assert len(knowledge_graph.entities) == 2  # Only entities are counted in len
 
     def test_contains_entity(self, knowledge_graph, sample_node):
         knowledge_graph.add_entity(entity_id=sample_node.entity_id, name=sample_node.name, entity_type=sample_node.entity_type, attributes=sample_node.attributes)

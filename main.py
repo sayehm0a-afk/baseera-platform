@@ -15,8 +15,8 @@ import uvicorn
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Import structured logging
-from src.core.monitoring.structured_logging import init_logging, get_logger
+# Import structured logging -- must come after sys.path.insert above so `src` is importable
+from src.core.monitoring.structured_logging import init_logging, get_logger  # noqa: E402
 
 # Initialize structured logging
 init_logging()

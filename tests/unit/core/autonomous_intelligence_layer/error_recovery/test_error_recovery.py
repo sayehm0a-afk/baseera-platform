@@ -91,7 +91,7 @@ def test_execute_recovery_with_retries(error_recovery_instance):
     action = error_recovery_instance.create_recovery_action("act1", "err1", "Retry")
     mock_func = MagicMock(side_effect=[Exception("Attempt 1"), Exception("Attempt 2"), "Success after retry"])
     error_recovery_instance.config.max_retries = 2
-    error_recovery_instance.config.initial_retry_delay_seconds = 0 # No actual sleep in test
+    error_recovery_instance.config.initial_retry_delay_seconds = 0  # No actual sleep in test
 
     success, result = error_recovery_instance.execute_recovery("act1", mock_func)
     assert success is True
@@ -133,9 +133,9 @@ def test_calculate_retry_delay_fibonacci_backoff(error_recovery_instance):
     delay = error_recovery_instance._calculate_retry_delay(2, RetryStrategy.FIBONACCI_BACKOFF)
     assert delay == 2
     delay = error_recovery_instance._calculate_retry_delay(9, RetryStrategy.FIBONACCI_BACKOFF)
-    assert delay == 55 # Max fib value in list
+    assert delay == 55  # Max fib value in list
     delay = error_recovery_instance._calculate_retry_delay(10, RetryStrategy.FIBONACCI_BACKOFF)
-    assert delay == 55 # Should cap at max fib value
+    assert delay == 55  # Should cap at max fib value
 
 
 def test_calculate_retry_delay_unknown_strategy(error_recovery_instance):
@@ -152,18 +152,20 @@ def test_calculate_retry_delay_capped(error_recovery_instance):
     error_recovery_instance.config.initial_retry_delay_seconds = 100
     error_recovery_instance.config.max_retry_delay_seconds = 150
     delay = error_recovery_instance._calculate_retry_delay(1, RetryStrategy.LINEAR_BACKOFF)
-    assert delay == 150 # 100 * (1+1) = 200, capped at 150
+    assert delay == 150  # 100 * (1+1) = 200, capped at 150
 
 
 def test_register_fallback_handler(error_recovery_instance):
-    def fallback_func(): return "Fallback result"
+    def fallback_func():
+        return "Fallback result"
     registered = error_recovery_instance.register_fallback_handler("ConnectionError", fallback_func)
     assert registered is True
     assert "ConnectionError" in error_recovery_instance.fallback_handlers
 
 
 def test_execute_fallback_success(error_recovery_instance):
-    def fallback_func(): return "Fallback result"
+    def fallback_func():
+        return "Fallback result"
     error_recovery_instance.register_fallback_handler("ConnectionError", fallback_func)
     result = error_recovery_instance.execute_fallback("ConnectionError")
     assert result == "Fallback result"
@@ -177,7 +179,8 @@ def test_execute_fallback_not_found(error_recovery_instance):
 
 
 def test_execute_fallback_exception(error_recovery_instance):
-    def failing_fallback_func(): raise Exception("Fallback failed")
+    def failing_fallback_func():
+        raise Exception("Fallback failed")
     error_recovery_instance.register_fallback_handler("FailingError", failing_fallback_func)
     with patch("src.core.autonomous_intelligence_layer.error_recovery.error_recovery.logger") as mock_logger:
         result = error_recovery_instance.execute_fallback("FailingError")

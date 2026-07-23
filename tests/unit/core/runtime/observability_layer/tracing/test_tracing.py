@@ -73,7 +73,7 @@ async def test_span_end_idempotency(tracer: ITracer):
     span = tracer.start_span("idempotent_span")
     span.end()
     end_time_first = span.end_time
-    span.end() # Calling end again should not change end_time
+    span.end()  # Calling end again should not change end_time
     assert span.end_time == end_time_first
 
 
@@ -89,7 +89,7 @@ async def test_span_context_manager(tracer: ITracer):
 async def test_span_duration(tracer: ITracer):
     import time
     span = tracer.start_span("duration_span")
-    time.sleep(0.01) # Simulate some work
+    time.sleep(0.01)  # Simulate some work
     span.end()
     assert span.end_time is not None
     assert span.end_time > span.start_time

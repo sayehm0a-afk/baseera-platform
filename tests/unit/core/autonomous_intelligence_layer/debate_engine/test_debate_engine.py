@@ -103,7 +103,7 @@ def test_detect_consensus_pro_con(debate_engine):
     debate_engine.add_argument("s1", "arg3", "agent1", "Pro 2", ArgumentType.PRO, confidence=0.8)
 
     consensus, score = debate_engine.detect_consensus("s1")
-    assert consensus is False # 2 pro, 1 con, threshold 0.7 -> 2/3 = 0.66, which is < 0.7
+    assert consensus is False  # 2 pro, 1 con, threshold 0.7 -> 2/3 = 0.66, which is < 0.7
     # The current implementation of detect_consensus only counts pro/con arguments, not confidence for consensus score.
     # Let's adjust the test to reflect the current implementation or adjust the implementation.
     # Based on the code, consensus_score = max_count / total_arguments. So 2/3 = 0.66. If threshold is 0.7, it should be False.
@@ -121,7 +121,7 @@ def test_detect_consensus_reached(debate_engine):
     debate_engine.add_argument("s1", "arg3", "agent2", "Pro 3", ArgumentType.PRO, confidence=0.7)
 
     consensus, score = debate_engine.detect_consensus("s1")
-    assert consensus is True # 3 pro, 0 con, threshold 0.7 -> 3/3 = 1.0
+    assert consensus is True  # 3 pro, 0 con, threshold 0.7 -> 3/3 = 1.0
     assert score == 1.0
 
 

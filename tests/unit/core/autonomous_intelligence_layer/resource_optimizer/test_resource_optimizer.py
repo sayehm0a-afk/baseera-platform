@@ -94,9 +94,9 @@ def test_update_usage_not_found(optimizer):
 def test_optimize_allocation_greedy(optimizer):
     optimizer.add_constraint("cpu_limit", ResourceType.CPU, 100.0, 10.0)
     optimizer.allocate_resource("alloc1", "agent1", ResourceType.CPU, 5.0)
-    optimizer.allocations["alloc1"].used_amount = 4.0 # High efficiency
+    optimizer.allocations["alloc1"].used_amount = 4.0  # High efficiency
     optimizer.allocate_resource("alloc2", "agent2", ResourceType.CPU, 5.0)
-    optimizer.allocations["alloc2"].used_amount = 1.0 # Low efficiency
+    optimizer.allocations["alloc2"].used_amount = 1.0  # Low efficiency
 
     result = optimizer.optimize_allocation("opt1", ["agent1", "agent2"], OptimizationStrategy.GREEDY)
     assert isinstance(result, OptimizationResult)
@@ -117,7 +117,7 @@ def test_optimize_allocation_no_agents(optimizer):
 def test_calculate_efficiency(optimizer):
     alloc1 = ResourceAllocation("id1", "agent1", ResourceType.CPU, 10.0, 8.0)
     alloc2 = ResourceAllocation("id2", "agent2", ResourceType.MEMORY, 20.0, 5.0)
-    alloc3 = ResourceAllocation("id3", "agent3", ResourceType.API_CALLS, 0.0, 0.0) # Should not cause division by zero
+    alloc3 = ResourceAllocation("id3", "agent3", ResourceType.API_CALLS, 0.0, 0.0)  # Should not cause division by zero
 
     efficiency = optimizer._calculate_efficiency([alloc1, alloc2, alloc3])
     # (0.8 + 0.25 + 0.0) / 3 = 0.35
@@ -148,7 +148,7 @@ def test_predict_resource_needs_empty_history(optimizer):
     }
     predictions = optimizer.predict_resource_needs("agent1", historical_data)
     assert ResourceType.CPU not in predictions
-    assert predictions[ResourceType.MEMORY] == pytest.approx(120.0) # 100 * 1.2
+    assert predictions[ResourceType.MEMORY] == pytest.approx(120.0)  # 100 * 1.2
 
 
 def test_get_allocation(optimizer):

@@ -190,7 +190,7 @@ async def test_planner_supervisor_integration(mock_planner_ai, supervisor_ai, mo
             return obj.id if hasattr(obj, 'id') else str(obj)
         raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
-    json.dumps(stored_context, default=convert_magicmock_to_id) # Verify JSON serializability
+    json.dumps(stored_context, default=convert_magicmock_to_id)  # Verify JSON serializability
 
 
 @pytest.mark.asyncio
@@ -341,4 +341,4 @@ async def test_full_core_workflow_integration(mock_planner_ai, supervisor_ai, re
     assert global_context_stored is not None
     assert global_context_stored["latest_report"] == "Monthly Product Performance"
     assert global_context_stored["kg_snapshot"] == deep_serialize(knowledge_graph.get_graph_stats())
-    json.dumps(global_context_stored) # Verify JSON serializability
+    json.dumps(global_context_stored)  # Verify JSON serializability

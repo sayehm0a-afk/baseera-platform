@@ -362,4 +362,4 @@ async def test_supervisor_agent_initialize_llm_client_logging(caplog):
                re.match(r"LLM client for SupervisorAgent .* set to None \(or specialized later\).", record.message):
                 found_log = True
                 break
-        assert found_log, "Expected log message from SupervisorAgent not found." # pylint: disable=C0301
+        assert found_log, "Expected log message from SupervisorAgent not found."  # pylint: disable=C0301

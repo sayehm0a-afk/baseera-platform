@@ -104,7 +104,7 @@ async def test_validate_and_execute_with_sandbox_success(
     mock_sandbox.create_sandbox.assert_called_once_with(agent_id, sandbox_config)
     mock_sandbox.execute_in_sandbox.assert_called_once()
     mock_sandbox.destroy_sandbox.assert_called_once_with("sandbox_123")
-    mock_func.assert_not_called() # func should not be called directly when using sandbox
+    mock_func.assert_not_called()  # func should not be called directly when using sandbox
 
 
 @pytest.mark.asyncio

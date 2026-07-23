@@ -78,9 +78,14 @@ async def test_supervisor_runtime_get_supervised_status(supervisor_runtime: Supe
 async def test_isupervisor_runtime_abstract_methods():
     """اختبار أن ISupervisorRuntime يفرض تنفيذ التوابع المجردة."""
     class ConcreteSupervisor(ISupervisorRuntime):
-        async def start_supervision(self, config: Optional[Dict[str, Any]] = None) -> None: pass
-        async def stop_supervision(self) -> None: pass
-        async def get_supervised_status(self) -> Dict[str, Any]: return {}
+        async def start_supervision(self, config: Optional[Dict[str, Any]] = None) -> None:
+            pass
+
+        async def stop_supervision(self) -> None:
+            pass
+
+        async def get_supervised_status(self) -> Dict[str, Any]:
+            return {}
 
     supervisor = ConcreteSupervisor()
     assert isinstance(supervisor, ISupervisorRuntime)

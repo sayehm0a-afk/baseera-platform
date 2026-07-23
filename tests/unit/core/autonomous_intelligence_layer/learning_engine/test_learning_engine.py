@@ -198,7 +198,7 @@ def test_get_failed_experiences(learning_engine):
 
 def test_get_high_confidence_patterns(learning_engine):
     learning_engine.discover_pattern("pat1", "typeA", {"data": "X"}, 0.8)
-    learning_engine.discover_pattern("pat2", "typeB", {"data": "Y"}, 0.6) # Below threshold
+    learning_engine.discover_pattern("pat2", "typeB", {"data": "Y"}, 0.6)  # Below threshold
     pat3 = learning_engine.discover_pattern("pat3", "typeC", {"data": "Z"}, 0.9)
     assert learning_engine.get_high_confidence_patterns() == [learning_engine.patterns["pat1"], pat3]
 

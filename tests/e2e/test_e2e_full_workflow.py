@@ -1,27 +1,30 @@
 import pytest
 import sys
+# Pre-existing hardcoded path from an earlier dev environment; left as-is
+# (out of M1.5 lint-debt scope) -- imports below are noqa'd rather than
+# reordered so this fix carries zero behavior-change risk.
 sys.path.insert(0,
 '/home/ubuntu/basirah')
-import json
-from datetime import datetime, UTC
-from unittest.mock import MagicMock, patch
-from src.core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI
-from src.core.autonomous_intelligence_layer.supervisor_ai.supervisor_ai import SupervisorAI
-from src.core.autonomous_intelligence_layer.reflection_engine.reflection_engine import ReflectionEngine
-from src.core.autonomous_intelligence_layer.memory_reasoning.memory_store import MemoryStore, MemoryType
+import json  # noqa: E402
+from datetime import datetime, UTC  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+from src.core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI  # noqa: E402
+from src.core.autonomous_intelligence_layer.supervisor_ai.supervisor_ai import SupervisorAI  # noqa: E402
+from src.core.autonomous_intelligence_layer.reflection_engine.reflection_engine import ReflectionEngine  # noqa: E402
+from src.core.autonomous_intelligence_layer.memory_reasoning.memory_store import MemoryStore, MemoryType  # noqa: E402
 
 
-from src.core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import KnowledgeGraph
-from src.core.autonomous_intelligence_layer.context_manager.context_manager import ContextManager
-from src.core.autonomous_intelligence_layer.agent_registry.agent_registry import AgentRegistry
+from src.core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import KnowledgeGraph  # noqa: E402
+from src.core.autonomous_intelligence_layer.context_manager.context_manager import ContextManager  # noqa: E402
+from src.core.autonomous_intelligence_layer.agent_registry.agent_registry import AgentRegistry  # noqa: E402
 
-from src.core.autonomous_intelligence_layer.learning_engine.learning_engine import LearningEngine
-from src.core.autonomous_intelligence_layer.error_recovery.error_recovery import ErrorRecovery
-from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
-from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task
-from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node
-from src.core.autonomous_intelligence_layer.agent_registry.agent import Agent
-from src.core.autonomous_intelligence_layer.execution_policies.execution_policies import ExecutionPolicies
+from src.core.autonomous_intelligence_layer.learning_engine.learning_engine import LearningEngine  # noqa: E402
+from src.core.autonomous_intelligence_layer.error_recovery.error_recovery import ErrorRecovery  # noqa: E402
+from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG  # noqa: E402
+from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task  # noqa: E402
+from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node  # noqa: E402
+from src.core.autonomous_intelligence_layer.agent_registry.agent import Agent  # noqa: E402
+from src.core.autonomous_intelligence_layer.execution_policies.execution_policies import ExecutionPolicies  # noqa: E402
 
 # Fixtures for real components
 
@@ -142,7 +145,7 @@ async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, k
         # Verify serialization (implicitly checked by context_manager and memory_store)
         stored_context = context_manager.get_isolated_context(task_id)
         assert stored_context is not None
-        json.dumps(stored_context) # Should not raise an error
+        json.dumps(stored_context)  # Should not raise an error
 
         # Verify memory persistence
 
@@ -167,7 +170,7 @@ async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, k
             # For now, we'll just check if the mock was called if it's part of execute_task.
             # If not, this assertion needs to be moved to a place where reflection is explicitly called.
             # mock_evaluate.assert_called() # This would fail if not called within execute_task
-            pass # Placeholder, as reflection might be called later or in a more complex way
+            pass  # Placeholder, as reflection might be called later or in a more complex way
 
         # Verify autonomous learning (mocked for now)
         with patch.object(supervisor_ai.learning_engine, 'learn_from_experiences') as mock_learn:

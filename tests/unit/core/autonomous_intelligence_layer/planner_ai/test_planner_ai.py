@@ -51,7 +51,7 @@ class TestPlannerAI:
 
         optimized_dag = planner_ai.optimize_plan(dummy_dag, {})
         assert isinstance(optimized_dag, DAG)
-        assert optimized_dag == dummy_dag # In a simple implementation, it might return the same DAG
+        assert optimized_dag == dummy_dag  # In a simple implementation, it might return the same DAG
 
     def test_create_dependency_graph(self, planner_ai):
         tasks_with_dependencies = [

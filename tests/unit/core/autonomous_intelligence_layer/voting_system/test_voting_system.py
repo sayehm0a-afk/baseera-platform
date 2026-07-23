@@ -98,7 +98,7 @@ def test_close_proposal_absolute_majority(voting_system):
 
     assert voting_system.close_proposal("p2") is True
     assert proposal.is_closed is True
-    assert proposal.result == "REJECTED" # 2/4 = 0.5, not > 0.5
+    assert proposal.result == "REJECTED"  # 2/4 = 0.5, not > 0.5
 
 
 def test_close_proposal_qualified_majority(voting_system):
@@ -113,7 +113,7 @@ def test_close_proposal_qualified_majority(voting_system):
 
     assert voting_system.close_proposal("p3") is True
     assert proposal.is_closed is True
-    assert proposal.result == "APPROVED" # 3/4 = 0.75, which is >= 2/3
+    assert proposal.result == "APPROVED"  # 3/4 = 0.75, which is >= 2/3
 
 
 def test_close_proposal_consensus(voting_system):
@@ -185,7 +185,7 @@ def test_get_weighted_votes(voting_system):
     voting_system.cast_vote("v3", "voter3", "p1", VoteType.YES, confidence=0.7)
 
     weighted_votes = voting_system.get_weighted_votes("p1")
-    assert weighted_votes["yes"] == pytest.approx(1.6) # 0.9 + 0.7
+    assert weighted_votes["yes"] == pytest.approx(1.6)  # 0.9 + 0.7
     assert weighted_votes["no"] == 0.8
 
 

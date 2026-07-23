@@ -53,7 +53,7 @@ def test_analyze_trends(cost_analyzer):
 
     trends = cost_analyzer._analyze_trends()
     assert CostCategory.COMPUTE.value in trends
-    assert trends[CostCategory.COMPUTE.value] > 0 # Should be increasing trend
+    assert trends[CostCategory.COMPUTE.value] > 0  # Should be increasing trend
 
 
 def test_generate_optimization_suggestions(cost_analyzer):

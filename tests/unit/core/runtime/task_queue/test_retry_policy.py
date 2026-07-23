@@ -45,7 +45,7 @@ async def test_retry_policy_get_delay_seconds_max_delay(retry_policy: Exponentia
     task_id = "test_task"
     # max_delay is 10
     assert await retry_policy.get_delay_seconds(task_id, 4) == 8  # min(10, 1 * (2^3))
-    assert await retry_policy.get_delay_seconds(task_id, 5) == 10 # min(10, 1 * (2^4))
+    assert await retry_policy.get_delay_seconds(task_id, 5) == 10  # min(10, 1 * (2^4))
 
 
 @pytest.mark.asyncio

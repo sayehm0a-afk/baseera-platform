@@ -91,10 +91,17 @@ async def test_agent_runtime_execute_agent_step_not_active(agent_runtime: AgentR
 async def test_iagent_runtime_abstract_methods():
     """اختبار أن IAgentRuntime يفرض تنفيذ التوابع المجردة."""
     class ConcreteAgentRuntime(IAgentRuntime):
-        async def activate_agent(self, agent_id: str, config: Optional[Dict[str, Any]] = None) -> None: pass
-        async def deactivate_agent(self, agent_id: str) -> None: pass
-        async def get_agent_status(self, agent_id: str) -> Dict[str, Any]: return {}
-        async def execute_agent_step(self, agent_id: str, step_data: Dict[str, Any]) -> Any: return None
+        async def activate_agent(self, agent_id: str, config: Optional[Dict[str, Any]] = None) -> None:
+            pass
+
+        async def deactivate_agent(self, agent_id: str) -> None:
+            pass
+
+        async def get_agent_status(self, agent_id: str) -> Dict[str, Any]:
+            return {}
+
+        async def execute_agent_step(self, agent_id: str, step_data: Dict[str, Any]) -> Any:
+            return None
 
     agent_rt = ConcreteAgentRuntime()
     assert isinstance(agent_rt, IAgentRuntime)

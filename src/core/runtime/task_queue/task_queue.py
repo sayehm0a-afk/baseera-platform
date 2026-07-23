@@ -156,7 +156,7 @@ class TaskQueue(ITaskQueue):
                         "Moved task %s from scheduler to priority queue.", task_id
                     )
 
-                await asyncio.sleep(0.1) # Prevent busy-waiting
+                await asyncio.sleep(0.1)  # Prevent busy-waiting
             except asyncio.CancelledError:
                 logger.info("TaskQueue processing loop cancelled.")
                 break
@@ -180,7 +180,7 @@ class TaskQueue(ITaskQueue):
                 await self._dead_letter_queue.enqueue(
                     task_id, task_payload, "Handler not found"
                 )
-                return None # Return None if handler not found, so worker doesn't try to execute
+                return None  # Return None if handler not found, so worker doesn't try to execute
 
             logger.debug("Worker %s fetched task %s from priority queue.", worker_id, task_id)
             return {"task_id": task_id, "task_payload": task_payload, "handler": handler}

@@ -159,10 +159,17 @@ async def test_runtime_kernel_get_status(runtime_kernel: RuntimeKernel):
 async def test_iruntime_kernel_abstract_methods():
     """اختبار أن IRuntimeKernel يفرض تنفيذ التوابع المجردة."""
     class ConcreteKernel(IRuntimeKernel):
-        async def initialize(self, config: Optional[Dict[str, Any]] = None) -> None: pass
-        async def start(self) -> None: pass
-        async def stop(self) -> None: pass
-        async def get_status(self) -> Dict[str, Any]: return {}
+        async def initialize(self, config: Optional[Dict[str, Any]] = None) -> None:
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def get_status(self) -> Dict[str, Any]:
+            return {}
 
         async def enqueue_task(
             self,
@@ -171,7 +178,8 @@ async def test_iruntime_kernel_abstract_methods():
             handler: Callable,
             delay_seconds: int = 0,
             priority: int = 0,
-        ) -> None: pass
+        ) -> None:
+            pass
 
     kernel = ConcreteKernel()
     assert isinstance(kernel, IRuntimeKernel)
