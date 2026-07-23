@@ -9,8 +9,9 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M1 (branch `chore/m1-repository-restructure`, based on `main` at
-`6ff474a289156a39d2ce05e5803a8d8a532f835d` / tag `v0.1.0-m0-stable`):
+As of M1.5 (branch `chore/m1.5-lint-debt-reduction`, based on `main` at
+`c21317663b7bfe5a9b20ab3f01ec9d3b77318a21` / tag `v0.2.0-m1-stable`,
+M1's merge commit):
 
 ## Implemented
 
@@ -99,28 +100,44 @@ directory's own `README.md`.
 (`.gitkeep`/empty `__init__.py`), per the canonical target architecture.
 None contain code. None are placeholder implementations.
 
-## Verified test/build state (M1, unchanged from M0's verified end state)
+## Verified test/build state (M1.5)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes, no `PYTHONPATH`
   manipulation required.
 - Full test suite: 717 passed / 12 skipped (Redis unavailable) / 0 failed
   without a live Redis; 729 passed / 0 skipped / 0 failed with one.
-  730 total test functions in the repository.
-- flake8: 1515 pre-existing violations, enforced in CI as a regression
-  ceiling (not reduced in M0 or M1).
+  730 total test functions in the repository (unchanged since M1).
+- flake8: **0** violations across `src/`, `tests/`, `main.py` (down from
+  1515 at M1's close — see "Completed: M1.5" below).
 
-## Planned: M1.5 — Lint Debt Reduction
+## Completed: M1.5 — Lint Debt Reduction
 
-Not started. Scope: reduce the 1515 pre-existing flake8 violations
-(breakdown by rule code in `docs/architecture/m0-build-status.md` §5),
-deliberately kept separate from M0 (build stability) and M1 (structural
-moves) because mixing a repo-wide reformat with either would make those
-diffs unreviewable. Must run after M1 is merged and before any M2
-feature code begins, so new code is written against a clean baseline
-rather than inheriting the debt. `.github/workflows/ci.yml`'s
-`FLAKE8_BASELINE` should only be lowered as part of this milestone, never
-silently raised elsewhere.
+Closed the 1515 pre-existing flake8 violations recorded at M1's close
+down to 0, in 9 atomic work packages (WP1–WP9, `[M1.5]`-prefixed commits
+on `chore/m1.5-lint-debt-reduction`), each with its own before/after
+count, full test suite run (with and without Redis), compile sweep, and
+boot smoke test. Breakdown by rule code prior to this milestone is in
+`docs/architecture/m0-build-status.md` §5 (kept as the historical
+record; not updated in place). Two genuine latent bugs were found and
+fixed along the way (both `F821` undefined-name `NameError`s from a
+missing `import asyncio`, in `src/core/service_layer/service_layer.py`
+and `src/core/autonomous_intelligence_layer/agent_runtime/agent_runtime.py`
+— both in files classified "legacy but still referenced" in
+`runtime-ownership.md`, unreachable from `main.py`, which is why the
+bugs were never caught by any test).
+
+**`.github/workflows/ci.yml`'s `FLAKE8_BASELINE` was deliberately left
+at `1515`, not lowered, in this milestone** — an explicit scope decision
+to keep M1.5 to source/test cleanup only, without touching CI
+configuration. This means the CI gate is now a loose ceiling (it will
+only fail if violations climb back above 1515, not if they climb above
+0) until a follow-up milestone updates the baseline value and/or
+replaces it with the dynamic, self-verifying ratchet mechanism
+originally scoped as this milestone's "WP0" and deferred. Until then,
+`flake8 src/ tests/ main.py --count` should read 0; any nonzero count
+is new debt from work done after this milestone closed, not inherited
+debt.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
