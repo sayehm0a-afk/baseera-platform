@@ -13,7 +13,7 @@ def test_store_context(context_store):
 
 
 def test_store_context_empty_key_raises_error(context_store):
-    with pytest.raises(ValueError, match="المفتاح \(key\) لا يمكن أن يكون فارغًا."):
+    with pytest.raises(ValueError, match=r"المفتاح \(key\) لا يمكن أن يكون فارغًا."):
         context_store.store_context("", "value")
 
 
@@ -24,7 +24,7 @@ def test_retrieve_context(context_store):
 
 
 def test_retrieve_context_empty_key_raises_error(context_store):
-    with pytest.raises(ValueError, match="المفتاح \(key\) لا يمكن أن يكون فارغًا."):
+    with pytest.raises(ValueError, match=r"المفتاح \(key\) لا يمكن أن يكون فارغًا."):
         context_store.retrieve_context("")
 
 
@@ -40,7 +40,7 @@ def test_delete_context_nonexistent_key(context_store):
 
 
 def test_delete_context_empty_key_raises_error(context_store):
-    with pytest.raises(ValueError, match="المفتاح \(key\) لا يمكن أن يكون فارغًا."):
+    with pytest.raises(ValueError, match=r"المفتاح \(key\) لا يمكن أن يكون فارغًا."):
         context_store.delete_context("")
 
 

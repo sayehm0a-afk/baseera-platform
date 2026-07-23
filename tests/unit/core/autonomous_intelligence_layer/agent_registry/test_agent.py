@@ -21,28 +21,28 @@ def test_agent_initialization_default_status():
 
 
 def test_agent_initialization_invalid_agent_id():
-    with pytest.raises(ValueError, match="معرف الوكيل \(agent_id\) يجب أن يكون سلسلة نصية غير فارغة."):
+    with pytest.raises(ValueError, match=r"معرف الوكيل \(agent_id\) يجب أن يكون سلسلة نصية غير فارغة."):
         Agent("", ["cap"])
-    with pytest.raises(ValueError, match="معرف الوكيل \(agent_id\) يجب أن يكون سلسلة نصية غير فارغة."):
+    with pytest.raises(ValueError, match=r"معرف الوكيل \(agent_id\) يجب أن يكون سلسلة نصية غير فارغة."):
         Agent(123, ["cap"])
 
 
 def test_agent_initialization_invalid_capabilities():
-    with pytest.raises(ValueError, match="القدرات \(capabilities\) يجب أن تكون قائمة من السلاسل النصية."):
+    with pytest.raises(ValueError, match=r"القدرات \(capabilities\) يجب أن تكون قائمة من السلاسل النصية."):
         Agent("agent3", "not_a_list")
-    with pytest.raises(ValueError, match="القدرات \(capabilities\) يجب أن تكون قائمة من السلاسل النصية."):
+    with pytest.raises(ValueError, match=r"القدرات \(capabilities\) يجب أن تكون قائمة من السلاسل النصية."):
         Agent("agent3", [123])
 
 
 def test_agent_initialization_invalid_status():
-    with pytest.raises(ValueError, match="الحالة \(status\) يجب أن تكون سلسلة نصية غير فارغة."):
+    with pytest.raises(ValueError, match=r"الحالة \(status\) يجب أن تكون سلسلة نصية غير فارغة."):
         Agent("agent4", ["cap"], "")
-    with pytest.raises(ValueError, match="الحالة \(status\) يجب أن تكون سلسلة نصية غير فارغة."):
+    with pytest.raises(ValueError, match=r"الحالة \(status\) يجب أن تكون سلسلة نصية غير فارغة."):
         Agent("agent4", ["cap"], 123)
 
 
 def test_agent_initialization_invalid_metadata():
-    with pytest.raises(ValueError, match="البيانات الوصفية \(metadata\) يجب أن تكون قاموسًا أو لا شيء."):
+    with pytest.raises(ValueError, match=r"البيانات الوصفية \(metadata\) يجب أن تكون قاموسًا أو لا شيء."):
         Agent("agent5", ["cap"], metadata="not_a_dict")
 
 
@@ -52,9 +52,9 @@ def test_update_status(sample_agent):
 
 
 def test_update_status_invalid_status(sample_agent):
-    with pytest.raises(ValueError, match="الحالة الجديدة \(new_status\) يجب أن تكون سلسلة نصية غير فارغة."):
+    with pytest.raises(ValueError, match=r"الحالة الجديدة \(new_status\) يجب أن تكون سلسلة نصية غير فارغة."):
         sample_agent.update_status("")
-    with pytest.raises(ValueError, match="الحالة الجديدة \(new_status\) يجب أن تكون سلسلة نصية غير فارغة."):
+    with pytest.raises(ValueError, match=r"الحالة الجديدة \(new_status\) يجب أن تكون سلسلة نصية غير فارغة."):
         sample_agent.update_status(123)
 
 
