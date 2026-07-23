@@ -1,9 +1,10 @@
-import pytest
 from src.core.autonomous_intelligence_layer.execution_policies.fast_mode_policy import FastModePolicy
+
 
 def test_fast_mode_policy_name():
     policy = FastModePolicy()
     assert policy.name == "FastMode"
+
 
 def test_fast_mode_policy_apply():
     policy = FastModePolicy()

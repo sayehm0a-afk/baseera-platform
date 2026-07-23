@@ -1,9 +1,9 @@
 import pytest
-from unittest.mock import Mock
 from src.core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI
 from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
 from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node
 from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task
+
 
 class TestPlannerAI:
     @pytest.fixture
@@ -50,7 +50,7 @@ class TestPlannerAI:
 
         optimized_dag = planner_ai.optimize_plan(dummy_dag, {})
         assert isinstance(optimized_dag, DAG)
-        assert optimized_dag == dummy_dag # In a simple implementation, it might return the same DAG
+        assert optimized_dag == dummy_dag  # In a simple implementation, it might return the same DAG
 
     def test_create_dependency_graph(self, planner_ai):
         tasks_with_dependencies = [

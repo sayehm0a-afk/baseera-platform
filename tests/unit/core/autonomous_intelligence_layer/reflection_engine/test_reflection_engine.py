@@ -6,6 +6,7 @@ from src.core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph impo
 from src.core.llm_abstraction.base_llm_client import BaseLLMClient
 from src.core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import EntityType, RelationType
 
+
 class TestReflectionEngine:
     @pytest.fixture
     def mock_llm_client(self):

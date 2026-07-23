@@ -1,9 +1,10 @@
-import pytest
 from src.core.autonomous_intelligence_layer.execution_policies.production_mode_policy import ProductionModePolicy
+
 
 def test_production_mode_policy_name():
     policy = ProductionModePolicy()
     assert policy.name == "ProductionMode"
+
 
 def test_production_mode_policy_apply():
     policy = ProductionModePolicy()

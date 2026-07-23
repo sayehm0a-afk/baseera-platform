@@ -1,7 +1,8 @@
 import pytest
 from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
 from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node
-from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task, TaskType, TaskStatus
+from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task, TaskStatus
+
 
 @pytest.fixture
 def sample_dag():
@@ -17,12 +18,14 @@ def sample_dag():
     dag.add_node(node3)
     return dag, node1, node2, node3
 
+
 def test_dag_init():
     dag = DAG()
     assert dag.id is not None
     assert len(dag.nodes) == 0
     assert len(dag.adj) == 0
     assert len(dag.in_degree) == 0
+
 
 def test_add_node(sample_dag):
     dag, node1, _, _ = sample_dag
@@ -35,6 +38,7 @@ def test_add_node(sample_dag):
 
     with pytest.raises(ValueError, match="العقدة يجب أن تكون من نوع Node."):
         dag.add_node("not_a_node")
+
 
 def test_add_edge(sample_dag):
     dag, node1, node2, node3 = sample_dag
@@ -53,12 +57,14 @@ def test_add_edge(sample_dag):
     with pytest.raises(ValueError, match="عقدة الوجهة ذات المعرف non_existent_node غير موجودة."):
         dag.add_edge("node1", "non_existent_node")
 
+
 def test_add_edge_creates_cycle(sample_dag):
     dag, node1, node2, node3 = sample_dag
     dag.add_edge("node1", "node2")
     dag.add_edge("node2", "node3")
     with pytest.raises(ValueError, match="إضافة حافة من node3 إلى node1 ستنشئ دورة في الرسم البياني."):
         dag.add_edge("node3", "node1")
+
 
 def test_get_dependencies(sample_dag):
     dag, node1, node2, node3 = sample_dag
@@ -74,6 +80,7 @@ def test_get_dependencies(sample_dag):
     with pytest.raises(ValueError, match="العقدة ذات المعرف non_existent_node غير موجودة."):
         dag.get_dependencies("non_existent_node")
 
+
 def test_get_successors(sample_dag):
     dag, node1, node2, node3 = sample_dag
     dag.add_edge("node1", "node2")
@@ -88,6 +95,7 @@ def test_get_successors(sample_dag):
     with pytest.raises(ValueError, match="العقدة ذات المعرف non_existent_node غير موجودة."):
         dag.get_successors("non_existent_node")
 
+
 def test_has_cycle(sample_dag):
     dag, node1, node2, node3 = sample_dag
     assert not dag.has_cycle()
@@ -100,6 +108,7 @@ def test_has_cycle(sample_dag):
     dag.adj["node3"].append("node1")
     dag.in_degree["node1"] += 1
     assert dag.has_cycle()
+
 
 def test_topological_sort(sample_dag):
     dag, node1, node2, node3 = sample_dag
@@ -136,14 +145,17 @@ def test_topological_sort(sample_dag):
     with pytest.raises(ValueError, match="لا يمكن إجراء الفرز الطوبولوجي على رسم بياني يحتوي على دورة."):
         dag_with_cycle.topological_sort()
 
+
 def test_len(sample_dag):
     dag, _, _, _ = sample_dag
     assert len(dag) == 3
+
 
 def test_contains(sample_dag):
     dag, _, _, _ = sample_dag
     assert "node1" in dag
     assert "non_existent_node" not in dag
+
 
 def test_repr(sample_dag):
     dag, _, _, _ = sample_dag

@@ -2,6 +2,7 @@ import pytest
 from src.core.autonomous_intelligence_layer.agent_registry.agent_registry import AgentRegistry
 from src.core.autonomous_intelligence_layer.agent_registry.agent import Agent
 
+
 class TestAgentRegistry:
     @pytest.fixture
     def registry(self):
@@ -80,11 +81,11 @@ class TestAgentRegistry:
             registry.register_agent("not_an_agent")
 
     def test_unregister_agent_invalid_id(self, registry):
-        with pytest.raises(ValueError, match="معرف الوكيل \(agent_id\) يجب أن يكون سلسلة نصية غير فارغة."):
+        with pytest.raises(ValueError, match=r"معرف الوكيل \(agent_id\) يجب أن يكون سلسلة نصية غير فارغة."):
             registry.unregister_agent("")
 
     def test_get_agent_invalid_id(self, registry):
-        with pytest.raises(ValueError, match="معرف الوكيل \(agent_id\) يجب أن يكون سلسلة نصية غير فارغة."):
+        with pytest.raises(ValueError, match=r"معرف الوكيل \(agent_id\) يجب أن يكون سلسلة نصية غير فارغة."):
             registry.get_agent("")
 
     def test_discover_agents_by_status(self, registry):

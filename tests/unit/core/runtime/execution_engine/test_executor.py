@@ -3,15 +3,18 @@ import logging
 import asyncio
 from unittest.mock import AsyncMock
 
-from src.core.runtime.execution_engine.executor import Executor, IExecutor
+from src.core.runtime.execution_engine.executor import Executor
+
 
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.execution_engine.executor").setLevel(logging.INFO)
 
+
 @pytest.fixture
 def executor() -> Executor:
     return Executor()
+
 
 @pytest.mark.asyncio
 async def test_executor_execute_task_success(executor: Executor):
@@ -24,6 +27,7 @@ async def test_executor_execute_task_success(executor: Executor):
 
     assert result == "Result: hello-123"
 
+
 @pytest.mark.asyncio
 async def test_executor_execute_task_failure(executor: Executor):
     async def mock_failing_task_function() -> None:
@@ -34,6 +38,7 @@ async def test_executor_execute_task_failure(executor: Executor):
     with pytest.raises(ValueError, match="Simulated task failure"):
         await executor.execute_task(task_id, mock_failing_task_function)
 
+
 @pytest.mark.asyncio
 async def test_executor_execute_task_no_kwargs(executor: Executor):
     async def mock_simple_task() -> str:
@@ -43,6 +48,7 @@ async def test_executor_execute_task_no_kwargs(executor: Executor):
     task_id = "test_simple"
     result = await executor.execute_task(task_id, mock_simple_task)
     assert result == "Simple Result"
+
 
 @pytest.mark.asyncio
 async def test_executor_execute_task_async_mock_function(executor: Executor):

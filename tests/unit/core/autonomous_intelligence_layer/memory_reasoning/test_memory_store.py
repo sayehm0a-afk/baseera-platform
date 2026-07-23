@@ -1,7 +1,7 @@
 import pytest
-from unittest.mock import Mock
 from src.core.autonomous_intelligence_layer.memory_reasoning.memory_store import MemoryStore, MemoryType, MemoryEntry, MemoryStoreConfig
 from datetime import datetime, timedelta, UTC
+
 
 class TestMemoryStore:
     @pytest.fixture
@@ -133,5 +133,3 @@ class TestMemoryStore:
         assert len(memory_store_with_config.memory[MemoryType.WORKING.value]) == 1
         assert entry1 not in memory_store_with_config.memory[MemoryType.WORKING.value]
         assert entry2 in memory_store_with_config.memory[MemoryType.WORKING.value]
-
-

@@ -122,6 +122,12 @@ result.
 
 ## 5. Lint baseline (flake8)
 
+**Historical record only.** This section describes the state at the end
+of M0/M1. M1.5 (`docs/architecture/current-status.md`, "Completed:
+M1.5") reduced the count from 1515 to 0; the breakdown below is kept
+unedited as evidence of the debt this milestone's plan was written
+against, not as the current state.
+
 Repository-wide count at the end of M0: **1515** violations across
 `src/`, `tests/`, `main.py` (`flake8 src/ tests/ main.py --count`).
 Breakdown by rule code (measured before the M0 test-path fix, 1517 total;

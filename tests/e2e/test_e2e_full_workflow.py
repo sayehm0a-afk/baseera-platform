@@ -1,32 +1,37 @@
 import pytest
 import sys
-sys.path.insert(0, 
-'/home/ubuntu/basirah')
-import json
-from datetime import datetime, UTC
-from unittest.mock import MagicMock, patch
-from src.core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI
-from src.core.autonomous_intelligence_layer.supervisor_ai.supervisor_ai import SupervisorAI
-from src.core.autonomous_intelligence_layer.reflection_engine.reflection_engine import ReflectionEngine
-from src.core.autonomous_intelligence_layer.memory_reasoning.memory_store import MemoryStore, MemoryType
+# Pre-existing hardcoded path from an earlier dev environment; left as-is
+# (out of M1.5 lint-debt scope) -- imports below are noqa'd rather than
+# reordered so this fix carries zero behavior-change risk.
+sys.path.insert(0,
+                '/home/ubuntu/basirah')
+import json  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+from src.core.autonomous_intelligence_layer.planner_ai.planner_ai import PlannerAI  # noqa: E402
+from src.core.autonomous_intelligence_layer.supervisor_ai.supervisor_ai import SupervisorAI  # noqa: E402
+from src.core.autonomous_intelligence_layer.reflection_engine.reflection_engine import ReflectionEngine  # noqa: E402
+from src.core.autonomous_intelligence_layer.memory_reasoning.memory_store import MemoryStore, MemoryType  # noqa: E402
 
 
-from src.core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import KnowledgeGraph
-from src.core.autonomous_intelligence_layer.context_manager.context_manager import ContextManager
-from src.core.autonomous_intelligence_layer.agent_registry.agent_registry import AgentRegistry
+from src.core.autonomous_intelligence_layer.knowledge_graph.knowledge_graph import KnowledgeGraph  # noqa: E402
+from src.core.autonomous_intelligence_layer.context_manager.context_manager import ContextManager  # noqa: E402
+from src.core.autonomous_intelligence_layer.agent_registry.agent_registry import AgentRegistry  # noqa: E402
 
-from src.core.autonomous_intelligence_layer.learning_engine.learning_engine import LearningEngine
-from src.core.autonomous_intelligence_layer.error_recovery.error_recovery import ErrorRecovery
-from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG
-from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task
-from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node
-from src.core.autonomous_intelligence_layer.agent_registry.agent import Agent
-from src.core.autonomous_intelligence_layer.execution_policies.execution_policies import ExecutionPolicies
+from src.core.autonomous_intelligence_layer.learning_engine.learning_engine import LearningEngine  # noqa: E402
+from src.core.autonomous_intelligence_layer.error_recovery.error_recovery import ErrorRecovery  # noqa: E402
+from src.core.autonomous_intelligence_layer.task_graph_engine.dag import DAG  # noqa: E402
+from src.core.autonomous_intelligence_layer.task_graph_engine.task import Task  # noqa: E402
+from src.core.autonomous_intelligence_layer.task_graph_engine.node import Node  # noqa: E402
+from src.core.autonomous_intelligence_layer.agent_registry.agent import Agent  # noqa: E402
+from src.core.autonomous_intelligence_layer.execution_policies.execution_policies import ExecutionPolicies  # noqa: E402
 
 # Fixtures for real components
+
+
 @pytest.fixture
 def context_manager():
     return ContextManager()
+
 
 @pytest.fixture
 def agent_registry():
@@ -37,13 +42,16 @@ def agent_registry():
     ar.register_agent(mock_agent_instance)
     return ar
 
+
 @pytest.fixture
 def execution_policies():
     return ExecutionPolicies()
 
+
 @pytest.fixture
 def planner_ai():
     return PlannerAI()
+
 
 @pytest.fixture
 def memory_store():
@@ -55,6 +63,7 @@ def memory_store():
 def knowledge_graph():
     return KnowledgeGraph()
 
+
 @pytest.fixture
 def reflection_engine(memory_store, knowledge_graph):
     from unittest.mock import Mock, AsyncMock
@@ -64,14 +73,15 @@ def reflection_engine(memory_store, knowledge_graph):
     return ReflectionEngine(llm_client=mock_llm_client, memory_store=memory_store, knowledge_graph=knowledge_graph)
 
 
-
 @pytest.fixture
 def learning_engine():
     return LearningEngine()
 
+
 @pytest.fixture
 def error_recovery():
     return ErrorRecovery()
+
 
 @pytest.fixture
 def supervisor_ai(context_manager, planner_ai, agent_registry, memory_store, knowledge_graph, reflection_engine, learning_engine, error_recovery, execution_policies):
@@ -86,6 +96,7 @@ def supervisor_ai(context_manager, planner_ai, agent_registry, memory_store, kno
         error_recovery=error_recovery,
         execution_policies=execution_policies
     )
+
 
 @pytest.mark.asyncio
 async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, knowledge_graph, planner_ai, benchmark):
@@ -133,11 +144,9 @@ async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, k
         # Verify serialization (implicitly checked by context_manager and memory_store)
         stored_context = context_manager.get_isolated_context(task_id)
         assert stored_context is not None
-        json.dumps(stored_context) # Should not raise an error
+        json.dumps(stored_context)  # Should not raise an error
 
         # Verify memory persistence
-
-
 
         print(f"ID of MemoryType.WORKING before search: {id(MemoryType.WORKING)}")
         retrieved_memory = memory_store.search(query=goal, memory_types=[MemoryType.WORKING])
@@ -160,19 +169,17 @@ async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, k
             # For now, we'll just check if the mock was called if it's part of execute_task.
             # If not, this assertion needs to be moved to a place where reflection is explicitly called.
             # mock_evaluate.assert_called() # This would fail if not called within execute_task
-            pass # Placeholder, as reflection might be called later or in a more complex way
+            pass  # Placeholder, as reflection might be called later or in a more complex way
 
         # Verify autonomous learning (mocked for now)
         with patch.object(supervisor_ai.learning_engine, 'learn_from_experiences') as mock_learn:
             mock_learn.return_value = None
             # Similar to reflection, check if invoked if part of execute_task
-            pass
 
         # Verify recovery system (mocked for now)
         with patch.object(supervisor_ai.error_recovery, 'execute_recovery') as mock_execute_recovery:
             mock_execute_recovery.return_value = (True, None)
             # Similar to reflection, check if invoked if part of execute_task
-            pass
 
         # Verify decision fusion, voting, ranking (these are internal to SupervisorAI or other components)
         # For E2E, we verify their *outcome* through the overall execution_results.
@@ -183,4 +190,3 @@ async def test_e2e_full_workflow(supervisor_ai, context_manager, memory_store, k
 
     benchmark(run_workflow)
     """اختبار تدفق العمل الكامل للوحدة 5 من البداية إلى النهاية."""
-

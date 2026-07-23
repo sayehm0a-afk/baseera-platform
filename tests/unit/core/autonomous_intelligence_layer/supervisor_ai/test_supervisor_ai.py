@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import Mock
 from src.core.autonomous_intelligence_layer.supervisor_ai.supervisor_ai import SupervisorAI
 
+
 class TestSupervisorAI:
     @pytest.fixture
     def supervisor_ai(self):
@@ -104,6 +105,5 @@ class TestSupervisorAI:
         assigned_agent = supervisor_ai._assign_agent_for_task(mock_task)
         assert assigned_agent is None
         supervisor_ai.agent_registry.discover_agents.assert_called_with(capabilities=["non_existent_capability"], status="IDLE")
-
 
     # Add more tests for other methods in SupervisorAI

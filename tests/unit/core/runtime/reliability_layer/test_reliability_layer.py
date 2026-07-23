@@ -1,32 +1,37 @@
 import pytest
 import logging
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-from src.core.runtime.reliability_layer.reliability_layer import ReliabilityLayer, IReliabilityLayer
+from src.core.runtime.reliability_layer.reliability_layer import ReliabilityLayer
 from src.core.runtime.reliability_layer.circuit_breaker import ICircuitBreaker, CircuitBreakerOpenError
 from src.core.runtime.reliability_layer.failure_recovery import IFailureRecovery
 from src.core.runtime.reliability_layer.compensation import ICompensation
+
 
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.reliability_layer.reliability_layer").setLevel(logging.INFO)
 
+
 @pytest.fixture
 def mock_circuit_breaker() -> AsyncMock:
     mock = AsyncMock(spec=ICircuitBreaker)
+
     async def _cb_execute_side_effect(func, *args, **kwargs):
         return await func(*args, **kwargs)
     mock.execute.side_effect = _cb_execute_side_effect
     return mock
 
+
 @pytest.fixture
 def mock_failure_recovery() -> AsyncMock:
     return AsyncMock(spec=IFailureRecovery)
 
+
 @pytest.fixture
 def mock_compensation() -> AsyncMock:
     return AsyncMock(spec=ICompensation)
+
 
 @pytest.fixture
 def reliability_layer(mock_circuit_breaker, mock_failure_recovery, mock_compensation) -> ReliabilityLayer:
@@ -35,6 +40,7 @@ def reliability_layer(mock_circuit_breaker, mock_failure_recovery, mock_compensa
         failure_recovery=mock_failure_recovery,
         compensation=mock_compensation
     )
+
 
 @pytest.mark.asyncio
 async def test_reliability_layer_execute_reliable_success(reliability_layer: ReliabilityLayer, mock_circuit_breaker: AsyncMock, mock_compensation: AsyncMock):
@@ -47,6 +53,7 @@ async def test_reliability_layer_execute_reliable_success(reliability_layer: Rel
     mock_circuit_breaker.execute.assert_called_once_with(mock_func, *(), **{})
     mock_compensation.compensate.assert_not_called()
     mock_compensation.clear_compensation.assert_called_once_with(operation_id)
+
 
 @pytest.mark.asyncio
 async def test_reliability_layer_execute_reliable_circuit_breaker_open_with_fallback(reliability_layer: ReliabilityLayer, mock_circuit_breaker: AsyncMock, mock_failure_recovery: AsyncMock, mock_compensation: AsyncMock):
@@ -65,6 +72,7 @@ async def test_reliability_layer_execute_reliable_circuit_breaker_open_with_fall
     mock_compensation.run_compensation.assert_not_called()
     mock_compensation.clear_compensation.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_reliability_layer_execute_reliable_circuit_breaker_open_no_fallback(reliability_layer: ReliabilityLayer, mock_circuit_breaker: AsyncMock, mock_compensation: AsyncMock):
     mock_func = AsyncMock()
@@ -79,6 +87,7 @@ async def test_reliability_layer_execute_reliable_circuit_breaker_open_no_fallba
     mock_compensation.compensate.assert_not_called()
     mock_compensation.run_compensation.assert_called_once_with(operation_id)
     mock_compensation.clear_compensation.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_reliability_layer_execute_reliable_failure_recovery_with_compensation(reliability_layer: ReliabilityLayer, mock_circuit_breaker: AsyncMock, mock_failure_recovery: AsyncMock, mock_compensation: AsyncMock):
@@ -98,6 +107,7 @@ async def test_reliability_layer_execute_reliable_failure_recovery_with_compensa
     mock_compensation.run_compensation.assert_not_called()
     mock_compensation.clear_compensation.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_reliability_layer_execute_reliable_failure_recovery_fails_with_compensation(reliability_layer: ReliabilityLayer, mock_circuit_breaker: AsyncMock, mock_failure_recovery: AsyncMock, mock_compensation: AsyncMock):
     mock_func = AsyncMock(side_effect=ValueError("Original Failure"))
@@ -115,6 +125,7 @@ async def test_reliability_layer_execute_reliable_failure_recovery_fails_with_co
     mock_compensation.run_compensation.assert_called_once_with(operation_id)
     mock_compensation.clear_compensation.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_reliability_layer_execute_reliable_no_circuit_breaker(reliability_layer: ReliabilityLayer, mock_circuit_breaker: AsyncMock, mock_failure_recovery: AsyncMock, mock_compensation: AsyncMock):
     mock_func = AsyncMock(return_value="Direct Result")
@@ -128,12 +139,14 @@ async def test_reliability_layer_execute_reliable_no_circuit_breaker(reliability
     mock_compensation.compensate.assert_not_called()
     mock_compensation.clear_compensation.assert_called_once_with(operation_id)
 
+
 @pytest.mark.asyncio
 async def test_reliability_layer_initialization_with_defaults():
     layer = ReliabilityLayer()
     assert isinstance(layer._circuit_breaker, ICircuitBreaker)
     assert isinstance(layer._failure_recovery, IFailureRecovery)
     assert isinstance(layer._compensation, ICompensation)
+
 
 @pytest.mark.asyncio
 async def test_reliability_layer_initialization_with_provided_instances(mock_circuit_breaker, mock_failure_recovery, mock_compensation):

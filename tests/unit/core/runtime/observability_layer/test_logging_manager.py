@@ -1,13 +1,14 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import logging
 from src.core.runtime.observability_layer.logging_manager import LoggingManager, ILoggingManager
+
 
 @pytest.fixture
 def logging_manager() -> ILoggingManager:
 
-
     return LoggingManager()
+
 
 @pytest.mark.asyncio
 async def test_get_logger(logging_manager: ILoggingManager):
@@ -22,6 +23,7 @@ async def test_get_logger(logging_manager: ILoggingManager):
     another_logger = logging_manager.get_logger(logger_name)
     assert logger is another_logger
 
+
 @pytest.mark.asyncio
 async def test_configure_logging_default(logging_manager: ILoggingManager, caplog):
     # LoggingManager is initialized with default logging, so we just need to check it
@@ -31,6 +33,7 @@ async def test_configure_logging_default(logging_manager: ILoggingManager, caplo
 
     assert "This is a test message" in caplog.text
     assert "INFO" in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_configure_logging_custom_level(logging_manager: ILoggingManager, capsys):
@@ -44,6 +47,7 @@ async def test_configure_logging_custom_level(logging_manager: ILoggingManager, 
     assert "Info message" in captured.out
     assert "DEBUG" in captured.out
 
+
 @pytest.mark.asyncio
 async def test_configure_logging_custom_handler(logging_manager: ILoggingManager):
     mock_handler = MagicMock(spec=logging.Handler)
@@ -55,6 +59,7 @@ async def test_configure_logging_custom_handler(logging_manager: ILoggingManager
 
     mock_handler.handle.assert_called_once()
     assert "Message to custom handler" in mock_handler.handle.call_args[0][0].getMessage()
+
 
 @pytest.mark.asyncio
 async def test_configure_logging_clears_old_handlers(logging_manager: ILoggingManager, capsys):
@@ -74,16 +79,17 @@ async def test_configure_logging_clears_old_handlers(logging_manager: ILoggingMa
 
     # Old handler should not have been called again
     mock_handler_old.handle.assert_not_called()
-    
+
     # New message should go to console
     captured = capsys.readouterr()
     assert "New message" in captured.out
+
 
 @pytest.mark.asyncio
 async def test_logger_propagation(logging_manager: ILoggingManager):
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
-    
+
     mock_root_handler = MagicMock(spec=logging.Handler)
     mock_root_handler.level = logging.DEBUG
     root_logger.addHandler(mock_root_handler)

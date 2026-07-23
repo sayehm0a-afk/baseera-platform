@@ -2,26 +2,31 @@ import pytest
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
-from src.core.runtime.execution_engine.execution_engine import ExecutionEngine, IExecutionEngine
+from src.core.runtime.execution_engine.execution_engine import ExecutionEngine
 from src.core.runtime.execution_engine.executor import IExecutor
 from src.core.runtime.execution_engine.dependency_resolver import IDependencyResolver
 from src.core.runtime.execution_engine.execution_graph import IExecutionGraph
+
 
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.execution_engine.execution_engine").setLevel(logging.INFO)
 
+
 @pytest.fixture
 def mock_executor() -> AsyncMock:
     return AsyncMock(spec=IExecutor)
+
 
 @pytest.fixture
 def mock_dependency_resolver() -> MagicMock:
     return MagicMock(spec=IDependencyResolver)
 
+
 @pytest.fixture
 def mock_execution_graph() -> AsyncMock:
     return AsyncMock(spec=IExecutionGraph)
+
 
 @pytest.fixture
 def execution_engine(mock_executor, mock_dependency_resolver, mock_execution_graph) -> ExecutionEngine:
@@ -30,6 +35,7 @@ def execution_engine(mock_executor, mock_dependency_resolver, mock_execution_gra
         dependency_resolver=mock_dependency_resolver,
         execution_graph=mock_execution_graph
     )
+
 
 @pytest.mark.asyncio
 async def test_execution_engine_execute_workflow_success(execution_engine: ExecutionEngine, mock_execution_graph: AsyncMock):
@@ -45,6 +51,7 @@ async def test_execution_engine_execute_workflow_success(execution_engine: Execu
     mock_execution_graph.execute_graph.assert_called_once_with(workflow_definition)
     assert results == expected_results
 
+
 @pytest.mark.asyncio
 async def test_execution_engine_execute_workflow_failure(execution_engine: ExecutionEngine, mock_execution_graph: AsyncMock):
     workflow_definition = {
@@ -56,6 +63,7 @@ async def test_execution_engine_execute_workflow_failure(execution_engine: Execu
         await execution_engine.execute_workflow(workflow_definition)
     mock_execution_graph.execute_graph.assert_called_once_with(workflow_definition)
 
+
 @pytest.mark.asyncio
 async def test_execution_engine_initialization_with_defaults():
     # Test that if no mocks are provided, it initializes its own instances
@@ -63,6 +71,7 @@ async def test_execution_engine_initialization_with_defaults():
     assert isinstance(engine._executor, IExecutor)
     assert isinstance(engine._dependency_resolver, IDependencyResolver)
     assert isinstance(engine._execution_graph, IExecutionGraph)
+
 
 @pytest.mark.asyncio
 async def test_execution_engine_initialization_with_provided_instances(mock_executor, mock_dependency_resolver, mock_execution_graph):

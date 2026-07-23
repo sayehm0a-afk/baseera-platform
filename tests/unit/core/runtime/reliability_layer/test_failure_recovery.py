@@ -1,16 +1,18 @@
 import pytest
 import logging
-import asyncio
 from unittest.mock import AsyncMock
-from src.core.runtime.reliability_layer.failure_recovery import FailureRecovery, IFailureRecovery
+from src.core.runtime.reliability_layer.failure_recovery import FailureRecovery
+
 
 @pytest.fixture(autouse=True)
 def set_logging_level():
     logging.getLogger("src.core.runtime.reliability_layer.failure_recovery").setLevel(logging.INFO)
 
+
 @pytest.fixture
 def failure_recovery() -> FailureRecovery:
     return FailureRecovery()
+
 
 @pytest.mark.asyncio
 async def test_failure_recovery_success(failure_recovery: FailureRecovery):
@@ -18,6 +20,7 @@ async def test_failure_recovery_success(failure_recovery: FailureRecovery):
     result = await failure_recovery.execute_with_recovery(mock_func)
     assert result == "Success Result"
     mock_func.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_failure_recovery_with_fallback_success(failure_recovery: FailureRecovery):
@@ -29,6 +32,7 @@ async def test_failure_recovery_with_fallback_success(failure_recovery: FailureR
     mock_func.assert_called_once()
     mock_fallback_func.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_failure_recovery_with_fallback_and_compensation_success(failure_recovery: FailureRecovery):
     mock_func = AsyncMock(side_effect=ValueError("Original failure"))
@@ -37,10 +41,11 @@ async def test_failure_recovery_with_fallback_and_compensation_success(failure_r
 
     with pytest.raises(ValueError, match="Fallback failure"):
         await failure_recovery.execute_with_recovery(mock_func, fallback_func=mock_fallback_func, compensation_func=mock_compensation_func)
-    
+
     mock_func.assert_called_once()
     mock_fallback_func.assert_called_once()
     mock_compensation_func.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_failure_recovery_no_fallback_no_compensation_failure(failure_recovery: FailureRecovery):
@@ -50,6 +55,7 @@ async def test_failure_recovery_no_fallback_no_compensation_failure(failure_reco
         await failure_recovery.execute_with_recovery(mock_func)
     mock_func.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_failure_recovery_only_compensation_failure(failure_recovery: FailureRecovery):
     mock_func = AsyncMock(side_effect=ValueError("Original failure"))
@@ -57,9 +63,10 @@ async def test_failure_recovery_only_compensation_failure(failure_recovery: Fail
 
     with pytest.raises(ValueError, match="Original failure"):
         await failure_recovery.execute_with_recovery(mock_func, compensation_func=mock_compensation_func)
-    
+
     mock_func.assert_called_once()
     mock_compensation_func.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_failure_recovery_compensation_fails(failure_recovery: FailureRecovery):
@@ -69,10 +76,11 @@ async def test_failure_recovery_compensation_fails(failure_recovery: FailureReco
 
     with pytest.raises(ValueError, match="Fallback failure"):
         await failure_recovery.execute_with_recovery(mock_func, fallback_func=mock_fallback_func, compensation_func=mock_compensation_func)
-    
+
     mock_func.assert_called_once()
     mock_fallback_func.assert_called_once()
     mock_compensation_func.assert_called_once()
+
 
 @pytest.mark.asyncio
 async def test_failure_recovery_compensation_only_fails(failure_recovery: FailureRecovery):
@@ -81,6 +89,6 @@ async def test_failure_recovery_compensation_only_fails(failure_recovery: Failur
 
     with pytest.raises(ValueError, match="Original failure"):
         await failure_recovery.execute_with_recovery(mock_func, compensation_func=mock_compensation_func)
-    
+
     mock_func.assert_called_once()
     mock_compensation_func.assert_called_once()

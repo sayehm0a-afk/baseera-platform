@@ -1,10 +1,11 @@
 import pytest
-from unittest.mock import AsyncMock
 from src.core.runtime.security_layer.permission_validation import PermissionValidation, IPermissionValidation
+
 
 @pytest.fixture
 def permission_validation() -> IPermissionValidation:
     return PermissionValidation()
+
 
 @pytest.mark.asyncio
 async def test_permission_validation_default_success(permission_validation: IPermissionValidation):
@@ -16,6 +17,7 @@ async def test_permission_validation_default_success(permission_validation: IPer
 
     assert is_allowed is True
 
+
 @pytest.mark.asyncio
 async def test_permission_validation_with_different_inputs(permission_validation: IPermissionValidation):
     agent_id = "another_agent"
@@ -25,6 +27,7 @@ async def test_permission_validation_with_different_inputs(permission_validation
     is_allowed = await permission_validation.validate_permission(agent_id, capability, context)
 
     assert is_allowed is True
+
 
 @pytest.mark.asyncio
 async def test_permission_validation_empty_context(permission_validation: IPermissionValidation):

@@ -1,21 +1,25 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from src.core.runtime.security_layer.security_layer import SecurityLayer, ISecurityLayer
 from src.core.runtime.security_layer.permission_validation import IPermissionValidation
 from src.core.runtime.security_layer.agent_isolation import IAgentIsolation
 from src.core.runtime.security_layer.sandbox import ISandbox
 
+
 @pytest.fixture
 def mock_permission_validation() -> AsyncMock:
     return AsyncMock(spec=IPermissionValidation)
+
 
 @pytest.fixture
 def mock_agent_isolation() -> AsyncMock:
     return AsyncMock(spec=IAgentIsolation)
 
+
 @pytest.fixture
 def mock_sandbox() -> AsyncMock:
     return AsyncMock(spec=ISandbox)
+
 
 @pytest.fixture
 def security_layer(
@@ -28,6 +32,7 @@ def security_layer(
         agent_isolation=mock_agent_isolation,
         sandbox=mock_sandbox
     )
+
 
 @pytest.mark.asyncio
 async def test_validate_and_execute_success_no_sandbox(
@@ -53,6 +58,7 @@ async def test_validate_and_execute_success_no_sandbox(
     mock_sandbox.execute_in_sandbox.assert_not_called()
     mock_sandbox.destroy_sandbox.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_validate_and_execute_permission_denied(
     security_layer: ISecurityLayer,
@@ -73,6 +79,7 @@ async def test_validate_and_execute_permission_denied(
     mock_permission_validation.validate_permission.assert_called_once_with(agent_id, capability, context)
     mock_func.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_validate_and_execute_with_sandbox_success(
     security_layer: ISecurityLayer,
@@ -83,7 +90,7 @@ async def test_validate_and_execute_with_sandbox_success(
     capability = "execute_script"
     mock_func = AsyncMock(return_value="script_executed")
     sandbox_config = {"timeout": 60}
-    
+
     mock_permission_validation.validate_permission.return_value = True
     mock_sandbox.create_sandbox.return_value = "sandbox_123"
     mock_sandbox.execute_in_sandbox.return_value = "script_executed"
@@ -97,7 +104,8 @@ async def test_validate_and_execute_with_sandbox_success(
     mock_sandbox.create_sandbox.assert_called_once_with(agent_id, sandbox_config)
     mock_sandbox.execute_in_sandbox.assert_called_once()
     mock_sandbox.destroy_sandbox.assert_called_once_with("sandbox_123")
-    mock_func.assert_not_called() # func should not be called directly when using sandbox
+    mock_func.assert_not_called()  # func should not be called directly when using sandbox
+
 
 @pytest.mark.asyncio
 async def test_validate_and_execute_with_sandbox_failure(
@@ -108,7 +116,7 @@ async def test_validate_and_execute_with_sandbox_failure(
     agent_id = "failing_sandbox_agent"
     capability = "risky_operation"
     mock_func = AsyncMock(side_effect=ValueError("Sandbox error"))
-    
+
     mock_permission_validation.validate_permission.return_value = True
     mock_sandbox.create_sandbox.return_value = "sandbox_456"
     mock_sandbox.execute_in_sandbox.side_effect = ValueError("Sandbox execution failed")
@@ -123,6 +131,7 @@ async def test_validate_and_execute_with_sandbox_failure(
     mock_sandbox.execute_in_sandbox.assert_called_once()
     mock_sandbox.destroy_sandbox.assert_called_once_with("sandbox_456")
     mock_func.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_validate_and_execute_with_args_kwargs_no_sandbox(
@@ -146,6 +155,7 @@ async def test_validate_and_execute_with_args_kwargs_no_sandbox(
     mock_sandbox.create_sandbox.assert_not_called()
     mock_sandbox.execute_in_sandbox.assert_not_called()
     mock_sandbox.destroy_sandbox.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_validate_and_execute_with_args_kwargs_with_sandbox(
@@ -178,12 +188,14 @@ async def test_validate_and_execute_with_args_kwargs_with_sandbox(
     mock_sandbox.destroy_sandbox.assert_called_once_with("sandbox_789")
     mock_func.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_security_layer_initialization_with_defaults():
     layer = SecurityLayer()
     assert isinstance(layer._permission_validation, IPermissionValidation)
     assert isinstance(layer._agent_isolation, IAgentIsolation)
     assert isinstance(layer._sandbox, ISandbox)
+
 
 @pytest.mark.asyncio
 async def test_security_layer_initialization_with_provided_instances(

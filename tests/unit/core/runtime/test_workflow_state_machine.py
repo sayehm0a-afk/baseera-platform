@@ -1,20 +1,21 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 from src.core.runtime.workflow_state_machine import WorkflowStateMachine, IWorkflowStateMachine
-from typing import Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 @pytest.fixture
 def workflow_state_machine() -> WorkflowStateMachine:
     """Fixture لإنشاء مثيل WorkflowStateMachine."""
     return WorkflowStateMachine()
 
+
 @pytest.mark.asyncio
 async def test_workflow_state_machine_instance(workflow_state_machine: WorkflowStateMachine):
     """اختبار أن WorkflowStateMachine هو مثيل لـ IWorkflowStateMachine."""
     assert isinstance(workflow_state_machine, IWorkflowStateMachine)
+
 
 @pytest.mark.asyncio
 async def test_workflow_state_machine_initial_state(workflow_state_machine: WorkflowStateMachine):
@@ -22,6 +23,7 @@ async def test_workflow_state_machine_initial_state(workflow_state_machine: Work
     workflow_id = "new_workflow"
     state = await workflow_state_machine.get_current_state(workflow_id)
     assert state == "UNKNOWN"
+
 
 @pytest.mark.asyncio
 async def test_workflow_state_machine_transition_state_success(workflow_state_machine: WorkflowStateMachine, caplog):
@@ -40,6 +42,7 @@ async def test_workflow_state_machine_transition_state_success(workflow_state_ma
     current_state = await workflow_state_machine.get_current_state(workflow_id)
     assert current_state == "PROCESSING"
     assert "Workflow \"test_workflow_1\" transitioned from STARTED to PROCESSING. Context: {\'step\': 1}" in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_workflow_state_machine_get_current_state(workflow_state_machine: WorkflowStateMachine):

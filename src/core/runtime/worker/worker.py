@@ -5,6 +5,7 @@ from typing import Any, Dict, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
 
+
 class IWorker(ABC):
     @abstractmethod
     async def start(self) -> None:
@@ -13,6 +14,7 @@ class IWorker(ABC):
     @abstractmethod
     async def stop(self) -> None:
         raise NotImplementedError
+
 
 class Worker(IWorker):
     def __init__(self, worker_id: str, task_queue: Any, handler: Callable[[Dict[str, Any]], Awaitable[None]]):

@@ -14,7 +14,6 @@ from prometheus_client import (
     Counter,
     Gauge,
     Histogram,
-    Summary,
     CollectorRegistry,
     generate_latest,
 )

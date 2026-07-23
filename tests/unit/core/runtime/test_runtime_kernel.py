@@ -3,7 +3,6 @@ import logging
 from unittest.mock import AsyncMock
 from typing import Any, Callable, Dict, Optional
 from src.core.runtime.runtime_kernel import RuntimeKernel, IRuntimeKernel
-from src.core.db.database import init_db, engine, Base
 from src.core.runtime.message_bus.message_bus import IMessageBus
 from src.core.runtime.task_queue.task_queue import ITaskQueue
 from src.core.runtime.worker.worker import IWorker
@@ -11,6 +10,7 @@ from src.core.autonomous_intelligence_layer.agent_runtime.agent_runtime import I
 from src.core.service_layer.service_layer import IServiceLayer
 
 logger = logging.getLogger(__name__)
+
 
 @pytest.fixture
 def mock_dependencies(mocker):
@@ -34,6 +34,7 @@ def mock_dependencies(mocker):
 
     return mock_init_db, mock_message_bus_instance, mock_task_queue_instance, mock_agent_runtime_instance, mock_service_layer_instance, mock_worker_instance
 
+
 @pytest.fixture
 def runtime_kernel(mock_dependencies) -> RuntimeKernel:
     """Fixture لتوفير مثيل RuntimeKernel."""
@@ -46,6 +47,7 @@ def runtime_kernel(mock_dependencies) -> RuntimeKernel:
         service_layer=mock_service_layer_instance,
     )
 
+
 @pytest.mark.asyncio
 async def test_runtime_kernel_initial_state(runtime_kernel: RuntimeKernel):
     """اختبار الحالة الأولية لـ RuntimeKernel."""
@@ -53,6 +55,7 @@ async def test_runtime_kernel_initial_state(runtime_kernel: RuntimeKernel):
     assert status["initialized"] is False
     assert status["running"] is False
     assert status["config"] == {}
+
 
 @pytest.mark.asyncio
 async def test_runtime_kernel_initialize(runtime_kernel: RuntimeKernel, mock_dependencies):
@@ -69,6 +72,7 @@ async def test_runtime_kernel_initialize(runtime_kernel: RuntimeKernel, mock_dep
     mock_message_bus_instance.assert_not_called()
     mock_agent_runtime_instance.assert_not_called()
 
+
 @pytest.mark.asyncio
 async def test_runtime_kernel_initialize_already_initialized(runtime_kernel: RuntimeKernel, caplog):
     """اختبار تهيئة RuntimeKernel عندما يكون مهيأ بالفعل."""
@@ -79,6 +83,7 @@ async def test_runtime_kernel_initialize_already_initialized(runtime_kernel: Run
     status = await runtime_kernel.get_status()
     assert status["initialized"] is True
 
+
 @pytest.mark.asyncio
 async def test_runtime_kernel_start_without_initialize(runtime_kernel: RuntimeKernel, caplog):
     """اختبار بدء RuntimeKernel بدون تهيئة."""
@@ -86,6 +91,7 @@ async def test_runtime_kernel_start_without_initialize(runtime_kernel: RuntimeKe
         with caplog.at_level(logging.ERROR):
             await runtime_kernel.start()
             assert "RuntimeKernel not initialized. Cannot start." in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_runtime_kernel_start(runtime_kernel: RuntimeKernel, mock_dependencies):
@@ -100,6 +106,7 @@ async def test_runtime_kernel_start(runtime_kernel: RuntimeKernel, mock_dependen
     # العامل يتم تهيئته وبدء تشغيله داخل start() الآن
     mock_worker_instance.start.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_runtime_kernel_start_already_running(runtime_kernel: RuntimeKernel, caplog):
     """اختبار بدء RuntimeKernel عندما يكون قيد التشغيل بالفعل."""
@@ -110,6 +117,7 @@ async def test_runtime_kernel_start_already_running(runtime_kernel: RuntimeKerne
         assert "RuntimeKernel already running." in caplog.text
     status = await runtime_kernel.get_status()
     assert status["running"] is True
+
 
 @pytest.mark.asyncio
 async def test_runtime_kernel_stop(runtime_kernel: RuntimeKernel, mock_dependencies):
@@ -124,6 +132,7 @@ async def test_runtime_kernel_stop(runtime_kernel: RuntimeKernel, mock_dependenc
     mock_task_queue_instance.stop.assert_called_once()
     mock_worker_instance.stop.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_runtime_kernel_stop_not_running(runtime_kernel: RuntimeKernel, caplog):
     """اختبار إيقاف RuntimeKernel عندما لا يكون قيد التشغيل."""
@@ -134,6 +143,7 @@ async def test_runtime_kernel_stop_not_running(runtime_kernel: RuntimeKernel, ca
     status = await runtime_kernel.get_status()
     assert status["running"] is False
 
+
 @pytest.mark.asyncio
 async def test_runtime_kernel_get_status(runtime_kernel: RuntimeKernel):
     """اختبار الحصول على حالة RuntimeKernel."""
@@ -143,14 +153,23 @@ async def test_runtime_kernel_get_status(runtime_kernel: RuntimeKernel):
     assert "running" in status
     assert "config" in status
 
+
 @pytest.mark.asyncio
 async def test_iruntime_kernel_abstract_methods():
     """اختبار أن IRuntimeKernel يفرض تنفيذ التوابع المجردة."""
     class ConcreteKernel(IRuntimeKernel):
-        async def initialize(self, config: Optional[Dict[str, Any]] = None) -> None: pass
-        async def start(self) -> None: pass
-        async def stop(self) -> None: pass
-        async def get_status(self) -> Dict[str, Any]: return {}
+        async def initialize(self, config: Optional[Dict[str, Any]] = None) -> None:
+            pass
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def get_status(self) -> Dict[str, Any]:
+            return {}
+
         async def enqueue_task(
             self,
             task_id: str,
@@ -158,7 +177,8 @@ async def test_iruntime_kernel_abstract_methods():
             handler: Callable,
             delay_seconds: int = 0,
             priority: int = 0,
-        ) -> None: pass
+        ) -> None:
+            pass
 
     kernel = ConcreteKernel()
     assert isinstance(kernel, IRuntimeKernel)

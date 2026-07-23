@@ -1,15 +1,15 @@
 import json
 import logging
 import os
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 import redis
-from redis import Redis
 
 logger = logging.getLogger(__name__)
 
+
 class RealTaskQueue:
     """Production-grade task queue using Redis."""
-    
+
     def __init__(self, host: str = None, port: int = None, db: int = 0):
         """Initialize real task queue."""
         self.host = host or os.getenv("REDIS_HOST", "localhost")
@@ -19,7 +19,7 @@ class RealTaskQueue:
         self.queue_name = "basirah:tasks"
         self.dead_letter_queue_name = "basirah:tasks:dead_letter"
         self._connect()
-    
+
     def _connect(self):
         """Establish connection to Redis."""
         try:
@@ -37,7 +37,7 @@ class RealTaskQueue:
         except Exception as e:
             logger.error(f"Failed to connect to Redis task queue: {e}")
             raise
-    
+
     def enqueue_task(self, task: Dict[str, Any], priority: int = 0) -> bool:
         """Enqueue a task to the task queue."""
         try:
@@ -50,7 +50,7 @@ class RealTaskQueue:
         except Exception as e:
             logger.error(f"Failed to enqueue task: {e}")
             return False
-    
+
     def dequeue_task(self) -> Optional[Dict[str, Any]]:
         """Dequeue a task from the task queue."""
         try:
@@ -64,7 +64,7 @@ class RealTaskQueue:
         except Exception as e:
             logger.error(f"Failed to dequeue task: {e}")
             return None
-    
+
     def get_task_count(self) -> int:
         """Get the number of tasks in the queue."""
         try:
@@ -72,7 +72,7 @@ class RealTaskQueue:
         except Exception as e:
             logger.error(f"Failed to get task count: {e}")
             return 0
-    
+
     def move_to_dead_letter(self, task: Dict[str, Any], reason: str) -> bool:
         """Move a task to the dead letter queue."""
         try:
@@ -84,7 +84,7 @@ class RealTaskQueue:
         except Exception as e:
             logger.error(f"Failed to move task to dead letter queue: {e}")
             return False
-    
+
     def get_dead_letter_count(self) -> int:
         """Get the number of tasks in the dead letter queue."""
         try:
@@ -92,7 +92,7 @@ class RealTaskQueue:
         except Exception as e:
             logger.error(f"Failed to get dead letter queue count: {e}")
             return 0
-    
+
     def clear_queue(self) -> bool:
         """Clear all tasks from the queue."""
         try:
@@ -102,7 +102,7 @@ class RealTaskQueue:
         except Exception as e:
             logger.error(f"Failed to clear task queue: {e}")
             return False
-    
+
     def health_check(self) -> bool:
         """Check if Redis is healthy."""
         try:
@@ -110,7 +110,7 @@ class RealTaskQueue:
         except Exception as e:
             logger.error(f"Task queue health check failed: {e}")
             return False
-    
+
     def close(self):
         """Close Redis connection."""
         try:

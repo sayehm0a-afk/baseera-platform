@@ -1,7 +1,8 @@
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from src.core.autonomous_intelligence_layer.context_manager.context_manager import ContextManager
 from src.core.autonomous_intelligence_layer.context_manager.context_store import ContextStore
+
 
 class TestContextManager:
     @pytest.fixture

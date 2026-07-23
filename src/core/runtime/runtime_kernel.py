@@ -5,8 +5,8 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Optional
-from src.core.db.database import init_db, Base
+from typing import Any, Dict, Optional
+from src.core.db.database import init_db
 from src.core.runtime.message_bus.message_bus import InMemoryMessageBus, IMessageBus
 from src.core.runtime.task_queue.task_queue import ITaskQueue, TaskQueue
 from src.core.runtime.worker.worker import IWorker, Worker
@@ -152,6 +152,7 @@ class RuntimeKernel(IRuntimeKernel):
         await self._task_queue.start()
         logger.info("Task queue started within RuntimeKernel.")
         # تهيئة وبدء تشغيل العامل
+
         async def agent_worker_handler(task_data: Dict[str, Any]):
             logger.info(f"[RuntimeKernel] Agent worker received task: {task_data}")
             task_payload = task_data.get("payload", {})

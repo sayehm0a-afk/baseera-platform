@@ -1,9 +1,10 @@
-import pytest
 from src.core.autonomous_intelligence_layer.execution_policies.research_mode_policy import ResearchModePolicy
+
 
 def test_research_mode_policy_name():
     policy = ResearchModePolicy()
     assert policy.name == "ResearchMode"
+
 
 def test_research_mode_policy_apply():
     policy = ResearchModePolicy()
