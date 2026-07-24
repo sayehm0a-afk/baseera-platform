@@ -154,12 +154,15 @@ commit):
   pluggability is prepared for), and no News/Corporate
   Actions/Market Events/Risk Assessment engines exist to fuse in yet
   (the extension point is proven ready for them only via a test-only
-  placeholder factor, never shipped as a real engine). `CompositeIntelligenceEngine`
-  was deliberately **not** registered into
-  `src/analysis/core/registry.py`'s `DEFAULT_ENGINE_REGISTRY` in this
-  milestone — a spec-flagged optional addition that was not explicitly
-  confirmed, so it was skipped rather than assumed, per "do not expand
-  scope."
+  placeholder factor, never shipped as a real engine).
+  `CompositeIntelligenceEngine` is registered into
+  `src/analysis/core/registry.py`'s `DEFAULT_ENGINE_REGISTRY` under the
+  name `"composite_analysis"` (via `bootstrap.py`, a small dedicated
+  M2.4 follow-up, PR #9) — the spec-flagged optional addition, done
+  once explicitly confirmed. `TechnicalAnalysisEngine`/
+  `FundamentalAnalysisEngine` were not modified to make this possible;
+  the registration proves the cross-engine contract holds recursively,
+  not just for the two engines it was designed against first.
 
 ## Partially implemented
 
@@ -458,9 +461,26 @@ Two design decisions worth recording verbatim:
 - The approved specification flagged one optional addition pending
   explicit confirmation: registering `CompositeIntelligenceEngine`
   itself into `src/analysis/core/registry.py`'s `DEFAULT_ENGINE_REGISTRY`
-  (via `bootstrap.py`). That confirmation was not given, so it was
-  **not done** in this milestone, per "do not expand scope" — noted
-  here rather than assumed silently either way.
+  (via `bootstrap.py`). That confirmation was not given at the time,
+  so it was **not done** in this milestone's initial PR, per "do not
+  expand scope" — noted here rather than assumed silently either way.
+  Confirmation was given as a separate, explicit follow-up request; the
+  registration itself landed as a small, dedicated M2.4 follow-up (one
+  commit, `bootstrap.py` + its test only, PR #9) rather than being
+  folded back into this section's original scope.
+
+## Completed: M2.4 follow-up — Register CompositeIntelligenceEngine
+
+The one item M2.4's initial PR (#8) deliberately left undone pending
+explicit confirmation (see above) is now done. `bootstrap.py` gained
+one import and one `.register()` call for `CompositeIntelligenceEngine`
+under the name `"composite_analysis"` — `TechnicalAnalysisEngine`
+and `FundamentalAnalysisEngine` were not touched, no existing API
+changed, no new functionality introduced beyond the registration
+itself. One `[M2.4]`-prefixed commit on
+`feature/m2.4-register-composite-engine` (stacked on the still-open
+`feature/m2.4-composite-intelligence-engine`), PR #9. With this,
+**M2.4 is 100% complete** relative to the approved specification.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
