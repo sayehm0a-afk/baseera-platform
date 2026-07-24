@@ -1101,6 +1101,148 @@ no watchlists, no WebSocket/streaming, no live data provider connected,
 no frontend, no architecture redesign, no modification to any existing
 analysis engine, `CouncilEngine`, Composite Engine, or Expert contract.
 
+## Completed: M2.13 — Live Data Integration
+
+Live Saudi market data integration layer, on top of M2.12's API
+foundation. Per explicit instruction: no frontend/UI/mock screens, no
+hardcoded credentials (environment variables/configuration files only),
+no modification to any existing analysis engine, `CouncilEngine`,
+Composite Engine, Signal Engine, or Expert contract, full backward
+compatibility with every pre-existing route and provider. No Pull
+Request opened this milestone (branch + push only, per instruction).
+
+1. **`src/market_data/providers/market_data_provider.py`** —
+   `IMarketDataProvider` gained one new abstract method,
+   `get_historical_ohlcv(symbol, start, end) -> List[Dict]`, returning
+   every bar in a date range shaped identically to the existing
+   `get_stock_data`'s single-bar return (same `symbol`/`open`/`high`/
+   `low`/`close`/`volume`/`timestamp` keys), so both feed the same
+   ingestion upsert logic without a second data shape to handle.
+   Implemented concretely in the existing `SaudiMarketDataProvider`
+   (calling `_make_request("/stocks/history", ...)`, reusing its
+   already-tested tenacity retry/rate-limiting/auth-refresh
+   `_make_request` unchanged) and in `DevMarketDataProvider` (a
+   day-by-day loop reusing the exact same `_seeded_value(...)` formula
+   `get_stock_data` already uses for "today", so a same-day historical
+   bar and a `get_stock_data()` call agree on that day's values).
+2. **`src/market_data/providers/sahmak_market_data_provider.py`** (new)
+   — `SahmakMarketDataProvider(IMarketDataProvider)`, a real
+   `aiohttp`-based HTTP client wired for a Sahmak API endpoint. No
+   Sahmak vendor contract exists yet (same disclosed status the
+   pre-existing `SaudiMarketDataProvider`/`TADAWUL_API_KEY` already
+   carry) — this class is real, working code, never exercised against
+   a live endpoint. Resilience is composed from two existing, already-
+   tested building blocks rather than reimplemented:
+   `src.core.runtime.reliability_layer.circuit_breaker.CircuitBreaker`
+   wraps every outbound call, and `tenacity`'s `@retry` (same pattern
+   `SaudiMarketDataProvider._make_request` already uses) handles
+   transient per-call retries inside each circuit-breaker-guarded
+   attempt. Quote/OHLCV/index responses are cached via the new
+   `TTLCache`. Every credential (`SAHMAK_API_KEY`/`SAHMAK_API_SECRET`/
+   `SAHMAK_BASE_URL`) is read lazily from `src/market_data/config.py`
+   — never hardcoded, never read at import time. `get_stock_data`/
+   `get_historical_ohlcv` validate the symbol format first
+   (`symbol_validator.py`) so a malformed symbol never wastes a real
+   API call. Registered into `MarketDataProviderFactory` as `"sahmak"`.
+3. **`src/market_data/provider_factory.py`** (new) — `get_configured_provider()`,
+   the single function that "connects the provider to the existing
+   analysis pipeline" (Objective 5): builds `DevMarketDataProvider` or
+   `SahmakMarketDataProvider` based solely on the `MARKET_DATA_PROVIDER`
+   environment variable, defaulting to `"dev"` on unset/unknown values
+   so a missing configuration value never silently attempts a live
+   call with no real credentials behind it. Callers (ingestion,
+   the new health endpoint) depend on this function only, never on a
+   hardcoded provider class — moving from synthetic to live data is an
+   environment-variable change, not a code change. Objective 6 ("API
+   endpoints return real market data whenever available") is already
+   structurally satisfied without further API-layer changes: every
+   M2.12 `/api/v1/analysis/*` and `/api/v1/market-data/*` route already
+   reads only from the database via existing loaders, so once a real
+   provider is configured and ingestion (below) has populated it, those
+   routes reflect real data with zero additional wiring.
+4. **`src/market_data/validators/symbol_validator.py`** (new) — Tadawul
+   symbol format validation (`^\d{4}$`, e.g. `"1120"`) via
+   `is_valid_symbol_format`/`validate_symbol_format`, plus DB-backed
+   `is_known_symbol`/`validate_known_symbol` against the existing
+   `Stock` table. Applied at the Sahmak provider's real-network-call
+   boundary; the existing `DevMarketDataProvider`/`ingest_ohlcv.py`
+   are untouched (no existing test's symbol values were assumed to
+   already be 4-digit Tadawul-format, so validating there was out of
+   scope for this milestone).
+5. **`src/market_data/caching/ttl_cache.py`** (new) — `TTLCache`, an
+   in-memory, per-process TTL cache (`get`/`set`/`clear`/async
+   `get_or_compute`), disclosed as not distributed-safe for the same
+   reason `RateLimitMiddleware` (M2.12) already documents: Redis is not
+   reliably available in every environment this app runs in. A
+   `_MISSING` sentinel distinguishes an absent/expired entry from a
+   legitimately cached `None`.
+6. **`src/market_data/config.py`** (new) — every M2.13 environment
+   variable read lazily, at call time only, matching the lazy-init
+   discipline `src/api/config.py` and `src/core/db/database.py`
+   already established: `MARKET_DATA_PROVIDER`, `SAHMAK_API_KEY`,
+   `SAHMAK_API_SECRET`, `SAHMAK_BASE_URL`, and tunables for max
+   retries, timeout, circuit-breaker thresholds, and quote cache TTL.
+7. **`src/market_data/ingestion/ingest_historical_ohlcv.py`** (new) —
+   `ingest_historical_ohlcv(symbols, start, end, provider,
+   session_factory)`, bulk-upserting every bar `get_historical_ohlcv`
+   returns. Deliberately imports `_get_or_create_stock`/
+   `_upsert_price_bar` directly from the existing, untouched
+   `ingest_ohlcv.py` rather than duplicating or modifying that already-
+   tested module, keeping the single-day and historical-range
+   ingestion paths from silently diverging in behavior. Same per-symbol
+   commit isolation as `ingest_ohlcv` (one symbol's failure never rolls
+   back or blocks another's).
+8. **`src/api/routes/market_data.py`** — one new endpoint, `GET
+   /api/v1/market-data/provider/health` (Objective 4's "Health
+   monitoring" deliverable): builds the configured provider via
+   `get_configured_provider()`, calls its own `health_check()`, and
+   returns it wrapped in the existing `Envelope`/`Meta` shape. Does not
+   read or write price data. Authenticated the same way every other
+   `/market-data/*` route already is. The pre-existing `/health/live`/
+   `/health/ready` routes in `main.py` are untouched and unrelated —
+   those report the runtime kernel's own liveness/readiness, not a
+   market-data provider's.
+9. **`.env.example`** extended (not redesigned) with the nine new
+   `MARKET_DATA_*`/`SAHMAK_*` variables this milestone reads; the
+   pre-existing `TADAWUL_API_KEY` placeholder is unchanged and now
+   documented alongside the actually-targeted `SAHMAK_*` vendor.
+10. **69 new tests**: unit tests for the symbol validator, TTL cache,
+    the new `get_historical_ohlcv` implementations (Dev/Saudi, the
+    latter via mocking `SaudiMarketDataProvider`'s own already-tested
+    `_make_request` boundary), the Sahmak provider (mocking at its own
+    `_request`/`session` boundary — including full authenticate/401-
+    retry/error-status paths against a minimal fake `aiohttp`-shaped
+    session, never a real socket), the provider-selection factory, the
+    historical ingestion module, and the new health endpoint (real
+    in-memory SQLite + FastAPI `dependency_overrides`, same pattern
+    `tests/integration/api/` already established). `test_main_boot.py`
+    extended in place for the one new route.
+11. **Coverage of every file this milestone added: 100%** (`src/market_data/config.py`,
+    `provider_factory.py`, `caching/ttl_cache.py`,
+    `validators/symbol_validator.py`,
+    `providers/sahmak_market_data_provider.py`,
+    `ingestion/ingest_historical_ohlcv.py`, `src/api/routes/market_data.py`,
+    `src/api/schemas/market_data.py`). The pre-existing
+    `market_data_provider.py`'s own `SaudiMarketDataProvider` remains at
+    its prior (pre-M2.13) coverage level for the methods this milestone
+    did not touch — no test instantiated that class directly before
+    M2.13 either, and backfilling its full coverage was out of this
+    milestone's scope; the one method this milestone added to it
+    (`get_historical_ohlcv`) is itself 100% covered. flake8: 0. Full
+    regression suite: 1288 passed / 12 skipped (Redis unavailable) / 0
+    failed.
+
+**Scope discipline**: per explicit instruction, M2.13 built only the
+live market data integration layer described above — no frontend, no
+UI, no mock screens, no Signal Engine, no Decision Engine, no
+watchlists, no WebSocket, no modification to `CouncilEngine`/Composite
+Engine/Expert contracts, no hardcoded credential anywhere in the new
+code (every secret is an `os.getenv(...)` read). No real Sahmak vendor
+contract exists yet — `SahmakMarketDataProvider` is real, working,
+tested code with no live endpoint verified behind it, disclosed
+exactly as such, matching this project's established precedent for
+every other not-yet-contracted data vendor.
+
 ## Completed: M1.5 — Lint Debt Reduction
 
 Closed the 1515 pre-existing flake8 violations recorded at M1's close
