@@ -9,9 +9,9 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.4 (branch `feature/m2.4-composite-intelligence-engine`, based
-on `main` at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge
-commit):
+As of M2.4.1 (branch `feature/m2.4.1-foundation-hardening`, stacked on
+the not-yet-merged M2.4 branch chain -- `main` itself is still at
+`efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge commit):
 
 ## Implemented
 
@@ -251,23 +251,22 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.4)
+## Verified test/build state (M2.4.1)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes (unchanged since
   M2.1), no `PYTHONPATH` manipulation required.
-- Full test suite: 945 passed / 12 skipped (Redis unavailable) / 0 failed
-  without a live Redis; 957 passed / 0 skipped / 0 failed with one.
-  957 total test functions in the repository (up from 904 at M2.3's
-  close — 53 new tests for the M2.4 composite types, registry, three
-  factors, and engine facade, including a real-engine integration
-  suite wiring `TechnicalAnalysisEngine` + `FundamentalAnalysisEngine`
-  end-to-end; zero existing tests modified).
+- Full test suite: 962 passed / 12 skipped (Redis unavailable) / 0 failed
+  without a live Redis; 974 passed / 0 skipped / 0 failed with one.
+  974 total test functions in the repository (up from 958 at M2.4's
+  registration follow-up close — 16 new tests for M2.4.1's error-
+  handling, registry-reachability, per-factor-isolation, and
+  full-pipeline coverage; zero existing tests modified).
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
   CI at `FLAKE8_BASELINE: 0` since M2.0 (see "Completed: M2.0" below).
-- No new migration in this milestone (no persistence in M2.4's scope);
-  the `fundamental_snapshots` migration cycle verified at M2.3's close
-  is unchanged.
+- No new migration in this milestone (no persistence in M2.4.1's
+  scope, per its explicit rules); the `fundamental_snapshots`
+  migration cycle verified at M2.3's close is unchanged.
 
 ## Completed: M1.5 — Lint Debt Reduction
 
@@ -481,6 +480,90 @@ itself. One `[M2.4]`-prefixed commit on
 `feature/m2.4-register-composite-engine` (stacked on the still-open
 `feature/m2.4-composite-intelligence-engine`), PR #9. With this,
 **M2.4 is 100% complete** relative to the approved specification.
+
+## Completed: M2.4.1 — Foundation Hardening
+
+A full Backend Readiness & Architecture Audit (repository-wide,
+read-only, five parallel deep-dive investigations plus direct
+first-hand verification) was performed before M2.5 to check for
+hidden architectural gaps rather than assuming M2.2–M2.4 were
+production-ready simply because their own tests passed. It found
+several real, previously-undisclosed issues; M2.4.1 closes the four
+the audit judged as directly affecting what a Signal Engine (M2.5)
+would build on, and one more it uncovered along the way. Four
+`[M2.4.1]`-prefixed commits on `feature/m2.4.1-foundation-hardening`
+(stacked on the still-open M2.4/M2.4-follow-up branch chain).
+
+1. **`DEFAULT_ENGINE_REGISTRY` was dormant in production.**
+   `src/analysis/core/bootstrap.py` — the composition root that
+   registers all three engines — was previously imported only by its
+   own test file; `main.py` never imported it, so the registry stayed
+   permanently empty in the actual running application despite tests
+   suggesting otherwise. Fixed with one `import src.analysis.core.bootstrap`
+   at `main.py`'s module level (pure in-memory registration, no I/O,
+   no Redis/DB dependency, no change to startup behavior otherwise).
+2. **A full-pipeline integration test now exists**
+   (`tests/integration/test_full_pipeline.py`): `ingest_ohlcv`/
+   `ingest_fundamentals` (real ingestion, via a sequential fake
+   provider replaying pre-built bars/periods one call at a time,
+   exactly the real per-day call pattern) → a real SQLite database →
+   `ohlcv_loader`/`fundamental_loader` → `TechnicalAnalysisEngine` →
+   `FundamentalAnalysisEngine` → `CompositeIntelligenceEngine`, in one
+   continuous test. Nothing before this proved the full chain works —
+   every prior test exercised one stage in isolation.
+   **Writing this test surfaced a second, real, previously-hidden
+   dormant-registry bug**, the same class as item 1 but one layer
+   down: `DEFAULT_COMPOSITE_REGISTRY` was only ever populated when the
+   three composite factor modules happened to be imported by
+   something — nothing in the production import chain
+   (`composite_intelligence_engine.py`, `bootstrap.py`, `main.py`)
+   imported them. It had only ever appeared to work because other
+   test files' own imports populated the shared registry singleton
+   first when the full suite ran together; the new test, run alone,
+   failed immediately with an empty composite result. Also discovered
+   in the process: `src/analysis/composite/factors/__init__.py` had
+   never actually been committed in M2.4 — the package had been
+   running as an implicit Python 3 namespace package since its
+   creation. Fixed the same way as item 1: `factors/__init__.py` now
+   imports all three factor modules (mirroring
+   `src/domain/models/__init__.py`'s identical established pattern),
+   and `composite_intelligence_engine.py` imports the `factors`
+   package at module level.
+3. **`CompositeIntelligenceEngine.analyze()` gained per-factor failure
+   isolation.** A factor that violates the "never raise" convention
+   (a bug, an unexpected input shape) is now caught, logged
+   server-side with its full traceback, and isolated as a
+   `DataCompleteness.INSUFFICIENT` entry with a structured explanation
+   — every other factor still computes normally, in the same
+   deterministic order. Mirrors the per-symbol failure isolation
+   `ingest_ohlcv`/`ingest_fundamentals` already had. No change to any
+   of the three real M2.4 factors, which don't raise today.
+4. **`main.py`'s five raw-exception leaks were fixed.**
+   `readiness_check`, `get_stats`, `submit_task`, `get_task_status`,
+   and `get_agent_status` previously returned `str(e)` — the internal
+   exception's own text — directly in the HTTP response body. Replaced
+   with fixed, generic per-route messages; the real exception is still
+   fully logged server-side via `logger.error(..., exc_info=True)`
+   (previously missing on two of the five, losing the stack trace from
+   logs too). Fixing this surfaced a related, previously-undocumented
+   correctness bug: `readiness_check` and `get_stats` were each
+   missing the `except HTTPException: raise` guard the other three
+   routes already had, so their own intentionally-raised
+   `HTTPException`s (e.g. 503 "kernel not initialized") were being
+   caught by the broad `except Exception` directly below and
+   miscategorized as generic 500s — fixed alongside the leak.
+
+**Scope discipline**: per explicit instruction, M2.4.1 did not begin
+the Signal Engine, build an AI Decision Layer, add any API route,
+implement any persistence, integrate a real market-data vendor, add
+authentication, or touch the frontend. Every other finding from the
+Backend Readiness Audit (missing FCF/operating-margin/standalone-BVPS
+fundamental metrics, no auth/rate-limiting, floor-only dependency
+pins, 116 committed coverage-artifact files, the unreachable legacy
+`autonomous_intelligence_layer`/`multi_agent_system` trees, Redis
+being a hard non-lazy boot dependency unlike the deliberately-lazy DB)
+remains open by design, tracked in that audit's own priority list, not
+addressed here.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
