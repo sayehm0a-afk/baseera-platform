@@ -20,6 +20,28 @@ unit test in this repo does: fast, isolated, no external service
 dependency -- consistent with the existing test fixture pattern used
 throughout tests/unit/domain/, tests/unit/market_data/, and
 tests/unit/analysis/.
+
+The `import src.analysis.experts.technical` at the top of this file
+(distinct from the specific `CouncilEngine`/`Council` imports used
+below) is a required, disclosed fix, not a stray import: without it,
+Stage 7's `technical_council.analyze(...)` call below silently returns
+an empty CouncilResult when this file is run alone (`pytest
+tests/integration/test_full_pipeline.py`), because
+DEFAULT_EXPERT_REGISTRY's population is itself an import-time side
+effect of importing the `src.analysis.experts.technical` package (see
+that package's own __init__.py docstring) -- a dependency Stage 7 has
+always had, silently masked whenever this file happened to run
+alongside another test (e.g. tests/unit/test_main_boot.py, which
+imports `main`) that triggered the same side effect first. Verified
+directly, in isolation, before this fix: `pytest
+tests/integration/test_full_pipeline.py` alone failed with
+`council_result.experts == {}`; the full suite passed regardless,
+which is exactly what made the bug easy to miss. The same dormant-
+registry bug class M2.4.1 found and fixed twice already
+(DEFAULT_ENGINE_REGISTRY's missing bootstrap.py import in main.py, and
+DEFAULT_COMPOSITE_REGISTRY's missing factors/__init__.py), present a
+third time, here, since M2.7 added Stage 7 -- fixed now, at M2.10,
+the first time this file was actually executed in true isolation.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -28,6 +50,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import src.analysis.experts.technical  # noqa: F401 -- import side effect required, see below
 from src.analysis.composite.composite_intelligence_engine import CompositeIntelligenceEngine
 from src.analysis.composite.types import Agreement, DataCompleteness, build_envelope
 from src.analysis.core.contracts import AnalysisEngineResult, AnalysisOutput
@@ -260,6 +283,7 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
         "technical.trend",
         "technical.momentum",
         "technical.volatility",
+        "technical.volume",
     }
 
     trend = council_result.get("technical.trend")
@@ -292,5 +316,17 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
     assert volatility.normalized_score is not None
     assert 0.0 <= volatility.normalized_score <= 1.0
     assert volatility.conflicts == ()
+
+    volume = council_result.get("technical.volume")
+    assert isinstance(volume, AnalysisOutput)
+    # Every one of the 40 synthetic bars closes strictly higher than the
+    # last (close = 100 + i*1.5, never flat, never down) -> OBV's own
+    # construction makes it strictly increasing every bar, on real,
+    # non-mocked indicator output -> unambiguous 20-bar bullish trend.
+    assert volume.direction == ExpertDirection.BULLISH
+    assert volume.normalized_score > 0.0
+    assert volume.completeness == DataCompleteness.COMPLETE
+    assert volume.conflicts == ()
+    assert volume.symbol == SYMBOL
     assert volatility.completeness == DataCompleteness.COMPLETE
     assert volatility.symbol == SYMBOL
