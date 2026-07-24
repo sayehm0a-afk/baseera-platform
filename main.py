@@ -9,6 +9,7 @@ import os
 import sys
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
@@ -38,12 +39,66 @@ import src.analysis.core.bootstrap  # noqa: E402,F401
 # root rather than folded into the one above.
 import src.analysis.experts.bootstrap  # noqa: E402,F401
 
+# M2.12: the API layer exposing the above engines/councils over HTTP.
+# Importing these here (not inline in route functions) is the same
+# reachability discipline every prior composition-root import in this
+# file already follows.
+from src.api import config as api_config  # noqa: E402
+from src.api.error_handlers import register_exception_handlers  # noqa: E402
+from src.api.middleware.rate_limit import RateLimitMiddleware  # noqa: E402
+from src.api.middleware.request_id import RequestIDMiddleware  # noqa: E402
+from src.api.routes.analysis import router as analysis_router  # noqa: E402
+from src.api.routes.auth import router as auth_router  # noqa: E402
+from src.api.routes.market_data import router as market_data_router  # noqa: E402
+from src.api.routes.stocks import router as stocks_router  # noqa: E402
+
 # FastAPI app
 app = FastAPI(
     title="Basirah",
     description="Enterprise AI Platform for Saudi Financial Market Analysis",
     version="1.0.0",
+    openapi_tags=[
+        {"name": "analysis", "description": "Technical/Fundamental/Composite/Council analysis output."},
+        {"name": "stocks", "description": "Stock reference-data lookup."},
+        {"name": "market-data", "description": "Historical OHLCV price-bar data."},
+        {"name": "auth", "description": "JWT access/refresh token issuance."},
+    ],
 )
+
+# Request-ID propagation and rate limiting apply to every route, old and
+# new alike -- both are purely additive (a new response header, and a 429
+# only once a client exceeds the configured limit) and change no existing
+# route's success-path behavior or response body.
+#
+# Registration order matters here: Starlette applies the *last*-added
+# middleware outermost, so RateLimitMiddleware is added before
+# RequestIDMiddleware to make RequestID the outer of the two -- it must
+# run first so request_id already exists in ASGI scope state by the
+# time RateLimitMiddleware needs it for a 429 response's own error body.
+app.add_middleware(
+    RateLimitMiddleware,
+    max_requests=api_config.get_rate_limit_requests_per_window(),
+    window_seconds=api_config.get_rate_limit_window_seconds(),
+)
+app.add_middleware(RequestIDMiddleware)
+
+# No default origins: an unconfigured CORS_ALLOWED_ORIGINS means no
+# browser-based frontend origin is allowed, rather than silently
+# allowing every origin (see src/api/config.py).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=api_config.get_cors_allowed_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+register_exception_handlers(app)
+
+app.include_router(analysis_router)
+app.include_router(stocks_router)
+app.include_router(market_data_router)
+app.include_router(auth_router)
 
 # Global runtime kernel
 kernel = None

@@ -57,7 +57,32 @@ def test_importing_main_populates_the_expert_registry():
     assert DEFAULT_EXPERT_REGISTRY.get("technical.candlestick").council is Council.TECHNICAL
 
 
-def test_main_boots_11_routes():
-    # Unchanged boot smoke test, now living alongside the registry check
-    # so both are verified from the same real `import main`.
-    assert len(main.app.routes) == 11
+def test_main_boots_expected_routes():
+    # As of FastAPI 0.139.2, app.include_router() (used by M2.12's new
+    # routers) registers a lazily-resolved _IncludedRouter wrapper in
+    # app.routes, not a flat APIRoute per endpoint -- len(app.routes) no
+    # longer counts real endpoints once any router is included (it did
+    # when every route in this file was a bare @app.get(...), which is
+    # why this test previously asserted a raw len(app.routes) == 11).
+    # app.openapi()["paths"] always fully resolves every router
+    # (included or not), so it is used here instead as the robust,
+    # FastAPI-internals-proof way to count real endpoints.
+    paths = set(main.app.openapi()["paths"].keys())
+    assert paths == {
+        "/health/live",
+        "/health/ready",
+        "/metrics",
+        "/stats",
+        "/api/tasks",
+        "/api/tasks/{task_id}",
+        "/api/agents/{agent_id}",
+        "/api/v1/analysis/{symbol}/technical",
+        "/api/v1/analysis/{symbol}/fundamental",
+        "/api/v1/analysis/{symbol}/composite",
+        "/api/v1/analysis/{symbol}/councils/technical",
+        "/api/v1/stocks",
+        "/api/v1/stocks/{symbol}",
+        "/api/v1/market-data/{symbol}/ohlcv",
+        "/auth/login",
+        "/auth/refresh",
+    }
