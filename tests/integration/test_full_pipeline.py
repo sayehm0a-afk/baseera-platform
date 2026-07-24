@@ -245,16 +245,17 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
     assert quality.completeness == DataCompleteness.COMPLETE
     assert quality.value == pytest.approx(1.0)  # both envelopes fresh (same `now`)
 
-    # --- Stage 7: Technical Council / Trend Expert (real, on the real technical_analysis
-    # envelope already built above) -- BEIF's own "one more hop" extension, M2.7. ---
-    # Trend Expert ships EXPERIMENTAL (no shadow-mode history yet, per BEIF Section 15),
-    # so CouncilEngine.analyze() must be asked for every status explicitly to see it --
+    # --- Stage 7: Technical Council / Trend + Momentum Expert (real, on the real
+    # technical_analysis envelope already built above) -- BEIF's "one more hop"
+    # extension, M2.7 (Trend) and M2.8 (Momentum). ---
+    # Both experts ship EXPERIMENTAL (no shadow-mode history yet, per BEIF Section 15),
+    # so CouncilEngine.analyze() must be asked for every status explicitly to see them --
     # exactly the promotion-gate behavior that status is supposed to enforce.
     technical_council = CouncilEngine(council=Council.TECHNICAL)
     council_result = technical_council.analyze(SYMBOL, envelopes, include_all_statuses=True)
 
     assert isinstance(council_result, AnalysisEngineResult)
-    assert set(council_result.experts.keys()) == {"technical.trend"}
+    assert set(council_result.experts.keys()) == {"technical.trend", "technical.momentum"}
 
     trend = council_result.get("technical.trend")
     assert isinstance(trend, AnalysisOutput)
@@ -266,3 +267,13 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
     assert trend.conflicts == ()
     assert trend.completeness == DataCompleteness.COMPLETE
     assert trend.symbol == SYMBOL
+
+    momentum = council_result.get("technical.momentum")
+    assert isinstance(momentum, AnalysisOutput)
+    # A monotonic 40-bar uptrend with no down days pushes RSI-14 strongly
+    # positive and keeps MACD's histogram above zero -> bullish agreement,
+    # on real, non-mocked indicator output.
+    assert momentum.direction == ExpertDirection.BULLISH
+    assert momentum.normalized_score > 0.0
+    assert momentum.completeness == DataCompleteness.COMPLETE
+    assert momentum.symbol == SYMBOL

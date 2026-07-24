@@ -9,9 +9,9 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.7 (branch `feature/m2.7-expert-intelligence-core`, stacked on
-the not-yet-merged M2.4/M2.4.1 branch chain -- `main` itself is still at
-`efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge commit):
+As of M2.8 (branch `feature/m2.8-momentum-expert`, stacked on the
+not-yet-merged M2.4/M2.4.1/M2.7 branch chain -- `main` itself is still
+at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge commit):
 
 ## Implemented
 
@@ -163,27 +163,38 @@ the not-yet-merged M2.4/M2.4.1 branch chain -- `main` itself is still at
   `FundamentalAnalysisEngine` were not modified to make this possible;
   the registration proves the cross-engine contract holds recursively,
   not just for the two engines it was designed against first.
-- **BEIF expert layer, Technical Council (M2.7)**: `src/analysis/
+- **BEIF expert layer, Technical Council (M2.7 + M2.8)**: `src/analysis/
   experts/` — a fourth, independent registry
   (`ExpertRegistry`/`DEFAULT_EXPERT_REGISTRY`) and a generic
   `CouncilEngine`, interpreting already-computed Technical Analysis
   Engine output into structured, evidence-bearing `ExpertResult`s
-  (never recomputing an indicator itself). One real expert exists:
-  **Trend Expert** (`technical.trend`), reading `sma_20`/`ema_20`/
-  `adx_14`/`supertrend` and producing direction/normalized_score/
-  confidence/evidence/conflicts, with per-expert failure isolation and
+  (never recomputing an indicator itself). Two real experts exist:
+  **Trend Expert** (`technical.trend`, M2.7), reading `sma_20`/`ema_20`/
+  `adx_14`/`supertrend`, and **Momentum Expert** (`technical.momentum`,
+  M2.8), reading `rsi_14`/`macd` — disjoint metric sets, verified by a
+  registry-level test per BEIF Section 6/16's double-counting guard.
+  Momentum Expert reads RSI-14 as a continuous, symmetric momentum-
+  direction-and-magnitude measure (`(rsi - 50) / 50`), deliberately
+  never as a binary "overbought means sell" trigger — the specific
+  misapplication Document 1 Section 5.2 identifies as RSI's most common
+  failure mode — with an extreme reading still disclosed via
+  `warnings`, informational only. MACD's histogram contributes by sign
+  only (±1), never scaled by magnitude, since no non-fabricated,
+  price-scale-independent normalization exists for MACD's absolute
+  value (unlike ADX's own standard 0–100 range, which Trend Expert
+  uses directly). Both experts share per-expert failure isolation and
   numeric-bounds validation mirroring `CompositeIntelligenceEngine`'s
   established pattern. Registered as `TechnicalCouncilEngine` into
   `DEFAULT_ENGINE_REGISTRY` under `"technical_council"` via
   `src/analysis/experts/bootstrap.py`, imported from `main.py`
   alongside the existing `core.bootstrap` import (same production-
-  reachability discipline M2.4.1 established). Trend Expert ships at
+  reachability discipline M2.4.1 established). Both experts ship at
   `ExpertStatus.EXPERIMENTAL` (BEIF's lifecycle, Section 15) —
   reachable and fully tested, but deliberately excluded from
   `CouncilEngine.analyze()`'s default (shadow-mode-gated) output until
   a real promotion process exists; `include_all_statuses=True` is the
   explicit override used by the full-pipeline integration test.
-  **Not included**: Momentum/Volatility/Volume/Candlestick Expert
+  **Not included**: Volatility/Volume/Candlestick Expert
   (BEIF's remaining Technical Council v1 set, sequenced next), Market
   Structure Expert (BEIF v2, blocked pending a swing-high/low and
   gap-detection indicator), any Fundamental/Saudi/Risk Council expert,
@@ -279,24 +290,23 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.7)
+## Verified test/build state (M2.8)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes (unchanged since
   M2.1), no `PYTHONPATH` manipulation required.
-- Full test suite: 1007 passed / 12 skipped (Redis unavailable) / 0
+- Full test suite: 1027 passed / 12 skipped (Redis unavailable) / 0
   failed, verified in this environment (no live Redis instance was
   reachable here — `redis-cli ping` refused the connection — so the
   with-Redis count from M2.4.1's report is carried forward
-  unverified this session rather than re-asserted). 1019 total test
-  functions in the repository (up from 974 at M2.4.1's close — 45 new
-  tests for M2.7's expert-layer contracts, registry, council-engine
-  isolation/bounds/determinism, Trend Expert reference-value and
-  edge-case coverage, registry-reachability, and the full-pipeline
-  extension; zero existing tests modified beyond the two files
-  explicitly extended, `test_main_boot.py` and
-  `test_full_pipeline.py`).
-- Coverage of the new `src/analysis/experts/` package: **100%**
+  unverified this session rather than re-asserted). 1039 total test
+  functions in the repository (up from 1019 at M2.7's close — 20 new
+  tests for M2.8's Momentum Expert reference-value and edge-case
+  coverage, registration, and a registry-level disjoint-metrics
+  double-counting check; `test_main_boot.py` and
+  `test_full_pipeline.py` extended in place, zero other existing
+  tests modified).
+- Coverage of the `src/analysis/experts/` package: **100%**
   (258/258 statements), measured via
   `pytest --cov=src/analysis/experts --cov-report=term-missing`.
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
@@ -389,6 +399,60 @@ Volume/Candlestick/Market Structure Expert, no Fundamental/Saudi/Risk
 Council, no Signal Engine, no Decision Engine, no API route, no
 persistence. These are explicitly the next, separately-authorized
 iterations.
+
+## Completed: M2.8 — Momentum Expert
+
+The second Technical Council v1 expert, following the exact shape
+M2.7's Trend Expert established — proving the BEIF pattern generalizes
+to a second expert without any change to `types.py`, `registry.py`, or
+`council_engine.py`. Six `[M2.8]`-prefixed commits on
+`feature/m2.8-momentum-expert` (stacked on the merged M2.7 branch).
+
+1. **`src/analysis/experts/technical/momentum_expert.py`**: Momentum
+   Expert (`technical.momentum`), reading only `rsi_14`/`macd` from an
+   already-computed `"technical_analysis"` envelope. RSI-14 is scaled
+   to a continuous, symmetric `(rsi - 50) / 50` momentum-direction-
+   and-magnitude measure — deliberately never a binary "overbought
+   means sell" trigger, the specific failure mode Document 1
+   Section 5.2 names as RSI's most common misapplication; an extreme
+   reading is still disclosed via `warnings`, informational only, not
+   folded into a reversal call this expert has no evidentiary basis to
+   make. MACD's histogram contributes by sign only (±1), never scaled
+   by magnitude — MACD's absolute value is price-scale-dependent with
+   no non-fabricated, universal normalization available the way ADX's
+   own standard 0–100 range gave Trend Expert a principled scale for
+   the same role. Disagreement between the two is disclosed as a
+   `conflicts` entry, confidence penalized harder than agreement is
+   rewarded (BIIC Article III.3), identical discipline to Trend
+   Expert. Ships at `ExpertStatus.EXPERIMENTAL`, same reasoning as
+   Trend Expert (no shadow-mode history yet).
+2. **`src/analysis/experts/technical/__init__.py`** gained one import
+   (`momentum_expert`, alongside the existing `trend_expert`) —
+   self-registration, the same pattern already established.
+3. **No change to `types.py`, `registry.py`, `council_engine.py`, or
+   `bootstrap.py`** — the entire BEIF core built in M2.7 absorbed a
+   second expert with zero modification, the direct proof its
+   extension-point design (BEIF Section 8/6) holds beyond the one
+   expert it was first proven against.
+4. **`tests/unit/test_main_boot.py`** and
+   **`tests/integration/test_full_pipeline.py`** extended in place:
+   the reachability test now asserts both expert IDs are present via
+   the real `import main` path, and the full-pipeline test's Stage 7
+   now asserts a real, non-mocked `technical.momentum` result
+   (bullish, on the same real ingested/persisted/loaded steady-uptrend
+   data Trend Expert's own assertion already used).
+5. A new registry-level test
+   (`test_momentum_and_trend_experts_have_disjoint_contributing_metrics`)
+   directly enforces BEIF Section 6/16's double-counting guard for
+   Technical Council's first two experts, not merely as a design
+   intention.
+
+**Scope discipline**: per explicit instruction, M2.8 implemented
+exactly one expert and touched no previously-stable module except the
+two test files and the one `__init__.py` import line already
+described — no Volatility/Volume/Candlestick/Market Structure Expert,
+no Fundamental/Saudi/Risk Council, no Signal Engine, no Decision
+Engine, no API route, no persistence.
 
 ## Completed: M1.5 — Lint Debt Reduction
 
