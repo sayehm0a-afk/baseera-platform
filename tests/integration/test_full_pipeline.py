@@ -31,6 +31,8 @@ from sqlalchemy.orm import sessionmaker
 from src.analysis.composite.composite_intelligence_engine import CompositeIntelligenceEngine
 from src.analysis.composite.types import Agreement, DataCompleteness, build_envelope
 from src.analysis.core.contracts import AnalysisEngineResult, AnalysisOutput
+from src.analysis.experts.council_engine import CouncilEngine
+from src.analysis.experts.types import Council, ExpertDirection
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
 from src.analysis.ohlcv_loader import load_price_bars
@@ -242,3 +244,25 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
     quality = composite_result.get("data_quality_summary")
     assert quality.completeness == DataCompleteness.COMPLETE
     assert quality.value == pytest.approx(1.0)  # both envelopes fresh (same `now`)
+
+    # --- Stage 7: Technical Council / Trend Expert (real, on the real technical_analysis
+    # envelope already built above) -- BEIF's own "one more hop" extension, M2.7. ---
+    # Trend Expert ships EXPERIMENTAL (no shadow-mode history yet, per BEIF Section 15),
+    # so CouncilEngine.analyze() must be asked for every status explicitly to see it --
+    # exactly the promotion-gate behavior that status is supposed to enforce.
+    technical_council = CouncilEngine(council=Council.TECHNICAL)
+    council_result = technical_council.analyze(SYMBOL, envelopes, include_all_statuses=True)
+
+    assert isinstance(council_result, AnalysisEngineResult)
+    assert set(council_result.experts.keys()) == {"technical.trend"}
+
+    trend = council_result.get("technical.trend")
+    assert isinstance(trend, AnalysisOutput)
+    # Steady, sustained uptrend (same 40-bar series Stage 4 already confirmed a
+    # bullish SuperTrend on): EMA-20 above SMA-20, SuperTrend bullish -> full
+    # directional agreement, real ADX strength scaling the magnitude.
+    assert trend.direction == ExpertDirection.BULLISH
+    assert trend.normalized_score > 0.0
+    assert trend.conflicts == ()
+    assert trend.completeness == DataCompleteness.COMPLETE
+    assert trend.symbol == SYMBOL

@@ -32,6 +32,12 @@ logger = get_logger(__name__)
 # affect startup behavior otherwise.
 import src.analysis.core.bootstrap  # noqa: E402,F401
 
+# Populate the BEIF expert-council catalog the same way, one line below
+# the engine-level bootstrap it depends on -- see src/analysis/experts/
+# bootstrap.py's own docstring for why this is a separate composition
+# root rather than folded into the one above.
+import src.analysis.experts.bootstrap  # noqa: E402,F401
+
 # FastAPI app
 app = FastAPI(
     title="Basirah",
