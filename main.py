@@ -22,6 +22,22 @@ from src.core.monitoring.structured_logging import init_logging, get_logger  # n
 init_logging()
 logger = get_logger(__name__)
 
+# Populate the analysis-engine catalog (src.analysis.core.registry.DEFAULT_ENGINE_REGISTRY)
+# by importing its composition root. bootstrap.py registers TechnicalAnalysisEngine,
+# FundamentalAnalysisEngine, and CompositeIntelligenceEngine at import time via a
+# module-level register_default_engines() call -- importing it here, at main.py's own
+# module load time, is what makes the registry non-empty in the real running
+# application, not just in tests that happen to import bootstrap.py directly. Pure
+# in-memory registration, no I/O, so this has no Redis/DB dependency and does not
+# affect startup behavior otherwise.
+import src.analysis.core.bootstrap  # noqa: E402,F401
+
+# Populate the BEIF expert-council catalog the same way, one line below
+# the engine-level bootstrap it depends on -- see src/analysis/experts/
+# bootstrap.py's own docstring for why this is a separate composition
+# root rather than folded into the one above.
+import src.analysis.experts.bootstrap  # noqa: E402,F401
+
 # FastAPI app
 app = FastAPI(
     title="Basirah",
@@ -147,9 +163,11 @@ async def readiness_check():
         else:
             raise HTTPException(status_code=503, detail=f"Degraded health: {health_status}")
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Readiness check error: {e}")
-        raise HTTPException(status_code=503, detail=str(e))
+        logger.error(f"Readiness check error: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Service not ready")
 
 
 @app.get("/metrics")
@@ -169,9 +187,11 @@ async def get_stats():
         stats = kernel.get_stats()
         return stats
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve statistics")
 
 
 @app.post("/api/tasks", response_model=TaskResponse)
@@ -202,8 +222,8 @@ async def submit_task(task_request: TaskRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error submitting task: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error submitting task: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to submit task")
 
 
 @app.get("/api/tasks/{task_id}")
@@ -223,8 +243,8 @@ async def get_task_status(task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting task status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting task status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve task status")
 
 
 @app.get("/api/agents/{agent_id}")
@@ -244,8 +264,8 @@ async def get_agent_status(agent_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting agent status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting agent status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve agent status")
 
 if __name__ == "__main__":
     try:

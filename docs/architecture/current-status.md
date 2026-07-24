@@ -9,9 +9,9 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.4 (branch `feature/m2.4-composite-intelligence-engine`, based
-on `main` at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge
-commit):
+As of M2.7 (branch `feature/m2.7-expert-intelligence-core`, stacked on
+the not-yet-merged M2.4/M2.4.1 branch chain -- `main` itself is still at
+`efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge commit):
 
 ## Implemented
 
@@ -163,6 +163,34 @@ commit):
   `FundamentalAnalysisEngine` were not modified to make this possible;
   the registration proves the cross-engine contract holds recursively,
   not just for the two engines it was designed against first.
+- **BEIF expert layer, Technical Council (M2.7)**: `src/analysis/
+  experts/` — a fourth, independent registry
+  (`ExpertRegistry`/`DEFAULT_EXPERT_REGISTRY`) and a generic
+  `CouncilEngine`, interpreting already-computed Technical Analysis
+  Engine output into structured, evidence-bearing `ExpertResult`s
+  (never recomputing an indicator itself). One real expert exists:
+  **Trend Expert** (`technical.trend`), reading `sma_20`/`ema_20`/
+  `adx_14`/`supertrend` and producing direction/normalized_score/
+  confidence/evidence/conflicts, with per-expert failure isolation and
+  numeric-bounds validation mirroring `CompositeIntelligenceEngine`'s
+  established pattern. Registered as `TechnicalCouncilEngine` into
+  `DEFAULT_ENGINE_REGISTRY` under `"technical_council"` via
+  `src/analysis/experts/bootstrap.py`, imported from `main.py`
+  alongside the existing `core.bootstrap` import (same production-
+  reachability discipline M2.4.1 established). Trend Expert ships at
+  `ExpertStatus.EXPERIMENTAL` (BEIF's lifecycle, Section 15) —
+  reachable and fully tested, but deliberately excluded from
+  `CouncilEngine.analyze()`'s default (shadow-mode-gated) output until
+  a real promotion process exists; `include_all_statuses=True` is the
+  explicit override used by the full-pipeline integration test.
+  **Not included**: Momentum/Volatility/Volume/Candlestick Expert
+  (BEIF's remaining Technical Council v1 set, sequenced next), Market
+  Structure Expert (BEIF v2, blocked pending a swing-high/low and
+  gap-detection indicator), any Fundamental/Saudi/Risk Council expert,
+  and no Signal Engine/Decision Layer to consume `CouncilResult` yet —
+  `CouncilResult` satisfies `AnalysisEngineResult` structurally, proven
+  the same way `CompositeResult` was, so a future Signal Engine can
+  consume it identically once it exists.
 
 ## Partially implemented
 
@@ -251,23 +279,116 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.4)
+## Verified test/build state (M2.7)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes (unchanged since
   M2.1), no `PYTHONPATH` manipulation required.
-- Full test suite: 945 passed / 12 skipped (Redis unavailable) / 0 failed
-  without a live Redis; 957 passed / 0 skipped / 0 failed with one.
-  957 total test functions in the repository (up from 904 at M2.3's
-  close — 53 new tests for the M2.4 composite types, registry, three
-  factors, and engine facade, including a real-engine integration
-  suite wiring `TechnicalAnalysisEngine` + `FundamentalAnalysisEngine`
-  end-to-end; zero existing tests modified).
+- Full test suite: 1007 passed / 12 skipped (Redis unavailable) / 0
+  failed, verified in this environment (no live Redis instance was
+  reachable here — `redis-cli ping` refused the connection — so the
+  with-Redis count from M2.4.1's report is carried forward
+  unverified this session rather than re-asserted). 1019 total test
+  functions in the repository (up from 974 at M2.4.1's close — 45 new
+  tests for M2.7's expert-layer contracts, registry, council-engine
+  isolation/bounds/determinism, Trend Expert reference-value and
+  edge-case coverage, registry-reachability, and the full-pipeline
+  extension; zero existing tests modified beyond the two files
+  explicitly extended, `test_main_boot.py` and
+  `test_full_pipeline.py`).
+- Coverage of the new `src/analysis/experts/` package: **100%**
+  (258/258 statements), measured via
+  `pytest --cov=src/analysis/experts --cov-report=term-missing`.
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
   CI at `FLAKE8_BASELINE: 0` since M2.0 (see "Completed: M2.0" below).
-- No new migration in this milestone (no persistence in M2.4's scope);
+- No new migration in this milestone (no persistence in M2.7's scope);
   the `fundamental_snapshots` migration cycle verified at M2.3's close
   is unchanged.
+
+## Completed: M2.7 — Expert Intelligence Core (BEIF Phase 1–3)
+
+Implements BEIF (the Basirah Expert Intelligence Framework
+specification) exactly as scoped in that document's own Section 20:
+core contracts, the expert registry, and **one** reference expert —
+Trend Expert — wired end to end, deliberately not the full Technical
+Council v1 set. Per BEIF Section 19 ("do not attempt to create all
+experts at once") and the explicit instruction this milestone was
+authorized under, this is Phases 1–3 only; Momentum/Volatility/Volume/
+Candlestick Expert follow as separate, later milestones now that the
+pattern is proven.
+
+1. **`src/analysis/experts/types.py`**: `Council` (five values, per
+   BEIF Section 3), `ExpertDirection`, `ExpertStatus` (BEIF's seven-
+   state lifecycle, Section 15), `EvidenceItem`, `ExpertResult`
+   (satisfies `AnalysisOutput` structurally — `name`, `category`,
+   `value`, `.latest()` — the same technique `IndicatorOutput`/
+   `RatioOutput`/`CompositeFactorOutput` already use), and
+   `CouncilResult` (satisfies `AnalysisEngineResult` structurally, the
+   same technique `CompositeResult` already uses). Reuses
+   `DataCompleteness`/`Freshness` from `src.analysis.composite.types`
+   rather than redefining them, per BEIF Section 4.
+2. **`src/analysis/experts/registry.py`**: `ExpertSpec`/`ExpertRegistry`/
+   `DEFAULT_EXPERT_REGISTRY`, mirroring `CompositeFactorRegistry`'s
+   shape as a fourth, completely independent registry. `ExpertSpec`'s
+   `compute` signature takes `(symbol, envelopes)`, not just
+   `envelopes` — a small, disclosed completion of BEIF's own
+   specification: `ExpertResult` requires a `symbol` field
+   (BEIF Section 4) that no `EngineResultEnvelope` carries (unlike
+   `CompositeFactorOutput`, which has no `symbol` field at all), so
+   the compute call must receive it explicitly. Flagged to the user as
+   a mechanical implementation-detail fix, not an architecture
+   reopening, before proceeding.
+3. **`src/analysis/experts/council_engine.py`**: `CouncilEngine`, a
+   direct structural copy of `CompositeIntelligenceEngine.analyze()`'s
+   per-item failure-isolation loop (BEIF Section 6), extended with
+   numeric-bounds validation (`normalized_score`/`confidence`
+   NaN/Infinity/out-of-range is isolated exactly like a raised
+   exception, per BEIF Section 18) and `ExpertStatus`-based default
+   visibility (`PRODUCTION`/`VALIDATED` only by default;
+   `include_all_statuses=True` for shadow-mode/debug use).
+4. **`src/analysis/experts/technical/trend_expert.py`**: Trend Expert
+   (`technical.trend`), reading only `sma_20`/`ema_20`/`adx_14`/
+   `supertrend` from an already-computed `"technical_analysis"`
+   envelope — never a raw OHLCV DataFrame, enforced structurally by
+   the function's own signature. Direction from EMA-vs-SMA sign and
+   SuperTrend's own direction flag (agreement raises confidence,
+   disagreement is disclosed as a `conflicts` entry and punished
+   harder than agreement is rewarded — BIIC Article III.3); magnitude
+   scaled by ADX-14's own standard 0–100 range, never an invented
+   calibration. Confidence is capped below 1.0 unconditionally
+   (Document 1 Section 13 / BIIC Article IV.4). Ships at
+   `ExpertStatus.EXPERIMENTAL` — registered and fully tested, but
+   excluded from `CouncilEngine.analyze()`'s default output until a
+   real shadow-mode/promotion process exists, per BEIF Section 15.
+5. **`src/analysis/experts/bootstrap.py`**: the BEIF composition root,
+   mirroring `src/analysis/core/bootstrap.py`'s pattern as a sibling,
+   not a modification — imports `src.analysis.experts.technical`
+   (triggering Trend Expert's self-registration, mirroring
+   `src/analysis/composite/factors/__init__.py`'s established
+   self-registration pattern) and registers `CouncilEngine(council=
+   Council.TECHNICAL)` into `DEFAULT_ENGINE_REGISTRY` under
+   `"technical_council"`.
+6. **`main.py`** gained one new import,
+   `import src.analysis.experts.bootstrap`, alongside the existing
+   `core.bootstrap` import — the same production-reachability
+   discipline M2.4.1 established, applied from the start this time
+   rather than retrofitted: `tests/unit/test_main_boot.py` now asserts
+   `DEFAULT_EXPERT_REGISTRY` and `DEFAULT_ENGINE_REGISTRY`'s
+   `"technical_council"` entry are both non-empty via the real
+   production import path.
+7. **`tests/integration/test_full_pipeline.py`** gained a seventh
+   stage: the real `TechnicalCouncilEngine`, run against the same
+   real `technical_analysis` envelope Stage 4 already built from real
+   ingested/persisted/loaded data, asserting a real, non-mocked
+   `technical.trend` result with the expected bullish direction on the
+   test's steady synthetic uptrend.
+
+**Scope discipline**: per explicit instruction, M2.7 implemented
+exactly BEIF Phases 1–3 and nothing else — no Momentum/Volatility/
+Volume/Candlestick/Market Structure Expert, no Fundamental/Saudi/Risk
+Council, no Signal Engine, no Decision Engine, no API route, no
+persistence. These are explicitly the next, separately-authorized
+iterations.
 
 ## Completed: M1.5 — Lint Debt Reduction
 
@@ -481,6 +602,90 @@ itself. One `[M2.4]`-prefixed commit on
 `feature/m2.4-register-composite-engine` (stacked on the still-open
 `feature/m2.4-composite-intelligence-engine`), PR #9. With this,
 **M2.4 is 100% complete** relative to the approved specification.
+
+## Completed: M2.4.1 — Foundation Hardening
+
+A full Backend Readiness & Architecture Audit (repository-wide,
+read-only, five parallel deep-dive investigations plus direct
+first-hand verification) was performed before M2.5 to check for
+hidden architectural gaps rather than assuming M2.2–M2.4 were
+production-ready simply because their own tests passed. It found
+several real, previously-undisclosed issues; M2.4.1 closes the four
+the audit judged as directly affecting what a Signal Engine (M2.5)
+would build on, and one more it uncovered along the way. Four
+`[M2.4.1]`-prefixed commits on `feature/m2.4.1-foundation-hardening`
+(stacked on the still-open M2.4/M2.4-follow-up branch chain).
+
+1. **`DEFAULT_ENGINE_REGISTRY` was dormant in production.**
+   `src/analysis/core/bootstrap.py` — the composition root that
+   registers all three engines — was previously imported only by its
+   own test file; `main.py` never imported it, so the registry stayed
+   permanently empty in the actual running application despite tests
+   suggesting otherwise. Fixed with one `import src.analysis.core.bootstrap`
+   at `main.py`'s module level (pure in-memory registration, no I/O,
+   no Redis/DB dependency, no change to startup behavior otherwise).
+2. **A full-pipeline integration test now exists**
+   (`tests/integration/test_full_pipeline.py`): `ingest_ohlcv`/
+   `ingest_fundamentals` (real ingestion, via a sequential fake
+   provider replaying pre-built bars/periods one call at a time,
+   exactly the real per-day call pattern) → a real SQLite database →
+   `ohlcv_loader`/`fundamental_loader` → `TechnicalAnalysisEngine` →
+   `FundamentalAnalysisEngine` → `CompositeIntelligenceEngine`, in one
+   continuous test. Nothing before this proved the full chain works —
+   every prior test exercised one stage in isolation.
+   **Writing this test surfaced a second, real, previously-hidden
+   dormant-registry bug**, the same class as item 1 but one layer
+   down: `DEFAULT_COMPOSITE_REGISTRY` was only ever populated when the
+   three composite factor modules happened to be imported by
+   something — nothing in the production import chain
+   (`composite_intelligence_engine.py`, `bootstrap.py`, `main.py`)
+   imported them. It had only ever appeared to work because other
+   test files' own imports populated the shared registry singleton
+   first when the full suite ran together; the new test, run alone,
+   failed immediately with an empty composite result. Also discovered
+   in the process: `src/analysis/composite/factors/__init__.py` had
+   never actually been committed in M2.4 — the package had been
+   running as an implicit Python 3 namespace package since its
+   creation. Fixed the same way as item 1: `factors/__init__.py` now
+   imports all three factor modules (mirroring
+   `src/domain/models/__init__.py`'s identical established pattern),
+   and `composite_intelligence_engine.py` imports the `factors`
+   package at module level.
+3. **`CompositeIntelligenceEngine.analyze()` gained per-factor failure
+   isolation.** A factor that violates the "never raise" convention
+   (a bug, an unexpected input shape) is now caught, logged
+   server-side with its full traceback, and isolated as a
+   `DataCompleteness.INSUFFICIENT` entry with a structured explanation
+   — every other factor still computes normally, in the same
+   deterministic order. Mirrors the per-symbol failure isolation
+   `ingest_ohlcv`/`ingest_fundamentals` already had. No change to any
+   of the three real M2.4 factors, which don't raise today.
+4. **`main.py`'s five raw-exception leaks were fixed.**
+   `readiness_check`, `get_stats`, `submit_task`, `get_task_status`,
+   and `get_agent_status` previously returned `str(e)` — the internal
+   exception's own text — directly in the HTTP response body. Replaced
+   with fixed, generic per-route messages; the real exception is still
+   fully logged server-side via `logger.error(..., exc_info=True)`
+   (previously missing on two of the five, losing the stack trace from
+   logs too). Fixing this surfaced a related, previously-undocumented
+   correctness bug: `readiness_check` and `get_stats` were each
+   missing the `except HTTPException: raise` guard the other three
+   routes already had, so their own intentionally-raised
+   `HTTPException`s (e.g. 503 "kernel not initialized") were being
+   caught by the broad `except Exception` directly below and
+   miscategorized as generic 500s — fixed alongside the leak.
+
+**Scope discipline**: per explicit instruction, M2.4.1 did not begin
+the Signal Engine, build an AI Decision Layer, add any API route,
+implement any persistence, integrate a real market-data vendor, add
+authentication, or touch the frontend. Every other finding from the
+Backend Readiness Audit (missing FCF/operating-margin/standalone-BVPS
+fundamental metrics, no auth/rate-limiting, floor-only dependency
+pins, 116 committed coverage-artifact files, the unreachable legacy
+`autonomous_intelligence_layer`/`multi_agent_system` trees, Redis
+being a hard non-lazy boot dependency unlike the deliberately-lazy DB)
+remains open by design, tracked in that audit's own priority list, not
+addressed here.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this

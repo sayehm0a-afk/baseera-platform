@@ -285,3 +285,91 @@ def test_engine_default_registry_is_unaffected_by_custom_registries():
 def test_default_registry_has_exactly_the_m24_factor_set():
     names = {spec.name for spec in DEFAULT_COMPOSITE_REGISTRY.all_specs()}
     assert names == EXPECTED_DEFAULT_FACTOR_NAMES
+
+
+# ---------------------------------------------------------------------------
+# Per-factor failure isolation (M2.4.1): a factor that violates the "never
+# raise" convention must never crash the whole engine -- it is isolated as
+# INSUFFICIENT, and every other factor still computes normally.
+# ---------------------------------------------------------------------------
+
+
+def _raising_factor_spec(name="broken_factor"):
+    def _compute(envelopes):
+        raise RuntimeError("simulated factor bug")
+
+    return CompositeFactorSpec(name, CompositeCategory.CONTEXT, [], _compute)
+
+
+def _constant_factor_spec(name="healthy_factor", value=7.0):
+    return CompositeFactorSpec(
+        name,
+        CompositeCategory.CONTEXT,
+        [],
+        lambda envelopes: CompositeFactorOutput(
+            name=name,
+            category=CompositeCategory.CONTEXT,
+            value=value,
+            completeness=DataCompleteness.COMPLETE,
+            agreement=None,
+            contributing_engines=[],
+            explanation={},
+        ),
+    )
+
+
+def test_a_raising_factor_is_isolated_as_insufficient_not_propagated():
+    registry = CompositeFactorRegistry()
+    registry.register(_raising_factor_spec())
+
+    result = CompositeIntelligenceEngine(registry=registry).analyze({})
+
+    output = result.get("broken_factor")
+    assert output.value is None
+    assert output.completeness == DataCompleteness.INSUFFICIENT
+    assert output.explanation["error_type"] == "RuntimeError"
+    assert output.explanation["error_message"] == "simulated factor bug"
+
+
+def test_other_factors_still_compute_when_one_factor_raises():
+    registry = CompositeFactorRegistry()
+    registry.register(_constant_factor_spec("before_broken", value=1.0))
+    registry.register(_raising_factor_spec())
+    registry.register(_constant_factor_spec("after_broken", value=2.0))
+
+    result = CompositeIntelligenceEngine(registry=registry).analyze({})
+
+    assert set(result.factors.keys()) == {"before_broken", "broken_factor", "after_broken"}
+    assert result.get("before_broken").value == pytest.approx(1.0)
+    assert result.get("after_broken").value == pytest.approx(2.0)
+    assert result.get("broken_factor").completeness == DataCompleteness.INSUFFICIENT
+
+
+def test_isolation_is_deterministic_across_repeated_runs():
+    registry = CompositeFactorRegistry()
+    registry.register(_constant_factor_spec("a", value=1.0))
+    registry.register(_raising_factor_spec("b"))
+    registry.register(_constant_factor_spec("c", value=3.0))
+
+    engine = CompositeIntelligenceEngine(registry=registry)
+    first = engine.analyze({}).latest_snapshot()
+    second = engine.analyze({}).latest_snapshot()
+
+    assert first == second == {"a": 1.0, "b": None, "c": 3.0}
+
+
+def test_default_registry_factors_are_unaffected_by_isolation_mechanism():
+    # A sanity check that the try/except added around spec.compute() in
+    # analyze() doesn't change behavior for the real, well-behaved M2.4
+    # factors -- isolation only engages when a factor actually raises.
+    result = CompositeIntelligenceEngine().analyze({})
+    for output in result.factors.values():
+        assert output.completeness in (
+            DataCompleteness.COMPLETE,
+            DataCompleteness.PARTIAL,
+            DataCompleteness.INSUFFICIENT,
+        )
+        # None of the real factors raise on empty input -- their own
+        # None-on-undefined-input handling, not the isolation mechanism,
+        # is what produces this result.
+        assert "error_type" not in output.explanation
