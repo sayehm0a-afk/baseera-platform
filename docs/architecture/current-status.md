@@ -9,10 +9,10 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.11 (branch `feature/m2.11-candlestick-expert`, stacked on the
-not-yet-merged M2.4/M2.4.1/M2.7/M2.8/M2.9/M2.10/M2.10.5 branch chain --
-`main` itself is still at `efda46013b5e682213476c74d7d868fc3de0d61e`,
-M2.3's merge commit):
+As of M2.12 (branch `feature/m2.12-backend-api-foundation`, stacked on
+the not-yet-merged M2.4/M2.4.1/M2.7/M2.8/M2.9/M2.10/M2.10.5/M2.11 branch
+chain -- `main` itself is still at
+`efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge commit):
 
 ## Implemented
 
@@ -334,27 +334,28 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.11)
+## Verified test/build state (M2.12)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
-- Boot smoke test: `import main` succeeds, 11 routes (unchanged since
-  M2.1), no `PYTHONPATH` manipulation required — verified via a
-  dedicated subprocess regression test (M2.10.5) to still produce
-  byte-identical `DEFAULT_ENGINE_REGISTRY` contents and the now-five-
-  expert `DEFAULT_EXPERT_REGISTRY` contents (updated for M2.11's fifth
-  expert; see "Completed: M2.10.5" and "Completed: M2.11" below).
-- Full test suite: 1132 passed / 12 skipped (Redis unavailable) / 0
+- Boot smoke test: `import main` succeeds. Route count grew from 11 to
+  16 (see "Completed: M2.12" below for the full list) — the boot test
+  itself changed from a raw `len(main.app.routes)` count to asserting
+  the exact resolved path set via `app.openapi()["paths"]`, because
+  FastAPI 0.139.2's `app.include_router()` registers a lazily-resolved
+  wrapper object in `app.routes` rather than one flat entry per
+  endpoint, making a raw length count meaningless once any router is
+  included (it was accurate before M2.12 only because every route was
+  still a bare `@app.get(...)` on `app` itself).
+- Full test suite: 1209 passed / 12 skipped (Redis unavailable) / 0
   failed, verified in this environment (no live Redis instance was
   reachable here — `redis-cli ping` refused the connection — so the
   with-Redis count from M2.4.1's report is carried forward
-  unverified this session rather than re-asserted). 1144 total test
-  functions in the repository (up from 1122 at M2.10.5's close — 22
-  new tests for M2.11's Candlestick & Price Action Expert reference-
-  value and edge-case coverage, registration, and the registry-level
-  pairwise disjoint-metrics check extended to all five Technical
-  Council experts; `test_main_boot.py`,
-  `test_full_pipeline.py`, and `test_ail_contracts_non_reachability.py`
-  extended in place, zero other existing tests modified).
+  unverified this session rather than re-asserted). 1221 total test
+  functions in the repository (up from 1144 at M2.11's close — 77 new
+  tests for M2.12's API layer: auth foundation, middleware, and
+  route-level integration tests against a real in-memory DB;
+  `test_main_boot.py` extended in place, zero other existing tests
+  modified).
 - `tests/integration/test_full_pipeline.py -v`, run in true isolation
   (`pytest tests/integration/test_full_pipeline.py -v`): 1 passed —
   confirms no test-order dependency remains and no registry
@@ -366,6 +367,12 @@ M2.2 — see "Implemented" above for each.)
 - Coverage of the
   `src/core/autonomous_intelligence_layer/contracts/` package: **100%**
   (116/116 statements).
+- Coverage of the new `src/api/` package (every file added or modified
+  this milestone): **100%** (524/524 statements). `src/api/health_check.py`
+  (0%) is excluded from that figure — a pre-existing, unreachable
+  duplicate file from before this milestone (confirmed untouched via
+  `git diff --stat`), already flagged as a known gap in the pre-M2.12
+  architecture review, not part of this milestone's scope to fix.
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
   CI at `FLAKE8_BASELINE: 0` since M2.0 (see "Completed: M2.0" below).
 - No new migration in this milestone (no persistence in M2.7's scope);
@@ -925,6 +932,174 @@ the one `__init__.py` import line already described — Market Structure
 Expert remains deferred to v2 exactly as BEIF specifies, no BEIF
 amendment made, no Fundamental/Saudi/Risk Council, no Signal Engine, no
 Decision Engine, no API route, no persistence.
+
+## Completed: M2.12 — Backend API Foundation
+
+The API layer that exposes the analysis backend built across M2.1–M2.11
+over HTTP for the first time. Per explicit instruction: backend only,
+no frontend, no architecture redesign, no modification to any existing
+analysis engine/`CouncilEngine`/Composite Engine/Expert contract, full
+backward compatibility with every pre-existing route. Every number in
+every response below is computed by an engine that already existed;
+this milestone adds only the HTTP boundary around it.
+
+1. **`src/api/routes/analysis.py`** — the four required endpoints:
+   - `GET /api/v1/analysis/{symbol}/technical` — loads persisted price
+     bars (`load_price_bars`, M2.1/M2.2's own loader) and calls
+     `TechnicalAnalysisEngine().analyze(df)` unchanged.
+   - `GET /api/v1/analysis/{symbol}/fundamental` — loads persisted
+     snapshots (`load_fundamental_snapshots`, M2.3's own loader) and
+     calls `FundamentalAnalysisEngine().analyze(...)` unchanged; market
+     price is loaded (never recomputed) only so valuation ratios can
+     populate, gracefully `None` if no price history exists yet.
+   - `GET /api/v1/analysis/{symbol}/composite` — builds the same
+     `EngineResultEnvelope`s the M2.4 integration test builds and calls
+     `CompositeIntelligenceEngine().analyze(envelopes)` unchanged;
+     tolerates a missing fundamental envelope by relying on Composite's
+     own already-existing graceful degradation (every factor already
+     reads `envelopes.get(...)`, never `envelopes[...]`), not a new
+     capability added here.
+   - `GET /api/v1/analysis/{symbol}/councils/technical` — calls
+     `CouncilEngine(council=Council.TECHNICAL).analyze(...)` unchanged,
+     `include_all_statuses=True` (every expert still ships
+     `EXPERIMENTAL`, same reasoning every prior milestone's own
+     integration test already uses).
+   Response bodies use two deliberately different levels of detail: `/technical`
+   and `/fundamental` wrap each `IndicatorOutput`/`RatioOutput` via its
+   own `.name`/`.category`/`.latest()` (the `AnalysisOutput` Protocol
+   shape) rather than serializing `.value` directly, because a
+   technical indicator's `.value` can be a full historical `pd.Series`
+   — not JSON-safe as-is, and a much larger payload than a "current
+   analysis" endpoint should return (that data belongs to the separate
+   `/market-data/.../ohlcv` endpoint). `/composite` and
+   `/councils/technical` wrap their outputs field-for-field in full
+   (`CompositeFactorOutput`/`ExpertResult` carry no raw Series and BEIF's
+   entire design intent for `ExpertResult` — confidence, evidence,
+   warnings, limitations — would be lost by collapsing it to one number).
+   A real, documented engine behavior needed explicit handling at the
+   boundary: `TechnicalAnalysisEngine.analyze()` raises `ValueError` on
+   fewer than 35 price bars — mapped to HTTP 422 by the global handler
+   (below), not a 500.
+2. **`src/api/routes/stocks.py`** — `GET /api/v1/stocks` (paginated
+   list) and `GET /api/v1/stocks/{symbol}`, plain lookups against the
+   existing `Stock` model. Left **unauthenticated**, unlike
+   `/analysis/*` and `/market-data/*` — a disclosed, deliberate choice:
+   company symbol/name/sector reference data is not the platform's
+   proprietary computed output.
+3. **`src/api/routes/market_data.py`** — `GET
+   /api/v1/market-data/{symbol}/ohlcv`, using `load_price_bars` only
+   (no new query logic). Pagination is offset/`page_size` over the
+   already-loaded range, applied in the route, not inside the loader.
+   A true opaque cursor (recommended in the pre-M2.12 API architecture
+   review for this specific endpoint) was **not** built in this pass —
+   a disclosed, bounded-scope decision, not an oversight.
+4. **`src/api/auth/`** — the authentication foundation (JWT access/
+   refresh tokens, API keys), explicitly scoped as a *foundation*, not
+   a full multi-user system (no `User` domain model exists yet):
+   - **`jwt_handler.py`**: HS256 JWTs implemented directly against the
+     standard library (`hmac`/`hashlib`/`base64`/`json`), **not**
+     PyJWT. Verified directly in this environment before writing it:
+     `import jwt` transitively imports `cryptography`, whose native
+     backend failed with an unrecoverable `pyo3_runtime.PanicException`
+     here (a broken `_cffi_backend`, fixable locally by installing
+     `cffi`, but not something to depend on for something this
+     fundamental). HS256 needs no asymmetric crypto at all, so it is
+     implemented directly instead, with zero new third-party
+     dependency.
+   - **`password.py`**: PBKDF2-HMAC-SHA256, 600,000 iterations (OWASP's
+     current recommendation), one fixed application-wide salt derived
+     from `SECRET_KEY` — disclosed as correct *only* because this
+     foundation supports exactly one configured account, not a general
+     pattern to copy forward once a real multi-user model exists.
+   - **`api_key.py`**: constant-time comparison against the single
+     configured `API_KEY` (already a placeholder in `.env.example`
+     since before this milestone, never previously read by anything).
+   - **`src/api/routes/auth.py`**: `POST /auth/login` (issues access +
+     refresh tokens against the one configured admin account) and
+     `POST /auth/refresh` (issues a new access token from a valid,
+     non-expired refresh token; no refresh-token rotation in this
+     foundation). No UI, no frontend, per explicit instruction.
+5. **`src/api/schemas/`** — Pydantic request/response models wrapping
+   the existing dataclasses (never redesigning them): `envelope.py`
+   (`Envelope[T]`/`ListEnvelope[T]`/`Meta`/`PaginationMeta`/
+   `ErrorResponse` — the common `{"data": ..., "meta": {...}}` shape,
+   exactly as specified), plus `analysis.py`/`stocks.py`/
+   `market_data.py`/`auth.py`. `Meta.as_of` is wall-clock computation
+   time (not the underlying data's own recency) and `Meta.freshness`
+   reuses `classify_freshness` directly (never reimplemented) — the
+   same `as_of`/`freshness` distinction `EngineResultEnvelope` already
+   established, reused for consistency rather than inventing a second
+   meaning for the same words at the API boundary.
+6. **`src/api/exceptions.py`** / **`src/api/error_handlers.py`** — a
+   dedicated `APIError` exception family (`NotFoundError`/
+   `UnauthorizedError`/`InsufficientDataError`), deliberately **not**
+   `fastapi.HTTPException`: every pre-existing route in `main.py`
+   already raises bare `HTTPException` and is tested
+   (`tests/unit/test_main_error_handling.py`) to receive FastAPI's
+   default `{"detail": "..."}` shape — registering a global handler for
+   `HTTPException` itself would have changed that already-tested,
+   already-working response shape for every existing route too.
+   `APIError`/`ValueError`/a final `Exception` catch-all are registered
+   instead, each producing this milestone's `{"error": {"code", "message",
+   "request_id"}}` envelope, verified via a dedicated backward-
+   compatibility test (`test_pre_existing_routes_are_unaffected_by_the_new_global_handlers`)
+   that every pre-existing route's response shape is unchanged.
+7. **`src/api/middleware/`** — `RequestIDMiddleware` (every response
+   carries `X-Request-ID`; honors an inbound one if already supplied)
+   and `RateLimitMiddleware` (in-memory, per-process, fixed-window,
+   disclosed as not distributed-safe since Redis is not reliably
+   available in every environment this app runs in — the same
+   unavailability already documented repeatedly elsewhere in this file).
+   **Both are raw ASGI middleware, not Starlette's `BaseHTTPMiddleware`**
+   — verified directly: a `BaseHTTPMiddleware` subclass here caused an
+   exception a route raised to be correctly handled by
+   `error_handlers.py` *and* still propagate further up the ASGI stack
+   afterward as an unhandled `ExceptionGroup`, a documented Starlette
+   limitation of that base class's internal `anyio` task group. Raw
+   ASGI middleware does not have this failure mode.
+8. **`main.py`** — additive only: the four new routers, the three new
+   middlewares (registration order deliberately
+   `RateLimitMiddleware` → `RequestIDMiddleware` → `CORSMiddleware`,
+   since Starlette applies the *last*-added middleware outermost and
+   `RequestIDMiddleware` must run before `RateLimitMiddleware` needs a
+   request id for its own 429 response body), `register_exception_handlers(app)`,
+   and `openapi_tags` metadata. No existing route, startup/shutdown
+   handler, or import touched.
+9. **`.env.example`** extended (not redesigned) with the new auth/CORS/
+   rate-limit variables this milestone reads; `SECRET_KEY`/`API_KEY`
+   (present as unused placeholders since before this milestone) are
+   now real, documented as such.
+10. **`tests/unit/test_main_boot.py`**: the boot-route assertion changed
+    from a raw `len(main.app.routes) == 11` count to asserting the
+    exact resolved path set via `app.openapi()["paths"]` — FastAPI
+    0.139.2's `app.include_router()` registers a lazily-resolved
+    wrapper in `app.routes`, not one flat entry per endpoint, so a raw
+    length count silently stopped meaning what it used to mean the
+    moment any router was included, independent of anything this
+    milestone did wrong.
+11. **77 new tests**: unit tests for the auth foundation and middleware
+    (including two ASGI-lifespan-event tests proving the non-HTTP-scope
+    passthrough branch every middleware needs for real app startup/
+    shutdown), plus route-level integration tests
+    (`tests/integration/api/`) against a real in-memory SQLite DB via
+    FastAPI's standard `dependency_overrides` pattern — real engines,
+    real `CouncilEngine`, only the HTTP layer mocked away (the DB
+    session, not the analysis logic). One genuine bug was found and
+    fixed during this testing, not by inspection: the OHLCV endpoint
+    was initially missing its `get_current_principal` auth dependency
+    entirely (copy/paste gap from the other three route modules) —
+    caught by `test_ohlcv_requires_authentication` failing with 200
+    instead of 401, fixed immediately, re-verified.
+12. **Coverage of every file this milestone touched: 100%** (524/524
+    statements, `src/api/` minus the pre-existing, untouched
+    `health_check.py`). flake8: 0. Full regression suite: 1209 passed /
+    12 skipped (Redis unavailable) / 0 failed.
+
+**Scope discipline**: per explicit instruction, M2.12 implemented only
+the API layer described above — no Signal Engine, no Decision Engine,
+no watchlists, no WebSocket/streaming, no live data provider connected,
+no frontend, no architecture redesign, no modification to any existing
+analysis engine, `CouncilEngine`, Composite Engine, or Expert contract.
 
 ## Completed: M1.5 — Lint Debt Reduction
 
