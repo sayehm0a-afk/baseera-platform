@@ -9,9 +9,10 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.8 (branch `feature/m2.8-momentum-expert`, stacked on the
-not-yet-merged M2.4/M2.4.1/M2.7 branch chain -- `main` itself is still
-at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge commit):
+As of M2.9 (branch `feature/m2.9-volatility-expert`, stacked on the
+not-yet-merged M2.4/M2.4.1/M2.7/M2.8 branch chain -- `main` itself is
+still at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge
+commit):
 
 ## Implemented
 
@@ -163,15 +164,17 @@ at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge commit):
   `FundamentalAnalysisEngine` were not modified to make this possible;
   the registration proves the cross-engine contract holds recursively,
   not just for the two engines it was designed against first.
-- **BEIF expert layer, Technical Council (M2.7 + M2.8)**: `src/analysis/
-  experts/` — a fourth, independent registry
+- **BEIF expert layer, Technical Council (M2.7 + M2.8 + M2.9)**:
+  `src/analysis/experts/` — a fourth, independent registry
   (`ExpertRegistry`/`DEFAULT_EXPERT_REGISTRY`) and a generic
   `CouncilEngine`, interpreting already-computed Technical Analysis
   Engine output into structured, evidence-bearing `ExpertResult`s
-  (never recomputing an indicator itself). Two real experts exist:
+  (never recomputing an indicator itself). Three real experts exist:
   **Trend Expert** (`technical.trend`, M2.7), reading `sma_20`/`ema_20`/
-  `adx_14`/`supertrend`, and **Momentum Expert** (`technical.momentum`,
-  M2.8), reading `rsi_14`/`macd` — disjoint metric sets, verified by a
+  `adx_14`/`supertrend`; **Momentum Expert** (`technical.momentum`,
+  M2.8), reading `rsi_14`/`macd`; and **Volatility Expert**
+  (`technical.volatility`, M2.9), reading `bollinger`/`atr_14` —
+  pairwise-disjoint metric sets across all three, verified by a
   registry-level test per BEIF Section 6/16's double-counting guard.
   Momentum Expert reads RSI-14 as a continuous, symmetric momentum-
   direction-and-magnitude measure (`(rsi - 50) / 50`), deliberately
@@ -182,19 +185,35 @@ at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge commit):
   only (±1), never scaled by magnitude, since no non-fabricated,
   price-scale-independent normalization exists for MACD's absolute
   value (unlike ADX's own standard 0–100 range, which Trend Expert
-  uses directly). Both experts share per-expert failure isolation and
-  numeric-bounds validation mirroring `CompositeIntelligenceEngine`'s
-  established pattern. Registered as `TechnicalCouncilEngine` into
-  `DEFAULT_ENGINE_REGISTRY` under `"technical_council"` via
-  `src/analysis/experts/bootstrap.py`, imported from `main.py`
-  alongside the existing `core.bootstrap` import (same production-
-  reachability discipline M2.4.1 established). Both experts ship at
-  `ExpertStatus.EXPERIMENTAL` (BEIF's lifecycle, Section 15) —
-  reachable and fully tested, but deliberately excluded from
-  `CouncilEngine.analyze()`'s default (shadow-mode-gated) output until
-  a real promotion process exists; `include_all_statuses=True` is the
-  explicit override used by the full-pipeline integration test.
-  **Not included**: Volatility/Volume/Candlestick Expert
+  uses directly). Volatility Expert is **non-directional by design**
+  (Document 1 Section 5.3, BEIF Section 5): `direction` is always
+  `NEUTRAL` and `conflicts` is always empty (there is no
+  disagreement concept for a single, non-directional quantity), and
+  `normalized_score` is repurposed from signed direction-and-strength
+  into an unsigned `[0, 1]` volatility-*intensity* measure — the
+  average of two independent, dimensionless corroborating measures
+  (Bollinger relative bandwidth `(upper - lower) / middle`, John
+  Bollinger's own standard bandwidth formulation, and ATR relative to
+  price `atr_14 / middle`, using the Bollinger middle band as the only
+  available price-level reference). Deliberately **does not** assert a
+  calibrated compressed/normal/expanded threshold — no empirically-
+  supported basis for one exists yet (Document 1 Section 10, Document
+  7) — `normalized_score` is disclosed as a raw relative measure, never
+  a classification, with that gap named explicitly in every result's
+  `limitations`. All three experts share per-expert failure isolation
+  and numeric-bounds validation mirroring
+  `CompositeIntelligenceEngine`'s established pattern. Registered as
+  `TechnicalCouncilEngine` into `DEFAULT_ENGINE_REGISTRY` under
+  `"technical_council"` via `src/analysis/experts/bootstrap.py`,
+  imported from `main.py` alongside the existing `core.bootstrap`
+  import (same production-reachability discipline M2.4.1 established).
+  All three experts ship at `ExpertStatus.EXPERIMENTAL` (BEIF's
+  lifecycle, Section 15) — reachable and fully tested, but deliberately
+  excluded from `CouncilEngine.analyze()`'s default (shadow-mode-gated)
+  output until a real promotion process exists;
+  `include_all_statuses=True` is the explicit override used by the
+  full-pipeline integration test.
+  **Not included**: Volume/Candlestick Expert
   (BEIF's remaining Technical Council v1 set, sequenced next), Market
   Structure Expert (BEIF v2, blocked pending a swing-high/low and
   gap-detection indicator), any Fundamental/Saudi/Risk Council expert,
@@ -290,24 +309,26 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.8)
+## Verified test/build state (M2.9)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes (unchanged since
   M2.1), no `PYTHONPATH` manipulation required.
-- Full test suite: 1027 passed / 12 skipped (Redis unavailable) / 0
+- Full test suite: 1050 passed / 12 skipped (Redis unavailable) / 0
   failed, verified in this environment (no live Redis instance was
   reachable here — `redis-cli ping` refused the connection — so the
   with-Redis count from M2.4.1's report is carried forward
-  unverified this session rather than re-asserted). 1039 total test
-  functions in the repository (up from 1019 at M2.7's close — 20 new
-  tests for M2.8's Momentum Expert reference-value and edge-case
-  coverage, registration, and a registry-level disjoint-metrics
-  double-counting check; `test_main_boot.py` and
+  unverified this session rather than re-asserted). 1062 total test
+  functions in the repository (up from 1039 at M2.8's close — 23 new
+  tests for M2.9's Volatility Expert reference-value and edge-case
+  coverage (including the non-directional/no-fabricated-threshold
+  invariants specific to this expert), registration, and a
+  registry-level pairwise disjoint-metrics double-counting check
+  across all three Technical Council experts; `test_main_boot.py` and
   `test_full_pipeline.py` extended in place, zero other existing
   tests modified).
 - Coverage of the `src/analysis/experts/` package: **100%**
-  (258/258 statements), measured via
+  (450/450 statements), measured via
   `pytest --cov=src/analysis/experts --cov-report=term-missing`.
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
   CI at `FLAKE8_BASELINE: 0` since M2.0 (see "Completed: M2.0" below).
@@ -453,6 +474,83 @@ two test files and the one `__init__.py` import line already
 described — no Volatility/Volume/Candlestick/Market Structure Expert,
 no Fundamental/Saudi/Risk Council, no Signal Engine, no Decision
 Engine, no API route, no persistence.
+
+## Completed: M2.9 — Volatility Expert
+
+Technical Council's third BEIF expert, and the first one with a
+genuinely different output shape than Trend/Momentum Expert —
+**non-directional by design** (Document 1 Section 5.3, BEIF Section
+5), not merely a third instance of the same pattern. Four
+`[M2.9]`-prefixed commits on `feature/m2.9-volatility-expert` (stacked
+on the merged M2.7/M2.8 branch chain).
+
+1. **`src/analysis/experts/technical/volatility_expert.py`**:
+   Volatility Expert (`technical.volatility`), reading only
+   `bollinger`/`atr_14` from an already-computed `"technical_analysis"`
+   envelope. Three architectural decisions are documented directly in
+   the module's own docstring, not only here:
+   - **Non-directional output**: `direction` is always `NEUTRAL` and
+     `conflicts` is always `()` — volatility measures magnitude of
+     dispersion, not its direction, and there is no disagreement
+     concept for a single, non-directional quantity. `normalized_score`
+     is deliberately repurposed from a signed `[-1, 1]`
+     direction-and-strength value into an unsigned `[0, 1]`
+     volatility-*intensity* value, per Document 1 Section 5.3's own
+     specification for this reuse.
+   - **Two independent, dimensionless measures, never one indicator's
+     raw price-scale-dependent value**: Bollinger relative bandwidth
+     `(upper - lower) / middle` (John Bollinger's own standard
+     bandwidth formulation) and ATR relative to price `atr_14 /
+     middle`, using the Bollinger middle band as the only available
+     price-level reference (no raw close price is available to this
+     expert, per BEIF Section 14). Both independently answer "how
+     large is price dispersion relative to price level," via
+     genuinely different underlying methodologies (rolling
+     standard-deviation-of-closes vs. true range), so their agreement
+     is real corroboration, not double-counting one computation twice.
+   - **No fabricated compressed/expanded threshold**: unlike ADX
+     (Trend Expert), Bollinger bandwidth and ATR-relative-to-price
+     have no pre-calibrated standard scale. `normalized_score` is
+     disclosed as the raw, dimensionless relative measure itself
+     (clamped to `[0, 1]` purely as a numeric safety bound, never as
+     an asserted "this counts as expanded" line) — a categorical
+     compressed/normal/expanded read is explicitly left to a future
+     Learning Engine (Document 7) once real, calibrated evidence
+     exists, and every result's `limitations` field discloses this
+     gap. `limitations` also explicitly states this expert does not
+     itself assess risk — that remains a future Risk Council expert's
+     exclusive job (Document 3 Section 5.1).
+   Malformed input (a non-dict Bollinger value, a zero or missing
+   middle band, an inverted upper/lower band, a missing individual
+   band) degrades gracefully to partial or insufficient completeness
+   with a disclosed `warnings` entry, never raises — the same
+   discipline Trend/Momentum Expert already established, extended here
+   with more distinct failure modes given Bollinger's richer output
+   shape.
+2. **`src/analysis/experts/technical/__init__.py`** gained one import
+   (`volatility_expert`) — the same self-registration pattern extended
+   a third time with zero change to the pattern itself.
+3. **No change to `types.py`, `registry.py`, `council_engine.py`, or
+   `bootstrap.py`** — the BEIF core absorbed a third expert, including
+   one with a materially different output shape (non-directional),
+   with zero modification.
+4. **`tests/unit/test_main_boot.py`** and
+   **`tests/integration/test_full_pipeline.py`** extended in place:
+   the full-pipeline test's Stage 7 now also asserts a real, non-mocked
+   `technical.volatility` result (`direction == NEUTRAL`,
+   `normalized_score` a real, bounded `[0, 1]` value, `conflicts == ()`)
+   on the same real ingested/persisted/loaded data Trend/Momentum
+   Expert's own assertions already use.
+5. A new registry-level test extends the double-counting guard to all
+   three Technical Council experts pairwise
+   (`test_volatility_expert_metrics_are_disjoint_from_trend_and_momentum`).
+
+**Scope discipline**: per explicit instruction, M2.9 implemented
+exactly one expert and touched no previously-stable module except the
+two test files and the one `__init__.py` import line already
+described — no Volume/Candlestick/Market Structure Expert, no
+Fundamental/Saudi/Risk Council, no Signal Engine, no Decision Engine,
+no API route, no persistence.
 
 ## Completed: M1.5 — Lint Debt Reduction
 
