@@ -147,9 +147,11 @@ async def readiness_check():
         else:
             raise HTTPException(status_code=503, detail=f"Degraded health: {health_status}")
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Readiness check error: {e}")
-        raise HTTPException(status_code=503, detail=str(e))
+        logger.error(f"Readiness check error: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Service not ready")
 
 
 @app.get("/metrics")
@@ -169,9 +171,11 @@ async def get_stats():
         stats = kernel.get_stats()
         return stats
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve statistics")
 
 
 @app.post("/api/tasks", response_model=TaskResponse)
@@ -202,8 +206,8 @@ async def submit_task(task_request: TaskRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error submitting task: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error submitting task: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to submit task")
 
 
 @app.get("/api/tasks/{task_id}")
@@ -223,8 +227,8 @@ async def get_task_status(task_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting task status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting task status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve task status")
 
 
 @app.get("/api/agents/{agent_id}")
@@ -244,8 +248,8 @@ async def get_agent_status(agent_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting agent status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting agent status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve agent status")
 
 if __name__ == "__main__":
     try:
