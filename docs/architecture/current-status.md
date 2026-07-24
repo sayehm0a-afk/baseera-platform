@@ -9,8 +9,8 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.3 (branch `feature/m2.3-fundamental-analysis-engine`, based on
-`main` at `078db462186a979ee77b69f5efc1e293f72bb719`, M2.2's merge
+As of M2.4 (branch `feature/m2.4-composite-intelligence-engine`, based
+on `main` at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge
 commit):
 
 ## Implemented
@@ -116,6 +116,50 @@ commit):
   extension point those will use. Depends entirely on
   `DevFundamentalDataProvider`'s synthetic data; no real fundamentals
   vendor is contracted.
+- **Composite Intelligence Engine** (M2.4): `src/analysis/composite/
+  composite_intelligence_engine.py`'s `CompositeIntelligenceEngine`
+  fuses already-computed results from independent analysis engines
+  (today: `TechnicalAnalysisEngine`, `FundamentalAnalysisEngine`) into
+  one `CompositeResult`. It never calls either concrete engine or
+  loads OHLCV/financial data itself — running each source engine
+  remains the caller's responsibility; `CompositeIntelligenceEngine`'s
+  only dependency is the structural `AnalysisEngineResult`/
+  `AnalysisOutput` contract from `src/analysis/core/`. Three composite
+  factors: `trend_fundamental_alignment` (SuperTrend direction vs.
+  revenue-growth sign — `+1.0`/`-1.0` on agreement, `0.0` on
+  disagreement, with an explicit `Agreement.AGREE`/`DISAGREE` flag,
+  never a falsely-blended middle value), `valuation_momentum_context`
+  (normalized RSI with P/E carried as context, not folded into the
+  number — deliberately no invented compound formula), and
+  `data_quality_summary` (fraction of supplied engine results that are
+  fresh). Neither `TechnicalAnalysisResult` nor
+  `FundamentalAnalysisResult` carries an "as of" timestamp, so
+  freshness is modeled externally via `EngineResultEnvelope` +
+  `classify_freshness()`'s documented default staleness policy,
+  **without editing either already-merged engine**.
+  `src/analysis/composite/registry.py`'s `CompositeFactorRegistry` is
+  this engine's own extension point — a third, completely separate
+  registry from M2.2's `IndicatorRegistry` and M2.3's `RatioRegistry`;
+  none of the three import each other. Every factor returns
+  `value=None` plus a `DataCompleteness` marker (`COMPLETE`/`PARTIAL`/
+  `INSUFFICIENT`) on missing/undefined input, never raises.
+  `CompositeFactorOutput`/`CompositeResult` satisfy
+  `AnalysisOutput`/`AnalysisEngineResult` structurally, proven directly
+  by `isinstance()` assertions in tests, with zero changes to
+  `src/analysis/core/contracts.py` — meaning a future Signal Engine
+  can consume `CompositeResult` exactly like Composite consumes each
+  engine's result today. **Not included**: no persistence, no API
+  route, no Signal Engine/Confidence Scoring/Explainable AI Engine/AI
+  Decision Layer/Multi-Agent Orchestrator (only their future
+  pluggability is prepared for), and no News/Corporate
+  Actions/Market Events/Risk Assessment engines exist to fuse in yet
+  (the extension point is proven ready for them only via a test-only
+  placeholder factor, never shipped as a real engine). `CompositeIntelligenceEngine`
+  was deliberately **not** registered into
+  `src/analysis/core/registry.py`'s `DEFAULT_ENGINE_REGISTRY` in this
+  milestone — a spec-flagged optional addition that was not explicitly
+  confirmed, so it was skipped rather than assumed, per "do not expand
+  scope."
 
 ## Partially implemented
 
@@ -143,20 +187,24 @@ commit):
 
 ## Not implemented
 
-- **Composite Analysis Engine, Signal Engine, Confidence Scoring,
-  Explainable AI Engine, AI Decision Layer, Multi-Agent Orchestrator**:
-  none of these exist yet. M2.3's `src/analysis/core/` package
-  (`AnalysisOutput`/`AnalysisEngineResult` contracts, `EngineRegistry`,
-  `bootstrap.py`) was built specifically so these can be added later
-  without modifying `TechnicalAnalysisEngine`, `FundamentalAnalysisEngine`,
-  or any indicator/ratio inside either, but no such layer has been
-  written.
+- **Signal Engine, Confidence Scoring, Explainable AI Engine, AI
+  Decision Layer, Multi-Agent Orchestrator**: none of these exist yet.
+  `src/analysis/composite/`'s `CompositeResult` (M2.4) was built
+  specifically so these can be added later without modifying
+  `CompositeIntelligenceEngine`, `TechnicalAnalysisEngine`,
+  `FundamentalAnalysisEngine`, or any indicator/ratio/factor inside
+  any of them, but no such layer has been written.
 - **News Intelligence Engine, Market Intelligence Engine, Sector
   Intelligence Engine, Macro Analysis Engine, Smart Money/ICT Engine,
-  Wyckoff Engine**: none exist yet — only Technical (M2.2) and
-  Fundamental (M2.3) analysis are implemented so far, each independent
-  and each satisfying the same `src/analysis/core/` contract these
-  future engines will also satisfy.
+  Wyckoff Engine, Corporate Actions, Market Events, Risk Assessment
+  Engine**: none exist yet — only Technical (M2.2), Fundamental
+  (M2.3), and Composite (M2.4) analysis are implemented so far, each
+  independent and each satisfying the same `src/analysis/core/`
+  contract these future engines will also satisfy. M2.4's composite
+  factors only combine Technical + Fundamental, the only two real
+  engines available — the extension point for these six is proven
+  ready only via a test-only placeholder factor, never a shipped
+  placeholder engine.
 - **Support/resistance detection**: not implemented — distinct from the
   trend-strength/direction ADX and SuperTrend already provide.
 - **Expert agent system** (the 15-agent organization described in the
@@ -200,23 +248,23 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.3)
+## Verified test/build state (M2.4)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes (unchanged since
   M2.1), no `PYTHONPATH` manipulation required.
-- Full test suite: 892 passed / 12 skipped (Redis unavailable) / 0 failed
-  without a live Redis; 904 passed / 0 skipped / 0 failed with one.
-  904 total test functions in the repository (up from 807 at M2.2's
-  close — 97 new tests for the M2.3 domain model, provider, ingestion
-  job, ratios, loader, engine facade, and the new `src/analysis/core/`
-  cross-engine contract; zero existing tests modified).
+- Full test suite: 945 passed / 12 skipped (Redis unavailable) / 0 failed
+  without a live Redis; 957 passed / 0 skipped / 0 failed with one.
+  957 total test functions in the repository (up from 904 at M2.3's
+  close — 53 new tests for the M2.4 composite types, registry, three
+  factors, and engine facade, including a real-engine integration
+  suite wiring `TechnicalAnalysisEngine` + `FundamentalAnalysisEngine`
+  end-to-end; zero existing tests modified).
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
   CI at `FLAKE8_BASELINE: 0` since M2.0 (see "Completed: M2.0" below).
-- Migration cycle (`alembic upgrade head` → `downgrade base revision` →
-  `upgrade head`) verified against a real local Postgres 16 instance
-  matching `database.py`'s default `DATABASE_URL` exactly, for the new
-  `fundamental_snapshots` migration.
+- No new migration in this milestone (no persistence in M2.4's scope);
+  the `fundamental_snapshots` migration cycle verified at M2.3's close
+  is unchanged.
 
 ## Completed: M1.5 — Lint Debt Reduction
 
@@ -378,6 +426,41 @@ against, not discovered after the fact: the autogenerated migration's
 Postgres ENUM type — the same defect class 0001's `timeframe` ENUM had
 in M2.1 — caught and fixed before the upgrade→downgrade→upgrade
 verification, not after.
+
+## Completed: M2.4 — Composite Intelligence Engine
+
+`CompositeIntelligenceEngine`, three composite factors, a third
+independent extension-point registry, and the `EngineResultEnvelope`
+freshness-tracking mechanism — see "Implemented" above for exactly
+what each is and isn't. Six `[M2.4]`-prefixed commits on
+`feature/m2.4-composite-intelligence-engine`, PR #8.
+
+This milestone deliberately scores cross-engine *agreement, context,
+and data quality* — never the stock itself. Producing a single
+trading score or decision remains explicitly out of scope, reserved
+for the not-yet-built Signal Engine/Confidence Scoring/AI Decision
+Layer. `trend_fundamental_alignment` never collapses a disagreement
+between Technical and Fundamental into a falsely-confident blended
+number — it reports the raw per-engine directional inputs plus an
+explicit `Agreement.AGREE`/`DISAGREE` flag instead, verified directly
+by a real-engine integration test pairing a strong, sustained
+downtrend with positive revenue growth and confirming `DISAGREE` is
+reported, not averaged away.
+
+Two design decisions worth recording verbatim:
+- Neither `TechnicalAnalysisResult` (M2.2) nor `FundamentalAnalysisResult`
+  (M2.3) carries a timestamp. Rather than retrofit one into either
+  already-merged engine — which the architectural directive explicitly
+  ruled out as "modifying an existing engine merely to force symmetry"
+  — freshness is modeled externally via `EngineResultEnvelope` and a
+  documented default staleness policy (`classify_freshness()`), leaving
+  both engines completely untouched.
+- The approved specification flagged one optional addition pending
+  explicit confirmation: registering `CompositeIntelligenceEngine`
+  itself into `src/analysis/core/registry.py`'s `DEFAULT_ENGINE_REGISTRY`
+  (via `bootstrap.py`). That confirmation was not given, so it was
+  **not done** in this milestone, per "do not expand scope" — noted
+  here rather than assumed silently either way.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
