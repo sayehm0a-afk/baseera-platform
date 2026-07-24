@@ -100,3 +100,26 @@ def test_ohlcv_respects_start_end_query_params():
     assert response.status_code == 200
     body = response.json()
     assert body["pagination"]["total"] == 3  # Jan 1, 2, 3
+
+
+def test_provider_health_returns_dev_provider_status_by_default():
+    os.environ.pop("MARKET_DATA_PROVIDER", None)
+    session = make_session()
+    client = make_client(session)
+
+    response = client.get("/api/v1/market-data/provider/health", headers=_AUTH_HEADERS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["provider"] == "dev"
+    assert body["data"]["status"] == "healthy"
+    assert "request_id" in body["meta"]
+
+
+def test_provider_health_requires_authentication():
+    session = make_session()
+    client = make_client(session)
+
+    response = client.get("/api/v1/market-data/provider/health")
+
+    assert response.status_code == 401

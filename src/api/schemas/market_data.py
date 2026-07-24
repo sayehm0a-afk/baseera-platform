@@ -16,3 +16,13 @@ class PriceBarSchema(BaseModel):
     volume: float
 
     model_config = {"from_attributes": True}
+
+
+class ProviderHealthSchema(BaseModel):
+    """Response schema for GET /api/v1/market-data/provider/health
+    (M2.13) -- wraps IMarketDataProvider.health_check()'s
+    ProviderHealth enum for whichever provider MARKET_DATA_PROVIDER
+    currently selects."""
+
+    provider: str
+    status: str

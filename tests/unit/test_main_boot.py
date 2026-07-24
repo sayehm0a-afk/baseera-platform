@@ -83,6 +83,7 @@ def test_main_boots_expected_routes():
         "/api/v1/stocks",
         "/api/v1/stocks/{symbol}",
         "/api/v1/market-data/{symbol}/ohlcv",
+        "/api/v1/market-data/provider/health",
         "/auth/login",
         "/auth/refresh",
     }
