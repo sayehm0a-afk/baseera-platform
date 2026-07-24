@@ -339,19 +339,27 @@ M2.2 — see "Implemented" above for each.)
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes (unchanged since
   M2.1), no `PYTHONPATH` manipulation required.
-- Full test suite: 1074 passed / 12 skipped (Redis unavailable) / 0
+- Full test suite: 1076 passed / 12 skipped (Redis unavailable) / 0
   failed, verified in this environment (no live Redis instance was
   reachable here — `redis-cli ping` refused the connection — so the
   with-Redis count from M2.4.1's report is carried forward
-  unverified this session rather than re-asserted). 1086 total test
+  unverified this session rather than re-asserted). 1088 total test
   functions in the repository (up from 1062 at M2.9's close — 24 new
   tests for M2.10's Volume Expert reference-value and edge-case
   coverage (including the OBV-series-reading, flat-close-blind-spot,
   and non-numeric-value invariants specific to this expert),
   registration, and a registry-level pairwise disjoint-metrics
   double-counting check across all four Technical Council experts;
-  `test_main_boot.py` and `test_full_pipeline.py` extended in place,
-  zero other existing tests modified).
+  plus 2 new tests in the dedicated
+  `test_registry_reachability_regression.py` regression guard added
+  in the defect-fix follow-up pass; `test_main_boot.py` and
+  `test_full_pipeline.py` extended in place, zero other existing
+  tests modified).
+- `tests/integration/test_full_pipeline.py -v`, run in true isolation
+  (`pytest tests/integration/test_full_pipeline.py -v`): 1 passed —
+  confirms no test-order dependency remains and no registry
+  population depends on accidental import side effects from another
+  test module.
 - Coverage of the `src/analysis/experts/` package: **100%**
   (554/554 statements), measured via
   `pytest --cov=src/analysis/experts --cov-report=term-missing`.
@@ -653,23 +661,58 @@ branch chain).
    four Technical Council experts pairwise
    (`test_volume_expert_metrics_are_disjoint_from_trend_momentum_and_volatility`).
 6. **A verified, pre-existing defect in `tests/integration/test_full_pipeline.py`
-   was found and fixed** — the third instance of the exact dormant-
-   registry bug class M2.4.1 first found and fixed twice
-   (`DEFAULT_ENGINE_REGISTRY`'s missing `bootstrap.py` import in
-   `main.py`; `DEFAULT_COMPOSITE_REGISTRY`'s missing
-   `factors/__init__.py`). Stage 7 (added in M2.7) has, since its
-   introduction, only ever passed because some *other* test file
-   (typically `test_main_boot.py`, importing `main`) happened to run
-   first in the same session and populated
-   `DEFAULT_EXPERT_REGISTRY` as an import-time side effect —
-   `pytest tests/integration/test_full_pipeline.py`, run genuinely
-   alone, returned an empty `CouncilResult` at Stage 7 every time,
-   confirmed directly before the fix. Fixed with one
-   `import src.analysis.experts.technical` line at the top of that
-   test file (documented in its own module docstring), verified by
-   re-running the file in true isolation afterward: passes. This is
-   the first time this file was actually executed alone since M2.7 —
-   caught only because M2.10's own validation discipline required it.
+   was found and fixed, then strengthened in a follow-up pass** — the
+   third instance of the exact dormant-registry bug class M2.4.1 first
+   found and fixed twice (`DEFAULT_ENGINE_REGISTRY`'s missing
+   `bootstrap.py` import in `main.py`; `DEFAULT_COMPOSITE_REGISTRY`'s
+   missing `factors/__init__.py`).
+   - **Root cause**: Stage 7 (added in M2.7) reads
+     `DEFAULT_EXPERT_REGISTRY`/`DEFAULT_ENGINE_REGISTRY` but this test
+     file never itself imported anything that populates either
+     registry as a side effect. `CompositeIntelligenceEngine`, by
+     contrast, is self-sufficient because its own module imports its
+     factors package directly; `CouncilEngine` is deliberately
+     council-agnostic per BEIF and cannot safely do the same, so the
+     population step has to happen at the call site.
+   - **Why it stayed hidden**: whenever this file ran in the same
+     pytest session as `test_main_boot.py` (which imports `main`,
+     which imports `src.analysis.experts.bootstrap`), the shared
+     `DEFAULT_EXPERT_REGISTRY`/`DEFAULT_ENGINE_REGISTRY` module-level
+     singletons were already populated by the time Stage 7 ran — which
+     is every ordinary full-suite run. `pytest
+     tests/integration/test_full_pipeline.py`, run genuinely alone,
+     returned an empty `CouncilResult` at Stage 7 every time, confirmed
+     directly before either fix.
+   - **Exact correction**: first pass (previous commit) added
+     `import src.analysis.experts.technical` directly. A follow-up
+     comparison in a fresh interpreter showed this left
+     `DEFAULT_ENGINE_REGISTRY` still empty (`"technical_council"`
+     never registered) even though `DEFAULT_EXPERT_REGISTRY` was
+     populated — `.technical` only self-registers experts, not the
+     council engine. Switched to `import
+     src.analysis.experts.bootstrap` instead, the same composition
+     root `main.py` itself imports, which populates both registries.
+   - **Isolation verification**: `pytest
+     tests/integration/test_full_pipeline.py -v` passes alone (1
+     passed). Deliberately reverting the import back to
+     `.technical` and re-running the new regression test (below)
+     reproduces the exact `technical_council`-missing failure,
+     confirming the fix (and the guard) are both real, not
+     coincidental.
+   - **Regression protection added**: a new dedicated file,
+     `tests/integration/test_registry_reachability_regression.py`,
+     runs the same import in a genuinely fresh subprocess interpreter
+     (immune to any in-process `sys.modules` pollution risk, not just
+     to the current absence of a `conftest.py`) and asserts both
+     registries are populated, plus a second guard asserting no
+     `conftest.py` exists anywhere in the repo (since one could mask
+     this defect the same way `test_main_boot.py`'s ordering
+     accidentally did). Both tests pass; both were verified to
+     actually fail when the underlying defect is reintroduced.
+7. **Two additive commits**, separate from the four `[M2.10]` Volume
+   Expert feature commits already in history, carry this strengthened
+   fix and its regression test — the original combined commit is left
+   untouched, no history rewritten.
 
 **Scope discipline**: per explicit instruction, M2.10 implemented
 exactly one expert and touched no previously-stable module except the
