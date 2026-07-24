@@ -15,6 +15,14 @@ completely independent of one another and of this engine.
 import logging
 from typing import Dict
 
+# Importing this package (not just registry.py) is what guarantees
+# DEFAULT_COMPOSITE_REGISTRY actually contains the three real M2.4
+# factors by the time anyone calls CompositeIntelligenceEngine().analyze()
+# -- each factor module self-registers as a side effect of being
+# imported (see factors/__init__.py), and without importing the
+# package here, whether that had already happened depended entirely on
+# which other modules a caller/test happened to import first.
+import src.analysis.composite.factors  # noqa: F401
 from src.analysis.composite.registry import DEFAULT_COMPOSITE_REGISTRY, CompositeFactorRegistry
 from src.analysis.composite.types import (
     CompositeFactorMap,
