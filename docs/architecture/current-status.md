@@ -9,8 +9,8 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.2 (branch `feature/m2.2-technical-analysis-engine`, based on
-`main` at `5887d4949ce0fa51c65791e2cfd36959180c903c`, M2.1's merge
+As of M2.3 (branch `feature/m2.3-fundamental-analysis-engine`, based on
+`main` at `078db462186a979ee77b69f5efc1e293f72bb719`, M2.2's merge
 commit):
 
 ## Implemented
@@ -75,6 +75,47 @@ commit):
   extension point for. Depends entirely on `DevMarketDataProvider`'s
   synthetic data via `ohlcv_loader.py`; no real Tadawul vendor is
   contracted (unchanged from M2.1).
+- **Fundamental Analysis Engine** (M2.3): `src/analysis/fundamental/
+  fundamental_analysis_engine.py` computes 18 financial-statement
+  ratios across 6 categories — net profit margin, gross profit margin,
+  ROE, ROA (profitability); current ratio, quick ratio, cash ratio
+  (liquidity); debt-to-equity, debt-to-assets, equity multiplier
+  (leverage); asset turnover (efficiency); P/E, P/B, dividend yield,
+  market cap (valuation — needs a market price); revenue growth, net
+  income growth, EPS growth (growth — needs a prior period) — against
+  one `FundamentalFacts` snapshot. New domain model
+  `FundamentalSnapshot` (`src/domain/models/fundamental_snapshot.py`,
+  migration `migrations/versions/a75a1f329294_...py`), a vendor-neutral
+  `IFundamentalDataProvider` interface + `FundamentalDataProviderFactory`
+  (no real vendor — interface only), `DevFundamentalDataProvider`
+  (synthetic-only, same `source="dev-synthetic"`/`is_synthetic=True`
+  labeling as `DevMarketDataProvider`), and `ingest_fundamentals`
+  (mirrors `ingest_ohlcv`'s per-symbol failure isolation).
+  `src/analysis/fundamental/registry.py`'s `RatioRegistry`/`RatioSpec`
+  is this engine's own extension point, structurally independent of
+  M2.2's `IndicatorRegistry` — neither package imports the other.
+  Every ratio returns `None`, never raises, when its inputs are
+  missing or a denominator is zero (financial statements are commonly
+  incomplete, unlike OHLCV bars).
+  **Cross-engine architecture**: a new `src/analysis/core/` package
+  (`contracts.py`'s `AnalysisOutput`/`AnalysisEngineResult`
+  `typing.Protocol`s, `registry.py`'s engine-level `EngineRegistry`,
+  `bootstrap.py` as the one composition-root module that registers
+  both `TechnicalAnalysisEngine` and `FundamentalAnalysisEngine`) is
+  the shared, engine-agnostic contract every current and future
+  analysis engine (News/Market/Sector Intelligence, Macro, Smart
+  Money/ICT, Wyckoff, and beyond) will satisfy — proven directly by
+  `tests/unit/analysis/core/test_contracts.py`, which verifies M2.2's
+  `TechnicalAnalysisResult`/`IndicatorOutput` satisfy the contract
+  **with zero changes to that M2.2 code** (the contract is structural,
+  not inheritance-based). **Not included**: no persistence of computed
+  ratios, no API route exposes any of this, no real financial-data
+  vendor (interface-only, per explicit instruction), and no Composite
+  Analysis Engine/Signal Engine/Confidence Scoring/AI Decision
+  Layer/Multi-Agent Orchestrator yet — `core/` only prepares the
+  extension point those will use. Depends entirely on
+  `DevFundamentalDataProvider`'s synthetic data; no real fundamentals
+  vendor is contracted.
 
 ## Partially implemented
 
@@ -102,11 +143,20 @@ commit):
 
 ## Not implemented
 
-- **Composite Indicator Engine, Signal Engine, Confidence Scoring,
-  Explainable Signals, AI Decision Layer**: none of these exist yet.
-  M2.2's `IndicatorRegistry`/`IndicatorOutput` extension point was
-  built specifically so these can be added later without modifying any
-  existing indicator, but no such layer has been written.
+- **Composite Analysis Engine, Signal Engine, Confidence Scoring,
+  Explainable AI Engine, AI Decision Layer, Multi-Agent Orchestrator**:
+  none of these exist yet. M2.3's `src/analysis/core/` package
+  (`AnalysisOutput`/`AnalysisEngineResult` contracts, `EngineRegistry`,
+  `bootstrap.py`) was built specifically so these can be added later
+  without modifying `TechnicalAnalysisEngine`, `FundamentalAnalysisEngine`,
+  or any indicator/ratio inside either, but no such layer has been
+  written.
+- **News Intelligence Engine, Market Intelligence Engine, Sector
+  Intelligence Engine, Macro Analysis Engine, Smart Money/ICT Engine,
+  Wyckoff Engine**: none exist yet — only Technical (M2.2) and
+  Fundamental (M2.3) analysis are implemented so far, each independent
+  and each satisfying the same `src/analysis/core/` contract these
+  future engines will also satisfy.
 - **Support/resistance detection**: not implemented — distinct from the
   trend-strength/direction ADX and SuperTrend already provide.
 - **Expert agent system** (the 15-agent organization described in the
@@ -116,6 +166,10 @@ commit):
   Confidence Calibration, Explainability, Outcome/Learning, Governance):
   not started. `src/agents/base/` is empty scaffolding, distinct from the
   legacy `autonomous_intelligence_layer/`/`multi_agent_system/` code.
+  Note: the "Fundamental" **agent** in this list is a distinct,
+  not-yet-started concept from the "Fundamental Analysis Engine"
+  implemented in M2.3 — M2.3 is pure ratio computation with no agent,
+  LLM, or decision-making wrapper around it.
 - **Decision pipeline, debate/fusion orchestration, learning loop**:
   `src/pipeline/` and `src/learning/` are empty scaffolding.
 - **Frontend**: does not exist in any form. `frontend/` is empty
@@ -146,22 +200,23 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.2)
+## Verified test/build state (M2.3)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
-- Boot smoke test: `import main` succeeds, 11 routes (unchanged from
+- Boot smoke test: `import main` succeeds, 11 routes (unchanged since
   M2.1), no `PYTHONPATH` manipulation required.
-- Full test suite: 795 passed / 12 skipped (Redis unavailable) / 0 failed
-  without a live Redis; 807 passed / 0 skipped / 0 failed with one.
-  807 total test functions in the repository (up from 747 at M2.1's
-  close — 60 new tests for the M2.2 indicators, registry, OHLCV loader,
-  and engine facade; zero existing tests modified).
+- Full test suite: 892 passed / 12 skipped (Redis unavailable) / 0 failed
+  without a live Redis; 904 passed / 0 skipped / 0 failed with one.
+  904 total test functions in the repository (up from 807 at M2.2's
+  close — 97 new tests for the M2.3 domain model, provider, ingestion
+  job, ratios, loader, engine facade, and the new `src/analysis/core/`
+  cross-engine contract; zero existing tests modified).
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
   CI at `FLAKE8_BASELINE: 0` since M2.0 (see "Completed: M2.0" below).
-- Migration cycle (`alembic upgrade head` → `downgrade base` →
+- Migration cycle (`alembic upgrade head` → `downgrade base revision` →
   `upgrade head`) verified against a real local Postgres 16 instance
-  matching `database.py`'s default `DATABASE_URL` exactly (unchanged
-  by M2.2 — no new migration in this milestone).
+  matching `database.py`'s default `DATABASE_URL` exactly, for the new
+  `fundamental_snapshots` migration.
 
 ## Completed: M1.5 — Lint Debt Reduction
 
@@ -268,6 +323,61 @@ every computation still runs on `DevMarketDataProvider`'s synthetic
 data — no real Tadawul vendor is contracted. Support/resistance
 detection, signal generation, and confidence scoring do not exist yet;
 this milestone only prepared the extension point they will plug into.
+
+## Completed: M2.3 — Fundamental Analysis Engine
+
+18 financial-statement ratios across 6 categories, a vendor-neutral
+fundamental data provider interface, a synthetic-only dev provider, an
+ingestion job, a ratio-level extension point, an engine facade, and a
+new cross-engine architectural layer — see "Implemented" above for
+exactly what each is and isn't. Fifteen `[M2.3]`-prefixed commits on
+`feature/m2.3-fundamental-analysis-engine`, PR #7.
+
+Before implementation began, an architectural directive extended
+M2.2's "build an extension point" instruction one level further: M2.3
+is only the second of many future analysis pillars (News/Market/Sector
+Intelligence, Macro, Smart Money/ICT, Wyckoff, Composite, Signal,
+Confidence Scoring, Explainable AI, AI Decision Layer, Multi-Agent
+Orchestrator), so nothing in it may assume only Technical and
+Fundamental Analysis will ever exist, every output must be generic and
+uniformly consumable, and Technical/Fundamental must stay completely
+independent of each other. This produced `src/analysis/core/`:
+`contracts.py`'s `AnalysisOutput`/`AnalysisEngineResult` are structural
+`typing.Protocol`s, not base classes, so M2.2's already-merged
+`IndicatorOutput`/`TechnicalAnalysisResult` satisfy them with **zero
+changes to that M2.2 code** — proven directly by
+`tests/unit/analysis/core/test_contracts.py`. `registry.py`'s
+`EngineRegistry` catalogs engines by name without standardizing each
+engine's `analyze()` call signature (OHLCV DataFrames and
+financial-statement facts are genuinely different input shapes, so
+only the *output* is unified — forcing a common invocation signature
+would have been exactly the kind of premature, leaky abstraction the
+"no shortcuts" instruction ruled out). `bootstrap.py` is the one,
+explicitly-labeled composition-root module that imports both concrete
+engines and registers them — adding a third engine later means editing
+only this one file, never `contracts.py`, `registry.py`, or either
+existing engine.
+
+One deliberate asymmetry, disclosed rather than silently fixed: M2.2's
+files remain at `src/analysis/{types,registry,technical_analysis_engine}.py`
+(not moved into a `src/analysis/technical/` subpackage to mirror
+`src/analysis/fundamental/`), because renaming/moving already-merged
+M2.2 files for cosmetic folder symmetry would itself have been
+"modifying an existing engine," which the architectural directive
+explicitly ruled out.
+
+Same fundamentals-vendor gap as M2.1/M2.2's market-data gap: **no
+fundamentals data vendor is contracted.** `IFundamentalDataProvider`
+(`src/market_data/providers/fundamental_data_provider.py`) is an
+interface + factory only; `DevFundamentalDataProvider` is
+deterministic synthetic data, labeled `source="dev-synthetic"`/
+`is_synthetic=True` in every returned value, the same discipline as
+`DevMarketDataProvider`. One real bug class was proactively guarded
+against, not discovered after the fact: the autogenerated migration's
+`downgrade()` again dropped the table but not the new `periodtype`
+Postgres ENUM type — the same defect class 0001's `timeframe` ENUM had
+in M2.1 — caught and fixed before the upgrade→downgrade→upgrade
+verification, not after.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
