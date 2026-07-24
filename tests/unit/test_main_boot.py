@@ -43,9 +43,10 @@ def test_importing_main_populates_the_expert_registry():
     # path (main.py), not just via a test that happens to import
     # src.analysis.experts.technical directly first.
     expert_ids = {spec.expert_id for spec in DEFAULT_EXPERT_REGISTRY.all_specs()}
-    assert {"technical.trend", "technical.momentum"}.issubset(expert_ids)
+    assert {"technical.trend", "technical.momentum", "technical.volatility"}.issubset(expert_ids)
     assert DEFAULT_EXPERT_REGISTRY.get("technical.trend").council is Council.TECHNICAL
     assert DEFAULT_EXPERT_REGISTRY.get("technical.momentum").council is Council.TECHNICAL
+    assert DEFAULT_EXPERT_REGISTRY.get("technical.volatility").council is Council.TECHNICAL
 
 
 def test_main_boots_11_routes():
