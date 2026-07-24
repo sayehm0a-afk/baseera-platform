@@ -14,6 +14,12 @@ DEFAULT_COMPOSITE_REGISTRY's missing factors/__init__.py), applied
 here from the start rather than retrofitted later.
 """
 
-from src.analysis.experts.technical import momentum_expert, trend_expert, volatility_expert, volume_expert
+from src.analysis.experts.technical import (
+    candlestick_expert,
+    momentum_expert,
+    trend_expert,
+    volatility_expert,
+    volume_expert,
+)
 
-__all__ = ["trend_expert", "momentum_expert", "volatility_expert", "volume_expert"]
+__all__ = ["trend_expert", "momentum_expert", "volatility_expert", "volume_expert", "candlestick_expert"]
