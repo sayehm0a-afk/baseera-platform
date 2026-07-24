@@ -9,10 +9,13 @@ to see all tables.
 from src.domain.models.stock import Stock
 from src.domain.models.price_bar import PriceBar, Timeframe
 from src.domain.models.market_snapshot import MarketSnapshot
+from src.domain.models.fundamental_snapshot import FundamentalSnapshot, PeriodType
 
 __all__ = [
     "Stock",
     "PriceBar",
     "Timeframe",
     "MarketSnapshot",
+    "FundamentalSnapshot",
+    "PeriodType",
 ]
