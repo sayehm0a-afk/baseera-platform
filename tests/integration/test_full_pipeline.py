@@ -321,10 +321,11 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
     assert quality.completeness == DataCompleteness.COMPLETE
     assert quality.value == pytest.approx(1.0)  # both envelopes fresh (same `now`)
 
-    # --- Stage 7: Technical Council / Trend + Momentum + Volatility Expert (real, on
-    # the real technical_analysis envelope already built above) -- BEIF's "one more
-    # hop" extension, M2.7 (Trend), M2.8 (Momentum), M2.9 (Volatility). ---
-    # All three experts ship EXPERIMENTAL (no shadow-mode history yet, per BEIF
+    # --- Stage 7: Technical Council / Trend + Momentum + Volatility + Volume +
+    # Candlestick Expert (real, on the real technical_analysis envelope already
+    # built above) -- BEIF's "one more hop" extension, M2.7 (Trend), M2.8
+    # (Momentum), M2.9 (Volatility), M2.10 (Volume), M2.11 (Candlestick). ---
+    # All five experts ship EXPERIMENTAL (no shadow-mode history yet, per BEIF
     # Section 15), so CouncilEngine.analyze() must be asked for every status
     # explicitly to see them -- exactly the promotion-gate behavior that status is
     # supposed to enforce.
@@ -337,6 +338,7 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
         "technical.momentum",
         "technical.volatility",
         "technical.volume",
+        "technical.candlestick",
     }
 
     trend = council_result.get("technical.trend")
@@ -383,3 +385,22 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
     assert volume.symbol == SYMBOL
     assert volatility.completeness == DataCompleteness.COMPLETE
     assert volatility.symbol == SYMBOL
+
+    candlestick = council_result.get("technical.candlestick")
+    assert isinstance(candlestick, AnalysisOutput)
+    # This series' body shape (close - open = 0.2 on every single bar, a
+    # constant, modest positive body against a 1.0 high-low range) does not
+    # match any of the five detected patterns' geometric conditions on any
+    # bar -- verified directly against candlestick_patterns.py's own
+    # thresholds: too large a body for a Doji (0.2 > 0.1 * range), too
+    # small a lower wick for a Hammer, upper wick alone insufficient for a
+    # Shooting Star, and every bar is bullish-bodied so neither engulfing
+    # pattern's "prior bar is bearish/bullish" precondition is ever met. A
+    # real, non-mocked, honestly-empty result -- COMPLETE completeness (the
+    # indicator was read successfully), NEUTRAL/no-score because there was
+    # genuinely nothing to report, not a failure to read the data.
+    assert candlestick.direction == ExpertDirection.NEUTRAL
+    assert candlestick.normalized_score is None
+    assert candlestick.completeness == DataCompleteness.COMPLETE
+    assert candlestick.conflicts == ()
+    assert candlestick.symbol == SYMBOL

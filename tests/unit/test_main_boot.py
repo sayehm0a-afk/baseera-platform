@@ -48,11 +48,13 @@ def test_importing_main_populates_the_expert_registry():
         "technical.momentum",
         "technical.volatility",
         "technical.volume",
+        "technical.candlestick",
     }.issubset(expert_ids)
     assert DEFAULT_EXPERT_REGISTRY.get("technical.trend").council is Council.TECHNICAL
     assert DEFAULT_EXPERT_REGISTRY.get("technical.momentum").council is Council.TECHNICAL
     assert DEFAULT_EXPERT_REGISTRY.get("technical.volatility").council is Council.TECHNICAL
     assert DEFAULT_EXPERT_REGISTRY.get("technical.volume").council is Council.TECHNICAL
+    assert DEFAULT_EXPERT_REGISTRY.get("technical.candlestick").council is Council.TECHNICAL
 
 
 def test_main_boots_11_routes():

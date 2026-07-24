@@ -9,10 +9,10 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.10.5 (branch `feature/m2.10.5-ail-contracts`, stacked on the
-not-yet-merged M2.4/M2.4.1/M2.7/M2.8/M2.9/M2.10 branch chain -- `main`
-itself is still at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's
-merge commit):
+As of M2.11 (branch `feature/m2.11-candlestick-expert`, stacked on the
+not-yet-merged M2.4/M2.4.1/M2.7/M2.8/M2.9/M2.10/M2.10.5 branch chain --
+`main` itself is still at `efda46013b5e682213476c74d7d868fc3de0d61e`,
+M2.3's merge commit):
 
 ## Implemented
 
@@ -334,33 +334,36 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.10.5)
+## Verified test/build state (M2.11)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes (unchanged since
-  M2.1), no `PYTHONPATH` manipulation required — and, as of M2.10.5,
-  verified via a dedicated subprocess regression test to still produce
-  byte-identical `DEFAULT_ENGINE_REGISTRY`/`DEFAULT_EXPERT_REGISTRY`
-  contents (see "Completed: M2.10.5" below).
-- Full test suite: 1110 passed / 12 skipped (Redis unavailable) / 0
+  M2.1), no `PYTHONPATH` manipulation required — verified via a
+  dedicated subprocess regression test (M2.10.5) to still produce
+  byte-identical `DEFAULT_ENGINE_REGISTRY` contents and the now-five-
+  expert `DEFAULT_EXPERT_REGISTRY` contents (updated for M2.11's fifth
+  expert; see "Completed: M2.10.5" and "Completed: M2.11" below).
+- Full test suite: 1132 passed / 12 skipped (Redis unavailable) / 0
   failed, verified in this environment (no live Redis instance was
   reachable here — `redis-cli ping` refused the connection — so the
   with-Redis count from M2.4.1's report is carried forward
-  unverified this session rather than re-asserted). 1122 total test
-  functions in the repository (up from 1088 at M2.10's close — 34 new
-  tests, all for M2.10.5's Autonomous Intelligence Layer contracts:
-  types/interfaces/registry/integration unit tests plus the two
-  dedicated non-reachability regression tests; zero existing test
-  modified).
+  unverified this session rather than re-asserted). 1144 total test
+  functions in the repository (up from 1122 at M2.10.5's close — 22
+  new tests for M2.11's Candlestick & Price Action Expert reference-
+  value and edge-case coverage, registration, and the registry-level
+  pairwise disjoint-metrics check extended to all five Technical
+  Council experts; `test_main_boot.py`,
+  `test_full_pipeline.py`, and `test_ail_contracts_non_reachability.py`
+  extended in place, zero other existing tests modified).
 - `tests/integration/test_full_pipeline.py -v`, run in true isolation
   (`pytest tests/integration/test_full_pipeline.py -v`): 1 passed —
   confirms no test-order dependency remains and no registry
   population depends on accidental import side effects from another
   test module.
 - Coverage of the `src/analysis/experts/` package: **100%**
-  (554/554 statements), measured via
+  (639/639 statements, up from 554 at M2.10's close), measured via
   `pytest --cov=src/analysis/experts --cov-report=term-missing`.
-- Coverage of the new
+- Coverage of the
   `src/core/autonomous_intelligence_layer/contracts/` package: **100%**
   (116/116 statements).
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
@@ -825,6 +828,103 @@ orchestration logic, no concrete Supervisor/Planner/Reflection/Memory/
 Collaboration/Debate/Voting/KnowledgeGraph/SelfImprovement
 implementation, no bootstrap wiring it into `main.py`, and (verified,
 not merely stated) no change to any existing production behavior.
+
+## Completed: M2.11 — Candlestick & Price Action Expert
+
+Technical Council's fifth and final v1 BEIF expert, closing out the
+full v1 set (Trend, Momentum, Volatility, Volume, Candlestick/Price
+Action) exactly as BEIF Section 3.A defines it. **Market Structure
+Expert remains explicitly deferred to v2** — this milestone implements
+Candlestick & Price Action Expert, not Market Structure Expert, per
+explicit instruction not to amend BEIF's own v1/v2 boundary. One
+`[M2.11]`-prefixed commit on `feature/m2.11-candlestick-expert`
+(stacked on the merged M2.7/M2.8/M2.9 chain plus the not-yet-merged
+M2.10/M2.10.5 branches).
+
+1. **`src/analysis/experts/technical/candlestick_expert.py`**:
+   Candlestick & Price Action Expert (`technical.candlestick`), reading
+   only the already-computed `candlestick_patterns` indicator (a
+   `List[PatternMatch]`, registered since M2.2) from a
+   `"technical_analysis"` envelope. Four architectural decisions are
+   documented directly in the module's own docstring:
+   - **Reading `IndicatorOutput.value` directly, not `.latest()`** —
+     a different reason than Volume Expert's (M2.10): `.latest()`
+     collapses matches into pattern *names* only, discarding each
+     match's `bullish` flag, which this expert needs for direction.
+   - **Per-pattern direction, and Doji's deliberate exclusion**: four
+     of five patterns (Hammer, Shooting Star, Bullish/Bearish
+     Engulfing) carry a fixed, unconditional `bullish` flag already
+     assigned by `candlestick_patterns.py` itself, read directly as
+     this expert's sign. Doji's `bullish` flag reflects only which
+     side of an insignificant body the close landed on — not a real
+     directional signal — so every detected Doji is still reported as
+     evidence (visible, auditable) but always with `contribution=0.0`,
+     excluded from the direction-sign combination.
+   - **No magnitude/strength scale**: `PatternMatch` carries no
+     numeric field (e.g. a wick-to-body ratio), so unlike Trend's ADX
+     scaling or Volume's relative-volume transform, `normalized_score`
+     is the plain average of contributing signs, already bounded to
+     `[-1, 1]`, with no invented intensity measure.
+   - **Disclosed "latest matched bar may not be the true latest bar"
+     limitation**: if the most recent real bar(s) matched no pattern,
+     the latest *matched* timestamp can be strictly older. Deliberately
+     does **not** use `EngineResultEnvelope.as_of` as a substitute
+     staleness signal — `as_of` records wall-clock analysis time, not
+     the underlying data's last bar timestamp, and the two can differ
+     by an arbitrary amount; conflating them would mislead more than
+     it clarifies. Disclosed in `limitations` instead.
+   Malformed input (missing/undefined/non-list `candlestick_patterns`
+   value, incomparable match timestamps) degrades gracefully to
+   `INSUFFICIENT` completeness with a disclosed `warnings` entry, never
+   raises. An empty pattern list (no patterns detected anywhere) is
+   `COMPLETE` completeness with `NEUTRAL`/`None` score — a successful
+   read that honestly found nothing, not a data-availability failure.
+   Ships at `ExpertStatus.EXPERIMENTAL`, same reasoning as every prior
+   Technical Council expert. Two structurally dead branches present in
+   Trend Expert's analogous logic (a reachable `PARTIAL` completeness
+   state, and a reachable "still NEUTRAL after having directional
+   evidence" case) were deliberately **not** copied here: with only one
+   required metric and every contributing sign always exactly `+1`/`-1`
+   (never `0`), both states are unreachable in this expert's specific
+   domain, and modeling unreachable branches would itself violate the
+   "no placeholder business logic" discipline this milestone was run
+   under. Verified via 100% branch coverage without a single
+   coverage-forcing contrived test.
+2. **`src/analysis/experts/technical/__init__.py`** gained one import
+   (`candlestick_expert`) — the same self-registration pattern extended
+   a fifth time with zero change to the pattern itself.
+3. **No change to `types.py`, `registry.py`, `council_engine.py`, or
+   `bootstrap.py`** — the BEIF core absorbed a fifth expert with zero
+   modification, the same result every prior expert milestone already
+   demonstrated.
+4. **`tests/unit/test_main_boot.py`**,
+   **`tests/integration/test_full_pipeline.py`**, and
+   **`tests/integration/test_ail_contracts_non_reachability.py`**
+   extended in place: the full-pipeline test's Stage 7 now also asserts
+   a real, non-mocked `technical.candlestick` result on the same real
+   ingested/persisted/loaded steady-uptrend series every other
+   Technical Council expert's own assertions already use — verified by
+   hand against `candlestick_patterns.py`'s own thresholds that this
+   specific series' constant, modest bar-body shape does not match any
+   of the five detected patterns on any bar, so the honest expected
+   result is `NEUTRAL`/`None`/`COMPLETE`, not a fabricated directional
+   call. `test_ail_contracts_non_reachability.py`'s hardcoded expected
+   expert-id list (a real, intended registry-membership baseline, not a
+   defect) was updated from four ids to five.
+5. **The registry-level double-counting guard extends to all five
+   Technical Council experts pairwise**
+   (`test_candlestick_expert_metrics_are_disjoint_from_all_other_technical_experts`).
+6. **Coverage of the new module: 100%** (85/85 statements). flake8: 0.
+   Full regression suite: 1132 passed / 12 skipped (Redis unavailable)
+   / 0 failed.
+
+**Scope discipline**: per explicit instruction, M2.11 implemented
+exactly one expert (Candlestick & Price Action, not Market Structure)
+and touched no previously-stable module except the three test files and
+the one `__init__.py` import line already described — Market Structure
+Expert remains deferred to v2 exactly as BEIF specifies, no BEIF
+amendment made, no Fundamental/Saudi/Risk Council, no Signal Engine, no
+Decision Engine, no API route, no persistence.
 
 ## Completed: M1.5 — Lint Debt Reduction
 
