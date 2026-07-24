@@ -21,27 +21,80 @@ dependency -- consistent with the existing test fixture pattern used
 throughout tests/unit/domain/, tests/unit/market_data/, and
 tests/unit/analysis/.
 
-The `import src.analysis.experts.technical` at the top of this file
-(distinct from the specific `CouncilEngine`/`Council` imports used
-below) is a required, disclosed fix, not a stray import: without it,
-Stage 7's `technical_council.analyze(...)` call below silently returns
-an empty CouncilResult when this file is run alone (`pytest
-tests/integration/test_full_pipeline.py`), because
-DEFAULT_EXPERT_REGISTRY's population is itself an import-time side
-effect of importing the `src.analysis.experts.technical` package (see
-that package's own __init__.py docstring) -- a dependency Stage 7 has
-always had, silently masked whenever this file happened to run
-alongside another test (e.g. tests/unit/test_main_boot.py, which
-imports `main`) that triggered the same side effect first. Verified
-directly, in isolation, before this fix: `pytest
-tests/integration/test_full_pipeline.py` alone failed with
-`council_result.experts == {}`; the full suite passed regardless,
-which is exactly what made the bug easy to miss. The same dormant-
-registry bug class M2.4.1 found and fixed twice already
-(DEFAULT_ENGINE_REGISTRY's missing bootstrap.py import in main.py, and
-DEFAULT_COMPOSITE_REGISTRY's missing factors/__init__.py), present a
-third time, here, since M2.7 added Stage 7 -- fixed now, at M2.10,
-the first time this file was actually executed in true isolation.
+======================================================================
+VERIFIED DEFECT (found and fixed at M2.10): dormant DEFAULT_EXPERT_REGISTRY
+======================================================================
+
+Root cause: Stage 7 below (added at M2.7) calls
+`CouncilEngine(council=Council.TECHNICAL).analyze(...)`, which reads
+`DEFAULT_EXPERT_REGISTRY` (src/analysis/experts/registry.py).
+That registry is only populated as an *import-time side effect* of
+importing `src.analysis.experts.technical` (each expert module
+self-registers when its parent package is imported -- see that
+package's own __init__.py docstring). This file itself never imported
+that package, or `src.analysis.experts.bootstrap` (the actual
+production composition root main.py imports) -- it only imported the
+`CouncilEngine`/`Council` *types*, which do not trigger the
+registration side effect. `CompositeIntelligenceEngine`, by contrast,
+imports its own factors package directly inside its own module
+(src/analysis/composite/composite_intelligence_engine.py), making
+Stage 6 self-sufficient wherever it is imported; `CouncilEngine` is
+deliberately council-agnostic (it must support Fundamental/Saudi/Risk/
+Intelligence-Learning councils too, per BEIF Section 6), so it cannot
+safely import one specific council's expert package itself -- wiring
+a specific council to the registry is `bootstrap.py`'s job by design,
+not `CouncilEngine`'s. That correct separation is exactly what made
+this dependency easy to omit at a call site.
+
+Why it remained hidden: Stage 7's own assertions are directly
+sensitive to this (an empty registry produces an empty CouncilResult,
+which its own `assert set(council_result.experts.keys()) == {...}`
+line already catches) -- but only when this file is executed in
+genuine isolation. Every session before this fix ran it either as
+part of the full suite or alongside other Technical Council test
+files, and `tests/unit/test_main_boot.py` (which imports `main`,
+which imports `src.analysis.experts.bootstrap`) reliably ran early
+enough in test collection to populate the shared registry singleton
+first -- masking the missing dependency completely. Verified directly
+before this fix, in a fresh interpreter with no other test module
+involved: `python -c "import tests.integration.test_full_pipeline; ..."`
+showed `DEFAULT_EXPERT_REGISTRY` with zero registered specs.
+
+Exact correction: `import src.analysis.experts.bootstrap` added below,
+not `import src.analysis.experts.technical` directly -- bootstrap.py
+is the real production composition root (the same module main.py
+itself imports), and importing it exercises strictly more of the real
+reachability path: it populates both `DEFAULT_EXPERT_REGISTRY` (via
+its own `import src.analysis.experts.technical`) and
+`DEFAULT_ENGINE_REGISTRY`'s `"technical_council"` entry (via its own
+`register_default_councils()` call) -- confirmed directly: importing
+`.technical` alone left `DEFAULT_ENGINE_REGISTRY` empty in a fresh
+interpreter; importing `.bootstrap` populated both registries
+correctly.
+
+Isolation verification performed: `pytest
+tests/integration/test_full_pipeline.py -v` run alone (passes);
+`python -c "import tests.integration.test_full_pipeline; ..."` run in
+a genuinely fresh interpreter, asserting >=4 registered expert specs
+(passes); every other expert-layer test file in the repository run
+individually, alone, to confirm none of them share this same latent
+defect (all pass alone).
+
+Regression protection added:
+tests/integration/test_registry_reachability_regression.py -- a
+dedicated, subprocess-based test (a truly fresh Python interpreter,
+not just "this file run alone via pytest") that would fail
+immediately, with a clear, specific message, if this file's bootstrap
+import were ever accidentally removed again. See that file's own
+docstring for why a subprocess, not just an in-process isolated pytest
+run, is the correct regression-guard mechanism.
+
+The same dormant-registry bug class M2.4.1 found and fixed twice
+already (`DEFAULT_ENGINE_REGISTRY`'s missing bootstrap.py import in
+main.py; `DEFAULT_COMPOSITE_REGISTRY`'s missing factors/__init__.py),
+present a third time, here, since M2.7 added Stage 7 -- caught only
+because M2.10's own validation discipline required running this file
+in true isolation for the first time since M2.7.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -50,7 +103,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-import src.analysis.experts.technical  # noqa: F401 -- import side effect required, see below
+import src.analysis.experts.bootstrap  # noqa: F401 -- import side effect required, see module docstring
 from src.analysis.composite.composite_intelligence_engine import CompositeIntelligenceEngine
 from src.analysis.composite.types import Agreement, DataCompleteness, build_envelope
 from src.analysis.core.contracts import AnalysisEngineResult, AnalysisOutput
