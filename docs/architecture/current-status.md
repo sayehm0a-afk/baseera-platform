@@ -9,10 +9,10 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.10 (branch `feature/m2.10-volume-expert`, stacked on the
-not-yet-merged M2.4/M2.4.1/M2.7/M2.8/M2.9 branch chain -- `main` itself
-is still at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge
-commit):
+As of M2.10.5 (branch `feature/m2.10.5-ail-contracts`, stacked on the
+not-yet-merged M2.4/M2.4.1/M2.7/M2.8/M2.9/M2.10 branch chain -- `main`
+itself is still at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's
+merge commit):
 
 ## Implemented
 
@@ -334,27 +334,24 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.10)
+## Verified test/build state (M2.10.5)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes (unchanged since
-  M2.1), no `PYTHONPATH` manipulation required.
-- Full test suite: 1076 passed / 12 skipped (Redis unavailable) / 0
+  M2.1), no `PYTHONPATH` manipulation required — and, as of M2.10.5,
+  verified via a dedicated subprocess regression test to still produce
+  byte-identical `DEFAULT_ENGINE_REGISTRY`/`DEFAULT_EXPERT_REGISTRY`
+  contents (see "Completed: M2.10.5" below).
+- Full test suite: 1110 passed / 12 skipped (Redis unavailable) / 0
   failed, verified in this environment (no live Redis instance was
   reachable here — `redis-cli ping` refused the connection — so the
   with-Redis count from M2.4.1's report is carried forward
-  unverified this session rather than re-asserted). 1088 total test
-  functions in the repository (up from 1062 at M2.9's close — 24 new
-  tests for M2.10's Volume Expert reference-value and edge-case
-  coverage (including the OBV-series-reading, flat-close-blind-spot,
-  and non-numeric-value invariants specific to this expert),
-  registration, and a registry-level pairwise disjoint-metrics
-  double-counting check across all four Technical Council experts;
-  plus 2 new tests in the dedicated
-  `test_registry_reachability_regression.py` regression guard added
-  in the defect-fix follow-up pass; `test_main_boot.py` and
-  `test_full_pipeline.py` extended in place, zero other existing
-  tests modified).
+  unverified this session rather than re-asserted). 1122 total test
+  functions in the repository (up from 1088 at M2.10's close — 34 new
+  tests, all for M2.10.5's Autonomous Intelligence Layer contracts:
+  types/interfaces/registry/integration unit tests plus the two
+  dedicated non-reachability regression tests; zero existing test
+  modified).
 - `tests/integration/test_full_pipeline.py -v`, run in true isolation
   (`pytest tests/integration/test_full_pipeline.py -v`): 1 passed —
   confirms no test-order dependency remains and no registry
@@ -363,6 +360,9 @@ M2.2 — see "Implemented" above for each.)
 - Coverage of the `src/analysis/experts/` package: **100%**
   (554/554 statements), measured via
   `pytest --cov=src/analysis/experts --cov-report=term-missing`.
+- Coverage of the new
+  `src/core/autonomous_intelligence_layer/contracts/` package: **100%**
+  (116/116 statements).
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
   CI at `FLAKE8_BASELINE: 0` since M2.0 (see "Completed: M2.0" below).
 - No new migration in this milestone (no persistence in M2.7's scope);
@@ -720,6 +720,111 @@ two test files and the one `__init__.py` import line already
 described — no Candlestick/Price Action/Market Structure Expert, no
 Fundamental/Saudi/Risk Council, no Signal Engine, no Decision Engine,
 no API route, no persistence.
+
+## Completed: M2.10.5 — Autonomous Intelligence Layer Contracts (architecture only)
+
+Added ahead of M2.11 per explicit instruction: design the interfaces,
+contracts, extension points, and integration boundaries a future
+Supervisor AI, Planner AI, Reflection Engine, Memory Engine, Multi-Agent
+Collaboration, Debate Engine, Voting Engine, Knowledge Graph, and
+Self-Improvement Engine will need — without implementing any of them,
+without placeholder business logic or fake implementations, and without
+changing any production behavior. One `[M2.10.5]`-prefixed commit on
+`feature/m2.10.5-ail-contracts` (stacked on the merged M2.7/M2.8/M2.9
+chain plus the not-yet-merged M2.10 branch).
+
+1. **New package: `src/core/autonomous_intelligence_layer/contracts/`**
+   — four files, mirroring the BEIF contracts/registry/composition-root
+   pattern already proven four times in this codebase:
+   - **`types.py`**: `ComponentKind` (one value per named role —
+     SUPERVISOR/PLANNER/REFLECTION/MEMORY/COLLABORATION/DEBATE/VOTING/
+     KNOWLEDGE_GRAPH/SELF_IMPROVEMENT — plus CUSTOM for future agents),
+     `ComponentLifecycleStatus` (structurally identical to BEIF's
+     `ExpertStatus` but a deliberately separate enum — `ExpertStatus`'s
+     own docstring ties it to `CouncilEngine.analyze()` specifically,
+     and an AIL component is not a BEIF expert), `AgentIdentity`
+     (minimal identity every component carries), `IntelligenceContext`
+     (the input envelope — wraps already-computed engine/council
+     results, typed `Mapping[str, Any]` for the same reason
+     `AnalysisOutput.category` is typed `Any`), `IntelligenceComponentOutput`
+     (the uniform output envelope every interface method returns —
+     `payload` deliberately unconstrained, since designing what a Plan,
+     a Reflection, or a debate transcript actually contains is real
+     design work for whichever future milestone implements that
+     specific component, not something to invent here), `AgentMessage`
+     (the generic collaboration/debate/voting message envelope).
+   - **`interfaces.py`**: nine named `typing.Protocol`s
+     (`ISupervisorAgent`, `IPlannerAgent`, `IReflectionEngine`,
+     `IMemoryEngine`, `ICollaborationCoordinator`, `IDebateEngine`,
+     `IVotingEngine`, `IKnowledgeGraph`, `ISelfImprovementEngine`) plus
+     one generic catch-all (`IAutonomousAgent`) for future autonomous
+     agents not yet named — structural, `@runtime_checkable`, the same
+     deliberate choice `AnalysisOutput`/`AnalysisEngineResult` already
+     made: a future concrete component only needs the right shape, not
+     inheritance from anything here.
+   - **`registry.py`**: `IntelligenceComponentRegistry` /
+     `DEFAULT_INTELLIGENCE_COMPONENT_REGISTRY`, mirroring
+     `ExpertRegistry`'s shape exactly — a fifth independent registry
+     pattern (after Indicator/Ratio/CompositeFactor/Expert). Created and
+     left empty; nothing registers into it.
+   - **`integration.py`**: the integration boundary — how a future
+     component would receive an `IntelligenceContext` built from
+     `DEFAULT_ENGINE_REGISTRY`/`DEFAULT_EXPERT_REGISTRY` output (one
+     pure data-shaping convenience constructor,
+     `build_intelligence_context`, mirroring `build_envelope`), plus an
+     explicit written statement of the two things this package
+     deliberately does not build yet: no orchestrator (no
+     `CouncilEngine`-equivalent that iterates the registry and calls
+     into components — that would be dispatch *behavior*, out of scope
+     until a real component exists to orchestrate) and no
+     `bootstrap.py` (every other registry's composition root is what
+     `main.py` imports to make it reachable; this package has none on
+     purpose).
+2. **Zero modification to any pre-existing file.** The disconnected
+   legacy implementation modules already present under
+   `autonomous_intelligence_layer/` (`supervisor_ai/`, `planner_ai/`,
+   `reflection_engine/`, `memory_reasoning/`, `debate_engine/`,
+   `voting_system/`, `knowledge_graph/`, `self_optimization/`,
+   `agent_registry/`, `agent_runtime/`, and the rest) are not imported,
+   referenced, or changed by this package — whether a future milestone
+   rewrites one of them to satisfy the matching interface above,
+   replaces it, or retires it remains the explicitly open decision the
+   M2.10 architecture review flagged, unresolved by this milestone on
+   purpose.
+3. **Verified non-reachability, not just asserted.**
+   `tests/integration/test_ail_contracts_non_reachability.py` runs a
+   genuinely fresh subprocess `import main` and asserts, in the same
+   process: (a) no `src.core.autonomous_intelligence_layer.contracts`
+   submodule appears in `sys.modules`; (b) `DEFAULT_ENGINE_REGISTRY`'s
+   four names (`composite_analysis`, `fundamental_analysis`,
+   `technical_analysis`, `technical_council`) and
+   `DEFAULT_EXPERT_REGISTRY`'s four expert ids
+   (`technical.momentum`/`.trend`/`.volatility`/`.volume`) are
+   byte-identical to their pre-M2.10.5 values; (c)
+   `DEFAULT_INTELLIGENCE_COMPONENT_REGISTRY` is still empty even when
+   explicitly imported in that same process. A second test asserts no
+   `contracts/bootstrap.py` file exists at all, so the guard doesn't
+   depend solely on nothing currently importing one. Both pass.
+4. **Tests**: 34 new tests —
+   `tests/unit/core/autonomous_intelligence_layer/contracts/{test_types,test_interfaces,test_registry,test_integration}.py`
+   plus the two non-reachability tests above.
+   `test_interfaces.py` proves each of the ten Protocols is actually
+   satisfiable (not vacuous) via minimal, test-only fake classes with
+   zero inheritance from this package, `isinstance`-checked against
+   each `@runtime_checkable` Protocol — the same technique
+   `test_expert_result_satisfies_analysis_output` already established
+   for BEIF's contracts.
+5. **Coverage of the new package: 100%** (116/116 statements,
+   `src/core/autonomous_intelligence_layer/contracts/`). flake8: 0.
+   Full regression suite: 1110 passed / 12 skipped (Redis unavailable)
+   / 0 failed (up from 1076 passed at M2.10's close — the 34 new tests
+   above).
+
+**Scope discipline**: architecture only, exactly as instructed — no
+orchestration logic, no concrete Supervisor/Planner/Reflection/Memory/
+Collaboration/Debate/Voting/KnowledgeGraph/SelfImprovement
+implementation, no bootstrap wiring it into `main.py`, and (verified,
+not merely stated) no change to any existing production behavior.
 
 ## Completed: M1.5 — Lint Debt Reduction
 
