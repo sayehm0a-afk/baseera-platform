@@ -1,5 +1,7 @@
 """Unit tests for the in-memory TTLCache."""
 
+import asyncio
+
 import pytest
 
 from src.market_data.caching.ttl_cache import TTLCache
@@ -115,3 +117,90 @@ def test_default_ttl_used_when_ttl_seconds_omitted(monkeypatch):
     from src.market_data.caching.ttl_cache import _MISSING
 
     assert cache.get("k") is _MISSING
+
+
+@pytest.mark.asyncio
+async def test_concurrent_get_or_compute_for_same_key_dedupes_to_one_call():
+    cache = TTLCache()
+    call_count = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def compute():
+        nonlocal call_count
+        call_count += 1
+        started.set()
+        await release.wait()
+        return "shared-result"
+
+    async def caller():
+        return await cache.get_or_compute("k", compute)
+
+    task1 = asyncio.create_task(caller())
+    await started.wait()
+    task2 = asyncio.create_task(caller())
+    await asyncio.sleep(0)  # let task2 reach the in-flight check
+    release.set()
+
+    result1, result2 = await asyncio.gather(task1, task2)
+
+    assert result1 == "shared-result"
+    assert result2 == "shared-result"
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_get_or_compute_propagates_shared_exception():
+    cache = TTLCache()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def compute():
+        started.set()
+        await release.wait()
+        raise RuntimeError("boom")
+
+    async def caller():
+        return await cache.get_or_compute("k", compute)
+
+    task1 = asyncio.create_task(caller())
+    await started.wait()
+    task2 = asyncio.create_task(caller())
+    await asyncio.sleep(0)
+    release.set()
+
+    results = await asyncio.gather(task1, task2, return_exceptions=True)
+
+    assert all(isinstance(r, RuntimeError) for r in results)
+
+
+@pytest.mark.asyncio
+async def test_in_flight_entry_is_cleared_after_completion():
+    cache = TTLCache()
+
+    async def compute():
+        return "v"
+
+    await cache.get_or_compute("k", compute)
+
+    assert cache._in_flight == {}
+
+
+@pytest.mark.asyncio
+async def test_sequential_calls_after_completion_are_not_deduped_incorrectly(monkeypatch):
+    cache = TTLCache(default_ttl_seconds=1)
+    fake_time = [4000.0]
+    monkeypatch.setattr("time.time", lambda: fake_time[0])
+    call_count = 0
+
+    async def compute():
+        nonlocal call_count
+        call_count += 1
+        return call_count
+
+    first = await cache.get_or_compute("k", compute)
+    fake_time[0] += 1.1
+    second = await cache.get_or_compute("k", compute)
+
+    assert first == 1
+    assert second == 2
