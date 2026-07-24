@@ -9,9 +9,9 @@ document remains as the detailed M0 evidence record) and is itself
 superseded by whatever the next milestone's equivalent document says,
 once code-verified.
 
-As of M2.9 (branch `feature/m2.9-volatility-expert`, stacked on the
-not-yet-merged M2.4/M2.4.1/M2.7/M2.8 branch chain -- `main` itself is
-still at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge
+As of M2.10 (branch `feature/m2.10-volume-expert`, stacked on the
+not-yet-merged M2.4/M2.4.1/M2.7/M2.8/M2.9 branch chain -- `main` itself
+is still at `efda46013b5e682213476c74d7d868fc3de0d61e`, M2.3's merge
 commit):
 
 ## Implemented
@@ -164,18 +164,43 @@ commit):
   `FundamentalAnalysisEngine` were not modified to make this possible;
   the registration proves the cross-engine contract holds recursively,
   not just for the two engines it was designed against first.
-- **BEIF expert layer, Technical Council (M2.7 + M2.8 + M2.9)**:
+- **BEIF expert layer, Technical Council (M2.7 + M2.8 + M2.9 + M2.10)**:
   `src/analysis/experts/` — a fourth, independent registry
   (`ExpertRegistry`/`DEFAULT_EXPERT_REGISTRY`) and a generic
   `CouncilEngine`, interpreting already-computed Technical Analysis
   Engine output into structured, evidence-bearing `ExpertResult`s
-  (never recomputing an indicator itself). Three real experts exist:
+  (never recomputing an indicator itself). Four real experts exist:
   **Trend Expert** (`technical.trend`, M2.7), reading `sma_20`/`ema_20`/
   `adx_14`/`supertrend`; **Momentum Expert** (`technical.momentum`,
-  M2.8), reading `rsi_14`/`macd`; and **Volatility Expert**
-  (`technical.volatility`, M2.9), reading `bollinger`/`atr_14` —
-  pairwise-disjoint metric sets across all three, verified by a
-  registry-level test per BEIF Section 6/16's double-counting guard.
+  M2.8), reading `rsi_14`/`macd`; **Volatility Expert**
+  (`technical.volatility`, M2.9), reading `bollinger`/`atr_14`; and
+  **Volume Expert** (`technical.volume`, M2.10), reading `obv`/
+  `volume_sma_20` — pairwise-disjoint metric sets across all four,
+  verified by a registry-level test per BEIF Section 6/16's
+  double-counting guard. Volume Expert is the first Technical Council
+  expert to read an indicator's full `pd.Series` (`IndicatorOutput.value`)
+  rather than only its `.latest()` snapshot — On-Balance Volume is a
+  cumulative running total whose single latest value carries no
+  directional information without a reference point elsewhere in its
+  own history, so OBV trend direction is computed as
+  `sign(OBV[latest] - OBV[latest - 20])`, a 20-bar lookback chosen to
+  match `volume_sma_20`'s own window, not an arbitrary number. This
+  still only reads an already-computed `IndicatorOutput`'s own content
+  — BEIF Section 14's anti-duplication rule prohibits recomputing an
+  indicator from raw data, not reading more of what it already
+  computed. Volume Expert has only one directional evidence source in
+  v1 (unlike Trend/Momentum Expert's two), so `conflicts` is always
+  empty by construction — disclosed explicitly as "nothing to compare
+  against," never implied as agreement. A secondary, magnitude-only
+  relative-volume measure is derived by recovering the latest bar's raw
+  volume from OBV's own construction (`|OBV[t] - OBV[t-1]|` exactly
+  recovers `volume[t]` whenever the bar's close changed, a disclosed,
+  arithmetic — not fabricated — recovery, with a documented blind spot
+  when the close is unchanged) and expressed as a ratio to
+  `volume_sma_20`, mapped through the parameter-free bounded transform
+  `ratio / (1 + ratio)` rather than an invented compressed/elevated
+  threshold — the same refusal to fabricate a calibration Volatility
+  Expert already established.
   Momentum Expert reads RSI-14 as a continuous, symmetric momentum-
   direction-and-magnitude measure (`(rsi - 50) / 50`), deliberately
   never as a binary "overbought means sell" trigger — the specific
@@ -200,20 +225,20 @@ commit):
   supported basis for one exists yet (Document 1 Section 10, Document
   7) — `normalized_score` is disclosed as a raw relative measure, never
   a classification, with that gap named explicitly in every result's
-  `limitations`. All three experts share per-expert failure isolation
+  `limitations`. All four experts share per-expert failure isolation
   and numeric-bounds validation mirroring
   `CompositeIntelligenceEngine`'s established pattern. Registered as
   `TechnicalCouncilEngine` into `DEFAULT_ENGINE_REGISTRY` under
   `"technical_council"` via `src/analysis/experts/bootstrap.py`,
   imported from `main.py` alongside the existing `core.bootstrap`
   import (same production-reachability discipline M2.4.1 established).
-  All three experts ship at `ExpertStatus.EXPERIMENTAL` (BEIF's
+  All four experts ship at `ExpertStatus.EXPERIMENTAL` (BEIF's
   lifecycle, Section 15) — reachable and fully tested, but deliberately
   excluded from `CouncilEngine.analyze()`'s default (shadow-mode-gated)
   output until a real promotion process exists;
   `include_all_statuses=True` is the explicit override used by the
   full-pipeline integration test.
-  **Not included**: Volume/Candlestick Expert
+  **Not included**: Candlestick/Price Action Expert
   (BEIF's remaining Technical Council v1 set, sequenced next), Market
   Structure Expert (BEIF v2, blocked pending a swing-high/low and
   gap-detection indicator), any Fundamental/Saudi/Risk Council expert,
@@ -309,26 +334,26 @@ implementations. (`src/domain/` and `migrations/versions/` are no
 longer empty as of M2.1, and `src/analysis/*` is no longer empty as of
 M2.2 — see "Implemented" above for each.)
 
-## Verified test/build state (M2.9)
+## Verified test/build state (M2.10)
 
 - Compile sweep: 0 syntax errors across `src/`, `tests/`, `main.py`.
 - Boot smoke test: `import main` succeeds, 11 routes (unchanged since
   M2.1), no `PYTHONPATH` manipulation required.
-- Full test suite: 1050 passed / 12 skipped (Redis unavailable) / 0
+- Full test suite: 1074 passed / 12 skipped (Redis unavailable) / 0
   failed, verified in this environment (no live Redis instance was
   reachable here — `redis-cli ping` refused the connection — so the
   with-Redis count from M2.4.1's report is carried forward
-  unverified this session rather than re-asserted). 1062 total test
-  functions in the repository (up from 1039 at M2.8's close — 23 new
-  tests for M2.9's Volatility Expert reference-value and edge-case
-  coverage (including the non-directional/no-fabricated-threshold
-  invariants specific to this expert), registration, and a
-  registry-level pairwise disjoint-metrics double-counting check
-  across all three Technical Council experts; `test_main_boot.py` and
-  `test_full_pipeline.py` extended in place, zero other existing
-  tests modified).
+  unverified this session rather than re-asserted). 1086 total test
+  functions in the repository (up from 1062 at M2.9's close — 24 new
+  tests for M2.10's Volume Expert reference-value and edge-case
+  coverage (including the OBV-series-reading, flat-close-blind-spot,
+  and non-numeric-value invariants specific to this expert),
+  registration, and a registry-level pairwise disjoint-metrics
+  double-counting check across all four Technical Council experts;
+  `test_main_boot.py` and `test_full_pipeline.py` extended in place,
+  zero other existing tests modified).
 - Coverage of the `src/analysis/experts/` package: **100%**
-  (450/450 statements), measured via
+  (554/554 statements), measured via
   `pytest --cov=src/analysis/experts --cov-report=term-missing`.
 - flake8: **0** violations across `src/`, `tests/`, `main.py`, gated in
   CI at `FLAKE8_BASELINE: 0` since M2.0 (see "Completed: M2.0" below).
@@ -549,6 +574,107 @@ on the merged M2.7/M2.8 branch chain).
 exactly one expert and touched no previously-stable module except the
 two test files and the one `__init__.py` import line already
 described — no Volume/Candlestick/Market Structure Expert, no
+Fundamental/Saudi/Risk Council, no Signal Engine, no Decision Engine,
+no API route, no persistence.
+
+## Completed: M2.10 — Volume Expert
+
+Technical Council's fourth BEIF expert, and the first one required to
+read more than an indicator's single latest value to produce any
+evidence at all. Four `[M2.10]`-prefixed commits on
+`feature/m2.10-volume-expert` (stacked on the merged M2.7/M2.8/M2.9
+branch chain).
+
+1. **`src/analysis/experts/technical/volume_expert.py`**: Volume
+   Expert (`technical.volume`), reading only `obv`/`volume_sma_20`
+   from an already-computed `"technical_analysis"` envelope. Three
+   architectural decisions are documented directly in the module's own
+   docstring:
+   - **Reading `IndicatorOutput.value` (the full `pd.Series`), not
+     just `.latest()`**: On-Balance Volume is a cumulative running
+     total — a single value at one point in time carries no
+     directional information without a reference point elsewhere in
+     its own history, unlike Trend/Momentum/Volatility Expert's
+     already-windowed indicators. This still only reads an
+     already-computed indicator's own content; BEIF Section 14's
+     anti-duplication rule prohibits recomputing an indicator from raw
+     data, not reading more of what it already computed.
+   - **A disclosed 20-bar lookback, matching `volume_sma_20`'s own
+     window**: OBV trend direction is `sign(OBV[latest] - OBV[latest
+     - 20])`, deliberately the same horizon `volume_sma_20` already
+     covers, not an arbitrary number. Only one directional evidence
+     source exists in v1 (unlike Trend/Momentum Expert's two), so
+     `conflicts` is always empty — disclosed explicitly as "nothing to
+     compare against," never implied as agreement having been checked
+     and found. The OBV-trend contribution is sign-only (±1), never
+     scaled by its own magnitude, for the identical reason MACD's
+     histogram is sign-only for Momentum Expert (M2.8): no
+     non-fabricated, universal scale exists for either.
+   - **Recovering the latest bar's raw volume from OBV's own
+     construction, never inventing a "current volume" figure**: no
+     raw, single-bar volume `IndicatorOutput` is registered — only
+     `volume_sma_20` (an average) and `obv` (a cumulative total)
+     exist. `abs(OBV[t] - OBV[t-1])` recovers `volume[t]` exactly
+     whenever the bar's close changed (a direct arithmetic consequence
+     of OBV's own definition, not a new computation over raw data),
+     with a disclosed, known blind spot: a flat-close bar reads as
+     exactly zero recovered volume regardless of true volume, flagged
+     via `warnings` whenever actually encountered. The resulting ratio
+     to `volume_sma_20` is mapped through the parameter-free bounded
+     transform `ratio / (1 + ratio)`, never an invented
+     compressed/elevated threshold — the same refusal to fabricate a
+     calibration Volatility Expert (M2.9) already established, so that
+     a ratio of exactly 1.0 (current volume equal to its own average)
+     maps to the middle of the range rather than an asserted
+     classification.
+   Malformed input (a non-Series `obv` value, an undefined value, a
+   series too short for the 20-bar lookback, a series too short even
+   for the 2-point volume recovery, non-numeric series values, a
+   zero/negative/missing `volume_sma_20`) degrades gracefully to
+   partial or insufficient completeness with a disclosed `warnings`
+   entry, never raises. Ships at `ExpertStatus.EXPERIMENTAL`, same
+   reasoning as every prior Technical Council expert.
+2. **`src/analysis/experts/technical/__init__.py`** gained one import
+   (`volume_expert`) — the same self-registration pattern extended a
+   fourth time with zero change to the pattern itself.
+3. **No change to `types.py`, `registry.py`, `council_engine.py`, or
+   `bootstrap.py`** — the BEIF core absorbed a fourth expert, including
+   the first one needing full-series access, with zero modification.
+4. **`tests/unit/test_main_boot.py`** and
+   **`tests/integration/test_full_pipeline.py`** extended in place:
+   the full-pipeline test's Stage 7 now also asserts a real, non-mocked
+   `technical.volume` result (bullish, `COMPLETE` completeness) on the
+   same real ingested/persisted/loaded steady-uptrend data every other
+   Technical Council expert's own assertions already use — every bar
+   in that series closes strictly higher than the last, so OBV is
+   strictly increasing throughout, giving an unambiguous real 20-bar
+   bullish trend to assert against.
+5. A new registry-level test extends the double-counting guard to all
+   four Technical Council experts pairwise
+   (`test_volume_expert_metrics_are_disjoint_from_trend_momentum_and_volatility`).
+6. **A verified, pre-existing defect in `tests/integration/test_full_pipeline.py`
+   was found and fixed** — the third instance of the exact dormant-
+   registry bug class M2.4.1 first found and fixed twice
+   (`DEFAULT_ENGINE_REGISTRY`'s missing `bootstrap.py` import in
+   `main.py`; `DEFAULT_COMPOSITE_REGISTRY`'s missing
+   `factors/__init__.py`). Stage 7 (added in M2.7) has, since its
+   introduction, only ever passed because some *other* test file
+   (typically `test_main_boot.py`, importing `main`) happened to run
+   first in the same session and populated
+   `DEFAULT_EXPERT_REGISTRY` as an import-time side effect —
+   `pytest tests/integration/test_full_pipeline.py`, run genuinely
+   alone, returned an empty `CouncilResult` at Stage 7 every time,
+   confirmed directly before the fix. Fixed with one
+   `import src.analysis.experts.technical` line at the top of that
+   test file (documented in its own module docstring), verified by
+   re-running the file in true isolation afterward: passes. This is
+   the first time this file was actually executed alone since M2.7 —
+   caught only because M2.10's own validation discipline required it.
+
+**Scope discipline**: per explicit instruction, M2.10 implemented
+exactly one expert and touched no previously-stable module except the
+two test files and the one `__init__.py` import line already
+described — no Candlestick/Price Action/Market Structure Expert, no
 Fundamental/Saudi/Risk Council, no Signal Engine, no Decision Engine,
 no API route, no persistence.
 
