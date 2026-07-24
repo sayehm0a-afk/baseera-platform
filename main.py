@@ -22,6 +22,16 @@ from src.core.monitoring.structured_logging import init_logging, get_logger  # n
 init_logging()
 logger = get_logger(__name__)
 
+# Populate the analysis-engine catalog (src.analysis.core.registry.DEFAULT_ENGINE_REGISTRY)
+# by importing its composition root. bootstrap.py registers TechnicalAnalysisEngine,
+# FundamentalAnalysisEngine, and CompositeIntelligenceEngine at import time via a
+# module-level register_default_engines() call -- importing it here, at main.py's own
+# module load time, is what makes the registry non-empty in the real running
+# application, not just in tests that happen to import bootstrap.py directly. Pure
+# in-memory registration, no I/O, so this has no Redis/DB dependency and does not
+# affect startup behavior otherwise.
+import src.analysis.core.bootstrap  # noqa: E402,F401
+
 # FastAPI app
 app = FastAPI(
     title="Basirah",
