@@ -20,6 +20,81 @@ unit test in this repo does: fast, isolated, no external service
 dependency -- consistent with the existing test fixture pattern used
 throughout tests/unit/domain/, tests/unit/market_data/, and
 tests/unit/analysis/.
+
+======================================================================
+VERIFIED DEFECT (found and fixed at M2.10): dormant DEFAULT_EXPERT_REGISTRY
+======================================================================
+
+Root cause: Stage 7 below (added at M2.7) calls
+`CouncilEngine(council=Council.TECHNICAL).analyze(...)`, which reads
+`DEFAULT_EXPERT_REGISTRY` (src/analysis/experts/registry.py).
+That registry is only populated as an *import-time side effect* of
+importing `src.analysis.experts.technical` (each expert module
+self-registers when its parent package is imported -- see that
+package's own __init__.py docstring). This file itself never imported
+that package, or `src.analysis.experts.bootstrap` (the actual
+production composition root main.py imports) -- it only imported the
+`CouncilEngine`/`Council` *types*, which do not trigger the
+registration side effect. `CompositeIntelligenceEngine`, by contrast,
+imports its own factors package directly inside its own module
+(src/analysis/composite/composite_intelligence_engine.py), making
+Stage 6 self-sufficient wherever it is imported; `CouncilEngine` is
+deliberately council-agnostic (it must support Fundamental/Saudi/Risk/
+Intelligence-Learning councils too, per BEIF Section 6), so it cannot
+safely import one specific council's expert package itself -- wiring
+a specific council to the registry is `bootstrap.py`'s job by design,
+not `CouncilEngine`'s. That correct separation is exactly what made
+this dependency easy to omit at a call site.
+
+Why it remained hidden: Stage 7's own assertions are directly
+sensitive to this (an empty registry produces an empty CouncilResult,
+which its own `assert set(council_result.experts.keys()) == {...}`
+line already catches) -- but only when this file is executed in
+genuine isolation. Every session before this fix ran it either as
+part of the full suite or alongside other Technical Council test
+files, and `tests/unit/test_main_boot.py` (which imports `main`,
+which imports `src.analysis.experts.bootstrap`) reliably ran early
+enough in test collection to populate the shared registry singleton
+first -- masking the missing dependency completely. Verified directly
+before this fix, in a fresh interpreter with no other test module
+involved: `python -c "import tests.integration.test_full_pipeline; ..."`
+showed `DEFAULT_EXPERT_REGISTRY` with zero registered specs.
+
+Exact correction: `import src.analysis.experts.bootstrap` added below,
+not `import src.analysis.experts.technical` directly -- bootstrap.py
+is the real production composition root (the same module main.py
+itself imports), and importing it exercises strictly more of the real
+reachability path: it populates both `DEFAULT_EXPERT_REGISTRY` (via
+its own `import src.analysis.experts.technical`) and
+`DEFAULT_ENGINE_REGISTRY`'s `"technical_council"` entry (via its own
+`register_default_councils()` call) -- confirmed directly: importing
+`.technical` alone left `DEFAULT_ENGINE_REGISTRY` empty in a fresh
+interpreter; importing `.bootstrap` populated both registries
+correctly.
+
+Isolation verification performed: `pytest
+tests/integration/test_full_pipeline.py -v` run alone (passes);
+`python -c "import tests.integration.test_full_pipeline; ..."` run in
+a genuinely fresh interpreter, asserting >=4 registered expert specs
+(passes); every other expert-layer test file in the repository run
+individually, alone, to confirm none of them share this same latent
+defect (all pass alone).
+
+Regression protection added:
+tests/integration/test_registry_reachability_regression.py -- a
+dedicated, subprocess-based test (a truly fresh Python interpreter,
+not just "this file run alone via pytest") that would fail
+immediately, with a clear, specific message, if this file's bootstrap
+import were ever accidentally removed again. See that file's own
+docstring for why a subprocess, not just an in-process isolated pytest
+run, is the correct regression-guard mechanism.
+
+The same dormant-registry bug class M2.4.1 found and fixed twice
+already (`DEFAULT_ENGINE_REGISTRY`'s missing bootstrap.py import in
+main.py; `DEFAULT_COMPOSITE_REGISTRY`'s missing factors/__init__.py),
+present a third time, here, since M2.7 added Stage 7 -- caught only
+because M2.10's own validation discipline required running this file
+in true isolation for the first time since M2.7.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -28,6 +103,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import src.analysis.experts.bootstrap  # noqa: F401 -- import side effect required, see module docstring
 from src.analysis.composite.composite_intelligence_engine import CompositeIntelligenceEngine
 from src.analysis.composite.types import Agreement, DataCompleteness, build_envelope
 from src.analysis.core.contracts import AnalysisEngineResult, AnalysisOutput
@@ -260,6 +336,7 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
         "technical.trend",
         "technical.momentum",
         "technical.volatility",
+        "technical.volume",
     }
 
     trend = council_result.get("technical.trend")
@@ -292,5 +369,17 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
     assert volatility.normalized_score is not None
     assert 0.0 <= volatility.normalized_score <= 1.0
     assert volatility.conflicts == ()
+
+    volume = council_result.get("technical.volume")
+    assert isinstance(volume, AnalysisOutput)
+    # Every one of the 40 synthetic bars closes strictly higher than the
+    # last (close = 100 + i*1.5, never flat, never down) -> OBV's own
+    # construction makes it strictly increasing every bar, on real,
+    # non-mocked indicator output -> unambiguous 20-bar bullish trend.
+    assert volume.direction == ExpertDirection.BULLISH
+    assert volume.normalized_score > 0.0
+    assert volume.completeness == DataCompleteness.COMPLETE
+    assert volume.conflicts == ()
+    assert volume.symbol == SYMBOL
     assert volatility.completeness == DataCompleteness.COMPLETE
     assert volatility.symbol == SYMBOL
