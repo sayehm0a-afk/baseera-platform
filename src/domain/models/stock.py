@@ -47,6 +47,9 @@ class Stock(Base):
     )
 
     price_bars = relationship("PriceBar", back_populates="stock", cascade="all, delete-orphan")
+    fundamental_snapshots = relationship(
+        "FundamentalSnapshot", back_populates="stock", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Stock symbol={self.symbol!r} name_en={self.name_en!r}>"
