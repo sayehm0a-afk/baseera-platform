@@ -245,17 +245,22 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
     assert quality.completeness == DataCompleteness.COMPLETE
     assert quality.value == pytest.approx(1.0)  # both envelopes fresh (same `now`)
 
-    # --- Stage 7: Technical Council / Trend + Momentum Expert (real, on the real
-    # technical_analysis envelope already built above) -- BEIF's "one more hop"
-    # extension, M2.7 (Trend) and M2.8 (Momentum). ---
-    # Both experts ship EXPERIMENTAL (no shadow-mode history yet, per BEIF Section 15),
-    # so CouncilEngine.analyze() must be asked for every status explicitly to see them --
-    # exactly the promotion-gate behavior that status is supposed to enforce.
+    # --- Stage 7: Technical Council / Trend + Momentum + Volatility Expert (real, on
+    # the real technical_analysis envelope already built above) -- BEIF's "one more
+    # hop" extension, M2.7 (Trend), M2.8 (Momentum), M2.9 (Volatility). ---
+    # All three experts ship EXPERIMENTAL (no shadow-mode history yet, per BEIF
+    # Section 15), so CouncilEngine.analyze() must be asked for every status
+    # explicitly to see them -- exactly the promotion-gate behavior that status is
+    # supposed to enforce.
     technical_council = CouncilEngine(council=Council.TECHNICAL)
     council_result = technical_council.analyze(SYMBOL, envelopes, include_all_statuses=True)
 
     assert isinstance(council_result, AnalysisEngineResult)
-    assert set(council_result.experts.keys()) == {"technical.trend", "technical.momentum"}
+    assert set(council_result.experts.keys()) == {
+        "technical.trend",
+        "technical.momentum",
+        "technical.volatility",
+    }
 
     trend = council_result.get("technical.trend")
     assert isinstance(trend, AnalysisOutput)
@@ -277,3 +282,15 @@ async def test_full_pipeline_ingestion_through_composite_fusion(session_factory)
     assert momentum.normalized_score > 0.0
     assert momentum.completeness == DataCompleteness.COMPLETE
     assert momentum.symbol == SYMBOL
+
+    volatility = council_result.get("technical.volatility")
+    assert isinstance(volatility, AnalysisOutput)
+    # Non-directional by design (Architectural Decision 1) -- direction is
+    # always NEUTRAL regardless of how much real intensity the real
+    # Bollinger/ATR computation over this series reports.
+    assert volatility.direction == ExpertDirection.NEUTRAL
+    assert volatility.normalized_score is not None
+    assert 0.0 <= volatility.normalized_score <= 1.0
+    assert volatility.conflicts == ()
+    assert volatility.completeness == DataCompleteness.COMPLETE
+    assert volatility.symbol == SYMBOL
