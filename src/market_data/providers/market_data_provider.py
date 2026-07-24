@@ -48,7 +48,20 @@ class IMarketDataProvider(ABC):
 
     @abstractmethod
     async def get_stock_data(self, symbol: str) -> Dict[str, Any]:
-        """Get stock data for a symbol."""
+        """Get the latest available OHLCV bar for a symbol -- this
+        platform's notion of a "latest quote" (Tadawul is a daily-bar
+        market in this codebase's model, not tick-level; see
+        get_historical_ohlcv for a multi-bar range)."""
+
+    @abstractmethod
+    async def get_historical_ohlcv(
+        self, symbol: str, start: datetime, end: datetime
+    ) -> List[Dict[str, Any]]:
+        """Get every available OHLCV bar for a symbol within
+        [start, end], oldest first -- each dict shaped identically to
+        get_stock_data's return value (same "symbol"/"open"/"high"/
+        "low"/"close"/"volume"/"timestamp" keys), so both feed the same
+        ingestion upsert logic without a second data shape to handle."""
 
     @abstractmethod
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:
@@ -255,6 +268,32 @@ class SaudiMarketDataProvider(IMarketDataProvider):
             return data
         except Exception as e:
             logger.error(f"Error retrieving stock data for {symbol}: {e}")
+            raise
+
+    async def get_historical_ohlcv(
+        self, symbol: str, start: datetime, end: datetime
+    ) -> List[Dict[str, Any]]:
+        """
+        Get every available OHLCV bar for a symbol within [start, end].
+
+        Args:
+            symbol: Stock symbol (e.g., "1010" for Al Rajhi Bank)
+            start: Range start (inclusive)
+            end: Range end (inclusive)
+
+        Returns:
+            List of OHLCV bar dictionaries, oldest first
+        """
+        try:
+            data = await self._make_request(
+                "/stocks/history",
+                params={"symbol": symbol, "start": start.isoformat(), "end": end.isoformat()},
+            )
+            bars = data.get("bars", [])
+            logger.debug(f"Retrieved {len(bars)} historical bars for {symbol}")
+            return bars
+        except Exception as e:
+            logger.error(f"Error retrieving historical OHLCV for {symbol}: {e}")
             raise
 
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:
