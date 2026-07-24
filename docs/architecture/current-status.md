@@ -1243,6 +1243,128 @@ tested code with no live endpoint verified behind it, disclosed
 exactly as such, matching this project's established precedent for
 every other not-yet-contracted data vendor.
 
+## Completed: SAHMK Integration (Phases 1–4 of 11) — Verified Provider Rebuild + Future-Module Architecture
+
+Branch `feature/sahmk-integration`, created from
+`feature/m2.13-live-data-integration` (not `main`, which is 47 commits
+behind active development — see the repository-audit report this
+milestone opened with). Corrects M2.13's speculative "Sahmak" provider
+(built with no real vendor documentation) against SAHMK's (sahmk.sa)
+actual, verified API. Covers Phases 1–4 of the user's 11-phase plan
+(repository audit, documentation verification, credential protection,
+provider layer rebuild) plus the explicitly-requested future-module
+architecture; Phases 5–11 (new internal API endpoints, real-key
+testing, frontend, recommendation-pipeline logic, security review,
+PR) are deliberately not started — real-key testing needs a fresh key
+never previously shared, and the remaining phases build on it.
+
+1. **Documentation verification (`docs/SAHMK_INTEGRATION.md`, new)** —
+   every endpoint, header, and behavior was read from SAHMK's own
+   official sources (their public Python SDK's GitHub README/
+   CHANGELOG and PyPI page — cross-checked across two independent
+   fetches, consistent both times) before any code was written.
+   SAHMK's own hosted docs site (`sahmk.sa/en/developers/docs`)
+   returned HTTP 403 from this environment and was not used. What
+   could not be verified (exact `from`/`to` date wire format, full
+   per-plan-tier rate-limit numbers, REST auth-failure status code)
+   is explicitly flagged as unverified rather than guessed, with a
+   defensible-but-unconfirmed default chosen and disclosed for each.
+2. **`src/market_data/providers/sahmk_market_data_provider.py`**
+   (renamed from `sahmak_...`, fully rewritten) — every endpoint from
+   M2.13's speculative design replaced with SAHMK's confirmed ones:
+   `X-API-Key` header on every call (no token-exchange endpoint exists
+   — the prior design's guessed `/auth/token` Bearer flow is gone);
+   `get_stock_data()` sources OHLCV bars from `/historical/` (Starter+)
+   rather than `/quote/`, because SAHMK's confirmed `/quote/` response
+   has no open/high/low fields and fabricating them from `price` would
+   present invented data as real; a new `get_latest_quote()` (not part
+   of `IMarketDataProvider`) exposes `/quote/` (Free tier) as a typed
+   `MarketQuote` for callers that only need a live price;
+   `get_historical_ohlcv()` → `/historical/`; `get_index_data()` →
+   `/market/summary/?index=TASI|NOMU|NOMUC`, validated against the
+   confirmed index set; `get_market_news()` → `/events/` (Pro+, the
+   closest verified endpoint — SAHMK documents no general news
+   endpoint); `authenticate()`/`health_check()` reuse `/market/summary/`
+   (cheapest confirmed Free-tier call). New exception family
+   (`SahmkAuthenticationError`/`SahmkEntitlementError`/
+   `SahmkResponseValidationError`/`SahmkRequestError`) matching SAHMK's
+   confirmed 401/403 `PLAN_LIMIT` semantics, replacing the prior
+   ad-hoc `RuntimeError`. Retry policy tuned to SAHMK's own documented
+   defaults (3 attempts, 0.5s/1s/2s backoff), honoring a 429's
+   `Retry-After` header. Every response is validated for required
+   fields before use. The provider abstraction (`IMarketDataProvider`),
+   `CircuitBreaker`, `TTLCache`, and symbol validation are kept exactly
+   as designed, per instruction — only vendor-specific request/response
+   details changed.
+3. **`src/market_data/models.py`** (new) — provider-agnostic
+   `MarketQuote`/`HistoricalCandle`/`MarketIndex`/`StockProfile`/
+   `FinancialStatement`/`StockSummary`/`TechnicalIndicator`/
+   `RecommendationInput` dataclasses, so a future provider swap or the
+   new Recommendation Engine contracts (below) have one stable data
+   shape to depend on instead of vendor-specific dicts.
+4. **Credential protection**: `SAHMAK_API_KEY`/`SAHMAK_API_SECRET`/
+   `SAHMAK_BASE_URL` renamed to `SAHMK_API_KEY`/`SAHMK_BASE_URL`
+   (`SAHMK_API_SECRET` removed entirely — SAHMK's confirmed auth model
+   has no secret pairing, only a single key). `SAHMK_BASE_URL` now
+   defaults to SAHMK's own published base URL (public information, not
+   a secret) while remaining overridable. New
+   `SAHMK_LIVE_DATA_ENABLED` kill switch in `provider_factory.py`:
+   even with `MARKET_DATA_PROVIDER=sahmk` set, a live provider is only
+   ever constructed if this is *also* explicitly `"true"` — two
+   deliberate settings required to go live, not one. Repo-wide secrets
+   scan (regex over every tracked file) found no hardcoded credential
+   before or after this milestone's changes; `.env` remains untracked
+   and gitignored; no key was ever printed to a terminal, log, or
+   commit message in this milestone (real-key testing has not started).
+5. **`src/market_data/caching/ttl_cache.py`** — `TTLCache.get_or_compute`
+   now deduplicates concurrent calls for the same key to one
+   underlying `compute()` call (in-flight request coalescing via an
+   `asyncio.Future`), rather than each concurrent caller triggering its
+   own provider call — meaningful once a real, metered vendor sits
+   behind it. New `MARKET_DATA_HISTORICAL_CACHE_TTL_SECONDS` tunable
+   (long TTL — a past trading day's bar never changes) alongside the
+   existing short-TTL quote cache.
+6. **`src/analysis/intelligence/contracts/`** (new, architecture only)
+   — extension points for Basirah's future decision layer: Live
+   Market Scanner, Recommendation Engine, Portfolio Analysis, Risk
+   Engine, Alert System, AI Decision Layer, per explicit instruction
+   ("Do not implement fake AI. Only prepare scalable architecture").
+   Mirrors the proven
+   `src.core.autonomous_intelligence_layer.contracts` pattern (M2.10.5)
+   exactly: `types.py` (value types, including `RecommendationVerdict`'s
+   five instructed categories — مراقبة/مناسب للمضاربة/مناسب للاستثمار/
+   انتظار/تجنب مؤقت), `interfaces.py` (six `typing.Protocol`s),
+   `registry.py` (`IntelligenceModuleRegistry`, created empty),
+   `integration.py` (the integration boundary, and an explicit
+   statement that scanning the full Saudi market on a metered SAHMK
+   plan needs a request-budget decision a future milestone must make
+   before `IMarketScanner` is implemented against a live provider).
+   Technical Analysis Engine and Fundamental Analysis Engine are
+   deliberately not re-specified — both already exist as real,
+   production engines and are consumed as inputs. Every human-facing
+   output type carries a mandatory, non-optional disclaimer field
+   (Arabic + English) stating the output is analytical, not a binding
+   financial recommendation, with no guaranteed profit — encoded at
+   the type level per Phase 9's explicit instruction. No orchestrator,
+   no bootstrap.py; `tests/integration/
+   test_intelligence_contracts_non_reachability.py` proves `import
+   main` does not import this package and every existing production
+   registry is unchanged by its existence (subprocess-based, mirroring
+   the AIL contracts' own non-reachability test).
+7. **101 new/rewritten test functions** across the provider-layer
+   rebuild and the architecture-only contracts package. **Coverage of
+   every file this milestone added or rewrote: 100%.** flake8: 0. Full
+   regression suite: 1343 passed / 12 skipped (Redis unavailable) / 0
+   failed.
+
+**Scope discipline**: per explicit instruction, this pass built only
+documentation verification, credential protection, the provider-layer
+rebuild, and architecture-only future-module contracts — no new
+internal API endpoints, no frontend/UI, no real-key testing (no key
+has been provided this milestone), no recommendation/scanning/risk
+logic of any kind, no modification to `CouncilEngine`/Composite
+Engine/Expert contracts/existing analysis engines, no Pull Request.
+
 ## Completed: M1.5 — Lint Debt Reduction
 
 Closed the 1515 pre-existing flake8 violations recorded at M1's close
