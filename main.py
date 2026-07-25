@@ -21,7 +21,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Import structured logging -- must come after sys.path.insert above so `src` is importable
 from src.core.monitoring.structured_logging import init_logging, get_logger  # noqa: E402
 from src.api.error_handlers import register_error_handlers  # noqa: E402
+from src.api.middleware.csrf import CSRFMiddleware  # noqa: E402
 from src.api.middleware.rate_limiting import limiter  # noqa: E402
+from src.api.middleware.security_headers import SecurityHeadersMiddleware  # noqa: E402
 from src.api.routes.admin import router as admin_router  # noqa: E402
 from src.api.routes.auth import router as auth_router  # noqa: E402
 from src.api.routes.backtests import router as backtests_router  # noqa: E402
@@ -42,6 +44,12 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Middleware stack -- Starlette applies the LAST-added middleware
+# outermost, so CORS (added last, when configured) wraps everything
+# else, exactly as a preflight OPTIONS request needs.
+app.add_middleware(CSRFMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+
 # CORS_ALLOWED_ORIGINS is a comma-separated list of allowed frontend
 # origins (e.g. "http://localhost:3000,https://app.example.com").
 # Deliberately empty (no cross-origin access) by default -- same
@@ -55,7 +63,7 @@ if _cors_origins:
         CORSMiddleware,
         allow_origins=_cors_origins,
         allow_credentials=True,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
 
