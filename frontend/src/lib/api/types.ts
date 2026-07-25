@@ -86,6 +86,25 @@ export interface RankingsResponse {
   rankings: RankingList[];
 }
 
+export interface WatchlistEntry {
+  symbol: string;
+  sector: string | null;
+  recommendation: string | null;
+  confidence: number | null;
+  reason: string;
+}
+
+export interface WatchlistResult {
+  category: string;
+  entries: WatchlistEntry[];
+  generated_at: string;
+}
+
+export interface WatchlistsResponse {
+  scan_run_id: number | null;
+  watchlists: WatchlistResult[];
+}
+
 export interface MarketScanRun {
   id: number;
   status: string;

@@ -10,6 +10,9 @@ interface InstrumentRowProps {
   sector?: string | null;
   price?: number | null;
   changePct?: number | null;
+  /** Set to "target" when `price` is an AI-projected target rather
+   * than a live quote -- never presented as a current price. */
+  priceKind?: "quote" | "target";
   recommendation?: RecommendationValue | null;
   confidence?: number | null;
   /** Set when the underlying quote came from a synthetic/dev provider
@@ -29,6 +32,7 @@ export function InstrumentRow({
   sector,
   price,
   changePct,
+  priceKind = "quote",
   recommendation,
   confidence,
   isSynthetic,
@@ -66,6 +70,9 @@ export function InstrumentRow({
 
         {price != null ? (
           <div className="flex flex-col items-end">
+            {priceKind === "target" ? (
+              <span className="text-[10px] text-bsr-text-muted">الهدف</span>
+            ) : null}
             <span className="bsr-numeric font-semibold text-bsr-text-primary">
               {price.toFixed(2)}
             </span>

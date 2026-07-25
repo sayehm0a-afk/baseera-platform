@@ -5,6 +5,7 @@ import type {
   MarketSummary,
   RankingsResponse,
   SectorsResponse,
+  WatchlistsResponse,
 } from "./types";
 
 /** Every function here is a direct, unmodified call to an existing
@@ -54,4 +55,15 @@ export function getRankings(
   if (runId !== undefined) search.set("run_id", String(runId));
   const query = search.toString() ? `?${search.toString()}` : "";
   return apiFetch<RankingsResponse>(`/api/v1/market/rankings${query}`);
+}
+
+export function getWatchlists(
+  category?: string,
+  runId?: number
+): Promise<WatchlistsResponse> {
+  const search = new URLSearchParams();
+  if (category) search.set("category", category);
+  if (runId !== undefined) search.set("run_id", String(runId));
+  const query = search.toString() ? `?${search.toString()}` : "";
+  return apiFetch<WatchlistsResponse>(`/api/v1/market/watchlists${query}`);
 }

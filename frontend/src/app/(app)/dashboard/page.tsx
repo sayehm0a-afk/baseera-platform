@@ -1,21 +1,41 @@
 import { AiStar } from "@/components/ai/AiStar";
 import { EmptyState } from "@/components/patterns/EmptyState";
+import { AiSignalCard } from "@/components/patterns/AiSignalCard";
 import { RunScanButton } from "@/components/dashboard/RunScanButton";
 import { ApiError } from "@/lib/api/client";
-import { getAlerts, getMarketSummary, getSectors } from "@/lib/api/market";
-import type { Alert, MarketSummary, SectorSummary } from "@/lib/api/types";
+import { getAlerts, getMarketSummary, getRankings, getSectors } from "@/lib/api/market";
+import type {
+  Alert,
+  MarketSummary,
+  RankingEntry,
+  SectorSummary,
+} from "@/lib/api/types";
+import type { RecommendationValue } from "@/components/badges/RecommendationBadge";
 
 async function loadDashboardData(): Promise<
-  | { available: true; summary: MarketSummary; sectors: SectorSummary[]; alerts: Alert[] }
+  | {
+      available: true;
+      summary: MarketSummary;
+      sectors: SectorSummary[];
+      alerts: Alert[];
+      topBuy: RankingEntry[];
+    }
   | { available: false }
 > {
   try {
-    const [summary, sectors, alerts] = await Promise.all([
+    const [summary, sectors, alerts, rankings] = await Promise.all([
       getMarketSummary(),
       getSectors(),
       getAlerts({ limit: 8 }),
+      getRankings("TOP_BUY"),
     ]);
-    return { available: true, summary, sectors: sectors.sectors, alerts: alerts.alerts };
+    return {
+      available: true,
+      summary,
+      sectors: sectors.sectors,
+      alerts: alerts.alerts,
+      topBuy: rankings.rankings[0]?.entries.slice(0, 4) ?? [],
+    };
   } catch (error) {
     if (error instanceof ApiError && error.code === "no_market_scan_data") {
       return { available: false };
@@ -48,7 +68,7 @@ export default async function DashboardPage() {
     );
   }
 
-  const { summary, sectors, alerts } = data;
+  const { summary, sectors, alerts, topBuy } = data;
 
   return (
     <div className="flex flex-col gap-bsr-6">
@@ -84,6 +104,38 @@ export default async function DashboardPage() {
         </div>
       </section>
 
+      <section>
+        <div className="mb-bsr-4 flex items-center justify-between">
+          <div className="flex items-center gap-bsr-2">
+            <AiStar />
+            <h2 className="text-base font-semibold text-bsr-text-primary">
+              إشارات بصيرة AI اليوم
+            </h2>
+          </div>
+          <a href="/opportunities" className="text-sm text-bsr-gold-500 hover:underline">
+            عرض جميع الفرص
+          </a>
+        </div>
+        {topBuy.length === 0 ? (
+          <EmptyState title="لا توجد إشارات شراء بارزة في هذا المسح" />
+        ) : (
+          <div className="grid grid-cols-1 gap-bsr-4 sm:grid-cols-2 lg:grid-cols-4">
+            {topBuy.map((entry) => (
+              <AiSignalCard
+                key={entry.symbol}
+                symbol={entry.symbol}
+                sector={entry.sector}
+                recommendation={(entry.recommendation as RecommendationValue) ?? "HOLD"}
+                confidence={entry.confidence}
+                targetPrice={entry.target_price}
+                expectedReturnPct={entry.expected_return_pct}
+                href={`/ai?symbol=${encodeURIComponent(entry.symbol)}`}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
       <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-2">
         <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 md:p-bsr-6">
           <h2 className="mb-bsr-4 text-base font-semibold text-bsr-text-primary">
@@ -92,15 +144,20 @@ export default async function DashboardPage() {
           {sectors.length === 0 ? (
             <EmptyState title="لا توجد بيانات قطاعات لهذا المسح" />
           ) : (
-            <ul className="flex flex-col gap-bsr-2">
+            <div className="grid grid-cols-1 gap-bsr-2 sm:grid-cols-2">
               {sectors.map((sector) => (
-                <li
+                <div
                   key={sector.sector}
-                  className="flex items-center justify-between rounded-bsr-md px-bsr-3 py-bsr-2 hover:bg-bsr-surface-overlay"
+                  className="flex flex-col gap-bsr-2 rounded-bsr-md bg-bsr-surface-overlay px-bsr-3 py-bsr-3"
                 >
-                  <span className="text-sm text-bsr-text-primary">
-                    {sector.sector}
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-bsr-text-primary">
+                      {sector.sector}
+                    </span>
+                    <span className="bsr-numeric text-xs text-bsr-text-secondary">
+                      {Math.round(sector.breadth * 100)}%
+                    </span>
+                  </div>
                   <div className="flex items-center gap-bsr-4 text-sm">
                     <span className="text-bsr-action-buy">
                       شراء {sector.buy_count}
@@ -108,13 +165,13 @@ export default async function DashboardPage() {
                     <span className="text-bsr-action-sell">
                       بيع {sector.sell_count}
                     </span>
-                    <span className="bsr-numeric text-bsr-text-secondary">
-                      {Math.round(sector.breadth * 100)}%
+                    <span className="text-bsr-action-hold">
+                      احتفاظ {sector.hold_count}
                     </span>
                   </div>
-                </li>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </section>
 
