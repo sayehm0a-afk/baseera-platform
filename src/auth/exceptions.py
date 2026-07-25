@@ -48,3 +48,12 @@ class UnauthenticatedError(APIError):
 class InsufficientPermissionError(APIError):
     status_code = 403
     code = "insufficient_permission"
+
+
+class SessionNotFoundError(APIError):
+    """No such device session, or it belongs to a different user --
+    404 (not 403) so a caller can never distinguish "not yours" from
+    "doesn't exist" and enumerate other users' session IDs."""
+
+    status_code = 404
+    code = "session_not_found"

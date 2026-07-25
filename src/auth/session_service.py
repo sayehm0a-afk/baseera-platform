@@ -119,11 +119,17 @@ def revoke_session(session: Session, raw_refresh_token: str) -> None:
 
 def revoke_all_sessions(session: Session, user_id: int) -> None:
     """"Sign out everywhere" -- also used internally after a password
-    reset completes."""
+    reset completes. Also instantly invalidates any access token
+    already issued to this user (see User.tokens_invalid_before) --
+    without this, a still-unexpired access token would keep working
+    for up to its remaining 15-minute lifetime despite every session
+    having just been revoked, defeating the point of "sign out
+    everywhere" as an incident response to a suspected compromise."""
     sessions = _repository.list_active_sessions_for_user(session, user_id)
     _repository.revoke_all_sessions_for_user(session, user_id)
     for user_session in sessions:
         token_store.delete_refresh_session(user_session.refresh_token_jti)
+    _repository.invalidate_all_access_tokens(session, user_id)
 
 
 def list_sessions(session: Session, user_id: int) -> List[UserSession]:

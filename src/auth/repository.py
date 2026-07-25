@@ -51,6 +51,13 @@ class AuthRepository:
         session.query(User).filter_by(id=user_id).update({"last_login_at": datetime.now(timezone.utc)})
         session.commit()
 
+    def invalidate_all_access_tokens(self, session: Session, user_id: int) -> None:
+        """See User.tokens_invalid_before's docstring -- the O(1)
+        instant-kill for every access token ever issued to this user,
+        used alongside session revocation."""
+        session.query(User).filter_by(id=user_id).update({"tokens_invalid_before": datetime.now(timezone.utc)})
+        session.commit()
+
     def list_users(self, session: Session, limit: int, offset: int) -> "tuple[int, List[User]]":
         query = session.query(User).order_by(User.id)
         total = query.count()
@@ -122,6 +129,9 @@ class AuthRepository:
 
     def get_user_session_by_jti(self, session: Session, refresh_token_jti: str) -> Optional[UserSession]:
         return session.query(UserSession).filter_by(refresh_token_jti=refresh_token_jti).one_or_none()
+
+    def get_user_session_by_id(self, session: Session, session_id: int) -> Optional[UserSession]:
+        return session.query(UserSession).filter_by(id=session_id).one_or_none()
 
     def revoke_user_session(self, session: Session, session_id: int) -> None:
         session.query(UserSession).filter_by(id=session_id).update({"revoked_at": datetime.now(timezone.utc)})

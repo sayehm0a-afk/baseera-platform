@@ -52,6 +52,7 @@ def test_user_defaults_on_insert(session):
     assert fetched.is_active is True
     assert fetched.is_staff is False
     assert fetched.staff_role is None
+    assert fetched.tokens_invalid_before is None
 
 
 def test_user_email_is_unique(session):

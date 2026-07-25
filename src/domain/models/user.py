@@ -47,6 +47,16 @@ class User(Base):
 
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Set (to "now") whenever every session is force-revoked (password
+    # reset, "sign out everywhere") -- an access-token JWT is stateless
+    # and NOT looked up in Redis/Postgres on the ordinary request path
+    # (see src/auth/token_store.py), so revoking a *session* alone
+    # cannot kill an already-issued, still-unexpired access token. This
+    # column is the O(1) escape hatch: get_current_user rejects any
+    # token whose `iat` predates this timestamp, regardless of how many
+    # access tokens were ever issued or whether their jtis were tracked.
+    tokens_invalid_before = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

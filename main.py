@@ -11,6 +11,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 import uvicorn
 
 # Add project root to path
@@ -19,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Import structured logging -- must come after sys.path.insert above so `src` is importable
 from src.core.monitoring.structured_logging import init_logging, get_logger  # noqa: E402
 from src.api.error_handlers import register_error_handlers  # noqa: E402
+from src.api.middleware.rate_limiting import limiter  # noqa: E402
+from src.api.routes.auth import router as auth_router  # noqa: E402
 from src.api.routes.backtests import router as backtests_router  # noqa: E402
 from src.api.routes.calibrations import router as calibrations_router  # noqa: E402
 from src.api.routes.market import router as market_router  # noqa: E402
@@ -54,6 +58,9 @@ if _cors_origins:
     )
 
 register_error_handlers(app)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.include_router(auth_router)
 app.include_router(stocks_router)
 app.include_router(backtests_router)
 app.include_router(calibrations_router)

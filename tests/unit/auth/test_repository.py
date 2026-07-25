@@ -53,6 +53,21 @@ def test_set_is_active_suspends_without_deleting(session, repo):
     assert fetched is not None
 
 
+def test_invalidate_all_access_tokens_sets_the_timestamp(session, repo):
+    user = repo.create_user(session, "invalidate@example.com", "hashed")
+    assert repo.get_user_by_id(session, user.id).tokens_invalid_before is None
+
+    before = datetime.now(timezone.utc)
+    repo.invalidate_all_access_tokens(session, user.id)
+    after = datetime.now(timezone.utc)
+
+    fetched = repo.get_user_by_id(session, user.id)
+    stamp = fetched.tokens_invalid_before
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    assert before <= stamp <= after
+
+
 def test_set_staff_role(session, repo):
     user = repo.create_user(session, "d@example.com", "hashed")
     repo.set_staff_role(session, user.id, True, StaffRole.SUPPORT)
