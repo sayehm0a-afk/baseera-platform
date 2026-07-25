@@ -58,6 +58,15 @@ def test_decision_reuses_recommendation_engines_score_and_confidence():
     decision = engine.decide(_context())
     assert decision.final_score == 80.0
     assert decision.recommendation == Recommendation.STRONG_BUY
+
+
+def test_requesting_user_id_is_accepted_and_has_no_effect_on_the_result():
+    # Phase 10 M10.8: accepted for API-consistency with AnalystEngine/
+    # RecommendationEngine -- this engine makes no LLM call, so passing
+    # it must be a pure no-op.
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0, confidence=90.0)])
+    decision = engine.decide(_context(), requesting_user_id=42)
+    assert decision.final_score == 80.0
     assert decision.confidence == 90.0
 
 

@@ -110,7 +110,13 @@ class RecommendationEngine:
         )
         self._tuning = tuning or RecommendationTuning()
 
-    def generate(self, context: AnalysisContext) -> RecommendationResult:
+    def generate(self, context: AnalysisContext, requesting_user_id: Optional[int] = None) -> RecommendationResult:
+        """`requesting_user_id` is accepted for API-consistency with
+        AnalystEngine.analyze()/AIDecisionEngine.decide() (Phase 10
+        M10.8) but currently unused -- every registered ScoreContributor
+        (technical/fundamental) is a deterministic calculation, not an
+        LLM call, so there is nothing to attribute to a user or record
+        as AI usage."""
         contributions = [c.contribute(context) for c in self._contributors]
         available = [c for c in contributions if c.score is not None and c.weight > 0]
 

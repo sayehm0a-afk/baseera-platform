@@ -25,8 +25,8 @@ class _FakeDecisionEngine:
         self._decision = decision
         self.calls = []
 
-    def decide(self, context):
-        self.calls.append(context)
+    def decide(self, context, requesting_user_id=None):
+        self.calls.append((context, requesting_user_id))
         return self._decision
 
 
@@ -35,8 +35,8 @@ class _FakePipeline:
         self._explanation = explanation
         self.calls = []
 
-    async def run(self, context, decision):
-        self.calls.append((context, decision))
+    async def run(self, context, decision, requesting_user_id=None):
+        self.calls.append((context, decision, requesting_user_id))
         return self._explanation
 
 
@@ -53,8 +53,8 @@ async def test_analyze_reuses_the_decision_engines_output_verbatim():
     assert report.decision is decision
     assert report.explanation is _EXPLANATION
     assert report.engine_version == ANALYST_ENGINE_VERSION
-    assert decision_engine.calls == [context]
-    assert pipeline.calls == [(context, decision)]
+    assert decision_engine.calls == [(context, None)]
+    assert pipeline.calls == [(context, decision, None)]
 
 
 @pytest.mark.asyncio

@@ -249,8 +249,15 @@ class AIDecisionEngine:
         self._recommendation_engine = recommendation_engine or RecommendationEngine(contributors=default_contributors())
         self._tuning = tuning or AIDecisionTuning()
 
-    def decide(self, context: AnalysisContext) -> InvestmentDecision:
-        result = self._recommendation_engine.generate(context)
+    def decide(self, context: AnalysisContext, requesting_user_id: Optional[int] = None) -> InvestmentDecision:
+        """`requesting_user_id` is accepted for API-consistency with
+        AnalystEngine.analyze()/RecommendationEngine.generate() (Phase
+        10 M10.8) but currently unused -- this engine makes no LLM
+        call (it is a deterministic, weighted-contributor scoring
+        engine; "AI" in its name refers to automated decision-making,
+        not a generative model), so there is nothing to attribute to a
+        user or record as AI usage."""
+        result = self._recommendation_engine.generate(context, requesting_user_id=requesting_user_id)
 
         price = _price_reference(context)
         atr_value = (

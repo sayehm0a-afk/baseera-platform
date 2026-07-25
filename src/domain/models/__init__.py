@@ -30,6 +30,18 @@ from src.domain.models.password_reset_token import PasswordResetToken
 from src.domain.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
 from src.domain.models.invoice import Invoice, InvoiceStatus
 from src.domain.models.payment import Payment, PaymentStatus
+from src.domain.models.audit_log import AuditLog
+from src.domain.models.feature_flag import FeatureFlag
+from src.domain.models.announcement import Announcement, AnnouncementSeverity
+from src.domain.models.global_setting import GlobalSetting
+from src.domain.models.notification import Notification, NotificationType
+from src.domain.models.user_watchlist import UserWatchlist, UserWatchlistItem
+from src.domain.models.user_setting import UserSetting
+from src.domain.models.feedback import Feedback, FeedbackCategory
+from src.domain.models.support_ticket import SupportTicket, SupportTicketStatus
+from src.domain.models.ai_request import AIRequest, AIRequestStatus
+from src.domain.models.recommendation_history import RecommendationHistory
+from src.domain.models.report import Report, ReportType, ReportStatus
 
 __all__ = [
     "Stock",
@@ -72,4 +84,24 @@ __all__ = [
     "InvoiceStatus",
     "Payment",
     "PaymentStatus",
+    "AuditLog",
+    "FeatureFlag",
+    "Announcement",
+    "AnnouncementSeverity",
+    "GlobalSetting",
+    "Notification",
+    "NotificationType",
+    "UserWatchlist",
+    "UserWatchlistItem",
+    "UserSetting",
+    "Feedback",
+    "FeedbackCategory",
+    "SupportTicket",
+    "SupportTicketStatus",
+    "AIRequest",
+    "AIRequestStatus",
+    "RecommendationHistory",
+    "Report",
+    "ReportType",
+    "ReportStatus",
 ]

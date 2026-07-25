@@ -5,11 +5,22 @@ populated, and that the optional LLMAdapter extension point is only
 consulted for the three eligible sections."""
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from src.analysis.analyst.llm_adapter import LLMAdapter, LLMGenerationResult, NullLLMAdapter
 from src.analysis.analyst.reasoning_pipeline import ReasoningPipeline
 from src.analysis.recommendation.types import AnalysisContext
+from src.core.db.database import Base
+from src.domain.models import AIRequest, AIRequestStatus
 from tests.unit.analysis.analyst._fixtures import make_decision
+
+
+class _FailingAdapter(LLMAdapter):
+    name = "failing"
+
+    async def generate(self, request):
+        raise RuntimeError("simulated provider outage")
 
 
 class _EmptyResultAdapter(LLMAdapter):
@@ -77,3 +88,74 @@ async def test_falls_back_to_baseline_when_adapter_returns_empty_text():
     # The deterministic fallback (never blank) is what should end up in the section.
     assert explanation.technical_reasoning
     assert "professional equity analyst" not in explanation.technical_reasoning
+
+
+# --- AIRequest instrumentation (Phase 10 M10.8) ------------------------
+
+
+@pytest.fixture
+def session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    factory = sessionmaker(bind=engine)
+    db = factory()
+    yield db
+    db.close()
+    Base.metadata.drop_all(bind=engine)
+
+
+@pytest.mark.asyncio
+async def test_no_adapter_records_nothing_even_with_a_session(session):
+    decision = make_decision()
+    context = AnalysisContext(symbol="2222", latest_price=100.0)
+
+    await ReasoningPipeline(session=session).run(context, decision)
+
+    assert session.query(AIRequest).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_adapter_without_a_session_records_nothing():
+    decision = make_decision()
+    context = AnalysisContext(symbol="2222", latest_price=100.0)
+
+    # No exception, no side effect -- session=None is the default for
+    # every existing caller (AnalystEngine's own default wiring).
+    await ReasoningPipeline(llm_adapter=NullLLMAdapter()).run(context, decision)
+
+
+@pytest.mark.asyncio
+async def test_adapter_with_a_session_records_one_ai_request_per_eligible_section(session):
+    decision = make_decision()
+    context = AnalysisContext(symbol="2222", latest_price=100.0)
+
+    await ReasoningPipeline(llm_adapter=NullLLMAdapter(), session=session).run(
+        context, decision, requesting_user_id=7
+    )
+
+    requests = session.query(AIRequest).order_by(AIRequest.id).all()
+    assert len(requests) == 3  # technical/fundamental/risk narration
+    assert {r.feature for r in requests} == {
+        "analyst_narration:technical_reasoning",
+        "analyst_narration:fundamental_reasoning",
+        "analyst_narration:risk_explanation",
+    }
+    assert all(r.status == AIRequestStatus.SUCCESS for r in requests)
+    assert all(r.user_id == 7 for r in requests)
+    assert all(r.symbol == "2222" for r in requests)
+    assert all(r.model == "null-adapter" for r in requests)
+    assert all(r.latency_ms is not None for r in requests)
+
+
+@pytest.mark.asyncio
+async def test_a_failing_adapter_records_a_failed_ai_request_and_still_raises(session):
+    decision = make_decision()
+    context = AnalysisContext(symbol="2222", latest_price=100.0)
+
+    with pytest.raises(RuntimeError):
+        await ReasoningPipeline(llm_adapter=_FailingAdapter(), session=session).run(context, decision)
+
+    requests = session.query(AIRequest).all()
+    assert len(requests) == 1  # technical_reasoning is narrated first, then the exception propagates
+    assert requests[0].status == AIRequestStatus.FAILED
+    assert "simulated provider outage" in requests[0].error_message

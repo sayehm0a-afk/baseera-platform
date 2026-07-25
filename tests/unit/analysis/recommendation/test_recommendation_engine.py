@@ -56,6 +56,15 @@ def test_single_contributor_final_score_equals_its_score():
     assert result.fundamental_score is None
 
 
+def test_requesting_user_id_is_accepted_and_has_no_effect_on_the_result():
+    # Phase 10 M10.8: accepted for API-consistency with AnalystEngine/
+    # AIDecisionEngine -- this engine makes no LLM call, so passing it
+    # must be a pure no-op.
+    engine = RecommendationEngine(contributors=[_FakeContributor("technical", score=80.0)])
+    result = engine.generate(_context(), requesting_user_id=42)
+    assert result.final_score == 80.0
+
+
 def test_two_equally_weighted_contributors_average():
     engine = RecommendationEngine(
         contributors=[

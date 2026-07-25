@@ -40,9 +40,9 @@ class AnalystEngine:
         self._decision_engine = decision_engine or AIDecisionEngine()
         self._pipeline = pipeline or ReasoningPipeline()
 
-    async def analyze(self, context: AnalysisContext) -> AnalystReport:
-        decision = self._decision_engine.decide(context)
-        explanation = await self._pipeline.run(context, decision)
+    async def analyze(self, context: AnalysisContext, requesting_user_id: Optional[int] = None) -> AnalystReport:
+        decision = self._decision_engine.decide(context, requesting_user_id=requesting_user_id)
+        explanation = await self._pipeline.run(context, decision, requesting_user_id=requesting_user_id)
         return AnalystReport(
             symbol=context.symbol,
             decision=decision,
