@@ -744,6 +744,93 @@ error shape), not a separate workstream. This milestone implements (1).
    `DevMarketDataProvider`/`DevFundamentalDataProvider` data on the same
    schedule instead, which is inert but not harmful.
 
+## Completed: Recommendation & Confidence Engine
+
+1. **`src/analysis/recommendation/`** (new) — an orchestration layer,
+   deliberately *not* a third analysis engine: it never computes an
+   indicator or a ratio itself, it only combines outputs
+   `TechnicalAnalysisEngine` (M2.2) and `FundamentalAnalysisEngine`
+   (M2.3) already produced, both reused completely unmodified.
+   - **`types.py`** — `Recommendation` (`STRONG_BUY`/`BUY`/`HOLD`/
+     `SELL`/`STRONG_SELL`), `Signal` (one human-readable observation,
+     with a `direction` and a point `impact`), `ScoreContribution` (one
+     module's 0-100 score/weight/confidence/signals — `score=None`,
+     `weight=0.0` when that module had nothing to work with, the same
+     honesty-by-omission discipline `RatioOutput.value=None` already
+     uses), `AnalysisContext` (everything available for one symbol:
+     `technical_result`, `fundamental_result`, plus a free-form `extra`
+     bag), and the `ScoreContributor` protocol every scoring module
+     implements.
+   - **`technical_contributor.py`** — reads only
+     `TechnicalAnalysisResult`'s already-computed indicators (never
+     touches a DataFrame). Six always-computable indicators (RSI,
+     MACD, Supertrend, EMA-vs-SMA momentum, OBV trend, volume trend)
+     drive the score; ADX (trend strength, not direction) only adjusts
+     confidence; candlestick patterns add a capped contribution;
+     Bollinger Band width is reported as an informational, zero-impact
+     signal (volatility context, not a directional call).
+   - **`fundamental_contributor.py`** — reads only
+     `FundamentalAnalysisResult`'s named ratio properties. Eight ratios
+     across profitability (ROE, net margin), liquidity (current
+     ratio), leverage (debt-to-equity), valuation (P/E, P/B — skipped,
+     not penalized, when a company is loss-making and P/E is not
+     meaningful), and growth (revenue, EPS) drive the score; any `None`
+     ratio is simply skipped, lowering confidence rather than raising.
+   - **`recommendation_engine.py`** — `RecommendationEngine.generate(context)`
+     blends every contributor's score by weight into a 0-100
+     `final_score`, maps it to a `Recommendation` via fixed thresholds
+     (`>=75` Strong Buy, `>=60` Buy, `>40` Hold, `>25` Sell, else Strong
+     Sell), and computes confidence as coverage (how many of the
+     nominal contributors actually had data) times each module's own
+     confidence, adjusted by an explicit agreement/disagreement
+     heuristic — modules landing close together raise confidence,
+     modules pulling opposite directions lower it. Builds a
+     human-readable explanation citing the recommendation, both
+     component scores, any unavailable module, and the top 5
+     highest-impact signals.
+2. **Extension point, exercised, not just asserted** — `generate()`'s
+   signature never changes when a module is added: unit tests
+   construct a third fake `news_sentiment`-style contributor and
+   confirm the engine blends it correctly with zero engine-code
+   changes, proving out the stated design goal for future modules
+   (news sentiment, insider trades, macro indicators, an AI reasoning
+   layer) ahead of any of them existing.
+3. **`GET /api/v1/stocks/{symbol}/recommendation`** (new route in the
+   existing `src/api/routes/stocks.py`) — assembles `AnalysisContext`
+   from the same DB-backed price bars and fundamental snapshots
+   `/technical` and `/fundamentals` already use, plus a live quote for
+   valuation ratios. Each leg degrades independently and gracefully,
+   exactly like the existing routes: insufficient price history or no
+   ingested fundamentals only drops that one leg's score/weight
+   (confidence reflects the reduced coverage); a market-data-provider
+   outage only drops the price-dependent valuation ratios. Only a
+   symbol with *neither* leg available is a 422
+   (`insufficient_data`) — a recommendation built from zero inputs
+   would not be an honest 200. New `RecommendationOut`/
+   `ScoreContributionOut`/`SignalOut` schemas in
+   `src/api/schemas/stocks.py`.
+4. **Tests** — 74 unit tests (`tests/unit/analysis/recommendation/`):
+   both contributors' scoring rules built from hand-constructed
+   `TechnicalAnalysisResult`/`FundamentalAnalysisResult` values (so
+   each bucket/threshold is exercised deterministically, independent
+   of how a real price series happens to make RSI/MACD/etc. come out),
+   and the engine's blending/confidence/threshold/explanation/
+   pluggability logic tested against small fake contributors, isolated
+   from either real module. Plus 6 integration tests
+   (`tests/integration/api/test_recommendation_route.py`) against real
+   engines, a real in-memory DB, and Dev providers: both legs
+   available, 404 for an unknown symbol, each leg degrading
+   independently, the 422 all-unavailable case, and a provider-outage
+   valuation degradation. **1231 tests pass, 12 skipped, repo-wide.**
+5. **Disclosed gaps** — the scoring rules (thresholds, point values,
+   confidence weighting) are a reasonable, explainable first cut, not
+   a backtested or ML-derived model; no historical validation of
+   recommendation accuracy has been done. The confidence-scoring
+   agreement/disagreement adjustment is a heuristic, not a statistically
+   calibrated measure. News sentiment, insider trades, macro
+   indicators, and an AI reasoning layer are architecturally supported
+   (the `ScoreContributor` extension point) but not implemented.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

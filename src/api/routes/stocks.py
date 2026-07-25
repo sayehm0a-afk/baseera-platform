@@ -29,6 +29,8 @@ from sqlalchemy.orm import Session
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
 from src.analysis.ohlcv_loader import load_price_bars
+from src.analysis.recommendation.recommendation_engine import RecommendationEngine
+from src.analysis.recommendation.types import AnalysisContext
 from src.analysis.technical_analysis_engine import TechnicalAnalysisEngine
 from src.api.dependencies import get_fundamental_provider, get_market_provider
 from src.api.exceptions import (
@@ -42,6 +44,9 @@ from src.api.schemas.stocks import (
     HistoricalBarOut,
     HistoryOut,
     QuoteOut,
+    RecommendationOut,
+    ScoreContributionOut,
+    SignalOut,
     StockOut,
     TechnicalAnalysisOut,
 )
@@ -193,4 +198,79 @@ async def get_fundamental_analysis(
         ratios=result.latest_snapshot(),
         source=snapshot_row.source,
         is_synthetic=snapshot_row.is_synthetic,
+    )
+
+
+@router.get("/{symbol}/recommendation", response_model=RecommendationOut)
+async def get_recommendation(
+    symbol: str,
+    period_type: PeriodType = Query(PeriodType.ANNUAL),
+    session: Session = Depends(get_db),
+    market_provider: IMarketDataProvider = Depends(get_market_provider),
+) -> RecommendationOut:
+    """BUY/HOLD/SELL with a confidence score, produced by
+    RecommendationEngine combining the existing TechnicalAnalysisEngine
+    and FundamentalAnalysisEngine -- see src/analysis/recommendation/
+    for the orchestration logic. Each leg degrades independently and
+    gracefully (missing history, no ingested fundamentals, or a
+    provider outage on the valuation price only lowers that leg's
+    weight/confidence, exactly like /technical and /fundamentals
+    already do on their own); only a symbol with *neither* leg
+    available is a 422, since a recommendation with zero inputs would
+    not be an honest response.
+    """
+    stock = _get_stock_or_404(session, symbol)
+
+    technical_result = None
+    df = load_price_bars(session, stock.id, Timeframe.ONE_DAY)
+    try:
+        technical_result = TechnicalAnalysisEngine().analyze(df)
+    except ValueError as exc:
+        logger.info("Technical leg of recommendation unavailable for '%s': %s", symbol, exc)
+
+    fundamental_result = None
+    snapshots = load_fundamental_snapshots(session, stock.id, period_type, limit=2)
+    if snapshots:
+        latest, prior = snapshots[0], (snapshots[1] if len(snapshots) > 1 else None)
+        market_price: Optional[float] = None
+        try:
+            quote = await market_provider.get_stock_data(symbol)
+            market_price = quote.get("close")
+        except (SahmkError, CircuitBreakerOpenError) as exc:
+            logger.info(
+                "Could not fetch a live price for '%s' recommendation valuation ratios: %s", symbol, exc
+            )
+        fundamental_result = FundamentalAnalysisEngine().analyze(
+            latest, prior_facts=prior, market_price=market_price
+        )
+
+    if technical_result is None and fundamental_result is None:
+        raise InsufficientDataError(
+            f"Not enough ingested history or fundamentals for '{symbol}' to generate a recommendation."
+        )
+
+    context = AnalysisContext(
+        symbol=symbol, technical_result=technical_result, fundamental_result=fundamental_result
+    )
+    result = RecommendationEngine().generate(context)
+
+    return RecommendationOut(
+        symbol=result.symbol,
+        recommendation=result.recommendation.value,
+        confidence=result.confidence,
+        explanation=result.explanation,
+        technical_score=result.technical_score,
+        fundamental_score=result.fundamental_score,
+        final_score=result.final_score,
+        contributions=[
+            ScoreContributionOut(
+                source=c.source, score=c.score, weight=c.weight, confidence=c.confidence, notes=c.notes
+            )
+            for c in result.contributions
+        ],
+        signals=[
+            SignalOut(name=s.name, description=s.description, direction=s.direction.value, source=s.source, impact=s.impact)
+            for s in result.signals
+        ],
+        generated_at=result.generated_at,
     )

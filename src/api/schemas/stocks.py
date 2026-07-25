@@ -66,3 +66,32 @@ class FundamentalAnalysisOut(BaseModel):
     ratios: Dict[str, Any]
     source: str
     is_synthetic: bool
+
+
+class SignalOut(BaseModel):
+    name: str
+    description: str
+    direction: str
+    source: str
+    impact: float
+
+
+class ScoreContributionOut(BaseModel):
+    source: str
+    score: Optional[float] = None
+    weight: float
+    confidence: float
+    notes: Optional[str] = None
+
+
+class RecommendationOut(BaseModel):
+    symbol: str
+    recommendation: str
+    confidence: float
+    explanation: str
+    technical_score: Optional[float] = None
+    fundamental_score: Optional[float] = None
+    final_score: float
+    contributions: List[ScoreContributionOut]
+    signals: List[SignalOut]
+    generated_at: datetime
