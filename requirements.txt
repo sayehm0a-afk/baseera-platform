@@ -40,9 +40,31 @@ tenacity>=9.1.4
 redis>=8.0.1
 
 # ===========================
+# Auth & Security
+# ===========================
+# passlib[bcrypt] was evaluated and rejected: passlib 1.7.4 (unmaintained
+# since 2020) hard-codes assumptions about bcrypt's internals that break
+# under bcrypt>=4.1 (AttributeError reading `_bcrypt.__about__.__version__`,
+# which bcrypt's own maintainers removed) -- reproduced directly against
+# the version this repo installs. Using the actively-maintained `bcrypt`
+# package directly (see src/auth/password_hashing.py) avoids that
+# unmaintained shim entirely rather than pinning bcrypt to an old release
+# forever.
+bcrypt>=4.0.0
+PyJWT>=2.8.0
+slowapi>=0.1.9
+email-validator>=2.1.0
+
+# ===========================
 # Observability
 # ===========================
 prometheus-client>=0.25.0
+sentry-sdk[fastapi]>=2.0.0
+
+# ===========================
+# Production server
+# ===========================
+gunicorn>=21.2.0
 
 # ===========================
 # Testing

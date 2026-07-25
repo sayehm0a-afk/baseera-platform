@@ -23,6 +23,10 @@ from src.domain.models.market_change_event import MarketChangeEvent, ChangeType
 from src.domain.models.portfolio import Portfolio
 from src.domain.models.portfolio_holding import PortfolioHolding
 from src.domain.models.portfolio_analysis_snapshot import PortfolioAnalysisSnapshot
+from src.domain.models.user import User, StaffRole
+from src.domain.models.user_session import UserSession
+from src.domain.models.email_verification_token import EmailVerificationToken
+from src.domain.models.password_reset_token import PasswordResetToken
 
 __all__ = [
     "Stock",
@@ -53,4 +57,9 @@ __all__ = [
     "Portfolio",
     "PortfolioHolding",
     "PortfolioAnalysisSnapshot",
+    "User",
+    "StaffRole",
+    "UserSession",
+    "EmailVerificationToken",
+    "PasswordResetToken",
 ]
