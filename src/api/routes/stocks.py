@@ -26,6 +26,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from src.analysis.decision.ai_decision_engine import AIDecisionEngine
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
 from src.analysis.ohlcv_loader import load_price_bars
@@ -40,9 +41,11 @@ from src.api.exceptions import (
     StockNotFoundError,
 )
 from src.api.schemas.stocks import (
+    DecisionFactorBreakdownOut,
     FundamentalAnalysisOut,
     HistoricalBarOut,
     HistoryOut,
+    InvestmentDecisionOut,
     QuoteOut,
     RecommendationOut,
     ScoreContributionOut,
@@ -201,6 +204,54 @@ async def get_fundamental_analysis(
     )
 
 
+async def _build_analysis_context(
+    symbol: str,
+    period_type: PeriodType,
+    session: Session,
+    market_provider: IMarketDataProvider,
+) -> AnalysisContext:
+    """Assembles the technical/fundamental/live-price inputs shared by
+    /recommendation and /decision -- both routes need the exact same
+    "run the two existing analysis engines against this symbol's
+    ingested data" work, so it lives once here rather than being
+    duplicated in each route. Each leg degrades independently and
+    gracefully: insufficient price history, no ingested fundamentals,
+    or a provider outage on the live quote only omits that piece
+    (`None`), never raises -- the caller decides whether the resulting
+    context has enough to proceed.
+    """
+    stock = _get_stock_or_404(session, symbol)
+
+    technical_result = None
+    df = load_price_bars(session, stock.id, Timeframe.ONE_DAY)
+    try:
+        technical_result = TechnicalAnalysisEngine().analyze(df)
+    except ValueError as exc:
+        logger.info("Technical leg unavailable for '%s': %s", symbol, exc)
+
+    market_price: Optional[float] = None
+    try:
+        quote = await market_provider.get_stock_data(symbol)
+        market_price = quote.get("close")
+    except (SahmkError, CircuitBreakerOpenError) as exc:
+        logger.info("Could not fetch a live price for '%s': %s", symbol, exc)
+
+    fundamental_result = None
+    snapshots = load_fundamental_snapshots(session, stock.id, period_type, limit=2)
+    if snapshots:
+        latest, prior = snapshots[0], (snapshots[1] if len(snapshots) > 1 else None)
+        fundamental_result = FundamentalAnalysisEngine().analyze(
+            latest, prior_facts=prior, market_price=market_price
+        )
+
+    return AnalysisContext(
+        symbol=symbol,
+        technical_result=technical_result,
+        fundamental_result=fundamental_result,
+        latest_price=market_price,
+    )
+
+
 @router.get("/{symbol}/recommendation", response_model=RecommendationOut)
 async def get_recommendation(
     symbol: str,
@@ -219,39 +270,13 @@ async def get_recommendation(
     available is a 422, since a recommendation with zero inputs would
     not be an honest response.
     """
-    stock = _get_stock_or_404(session, symbol)
+    context = await _build_analysis_context(symbol, period_type, session, market_provider)
 
-    technical_result = None
-    df = load_price_bars(session, stock.id, Timeframe.ONE_DAY)
-    try:
-        technical_result = TechnicalAnalysisEngine().analyze(df)
-    except ValueError as exc:
-        logger.info("Technical leg of recommendation unavailable for '%s': %s", symbol, exc)
-
-    fundamental_result = None
-    snapshots = load_fundamental_snapshots(session, stock.id, period_type, limit=2)
-    if snapshots:
-        latest, prior = snapshots[0], (snapshots[1] if len(snapshots) > 1 else None)
-        market_price: Optional[float] = None
-        try:
-            quote = await market_provider.get_stock_data(symbol)
-            market_price = quote.get("close")
-        except (SahmkError, CircuitBreakerOpenError) as exc:
-            logger.info(
-                "Could not fetch a live price for '%s' recommendation valuation ratios: %s", symbol, exc
-            )
-        fundamental_result = FundamentalAnalysisEngine().analyze(
-            latest, prior_facts=prior, market_price=market_price
-        )
-
-    if technical_result is None and fundamental_result is None:
+    if context.technical_result is None and context.fundamental_result is None:
         raise InsufficientDataError(
             f"Not enough ingested history or fundamentals for '{symbol}' to generate a recommendation."
         )
 
-    context = AnalysisContext(
-        symbol=symbol, technical_result=technical_result, fundamental_result=fundamental_result
-    )
     result = RecommendationEngine().generate(context)
 
     return RecommendationOut(
@@ -273,4 +298,58 @@ async def get_recommendation(
             for s in result.signals
         ],
         generated_at=result.generated_at,
+    )
+
+
+@router.get("/{symbol}/decision", response_model=InvestmentDecisionOut)
+async def get_investment_decision(
+    symbol: str,
+    period_type: PeriodType = Query(PeriodType.ANNUAL),
+    session: Session = Depends(get_db),
+    market_provider: IMarketDataProvider = Depends(get_market_provider),
+) -> InvestmentDecisionOut:
+    """The AI Decision Intelligence Layer's final output for one
+    symbol: everything /recommendation already produces, plus a target
+    price, stop loss, time horizon, expected return, risk level,
+    position-size recommendation, plain-language reasons, and a
+    category-level explainable breakdown -- see
+    src/analysis/decision/ai_decision_engine.py. Built entirely on top
+    of RecommendationEngine (itself built on TechnicalAnalysisEngine/
+    FundamentalAnalysisEngine); the same graceful-degradation and 422
+    rules as /recommendation apply, since this endpoint runs the same
+    two engines first.
+    """
+    context = await _build_analysis_context(symbol, period_type, session, market_provider)
+
+    if context.technical_result is None and context.fundamental_result is None:
+        raise InsufficientDataError(
+            f"Not enough ingested history or fundamentals for '{symbol}' to generate an investment decision."
+        )
+
+    decision = AIDecisionEngine().decide(context)
+
+    return InvestmentDecisionOut(
+        symbol=decision.symbol,
+        recommendation=decision.recommendation.value,
+        confidence=decision.confidence,
+        final_score=decision.final_score,
+        target_price=decision.target_price,
+        stop_loss=decision.stop_loss,
+        time_horizon=decision.time_horizon.value,
+        expected_return_pct=decision.expected_return_pct,
+        risk_level=decision.risk_level.value,
+        position_size=decision.position_size.value,
+        reasons=decision.reasons,
+        breakdown=[
+            DecisionFactorBreakdownOut(
+                category=b.category, points=b.points, weight=b.weight,
+                confidence=b.confidence, available=b.available, notes=b.notes,
+            )
+            for b in decision.breakdown
+        ],
+        signals=[
+            SignalOut(name=s.name, description=s.description, direction=s.direction.value, source=s.source, impact=s.impact)
+            for s in decision.signals
+        ],
+        generated_at=decision.generated_at,
     )

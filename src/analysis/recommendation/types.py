@@ -90,11 +90,17 @@ class AnalysisContext:
     when that engine could not run (insufficient history / no ingested
     fundamentals) -- contributors are required to handle `None`
     gracefully and report themselves as unavailable, never raise.
+
+    `latest_price` is optional and additive (added for the AI Decision
+    Intelligence Layer's target price/stop loss calculations,
+    src/analysis/decision/) -- existing contributors that don't need a
+    price anchor simply never read it.
     """
 
     symbol: str
     technical_result: Optional[TechnicalAnalysisResult] = None
     fundamental_result: Optional[FundamentalAnalysisResult] = None
+    latest_price: Optional[float] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
 

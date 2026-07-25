@@ -831,6 +831,109 @@ error shape), not a separate workstream. This milestone implements (1).
    indicators, and an AI reasoning layer are architecturally supported
    (the `ScoreContributor` extension point) but not implemented.
 
+## Completed: AI Decision Intelligence Layer
+
+1. **`src/analysis/decision/`** (new) — sits above `TechnicalAnalysisEngine`,
+   `FundamentalAnalysisEngine`, and `RecommendationEngine` (which
+   already includes confidence scoring) by calling
+   `RecommendationEngine.generate()` as a black box, not by
+   duplicating its blending/confidence math. `RecommendationEngine`
+   is configured with an expanded, nine-module contributor list —
+   the existing Technical/Fundamental contributors plus five new ones
+   satisfying the *same*, unmodified `ScoreContributor` protocol
+   `RecommendationEngine` already supported (the exact extension point
+   that milestone was built for):
+   - **`contributors/momentum_contributor.py`** / **`volume_contributor.py`**
+     — read the same `TechnicalAnalysisResult` series
+     `TechnicalScoreContributor` reads, but score genuinely different
+     facts from them, so nothing is double-counted: RSI/MACD-histogram
+     *velocity* (rate of change over the last 5 bars, not level) and
+     ADX trend-strength magnitude (previously used only to adjust
+     `TechnicalScoreContributor`'s confidence, never scored) for
+     Momentum; OBV flow *acceleration* and a volume-vs-its-own-baseline
+     surge check for Volume.
+   - **`contributors/risk_contributor.py`** — scores ATR(14)-to-price
+     and Bollinger Band width-to-price, two measurements no existing
+     contributor scores at all. Sign convention is deliberately
+     inverted from every other contributor (positive = low risk,
+     favorable): elevated volatility is treated as reducing conviction
+     regardless of direction. The same measurements also set
+     `InvestmentDecision.risk_level` directly, so risk is never only
+     folded into the score.
+   - **`contributors/external_factor_contributors.py`** — News
+     Intelligence, Macro Economy, Insider Transactions, Sector
+     Rotation: requirement 5's remaining future-module list, proven
+     concretely rather than only architecturally. No real vendor is
+     contracted for any of the four (same disclosed-gap status
+     `SaudiMarketDataProvider` had before SAHMK), so each reads its
+     input from `AnalysisContext.extra` (a new, additive, optional
+     field alongside a new `latest_price` field — both backward
+     compatible, no existing contributor reads either) and honestly
+     reports itself unavailable when its key is absent, exactly like
+     `FundamentalScoreContributor` already does for a missing ratio.
+     Unit tests supply fake `extra` data and confirm each scores it
+     correctly, proving the plug-in point works end-to-end today, not
+     just in principle.
+   - **`ai_decision_engine.py`** — `AIDecisionEngine.decide(context)`
+     calls `RecommendationEngine` once, then derives everything only
+     this layer produces from the result plus one live/derived price:
+     an ATR-multiple target price and stop loss (reward distance
+     scales with conviction, 2x-4x ATR; stop fixed at 1.5x ATR — a
+     standard, documented technical-analysis convention, not
+     fabricated), a time horizon (short/medium/long, from conviction
+     and confirmed trend strength), a risk level (from the Risk
+     contributor's own score), a position-size recommendation (from
+     recommendation strength, discounted for low confidence or
+     elevated risk), plain-language reasons (the top signals by
+     impact, any unavailable module disclosed, a closing risk/sizing
+     statement), and a category-level explainable breakdown —
+     "Technical Analysis: +35", "Risk: -6", etc. — matching the
+     requested format exactly (each contributor's 0-100 score
+     re-centered on its 50-point neutral baseline).
+2. **`GET /api/v1/stocks/{symbol}/decision`** (new route in the
+   existing `src/api/routes/stocks.py`) — the assembly logic shared
+   with `/recommendation` (load price bars, fundamental snapshots, a
+   live quote) was factored into one `_build_analysis_context()`
+   helper both routes call, rather than duplicated between them; the
+   only behavior change is `/recommendation` now always attempts a
+   live quote (previously only when fundamentals existed), so
+   `AnalysisContext.latest_price` is populated whenever possible for
+   `/decision`'s target-price math too. Same graceful-degradation and
+   422-only-when-both-legs-unavailable rules as `/recommendation`,
+   since `/decision` runs the same two engines first. New
+   `InvestmentDecisionOut`/`DecisionFactorBreakdownOut` schemas in
+   `src/api/schemas/stocks.py`.
+3. **Tests** — 78 unit tests (`tests/unit/analysis/decision/`):
+   Momentum/Volume/Risk contributors built from hand-constructed
+   `TechnicalAnalysisResult` values (deterministic, independent of how
+   a real price series happens to come out); the four external-factor
+   contributors covering both the unavailable-by-default path and the
+   scored-when-data-is-supplied path; `AIDecisionEngine` orchestration
+   tests (target/stop direction and conviction scaling, risk-level
+   thresholds, position-size downgrades, time-horizon rules, breakdown
+   point-centering, reasons content) built against small fake
+   contributors, isolated from the real scoring rules. Plus 6
+   integration tests (`tests/integration/api/test_decision_route.py`)
+   against real engines, a real in-memory DB, and Dev providers.
+   **1315 tests pass, 12 skipped, repo-wide.**
+4. **Disclosed gaps** — target price/stop loss/expected return use a
+   documented ATR-multiple heuristic, not a backtested or
+   statistically calibrated model. Time horizon, risk level, and
+   position size are rule-based, not portfolio-aware (no existing
+   position, cash balance, or diversification is considered — there is
+   no portfolio/watchlist model in this codebase yet). "One decision
+   per stock" is satisfied per-symbol (the engine is symbol-agnostic,
+   like every engine below it); a batch/universe-wide execution
+   endpoint does not exist, though it would reuse the ingestion
+   scheduler's symbol-universe pattern (`src/market_data/ingestion/config.py`)
+   if built. Portfolio Optimizer and a genuine AI Reasoning layer
+   (requirement 5's remaining two items) are not implemented — a
+   portfolio optimizer's natural input is a *list* of
+   `InvestmentDecision`s across symbols, a different interface shape
+   than the per-symbol `ScoreContributor` extension point this layer
+   uses, so it is a disclosed, deliberately out-of-scope extension
+   point rather than a stub.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

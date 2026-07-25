@@ -95,3 +95,29 @@ class RecommendationOut(BaseModel):
     contributions: List[ScoreContributionOut]
     signals: List[SignalOut]
     generated_at: datetime
+
+
+class DecisionFactorBreakdownOut(BaseModel):
+    category: str
+    points: float
+    weight: float
+    confidence: float
+    available: bool
+    notes: Optional[str] = None
+
+
+class InvestmentDecisionOut(BaseModel):
+    symbol: str
+    recommendation: str
+    confidence: float
+    final_score: float
+    target_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    time_horizon: str
+    expected_return_pct: Optional[float] = None
+    risk_level: str
+    position_size: str
+    reasons: List[str]
+    breakdown: List[DecisionFactorBreakdownOut]
+    signals: List[SignalOut]
+    generated_at: datetime
