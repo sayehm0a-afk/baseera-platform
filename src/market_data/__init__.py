@@ -14,6 +14,7 @@ from .providers.market_data_provider import (
     MarketDataProviderFactory,
 )
 from .providers.dev_market_data_provider import DevMarketDataProvider
+from .providers.sahmk_market_data_provider import SahmkMarketDataProvider
 
 __all__ = [
     "IMarketDataProvider",
@@ -22,4 +23,5 @@ __all__ = [
     "SaudiMarketDataProvider",
     "MarketDataProviderFactory",
     "DevMarketDataProvider",
+    "SahmkMarketDataProvider",
 ]

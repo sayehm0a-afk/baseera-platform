@@ -159,6 +159,36 @@ async def metrics():
     return get_metrics().get_metrics().decode("utf-8")
 
 
+@app.get("/market-data/status")
+async def market_data_status():
+    """Reports which market data provider is currently active.
+
+    src.market_data.provider_factory automatically selects the live
+    SAHMK provider whenever SAHMK_API_KEY is configured and sahmk.sa is
+    reachable, and falls back to the synthetic dev provider otherwise
+    (e.g. in a network-restricted environment) -- this endpoint exposes
+    that decision and the provider's own health check for operators.
+    Never returns the configured API key.
+    """
+    try:
+        from src.market_data.provider_factory import (
+            get_last_selected_provider_kind,
+            get_market_data_provider,
+        )
+
+        provider = await get_market_data_provider()
+        health = await provider.health_check()
+        return {
+            "provider": get_last_selected_provider_kind(),
+            "health": health.value,
+        }
+    except Exception as e:
+        logger.error(f"Error checking market data provider status: {e}")
+        raise HTTPException(
+            status_code=500, detail="Failed to determine market data provider status"
+        )
+
+
 @app.get("/stats")
 async def get_stats():
     """Get runtime statistics."""

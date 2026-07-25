@@ -379,6 +379,93 @@ Postgres ENUM type — the same defect class 0001's `timeframe` ENUM had
 in M2.1 — caught and fixed before the upgrade→downgrade→upgrade
 verification, not after.
 
+## Completed: SAHMK Integration — Live Provider, Auto-Selection, Unit Tests
+
+Closes the market-data-vendor gap M2.1/M2.2/M2.3 each disclosed:
+`SAHMK_API_KEY` (a Tadawul-licensed Saudi market data vendor,
+sahmk.sa) is now a real, working credential, and a full
+`IMarketDataProvider` implementation exists behind it. See
+`docs/SAHMK_INTEGRATION.md` for the verified endpoint/auth contract,
+including what was confirmed against the real account (the key is
+accepted; `/market/summary/` and `/historical/` currently return `403
+PLAN_LIMIT` for this account — disclosed, not hidden, and not yet
+understood as plan-tier vs. account-activation).
+
+1. **`src/market_data/sahmk/`** (new) — `client.py` (`SahmkClient`, the
+   reusable, low-level async wrapper for every endpoint used:
+   `/quote/`, `/historical/`, `/market/summary/`, `/events/`;
+   `X-API-Key` auth, 3-attempt retry with `Retry-After`-aware backoff
+   on 429/5xx, wrapped in the existing `CircuitBreaker`), `service.py`
+   (`SahmkMarketDataService`, the typed/cached business layer —
+   `TTLCache` with in-flight request coalescing), `models.py` (typed
+   response shapes), `exceptions.py` (`SahmkAuthenticationError`/
+   `SahmkEntitlementError`/`SahmkRateLimitError`/
+   `SahmkResponseValidationError`/`SahmkRequestError`, matching SAHMK's
+   confirmed 401/403 `PLAN_LIMIT` semantics).
+2. **`src/market_data/providers/sahmk_market_data_provider.py`** (new)
+   — `SahmkMarketDataProvider`, an `IMarketDataProvider` implementation
+   (unchanged interface, per M2.1's design) returning the exact same
+   dict shape `DevMarketDataProvider` does (`source="sahmk"`,
+   `is_synthetic=False` instead of the dev markers), registered with
+   the existing `MarketDataProviderFactory` under `"sahmk"`.
+3. **`src/market_data/provider_factory.py`** (new) — the automatic
+   live/synthetic selection point. `SAHMK_API_KEY` unset →
+   `DevMarketDataProvider`, always, no live call ever attempted. Key
+   set → a short, timeout-bounded connectivity probe
+   (`SahmkMarketDataProvider.authenticate()`) decides: reachable and
+   accepted → live `SahmkMarketDataProvider`; any connectivity failure,
+   auth rejection, or timeout → `DevMarketDataProvider`, logged, never
+   a startup failure. Selection is cached (default 60s) to avoid
+   re-probing on every call. `MARKET_DATA_PROVIDER=dev|sahmk|auto` can
+   force a specific choice for testing; even a forced `"sahmk"` still
+   falls back to `"dev"` on an unreachable host, since booting must
+   never depend on live third-party network access.
+4. **`src/market_data/caching/ttl_cache.py`**,
+   **`src/market_data/validators/symbol_validator.py`** (new) —
+   in-process TTL cache with in-flight coalescing (a concurrent burst
+   of requests for the same key triggers one upstream call, not one
+   per caller), and the existing 4-digit Tadawul symbol format check
+   used by `IMarketDataProvider`'s ingestion callers.
+5. **`main.py`** — one new `GET /market-data/status` endpoint reporting
+   which provider is currently active and its health, without ever
+   exposing the configured key. `.env.example` documents
+   `SAHMK_API_KEY`/`SAHMK_BASE_URL`/`MARKET_DATA_PROVIDER`.
+6. **125 new unit tests** (`tests/unit/market_data/{sahmk,caching,
+   validators,providers}/`, `test_config.py`, `test_provider_factory.py`)
+   — every SAHMK/network call is mocked (a `FakeSession`/`FakeResponse`
+   pair replaying scripted responses for the client, `AsyncMock` for
+   the service/provider layers); no test opens a real socket. Covers
+   every status-code mapping, the retry/circuit-breaker paths, cache
+   coalescing and expiry, and every branch of the auto-selection logic
+   (forced dev/sahmk, no credentials, rejected key, unreachable host,
+   probe timeout, cache hit, forced refresh).
+
+**A real bug was caught and fixed during this milestone, not after**:
+an early manual smoke-test constructed `aiohttp.ClientSession()` without
+`trust_env=True`. `aiohttp`, unlike `curl`, does not honor
+`HTTPS_PROXY` by default, so that session dialed `sahmk.sa` directly —
+bypassing this environment's own egress policy proxy instead of
+receiving its allow/deny decision, exactly the kind of restriction
+bypass the task explicitly prohibited. `SahmkClient` now always passes
+`trust_env=True`, verified afterward by confirming the same call
+correctly receives the proxy's policy-denial response instead of
+reaching the real host directly.
+
+**Scope discipline**: `feature/sahmk-integration` (a separate,
+pre-existing branch based on `feature/m2.13-live-data-integration`, 47
+commits ahead of `main`) already contains SAHMK research and a
+provider rebuild; that branch's *research* (verified endpoints, auth
+model, error semantics) informed this work, but its code was
+deliberately not merged — it carries roughly ten milestones'
+(M2.4–M2.13) worth of unreviewed work (composite intelligence engine,
+technical experts, API auth foundation, etc.) that this task did not
+ask for and `main` has not reviewed. This milestone is built directly
+on `main` (M2.3) instead, touching only the market-data layer.
+`ingest_ohlcv.py`/`ingest_fundamentals.py` remain unwired to any
+worker/task-queue (still explicitly out of scope, per M2.1's own
+disclosed boundary) — `provider_factory.get_market_data_provider()` is
+available for that wiring whenever it is taken on.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.
