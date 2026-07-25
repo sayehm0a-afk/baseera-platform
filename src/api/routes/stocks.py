@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from src.analysis.analyst.analyst_engine import AnalystEngine
 from src.analysis.analyst.output_formatter import OutputFormatter
+from src.analysis.context_builder import build_analysis_context
 from src.analysis.decision.ai_decision_engine import AIDecisionEngine
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
@@ -213,46 +214,17 @@ async def _build_analysis_context(
     session: Session,
     market_provider: IMarketDataProvider,
 ) -> AnalysisContext:
-    """Assembles the technical/fundamental/live-price inputs shared by
-    /recommendation and /decision -- both routes need the exact same
-    "run the two existing analysis engines against this symbol's
-    ingested data" work, so it lives once here rather than being
-    duplicated in each route. Each leg degrades independently and
-    gracefully: insufficient price history, no ingested fundamentals,
-    or a provider outage on the live quote only omits that piece
-    (`None`), never raises -- the caller decides whether the resulting
-    context has enough to proceed.
+    """Thin wrapper around the shared `build_analysis_context`
+    (src/analysis/context_builder.py): resolves `symbol` to a `Stock`
+    row (raising the API-layer 404 this route needs) and delegates the
+    actual technical/fundamental/live-price assembly, so /recommendation,
+    /decision, and /analyst-report keep the exact same call shape they
+    already had. The assembly logic itself is no longer duplicated here
+    -- src.market_intelligence's scanner reuses the same
+    build_analysis_context for its market-wide pipeline.
     """
     stock = _get_stock_or_404(session, symbol)
-
-    technical_result = None
-    df = load_price_bars(session, stock.id, Timeframe.ONE_DAY)
-    try:
-        technical_result = TechnicalAnalysisEngine().analyze(df)
-    except ValueError as exc:
-        logger.info("Technical leg unavailable for '%s': %s", symbol, exc)
-
-    market_price: Optional[float] = None
-    try:
-        quote = await market_provider.get_stock_data(symbol)
-        market_price = quote.get("close")
-    except (SahmkError, CircuitBreakerOpenError) as exc:
-        logger.info("Could not fetch a live price for '%s': %s", symbol, exc)
-
-    fundamental_result = None
-    snapshots = load_fundamental_snapshots(session, stock.id, period_type, limit=2)
-    if snapshots:
-        latest, prior = snapshots[0], (snapshots[1] if len(snapshots) > 1 else None)
-        fundamental_result = FundamentalAnalysisEngine().analyze(
-            latest, prior_facts=prior, market_price=market_price
-        )
-
-    return AnalysisContext(
-        symbol=symbol,
-        technical_result=technical_result,
-        fundamental_result=fundamental_result,
-        latest_price=market_price,
-    )
+    return await build_analysis_context(stock, period_type, session, market_provider)
 
 
 @router.get("/{symbol}/recommendation", response_model=RecommendationOut)

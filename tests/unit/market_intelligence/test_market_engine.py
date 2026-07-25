@@ -1,0 +1,171 @@
+"""Unit tests for MarketIntelligenceEngine -- uses a fake MarketScanner
+(hand-built outcomes, no real analysis pipeline) against a real, in-
+memory-SQLite-backed MarketIntelligenceRepository, isolating engine
+orchestration from a real scan (already covered by test_scanner.py)
+and from a real ranking/watchlist/sector/change/alert run (each
+already covered by their own test files).
+"""
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from src.analysis.recommendation.types import Recommendation
+from src.core.db.database import Base
+from src.domain.models import MarketScanStatus, Stock
+from src.market_intelligence.market_engine import MarketIntelligenceEngine
+from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
+from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
+
+
+@pytest.fixture
+def factory():
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    session_factory = sessionmaker(bind=engine)
+    yield session_factory
+    Base.metadata.drop_all(bind=engine)
+
+
+def _seed_stock(factory, symbol, sector="Energy"):
+    session = factory()
+    session.add(Stock(symbol=symbol, name_en=f"Stock {symbol}", sector=sector))
+    session.commit()
+    session.close()
+
+
+class _FakeScanner:
+    def __init__(self, outcomes):
+        self._outcomes = outcomes
+
+    async def scan(self, symbols):
+        return self._outcomes
+
+
+class _FakeSymbolSelector:
+    def __init__(self, symbols):
+        self._symbols = symbols
+
+    def select(self, session, symbols=None):
+        return symbols if symbols is not None else self._symbols
+
+
+@pytest.mark.asyncio
+async def test_execute_scan_persists_symbol_records_and_marks_success(factory):
+    _seed_stock(factory, "2222")
+    repo = MarketIntelligenceRepository()
+    outcomes = [make_outcome(symbol="2222", decision=make_decision(symbol="2222"))]
+
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner(outcomes), symbol_selector=_FakeSymbolSelector(["2222"]),
+    )
+
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    run_id = run.id
+    session.close()
+
+    result = await engine.execute_scan(run_id)
+
+    assert result == outcomes
+
+    session = factory()
+    run_row = repo.get_run(session, run_id)
+    assert run_row.status is MarketScanStatus.SUCCESS
+    assert run_row.symbols_succeeded == 1
+    assert run_row.duration_seconds is not None
+
+    records = repo.get_symbol_records_by_symbol(session, run_id)
+    assert "2222" in records
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_execute_scan_persists_sector_summaries(factory):
+    _seed_stock(factory, "2222", sector="Energy")
+    repo = MarketIntelligenceRepository()
+    outcomes = [make_outcome(symbol="2222", sector="Energy", decision=make_decision(symbol="2222", final_score=80.0))]
+
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner(outcomes), symbol_selector=_FakeSymbolSelector(["2222"]),
+    )
+
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    run_id = run.id
+    session.close()
+
+    await engine.execute_scan(run_id)
+
+    session = factory()
+    sectors = repo.get_sector_summaries(session, run_id)
+    assert len(sectors) == 1
+    assert sectors[0].sector == "Energy"
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_second_scan_detects_changes_against_the_first(factory):
+    _seed_stock(factory, "2222")
+    repo = MarketIntelligenceRepository()
+
+    session = factory()
+    run1 = repo.create_scan_run(session, symbols_requested=1)
+    run1_id = run1.id
+    session.close()
+
+    engine1 = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner([make_outcome(symbol="2222", decision=make_decision(symbol="2222", recommendation=Recommendation.HOLD))]),
+        symbol_selector=_FakeSymbolSelector(["2222"]),
+    )
+    await engine1.execute_scan(run1_id)
+
+    session = factory()
+    run2 = repo.create_scan_run(session, symbols_requested=1)
+    run2_id = run2.id
+    session.close()
+
+    engine2 = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner([make_outcome(symbol="2222", decision=make_decision(symbol="2222", recommendation=Recommendation.STRONG_BUY))]),
+        symbol_selector=_FakeSymbolSelector(["2222"]),
+    )
+    await engine2.execute_scan(run2_id)
+
+    session = factory()
+    total, events = repo.get_change_events(session, limit=50, offset=0, run_id=run2_id)
+    assert total >= 1
+    assert any(e.previous_value == "HOLD" and e.new_value == "STRONG_BUY" for e in events)
+
+    total_alerts, alerts = repo.get_alerts(session, limit=50, offset=0)
+    assert any(a.alert_type.value == "NEW_STRONG_BUY" for a in alerts)
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_execute_scan_marks_running_before_finishing(factory):
+    _seed_stock(factory, "2222")
+    repo = MarketIntelligenceRepository()
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner([make_outcome(symbol="2222")]),
+        symbol_selector=_FakeSymbolSelector(["2222"]),
+    )
+
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    run_id = run.id
+    session.close()
+
+    await engine.execute_scan(run_id)
+
+    session = factory()
+    run_row = repo.get_run(session, run_id)
+    assert run_row.started_at is not None
+    assert run_row.finished_at is not None
+    assert run_row.started_at <= run_row.finished_at
+    session.close()

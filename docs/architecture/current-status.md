@@ -1097,6 +1097,79 @@ OpenAI, the Claude API, Gemini, or any other external AI model.
    behavior.** Full detail in
    `docs/AUTONOMOUS_AI_ANALYST_FRAMEWORK.md`.
 
+## Completed: Autonomous Market Intelligence Layer
+
+Full detail in `docs/MARKET_INTELLIGENCE.md`; summary here.
+
+1. **`src/market_intelligence/`** (new package) — continuously
+   discovers opportunities across the entire tracked symbol universe
+   without a user selecting a stock. `SymbolSelector` resolves every
+   active, price-eligible `Stock`; `MarketScanner` runs the reused
+   pipeline per symbol with bounded concurrency and per-symbol retry;
+   `RankingEngine`/`WatchlistEngine` produce the 17 ranking categories
+   and 9 watchlists via declarative filter/sort/predicate rules (no
+   hand-duplicated logic per category); `SectorAnalyzer` computes
+   per-sector aggregates, strongest/weakest, momentum, and rotation;
+   `ChangeDetector` diffs a scan against the previous one's persisted
+   records; `AlertEngine` produces `Alert` *objects only* (no
+   notification/delivery mechanism exists); `MarketSnapshotBuilder`
+   assembles market-wide sentiment; `MarketIntelligenceEngine`
+   orchestrates all of it; `IntervalMarketIntelligenceScheduler`
+   (behind the replaceable `IMarketIntelligenceScheduler` interface)
+   provides recurring, unattended scans, disabled by default.
+2. **Reused, not duplicated**: every symbol's analysis is exactly
+   `AnalystEngine.analyze()` (itself `AIDecisionEngine` ->
+   `RecommendationEngine` -> `TechnicalAnalysisEngine`/
+   `FundamentalAnalysisEngine`, unmodified) called once per symbol --
+   no score, target, confidence, or narrative is computed anywhere in
+   this new package. One behavior-preserving refactor made this
+   possible without duplicating the context-assembly logic: `stocks.py`'s
+   private `_build_analysis_context` was extracted, unchanged, into
+   the public `src.analysis.context_builder.build_analysis_context()`,
+   reused by both the REST routes and the new scanner. Rankings and
+   watchlists are computed on read from the persisted
+   `SymbolIntelligenceRecord` rows (the single source of truth), never
+   stored as separate materialized tables -- a deliberate choice
+   against a stale-prone duplicate cache.
+3. **New domain models + migration `bc03fb48f33b`**: `MarketScanRun`
+   (scan history), `SymbolIntelligenceRecord` (per-symbol market
+   snapshot), `SectorIntelligenceSummary` (needed for momentum's t-1
+   comparison), `MarketAlert`, `MarketChangeEvent`.
+4. **REST API** (`src/api/routes/market.py`) -- `POST
+   /api/v1/market/scan` schedules a `BackgroundTask` and never blocks;
+   `GET /scan/{run_id}`, `/summary`, `/rankings` (+`/top-buy`,
+   `/top-strong-buy` convenience wrappers), `/watchlists`, `/sectors`,
+   `/changes`, `/alerts` -- every GET route reconstructs
+   `SymbolScanOutcome`s from persisted rows via
+   `src.market_intelligence.read_model` and hands them to the exact
+   same engines the scan itself used, so no ranking/watchlist/
+   sentiment rule is duplicated between the write and read paths.
+   Every read route defaults to the latest successful scan and returns
+   404 `no_market_scan_data` when none exists yet.
+5. **Tests** -- 90 unit tests under `tests/unit/market_intelligence/`
+   (including 12 repository tests against real in-memory SQLite), 3
+   unit tests for the extracted `build_analysis_context`, and 10
+   integration tests (`tests/integration/api/test_market_routes.py`,
+   a real background-task scan exercised end-to-end through every
+   read route). **1720 tests pass, 12 skipped, repo-wide** (up from
+   1617). `flake8 src/ tests/ main.py` is clean at 0 violations.
+6. **Disclosed limitations** -- no real parallel scanning is exercised
+   (`MARKET_SCAN_BATCH_SIZE` defaults to 1, architecture supports
+   more); `new_symbols`/`removed_symbols` aren't persisted separately
+   from the change-event log, a small gap between the live-scan and
+   read-a-past-scan paths for the `NEW_OPPORTUNITIES` ranking;
+   `REMOVED_OPPORTUNITIES` means "dropped out of BUY territory," not
+   "vanished from the universe"; no corporate-action price adjustment
+   or true portfolio model (inherited from the engines this layer
+   reuses); sector breadth/momentum/rotation are per-scan aggregates
+   only, not TASI-index-relative (no broad-market index history is
+   ingested). **No live SAHMK network access exists in this
+   environment -- every test in this milestone runs against hand-built
+   fixtures or synthetic, hand-seeded data; no ranking/watchlist/
+   alert/sentiment value anywhere in this codebase's tests is a claim
+   about real market performance.** Full detail in
+   `docs/MARKET_INTELLIGENCE.md`.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

@@ -77,3 +77,18 @@ class InvalidCalibrationTransitionError(APIError):
 
     status_code = 409
     code = "invalid_calibration_transition"
+
+
+class MarketScanRunNotFoundError(APIError):
+    status_code = 404
+    code = "market_scan_run_not_found"
+
+
+class NoMarketScanDataError(APIError):
+    """No successful MarketScanRun exists yet -- a legitimate "not yet"
+    state (no scan has ever completed), not a server failure. Every
+    read endpoint under /api/v1/market/* except POST /scan and
+    GET /scan/{run_id} needs at least one completed scan to read from."""
+
+    status_code = 404
+    code = "no_market_scan_data"

@@ -21,6 +21,7 @@ from src.core.monitoring.structured_logging import init_logging, get_logger  # n
 from src.api.error_handlers import register_error_handlers  # noqa: E402
 from src.api.routes.backtests import router as backtests_router  # noqa: E402
 from src.api.routes.calibrations import router as calibrations_router  # noqa: E402
+from src.api.routes.market import router as market_router  # noqa: E402
 from src.api.routes.stocks import router as stocks_router  # noqa: E402
 
 # Initialize structured logging
@@ -55,11 +56,13 @@ register_error_handlers(app)
 app.include_router(stocks_router)
 app.include_router(backtests_router)
 app.include_router(calibrations_router)
+app.include_router(market_router)
 
 # Global runtime kernel
 kernel = None
 container = None
 ingestion_scheduler = None
+market_intelligence_scheduler = None
 
 
 class TaskRequest(BaseModel):
@@ -80,7 +83,7 @@ class TaskResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Startup event handler."""
-    global kernel, container, ingestion_scheduler
+    global kernel, container, ingestion_scheduler, market_intelligence_scheduler
 
     # The ingestion scheduler needs only the DB and a market/fundamental
     # data provider -- no Redis, no runtime kernel. Started first, in its
@@ -102,6 +105,27 @@ async def startup_event():
             )
     except Exception as e:
         logger.error(f"Error starting ingestion scheduler: {e}", exc_info=True)
+
+    # Same reasoning, same isolation: an unattended, recurring
+    # full-market scan is real workload an operator must opt into (see
+    # src.market_intelligence.config.is_market_intelligence_scheduler_enabled),
+    # disabled by default, and never allowed to prevent the ingestion
+    # scheduler or the kernel from starting.
+    try:
+        from src.market_intelligence.config import is_market_intelligence_scheduler_enabled
+        from src.market_intelligence.scheduler import IntervalMarketIntelligenceScheduler
+
+        if is_market_intelligence_scheduler_enabled():
+            market_intelligence_scheduler = IntervalMarketIntelligenceScheduler()
+            market_intelligence_scheduler.start()
+            logger.info("Market intelligence scheduler started.")
+        else:
+            logger.info(
+                "Market intelligence scheduler disabled "
+                "(set MARKET_INTELLIGENCE_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting market intelligence scheduler: {e}", exc_info=True)
 
     try:
         logger.info("Starting Basirah Enterprise AI Platform...")
@@ -166,6 +190,9 @@ async def shutdown_event():
 
         if ingestion_scheduler is not None:
             await ingestion_scheduler.stop()
+
+        if market_intelligence_scheduler is not None:
+            await market_intelligence_scheduler.stop()
 
         if kernel:
             await kernel.stop()

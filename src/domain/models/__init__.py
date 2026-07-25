@@ -15,6 +15,11 @@ from src.domain.models.ingestion_run_log import IngestionRunLog, IngestionJobSta
 from src.domain.models.backtest_run import BacktestRun, BacktestRunStatus, DataProvenanceMode
 from src.domain.models.recommendation_snapshot import RecommendationSnapshot, RecommendationLabel
 from src.domain.models.calibration_config import CalibrationConfig, CalibrationStatus
+from src.domain.models.market_scan_run import MarketScanRun, MarketScanStatus
+from src.domain.models.symbol_intelligence_record import SymbolIntelligenceRecord
+from src.domain.models.sector_intelligence_summary import SectorIntelligenceSummary
+from src.domain.models.market_alert import MarketAlert, AlertType, AlertSeverity
+from src.domain.models.market_change_event import MarketChangeEvent, ChangeType
 
 __all__ = [
     "Stock",
@@ -33,4 +38,13 @@ __all__ = [
     "RecommendationLabel",
     "CalibrationConfig",
     "CalibrationStatus",
+    "MarketScanRun",
+    "MarketScanStatus",
+    "SymbolIntelligenceRecord",
+    "SectorIntelligenceSummary",
+    "MarketAlert",
+    "AlertType",
+    "AlertSeverity",
+    "MarketChangeEvent",
+    "ChangeType",
 ]
