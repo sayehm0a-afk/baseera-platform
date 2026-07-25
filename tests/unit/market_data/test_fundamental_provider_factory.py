@@ -109,3 +109,60 @@ async def test_selection_is_cached_across_calls(monkeypatch):
     await fundamental_provider_factory.get_fundamental_data_provider()
     await fundamental_provider_factory.get_fundamental_data_provider()
     assert len(_FakeSahmkFundamentalProvider.instances) == 1
+
+
+# --- regression: superseded providers must be disconnected (resource leak) --
+
+
+@pytest.mark.asyncio
+async def test_force_refresh_disconnects_the_superseded_provider(monkeypatch):
+    """Regression test for the resource leak a prior review caught and
+    reproduced -- the fundamentals-side twin of provider_factory's
+    equivalent test."""
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+
+    first = await fundamental_provider_factory.get_fundamental_data_provider()
+    await fundamental_provider_factory.get_fundamental_data_provider(force_refresh=True)
+
+    assert first.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_repeated_refreshes_disconnect_every_superseded_instance_but_not_the_current_one(
+    monkeypatch,
+):
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+
+    for _ in range(5):
+        await fundamental_provider_factory.get_fundamental_data_provider(force_refresh=True)
+
+    *superseded, current = _FakeSahmkFundamentalProvider.instances
+    assert len(superseded) == 4
+    assert all(instance.disconnected is True for instance in superseded)
+    assert current.disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_does_not_disconnect_the_still_current_provider(monkeypatch):
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+
+    provider = await fundamental_provider_factory.get_fundamental_data_provider()
+    same_provider = await fundamental_provider_factory.get_fundamental_data_provider()
+
+    assert provider is same_provider
+    assert provider.disconnected is False

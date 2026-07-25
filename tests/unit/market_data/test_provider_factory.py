@@ -154,3 +154,95 @@ async def test_force_refresh_bypasses_cache(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_last_selected_provider_kind_none_before_any_selection():
     assert provider_factory.get_last_selected_provider_kind() is None
+
+
+# --- regression: superseded providers must be disconnected (resource leak) --
+
+
+@pytest.mark.asyncio
+async def test_force_refresh_disconnects_the_superseded_provider(monkeypatch):
+    """Regression test for the resource leak a prior review caught and
+    reproduced: replacing the cached provider without disconnecting the
+    old one leaked its aiohttp session every cache-refresh cycle."""
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkProvider.authenticate = lambda self: _ok()
+
+    first = await provider_factory.get_market_data_provider()
+    await provider_factory.get_market_data_provider(force_refresh=True)
+
+    assert first.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_repeated_refreshes_disconnect_every_superseded_instance_but_not_the_current_one(
+    monkeypatch,
+):
+    """Extends the single-refresh regression test above to several
+    refreshes in a row -- every instance that gets replaced must be
+    disconnected, and the still-active one must never be."""
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkProvider.authenticate = lambda self: _ok()
+
+    for _ in range(5):
+        await provider_factory.get_market_data_provider(force_refresh=True)
+
+    *superseded, current = _FakeSahmkProvider.instances
+    assert len(superseded) == 4
+    assert all(instance.disconnected is True for instance in superseded)
+    assert current.disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_does_not_disconnect_the_still_current_provider(monkeypatch):
+    """A cache *hit* (no reselection) must never disconnect anything --
+    only an actual replacement should."""
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkProvider.authenticate = lambda self: _ok()
+
+    provider = await provider_factory.get_market_data_provider()
+    same_provider = await provider_factory.get_market_data_provider()
+
+    assert provider is same_provider
+    assert provider.disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_switching_from_dev_to_sahmk_does_not_attempt_to_disconnect_dev_incorrectly(
+    monkeypatch,
+):
+    """DevMarketDataProvider.disconnect() is a plain, always-safe no-op
+    -- this just confirms transitioning across provider *kinds* (not
+    just repeated sahmk selections) goes through the same disconnect
+    path without raising."""
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "dev")
+    dev_provider = await provider_factory.get_market_data_provider()
+
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "sahmk")
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkProvider.authenticate = lambda self: _ok()
+
+    sahmk_provider = await provider_factory.get_market_data_provider(force_refresh=True)
+
+    assert isinstance(sahmk_provider, _FakeSahmkProvider)
+    # dev_provider.disconnect() ran (without raising) as part of the
+    # dev->sahmk transition; DevMarketDataProvider marks itself
+    # unhealthy once disconnected.
+    from src.market_data.providers.market_data_provider import ProviderHealth
+
+    assert await dev_provider.health_check() == ProviderHealth.UNHEALTHY

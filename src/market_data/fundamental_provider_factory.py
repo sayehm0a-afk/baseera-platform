@@ -36,7 +36,13 @@ _cached_at: float = 0.0
 
 
 async def get_fundamental_data_provider(force_refresh: bool = False) -> IFundamentalDataProvider:
-    """Returns the IFundamentalDataProvider the caller should use right now."""
+    """Returns the IFundamentalDataProvider the caller should use right now.
+
+    Any provider this call replaces is disconnected before the new one
+    is installed -- see provider_factory.get_market_data_provider()'s
+    docstring for the full rationale and the disclosed trade-off (this
+    is the fundamentals-side twin of that fix).
+    """
     global _cached_provider, _cached_provider_kind, _cached_at
 
     async with _cache_lock:
@@ -50,11 +56,25 @@ async def get_fundamental_data_provider(force_refresh: bool = False) -> IFundame
         ):
             return _cached_provider
 
+        previous_provider = _cached_provider
         provider, kind = await _select_provider()
+
+        if previous_provider is not None and previous_provider is not provider:
+            await _disconnect_quietly(previous_provider)
+
         _cached_provider = provider
         _cached_provider_kind = kind
         _cached_at = now
         return provider
+
+
+async def _disconnect_quietly(provider: IFundamentalDataProvider) -> None:
+    """Disconnects a superseded provider. Never lets a disconnect
+    failure prevent the new selection from being installed."""
+    try:
+        await provider.disconnect()
+    except Exception:
+        logger.warning("Error disconnecting a superseded fundamental data provider.", exc_info=True)
 
 
 def get_last_selected_fundamental_provider_kind() -> Optional[str]:

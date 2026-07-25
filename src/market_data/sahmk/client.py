@@ -8,10 +8,19 @@ hardcoded or logged.
 
 Retry policy matches SAHMK's own documented defaults: 3 attempts,
 0.5s/1s/2s exponential backoff on 429/5xx, honoring a 429's
-Retry-After header. A CircuitBreaker wraps the whole retried call so a
-sustained outage stops hammering the upstream once the failure
+Retry-After header. A CircuitBreaker wraps the retried call so a
+sustained *infrastructure* outage (network failure, or 429/5xx that
+survives every retry) stops hammering the upstream once the failure
 threshold trips (src.core.runtime.reliability_layer.circuit_breaker,
-reused unchanged).
+reused unchanged) -- but a deterministic *business* response (401, 403
+PLAN_LIMIT, any other non-2xx) never counts as a breaker failure. Those
+are legitimate, expected answers from a reachable, healthy SAHMK to a
+specific request (e.g. calling a Pro+ endpoint on a Starter plan is
+*always* going to be 403, not a sign anything is down) -- counting them
+would let three routine plan-limit responses on one endpoint block
+completely unrelated, healthy calls on the same client for
+`recovery_timeout` seconds. See `_BusinessError` below for how this is
+enforced structurally, not just by convention.
 
 This class only knows how to talk to the wire -- it returns raw
 response dicts. src.market_data.sahmk.service.SahmkMarketDataService
@@ -43,12 +52,36 @@ logger = logging.getLogger(__name__)
 class _RetryableSahmkError(Exception):
     """Internal-only signal used to trigger tenacity's retry on 429/5xx.
     Never escapes SahmkClient -- _request() converts it to
-    SahmkRateLimitError or SahmkRequestError once retries are exhausted."""
+    SahmkRateLimitError or SahmkRequestError once retries are exhausted.
+    This is the only exception type that both tenacity's retry and the
+    CircuitBreaker are ever allowed to see -- it is raised exclusively
+    for conditions that are actually transient/infrastructure in
+    nature (429, 5xx), never for a business response."""
 
     def __init__(self, message: str, *, kind: str, retry_after: Optional[float] = None):
         super().__init__(message)
         self.kind = kind  # "rate_limit" | "server_error"
         self.retry_after = retry_after
+
+
+class _BusinessError:
+    """Wraps a deterministic, non-transient business exception (401,
+    403 PLAN_LIMIT, any other non-2xx) so it can be *returned* rather
+    than *raised* from the function passed to CircuitBreaker.execute().
+
+    CircuitBreaker.execute() (src.core.runtime.reliability_layer,
+    shared with the rest of the codebase, deliberately not modified
+    here) counts any *raised* exception from its wrapped call as a
+    failure, with no way to distinguish exception types -- it wasn't
+    designed to. Returning this sentinel instead of raising is what
+    keeps a 401/403/other business response from ever being recorded
+    as a circuit-breaker failure while still surfacing the exact same
+    exception to the caller: _request() unwraps and raises `.exception`
+    itself, outside of `execute()`'s try/except, once the (successful,
+    as far as the breaker is concerned) call has returned."""
+
+    def __init__(self, exception: Exception):
+        self.exception = exception
 
 
 class SahmkClient:
@@ -113,17 +146,31 @@ class SahmkClient:
             wait=wait_exponential(multiplier=0.5, min=0.5, max=2),
             retry=retry_if_exception_type(_RetryableSahmkError),
         )
-        async def _do_request() -> Dict[str, Any]:
+        async def _do_request() -> Any:
+            # Returns either the parsed dict (2xx) or a _BusinessError
+            # sentinel (401/403/other non-2xx) -- never *raises* for a
+            # business outcome, so CircuitBreaker.execute() below never
+            # sees it as a failure. Only raises _RetryableSahmkError
+            # (429/5xx, retried by tenacity above) or a network-level
+            # SahmkRequestError (from _send) -- both genuinely transient,
+            # both legitimate for the breaker to count.
             return await self._send(path, params)
 
         try:
-            return await self._circuit_breaker.execute(_do_request)
+            outcome = await self._circuit_breaker.execute(_do_request)
         except _RetryableSahmkError as exc:
             if exc.kind == "rate_limit":
                 raise SahmkRateLimitError(str(exc), retry_after=exc.retry_after) from exc
             raise SahmkRequestError(str(exc)) from exc
 
-    async def _send(self, path: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if isinstance(outcome, _BusinessError):
+            # Raised here, outside circuit_breaker.execute()'s scope --
+            # this is a real, surfaced error for the *caller*, but it is
+            # deliberately never counted as a breaker failure.
+            raise outcome.exception
+        return outcome
+
+    async def _send(self, path: str, params: Optional[Dict[str, Any]]) -> Any:
         session = await self._ensure_session()
         url = f"{self._base_url}{path}"
         headers = {"X-API-Key": self._api_key}
@@ -141,13 +188,20 @@ class SahmkClient:
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             raise SahmkRequestError(f"Network error calling SAHMK API: {exc}") from exc
 
-    async def _handle_response(self, response: aiohttp.ClientResponse) -> Dict[str, Any]:
+    async def _handle_response(self, response: aiohttp.ClientResponse) -> Any:
         status = response.status
 
         if status == 200:
             try:
                 return await response.json()
             except (aiohttp.ContentTypeError, ValueError) as exc:
+                # An unparseable 200 is not a clean business rejection --
+                # it looks like something between SAHMK and here (a
+                # captive portal, a broken intermediary) returned a
+                # malformed response, which is exactly the class of
+                # anomaly the circuit breaker exists to protect against.
+                # Raised directly (not wrapped in _BusinessError), so it
+                # is still counted.
                 body_text = await response.text()
                 raise SahmkRequestError(
                     f"SAHMK returned a non-JSON 200 response: {body_text[:200]!r}",
@@ -158,14 +212,18 @@ class SahmkClient:
         body = await self._read_body(response)
 
         if status == 401:
-            raise SahmkAuthenticationError(
-                "SAHMK rejected the configured API key (401).", status_code=status, body=body
+            return _BusinessError(
+                SahmkAuthenticationError(
+                    "SAHMK rejected the configured API key (401).", status_code=status, body=body
+                )
             )
         if status == 403:
-            raise SahmkEntitlementError(
-                "SAHMK plan does not permit this endpoint (403 PLAN_LIMIT).",
-                status_code=status,
-                body=body,
+            return _BusinessError(
+                SahmkEntitlementError(
+                    "SAHMK plan does not permit this endpoint (403 PLAN_LIMIT).",
+                    status_code=status,
+                    body=body,
+                )
             )
         if status == 429:
             raise _RetryableSahmkError(
@@ -176,8 +234,10 @@ class SahmkClient:
         if 500 <= status < 600:
             raise _RetryableSahmkError(f"SAHMK server error ({status}): {body}", kind="server_error")
 
-        raise SahmkRequestError(
-            f"SAHMK request failed with status {status}.", status_code=status, body=body
+        return _BusinessError(
+            SahmkRequestError(
+                f"SAHMK request failed with status {status}.", status_code=status, body=body
+            )
         )
 
     @staticmethod

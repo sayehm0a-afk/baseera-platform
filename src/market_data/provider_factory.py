@@ -46,7 +46,25 @@ _cached_at: float = 0.0
 
 
 async def get_market_data_provider(force_refresh: bool = False) -> IMarketDataProvider:
-    """Returns the IMarketDataProvider the caller should use right now."""
+    """Returns the IMarketDataProvider the caller should use right now.
+
+    Any provider this call replaces (cache expiry or force_refresh=True)
+    is disconnected before the new one is installed -- a live
+    SahmkMarketDataProvider holds an open aiohttp session, and simply
+    overwriting the cached reference without closing it leaks that
+    session every MARKET_DATA_PROVIDER_CACHE_SECONDS. Disconnecting
+    happens while still holding _cache_lock, so it's strictly ordered
+    against the new selection and can't race a second concurrent
+    refresh. Trade-off, disclosed rather than engineered around with a
+    full reference-counted drain: a caller that fetched the outgoing
+    provider an instant before this runs and is still mid-request
+    against it could see that request fail if disconnect() closes the
+    underlying session out from under it. This was judged an acceptable,
+    narrow risk against the alternative (a guaranteed, unbounded leak) --
+    cache refreshes are infrequent (default every 60s) and callers are
+    expected to fetch-and-use the provider promptly, not hold it across
+    a refresh boundary.
+    """
     global _cached_provider, _cached_provider_kind, _cached_at
 
     async with _cache_lock:
@@ -60,11 +78,27 @@ async def get_market_data_provider(force_refresh: bool = False) -> IMarketDataPr
         ):
             return _cached_provider
 
+        previous_provider = _cached_provider
         provider, kind = await _select_provider()
+
+        if previous_provider is not None and previous_provider is not provider:
+            await _disconnect_quietly(previous_provider)
+
         _cached_provider = provider
         _cached_provider_kind = kind
         _cached_at = now
         return provider
+
+
+async def _disconnect_quietly(provider: IMarketDataProvider) -> None:
+    """Disconnects a superseded provider. Never lets a disconnect
+    failure prevent the new selection from being installed -- a
+    same-process resource-cleanup problem must not be allowed to break
+    provider selection itself."""
+    try:
+        await provider.disconnect()
+    except Exception:
+        logger.warning("Error disconnecting a superseded market data provider.", exc_info=True)
 
 
 def get_last_selected_provider_kind() -> Optional[str]:

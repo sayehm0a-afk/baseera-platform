@@ -255,8 +255,114 @@ async def test_429_recovers_once_rate_limit_clears():
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_opens_after_repeated_failures():
+    """Regression guard: confirms the fix below did NOT neuter the
+    breaker's real purpose -- genuine, repeated infrastructure failures
+    (5xx surviving every retry) must still trip it."""
     breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=9999)
     client, session = _client([FakeResponse(500, {})] * 3, circuit_breaker=breaker)
+    with pytest.raises(SahmkRequestError):
+        await client.get_market_summary("TASI")
+
+    with pytest.raises(CircuitBreakerOpenError):
+        await client.get_market_summary("TASI")
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_opens_after_repeated_429_exhaustion():
+    """429 exhaustion is transient/infrastructure in nature (the vendor
+    is overloaded or we are), unlike a 401/403 -- it must still be able
+    to trip the breaker."""
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=9999)
+    client, session = _client([FakeResponse(429, {})] * 3, circuit_breaker=breaker)
+    with pytest.raises(SahmkRateLimitError):
+        await client.get_market_summary("TASI")
+
+    with pytest.raises(CircuitBreakerOpenError):
+        await client.get_market_summary("TASI")
+
+
+# --- regression: business errors must never trip the circuit breaker -------
+#
+# Reproduces the bug a prior review caught: three 403 PLAN_LIMIT responses
+# on one (Pro+-only) endpoint tripped the shared client-wide breaker and
+# blocked a completely unrelated, healthy call on the same client. 401,
+# 403, and other deterministic non-2xx business responses are expected,
+# routine outcomes from a reachable, healthy SAHMK -- never a sign the
+# service is down -- and must never be treated as breaker failures.
+
+
+@pytest.mark.asyncio
+async def test_repeated_401_never_opens_the_breaker():
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=9999)
+    client, session = _client([FakeResponse(401, {"error": "invalid key"})] * 5, circuit_breaker=breaker)
+
+    for _ in range(5):
+        with pytest.raises(SahmkAuthenticationError):
+            await client.get_market_summary("TASI")
+
+    assert breaker.state.value == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_repeated_403_entitlement_errors_never_open_the_breaker():
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=9999)
+    client, session = _client([FakeResponse(403, {"error": "PLAN_LIMIT"})] * 5, circuit_breaker=breaker)
+
+    for _ in range(5):
+        with pytest.raises(SahmkEntitlementError):
+            await client.get_events(limit=10)
+
+    assert breaker.state.value == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_repeated_other_4xx_never_opens_the_breaker():
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=9999)
+    client, session = _client([FakeResponse(404, {"error": "not found"})] * 5, circuit_breaker=breaker)
+
+    for _ in range(5):
+        with pytest.raises(SahmkRequestError):
+            await client.get_market_summary("TASI")
+
+    assert breaker.state.value == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_repeated_plan_limit_errors_do_not_block_a_different_healthy_endpoint():
+    """The exact reproduction from the review: three 403 PLAN_LIMIT
+    responses on get_events(), then a completely unrelated, healthy
+    get_market_summary() call on the SAME client must still succeed."""
+    breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=30)
+    outcomes = [FakeResponse(403, {"error": "PLAN_LIMIT"})] * 3 + [FakeResponse(200, {"index_value": 12000})]
+    client, session = _client(outcomes, circuit_breaker=breaker)
+
+    for _ in range(3):
+        with pytest.raises(SahmkEntitlementError):
+            await client.get_events(limit=10)
+
+    result = await client.get_market_summary("TASI")
+    assert result == {"index_value": 12000}
+
+
+@pytest.mark.asyncio
+async def test_mixed_business_and_infrastructure_failures_only_the_infrastructure_one_counts():
+    """A failure_threshold=1 breaker: if a business error counted for
+    even a fraction of a "failure," it would open on the very first
+    403. Three 403s in a row must leave it fully CLOSED; only the
+    single genuine infrastructure failure that follows (a 500,
+    exhausting its own retries) may open it."""
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=9999)
+    outcomes = (
+        [FakeResponse(403, {"error": "PLAN_LIMIT"})] * 3  # must never move the breaker at all
+        + [FakeResponse(500, {})] * 3  # one genuine failure (after exhausting its own retries) -- opens it
+    )
+    client, session = _client(outcomes, circuit_breaker=breaker)
+
+    for _ in range(3):
+        with pytest.raises(SahmkEntitlementError):
+            await client.get_market_summary("TASI")
+    assert breaker.state.value == "CLOSED"
+
     with pytest.raises(SahmkRequestError):
         await client.get_market_summary("TASI")
 
