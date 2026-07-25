@@ -21,31 +21,23 @@ from src.analysis.recommendation.types import (
     AnalysisContext,
     Recommendation,
     RecommendationResult,
+    RecommendationTuning,
     ScoreContribution,
     ScoreContributor,
     Signal,
 )
 
-# Two modules agreeing (scores close together) raises confidence;
-# sharply disagreeing (one bullish, one bearish) lowers it -- an
-# explicit, tunable heuristic, not a hidden magic number buried in the
-# calculation below.
-_AGREEMENT_SPREAD_THRESHOLD = 15.0
-_AGREEMENT_BONUS = 8.0
-_DISAGREEMENT_SPREAD_THRESHOLD = 40.0
-_DISAGREEMENT_PENALTY = 12.0
-
 _MAX_EXPLANATION_SIGNALS = 5
 
 
-def _score_to_recommendation(score: float) -> Recommendation:
-    if score >= 75:
+def _score_to_recommendation(score: float, tuning: RecommendationTuning) -> Recommendation:
+    if score >= tuning.strong_buy_threshold:
         return Recommendation.STRONG_BUY
-    if score >= 60:
+    if score >= tuning.buy_threshold:
         return Recommendation.BUY
-    if score > 40:
+    if score > tuning.sell_threshold:
         return Recommendation.HOLD
-    if score > 25:
+    if score > tuning.strong_sell_threshold:
         return Recommendation.SELL
     return Recommendation.STRONG_SELL
 
@@ -98,15 +90,25 @@ class RecommendationEngine:
     50/50. Pass a custom `contributors` list to change weighting, drop
     a module, or add a new one (news sentiment, insider trades, macro
     indicators, AI reasoning, ...) -- `generate()`'s signature never
-    changes.
+    changes. Pass a custom `tuning` (RecommendationTuning) to change
+    the recommendation-band thresholds or the confidence agreement/
+    disagreement heuristic without touching this class's code -- the
+    Backtesting & Calibration Engine's extension point for calibrating
+    *how* a blended score becomes a recommendation, distinct from
+    *what* gets blended.
     """
 
-    def __init__(self, contributors: Optional[List[ScoreContributor]] = None):
+    def __init__(
+        self,
+        contributors: Optional[List[ScoreContributor]] = None,
+        tuning: Optional[RecommendationTuning] = None,
+    ):
         self._contributors: List[ScoreContributor] = (
             list(contributors)
             if contributors is not None
             else [TechnicalScoreContributor(), FundamentalScoreContributor()]
         )
+        self._tuning = tuning or RecommendationTuning()
 
     def generate(self, context: AnalysisContext) -> RecommendationResult:
         contributions = [c.contribute(context) for c in self._contributors]
@@ -122,20 +124,20 @@ class RecommendationEngine:
 
             total_possible_weight = sum(c.default_weight for c in self._contributors)
             coverage = total_weight / total_possible_weight if total_possible_weight > 0 else 0.0
-            confidence = weighted_confidence * coverage
+            confidence = weighted_confidence * (coverage ** self._tuning.coverage_penalty_exponent)
 
             if len(available) >= 2:
                 scores = [c.score for c in available]
                 spread = max(scores) - min(scores)
-                if spread <= _AGREEMENT_SPREAD_THRESHOLD:
-                    confidence += _AGREEMENT_BONUS
-                elif spread >= _DISAGREEMENT_SPREAD_THRESHOLD:
-                    confidence -= _DISAGREEMENT_PENALTY
+                if spread <= self._tuning.agreement_spread_threshold:
+                    confidence += self._tuning.agreement_bonus
+                elif spread >= self._tuning.disagreement_spread_threshold:
+                    confidence -= self._tuning.disagreement_penalty
 
             confidence = _clamp(confidence)
 
         final_score = _clamp(final_score)
-        recommendation = _score_to_recommendation(final_score)
+        recommendation = _score_to_recommendation(final_score, self._tuning)
 
         technical_score = next((c.score for c in contributions if c.source == "technical"), None)
         fundamental_score = next((c.score for c in contributions if c.source == "fundamental"), None)

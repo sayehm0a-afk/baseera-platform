@@ -33,7 +33,7 @@ from src.analysis.ohlcv_loader import load_price_bars
 from src.analysis.recommendation.recommendation_engine import RecommendationEngine
 from src.analysis.recommendation.types import AnalysisContext
 from src.analysis.technical_analysis_engine import TechnicalAnalysisEngine
-from src.api.dependencies import get_fundamental_provider, get_market_provider
+from src.api.dependencies import get_market_provider
 from src.api.exceptions import (
     InsufficientDataError,
     InvalidSymbolFormatError,
@@ -56,7 +56,6 @@ from src.api.schemas.stocks import (
 from src.core.db.database import get_db
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.domain.models import FundamentalSnapshot, PeriodType, Stock, Timeframe
-from src.market_data.providers.fundamental_data_provider import IFundamentalDataProvider
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
 from src.market_data.validators.symbol_validator import InvalidSymbolError, validate_symbol_format

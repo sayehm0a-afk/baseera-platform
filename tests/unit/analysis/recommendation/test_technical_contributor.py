@@ -8,7 +8,6 @@ particular price series happens to make RSI/MACD/etc. come out.
 """
 
 import pandas as pd
-import pytest
 
 from src.analysis.recommendation.technical_contributor import TechnicalScoreContributor
 from src.analysis.recommendation.types import AnalysisContext, SignalDirection

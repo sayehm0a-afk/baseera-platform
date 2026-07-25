@@ -8,14 +8,13 @@ tested in complete isolation from either real module's scoring rules
 test_fundamental_contributor.py.
 """
 
-from typing import List, Optional
-
 import pytest
 
 from src.analysis.recommendation.recommendation_engine import RecommendationEngine
 from src.analysis.recommendation.types import (
     AnalysisContext,
     Recommendation,
+    RecommendationTuning,
     ScoreContribution,
     Signal,
     SignalDirection,
@@ -263,6 +262,71 @@ def test_a_third_contributor_plugs_in_without_engine_changes():
     assert result.final_score == pytest.approx(60.0)
     sources = {c.source for c in result.contributions}
     assert sources == {"technical", "fundamental", "news_sentiment"}
+
+
+# --- tuning (calibration extension point) ---------------------------
+
+
+def test_default_tuning_matches_prior_hardcoded_thresholds():
+    """Locks in that RecommendationTuning's defaults reproduce exactly
+    the behavior RecommendationEngine had before tuning was
+    pluggable -- a regression test for the calibration refactor."""
+    engine = RecommendationEngine(contributors=[_FakeContributor("technical", score=74.9, weight=1.0)])
+    assert engine.generate(_context()).recommendation == Recommendation.BUY
+
+    engine = RecommendationEngine(contributors=[_FakeContributor("technical", score=75.0, weight=1.0)])
+    assert engine.generate(_context()).recommendation == Recommendation.STRONG_BUY
+
+
+def test_custom_thresholds_change_recommendation_classification():
+    tuning = RecommendationTuning(strong_buy_threshold=90.0, buy_threshold=70.0)
+    engine = RecommendationEngine(contributors=[_FakeContributor("technical", score=80.0, weight=1.0)], tuning=tuning)
+    result = engine.generate(_context())
+    # 80 would be STRONG_BUY under default thresholds, but only BUY under this tuning.
+    assert result.recommendation == Recommendation.BUY
+
+
+def test_custom_agreement_bonus_is_applied():
+    tuning = RecommendationTuning(agreement_bonus=50.0)
+    engine = RecommendationEngine(
+        contributors=[
+            _FakeContributor("technical", score=70.0, weight=0.5, confidence=50.0),
+            _FakeContributor("fundamental", score=72.0, weight=0.5, confidence=50.0),
+        ],
+        tuning=tuning,
+    )
+    result = engine.generate(_context())
+    assert result.confidence == 100.0  # clamped after a large custom agreement bonus
+
+
+def test_custom_disagreement_penalty_is_applied():
+    tuning = RecommendationTuning(disagreement_penalty=90.0)
+    engine = RecommendationEngine(
+        contributors=[
+            _FakeContributor("technical", score=90.0, weight=0.5, confidence=80.0),
+            _FakeContributor("fundamental", score=10.0, weight=0.5, confidence=80.0),
+        ],
+        tuning=tuning,
+    )
+    result = engine.generate(_context())
+    assert result.confidence == 0.0  # clamped after a large custom disagreement penalty
+
+
+def test_coverage_penalty_exponent_harsher_than_default_lowers_confidence():
+    contributors = [
+        _FakeContributor("technical", score=70.0, weight=0.5, confidence=80.0),
+        _FakeContributor("fundamental", score=None, weight=0.5, confidence=0.0, notes="unavailable"),
+    ]
+    default_result = RecommendationEngine(contributors=contributors).generate(_context())
+    harsh_result = RecommendationEngine(
+        contributors=contributors, tuning=RecommendationTuning(coverage_penalty_exponent=3.0)
+    ).generate(_context())
+    assert harsh_result.confidence < default_result.confidence
+
+
+def test_omitting_tuning_uses_default_recommendation_tuning():
+    engine = RecommendationEngine(contributors=[_FakeContributor("technical", score=60.0, weight=1.0)])
+    assert engine.generate(_context()).recommendation == Recommendation.BUY  # default buy_threshold=60.0
 
 
 # --- default construction ---------------------------------------------

@@ -11,7 +11,7 @@ covered by their own test files.
 import pytest
 
 from src.analysis.decision.ai_decision_engine import AIDecisionEngine
-from src.analysis.decision.types import PositionSize, RiskLevel, TimeHorizon
+from src.analysis.decision.types import AIDecisionTuning, PositionSize, RiskLevel, TimeHorizon
 from src.analysis.recommendation.recommendation_engine import RecommendationEngine
 from src.analysis.recommendation.types import (
     AnalysisContext,
@@ -240,3 +240,58 @@ def test_signals_are_the_same_flattened_list_recommendation_engine_produced():
     engine = _engine([_FakeContributor("technical", score=60.0, weight=1.0, signals=[signal])])
     decision = engine.decide(_context())
     assert signal in decision.signals
+
+
+# --- tuning (calibration extension point) ---------------------------
+
+
+def test_default_tuning_matches_prior_hardcoded_behavior():
+    engine = AIDecisionEngine(recommendation_engine=RecommendationEngine(contributors=[_FakeContributor("technical", score=80.0, weight=1.0)]))
+    decision = engine.decide(_context(latest_price=100.0))
+    assert decision.target_price > 100.0
+    assert decision.stop_loss < 100.0
+
+
+def test_custom_atr_multiples_widen_stop_and_target():
+    default_engine = AIDecisionEngine(
+        recommendation_engine=RecommendationEngine(contributors=[_FakeContributor("technical", score=80.0, weight=1.0)])
+    )
+    default_decision = default_engine.decide(_context(latest_price=100.0))
+
+    wide_tuning = AIDecisionTuning(stop_atr_multiple=5.0, base_reward_atr_multiple=8.0, max_extra_reward_atr_multiple=0.0)
+    wide_engine = AIDecisionEngine(
+        recommendation_engine=RecommendationEngine(contributors=[_FakeContributor("technical", score=80.0, weight=1.0)]),
+        tuning=wide_tuning,
+    )
+    wide_decision = wide_engine.decide(_context(latest_price=100.0))
+
+    assert (100.0 - wide_decision.stop_loss) > (100.0 - default_decision.stop_loss)
+    assert (wide_decision.target_price - 100.0) > (default_decision.target_price - 100.0)
+
+
+def test_custom_risk_thresholds_change_risk_level():
+    tuning = AIDecisionTuning(risk_low_threshold=10.0)  # almost anything now counts as LOW risk
+    engine = AIDecisionEngine(
+        recommendation_engine=RecommendationEngine(
+            contributors=[
+                _FakeContributor("technical", score=60.0, weight=0.8),
+                _FakeContributor("risk", score=15.0, weight=0.2),
+            ]
+        ),
+        tuning=tuning,
+    )
+    decision = engine.decide(_context())
+    assert decision.risk_level == RiskLevel.LOW  # would be VERY_HIGH under default thresholds
+
+
+def test_omitting_tuning_uses_default_ai_decision_tuning():
+    engine = AIDecisionEngine(
+        recommendation_engine=RecommendationEngine(
+            contributors=[
+                _FakeContributor("technical", score=60.0, weight=0.8),
+                _FakeContributor("risk", score=70.0, weight=0.2),
+            ]
+        )
+    )
+    decision = engine.decide(_context())
+    assert decision.risk_level == RiskLevel.LOW  # default risk_low_threshold=65.0

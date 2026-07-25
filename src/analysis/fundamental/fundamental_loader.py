@@ -4,6 +4,7 @@ in src/analysis/fundamental/ that touches a database session -- every
 ratio function downstream is DB-agnostic.
 """
 
+from datetime import date
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -41,6 +42,7 @@ def load_fundamental_snapshots(
     stock_id: int,
     period_type: PeriodType,
     limit: int = 8,
+    as_of: Optional[date] = None,
 ) -> List[FundamentalFacts]:
     """Query FundamentalSnapshot rows for one stock/period type, most
     recent fiscal period first, converted to the pure FundamentalFacts
@@ -55,16 +57,27 @@ def load_fundamental_snapshots(
     Returns an empty list, not an exception, if no snapshots match --
     a stock with no reported fundamentals yet is a valid, expected
     state, not an error.
+
+    `as_of` is optional and additive (added for the Backtesting &
+    Calibration Engine's anti-look-ahead requirement) -- omitted, this
+    function's behavior is unchanged from before that milestone: the N
+    most recent snapshots regardless of date, correct for every
+    existing caller (the live /fundamentals and /recommendation routes,
+    which always want "as of right now"). When given, only snapshots
+    with `fiscal_period_end <= as_of` are eligible, so a backtest
+    evaluating a historical date never sees a fiscal period that, from
+    that date's point of view, hadn't happened yet. This alone is a
+    conservative approximation, not exact filing-date accuracy -- see
+    src/backtesting/data_access.py for the additional reporting-lag
+    buffer applied on top of this filter.
     """
-    query = (
-        session.query(FundamentalSnapshot)
-        .filter(
-            FundamentalSnapshot.stock_id == stock_id,
-            FundamentalSnapshot.period_type == period_type,
-        )
-        .order_by(FundamentalSnapshot.fiscal_period_end.desc())
-        .limit(limit)
+    query = session.query(FundamentalSnapshot).filter(
+        FundamentalSnapshot.stock_id == stock_id,
+        FundamentalSnapshot.period_type == period_type,
     )
+    if as_of is not None:
+        query = query.filter(FundamentalSnapshot.fiscal_period_end <= as_of)
+    query = query.order_by(FundamentalSnapshot.fiscal_period_end.desc()).limit(limit)
     return [_to_facts(snapshot) for snapshot in query.all()]
 
 

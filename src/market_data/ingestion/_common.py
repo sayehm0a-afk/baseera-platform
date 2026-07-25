@@ -75,12 +75,17 @@ def upsert_price_bar(session: Session, stock: Stock, data: Dict) -> bool:
         .one_or_none()
     )
 
+    source = data.get("source", "unknown")
+    is_synthetic = data.get("is_synthetic", True)
+
     if existing is not None:
         existing.open = Decimal(str(data["open"]))
         existing.high = Decimal(str(data["high"]))
         existing.low = Decimal(str(data["low"]))
         existing.close = Decimal(str(data["close"]))
         existing.volume = int(data["volume"])
+        existing.source = source
+        existing.is_synthetic = is_synthetic
         return False
 
     session.add(
@@ -93,6 +98,8 @@ def upsert_price_bar(session: Session, stock: Stock, data: Dict) -> bool:
             low=Decimal(str(data["low"])),
             close=Decimal(str(data["close"])),
             volume=int(data["volume"]),
+            source=source,
+            is_synthetic=is_synthetic,
         )
     )
     return True

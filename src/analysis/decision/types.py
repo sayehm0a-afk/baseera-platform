@@ -45,6 +45,30 @@ class PositionSize(str, Enum):
 
 
 @dataclass(frozen=True)
+class AIDecisionTuning:
+    """Every numeric constant `AIDecisionEngine` would otherwise
+    hardcode -- ATR stop/reward multiples and risk-level thresholds.
+    Field defaults exactly reproduce the values AIDecisionEngine used
+    before this dataclass existed, so `AIDecisionEngine()` (no
+    `tuning=`) behaves identically to before -- the same additive,
+    backward-compatible pattern `RecommendationTuning` already applies
+    to RecommendationEngine, giving the Backtesting & Calibration
+    Engine (src/backtesting/) a way to propose alternative values
+    without editing this engine's code.
+    """
+
+    stop_atr_multiple: float = 1.5
+    base_reward_atr_multiple: float = 2.0
+    max_extra_reward_atr_multiple: float = 2.0
+    risk_low_threshold: float = 65.0
+    risk_medium_threshold: float = 45.0
+    risk_high_threshold: float = 25.0
+    time_horizon_long_conviction_threshold: float = 25.0
+    time_horizon_long_adx_threshold: float = 25.0
+    time_horizon_medium_conviction_threshold: float = 10.0
+
+
+@dataclass(frozen=True)
 class DecisionFactorBreakdown:
     """One line of the explainable breakdown -- "Technical Analysis:
     +35", "Risk: -6", etc. `points` is signed and centered on 0 (a

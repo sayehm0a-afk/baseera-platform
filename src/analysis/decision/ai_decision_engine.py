@@ -34,6 +34,7 @@ from src.analysis.decision.contributors.momentum_contributor import MomentumScor
 from src.analysis.decision.contributors.risk_contributor import RiskScoreContributor
 from src.analysis.decision.contributors.volume_contributor import VolumeScoreContributor
 from src.analysis.decision.types import (
+    AIDecisionTuning,
     DecisionFactorBreakdown,
     InvestmentDecision,
     PositionSize,
@@ -45,11 +46,15 @@ from src.analysis.recommendation.recommendation_engine import RecommendationEngi
 from src.analysis.recommendation.technical_contributor import TechnicalScoreContributor
 from src.analysis.recommendation.types import AnalysisContext, Recommendation, ScoreContribution
 
-_STOP_ATR_MULTIPLE = 1.5
-_BASE_REWARD_ATR_MULTIPLE = 2.0
-_MAX_EXTRA_REWARD_ATR_MULTIPLE = 2.0
 _DEFAULT_ATR_PCT_FALLBACK = 0.02  # used only when ATR itself is unavailable but a price is
 _MIN_PRICE = 0.01
+
+# Recorded on every RecommendationSnapshot the Backtesting & Calibration
+# Engine writes (src/backtesting/) -- bump this when a change to this
+# module or RecommendationEngine would make an old snapshot's score no
+# longer reproducible from its stored inputs, so an auditor can tell
+# "this decision predates behavior change X."
+ENGINE_VERSION = "1.0.0"
 
 _CATEGORY_LABELS = {
     "technical": "Technical Analysis",
@@ -75,12 +80,18 @@ _BASE_POSITION_SIZE = {
 _MAX_REASON_SIGNALS = 6
 
 
-def _default_contributors() -> List:
+def default_contributors() -> List:
     """The AI Decision Intelligence Layer's full contributor set.
     Weights sum to 1.0 and are deliberately different from
     RecommendationEngine's own 50/50 default (calibrated for exactly
     two contributors) -- Technical/Fundamental remain the two largest
-    single weights, the rest are additive refinements."""
+    single weights, the rest are additive refinements. Public (not a
+    module-private helper) so anything that needs AIDecisionEngine's
+    default contributor set without also wanting its default tuning
+    (e.g. src.backtesting.baselines.AIDecisionEngineStrategy, when a
+    caller overrides RecommendationTuning but not the contributor
+    list) can reuse it instead of re-deriving the same nine
+    instances."""
     return [
         TechnicalScoreContributor(weight=0.25),
         FundamentalScoreContributor(weight=0.25),
@@ -104,16 +115,18 @@ def _price_reference(context: AnalysisContext) -> Optional[float]:
     return None
 
 
-def _compute_price_targets(final_score: float, price: Optional[float], atr_value: Optional[float]):
+def _compute_price_targets(
+    final_score: float, price: Optional[float], atr_value: Optional[float], tuning: AIDecisionTuning
+):
     if price is None or price <= 0:
         return None, None, None
 
     atr_pct = (atr_value / price) if (atr_value is not None and atr_value > 0) else _DEFAULT_ATR_PCT_FALLBACK
     direction = 1 if final_score >= 50 else -1
     conviction = min(1.0, abs(final_score - 50) / 50.0)
-    reward_multiple = _BASE_REWARD_ATR_MULTIPLE + _MAX_EXTRA_REWARD_ATR_MULTIPLE * conviction
+    reward_multiple = tuning.base_reward_atr_multiple + tuning.max_extra_reward_atr_multiple * conviction
 
-    stop_distance = atr_pct * _STOP_ATR_MULTIPLE * price
+    stop_distance = atr_pct * tuning.stop_atr_multiple * price
     reward_distance = atr_pct * reward_multiple * price
 
     if direction > 0:
@@ -129,28 +142,28 @@ def _compute_price_targets(final_score: float, price: Optional[float], atr_value
     return target_price, stop_loss, expected_return_pct
 
 
-def _derive_risk_level(contributions: List[ScoreContribution]) -> RiskLevel:
+def _derive_risk_level(contributions: List[ScoreContribution], tuning: AIDecisionTuning) -> RiskLevel:
     risk_contribution = next((c for c in contributions if c.source == "risk"), None)
     if risk_contribution is None or risk_contribution.score is None:
         return RiskLevel.MEDIUM  # unknown risk defaults to a conservative middle, never LOW
 
     rs = risk_contribution.score
-    if rs >= 65:
+    if rs >= tuning.risk_low_threshold:
         return RiskLevel.LOW
-    if rs >= 45:
+    if rs >= tuning.risk_medium_threshold:
         return RiskLevel.MEDIUM
-    if rs >= 25:
+    if rs >= tuning.risk_high_threshold:
         return RiskLevel.HIGH
     return RiskLevel.VERY_HIGH
 
 
-def _derive_time_horizon(final_score: float, technical_result) -> TimeHorizon:
+def _derive_time_horizon(final_score: float, technical_result, tuning: AIDecisionTuning) -> TimeHorizon:
     conviction = abs(final_score - 50.0)
     adx = technical_result.indicators["adx_14"].latest() if technical_result is not None else None
 
-    if conviction >= 25 and adx is not None and adx >= 25:
+    if conviction >= tuning.time_horizon_long_conviction_threshold and adx is not None and adx >= tuning.time_horizon_long_adx_threshold:
         return TimeHorizon.LONG_TERM
-    if conviction >= 10:
+    if conviction >= tuning.time_horizon_medium_conviction_threshold:
         return TimeHorizon.MEDIUM_TERM
     return TimeHorizon.SHORT_TERM
 
@@ -214,10 +227,21 @@ class AIDecisionEngine:
     pre-configured `RecommendationEngine` (e.g. with a custom
     contributor list/weights, or extra modules beyond the default
     nine) to change what feeds the decision -- this class's own
-    `decide()` signature never changes either way."""
+    `decide()` signature never changes either way. Pass a custom
+    `tuning` (AIDecisionTuning) to change ATR stop/reward multiples or
+    risk-level thresholds without touching this class's code -- the
+    Backtesting & Calibration Engine's extension point for this
+    layer's own price-target/risk logic, distinct from
+    RecommendationTuning (which governs the RecommendationEngine layer
+    below it)."""
 
-    def __init__(self, recommendation_engine: Optional[RecommendationEngine] = None):
-        self._recommendation_engine = recommendation_engine or RecommendationEngine(contributors=_default_contributors())
+    def __init__(
+        self,
+        recommendation_engine: Optional[RecommendationEngine] = None,
+        tuning: Optional[AIDecisionTuning] = None,
+    ):
+        self._recommendation_engine = recommendation_engine or RecommendationEngine(contributors=default_contributors())
+        self._tuning = tuning or AIDecisionTuning()
 
     def decide(self, context: AnalysisContext) -> InvestmentDecision:
         result = self._recommendation_engine.generate(context)
@@ -226,10 +250,12 @@ class AIDecisionEngine:
         atr_value = (
             context.technical_result.indicators["atr_14"].latest() if context.technical_result is not None else None
         )
-        target_price, stop_loss, expected_return_pct = _compute_price_targets(result.final_score, price, atr_value)
+        target_price, stop_loss, expected_return_pct = _compute_price_targets(
+            result.final_score, price, atr_value, self._tuning
+        )
 
-        risk_level = _derive_risk_level(result.contributions)
-        time_horizon = _derive_time_horizon(result.final_score, context.technical_result)
+        risk_level = _derive_risk_level(result.contributions, self._tuning)
+        time_horizon = _derive_time_horizon(result.final_score, context.technical_result, self._tuning)
         position_size = _derive_position_size(result.recommendation, result.confidence, risk_level)
         reasons = _build_reasons(
             context.symbol, result.recommendation, result.final_score, result.confidence,

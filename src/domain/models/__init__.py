@@ -12,6 +12,9 @@ from src.domain.models.market_snapshot import MarketSnapshot
 from src.domain.models.fundamental_snapshot import FundamentalSnapshot, PeriodType
 from src.domain.models.dividend import Dividend
 from src.domain.models.ingestion_run_log import IngestionRunLog, IngestionJobStatus
+from src.domain.models.backtest_run import BacktestRun, BacktestRunStatus, DataProvenanceMode
+from src.domain.models.recommendation_snapshot import RecommendationSnapshot, RecommendationLabel
+from src.domain.models.calibration_config import CalibrationConfig, CalibrationStatus
 
 __all__ = [
     "Stock",
@@ -23,4 +26,11 @@ __all__ = [
     "Dividend",
     "IngestionRunLog",
     "IngestionJobStatus",
+    "BacktestRun",
+    "BacktestRunStatus",
+    "DataProvenanceMode",
+    "RecommendationSnapshot",
+    "RecommendationLabel",
+    "CalibrationConfig",
+    "CalibrationStatus",
 ]

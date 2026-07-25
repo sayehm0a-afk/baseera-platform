@@ -119,6 +119,37 @@ def test_load_latest_fundamental_facts_returns_most_recent(session, stock):
     assert latest.fiscal_period_end == date(2024, 12, 31)
 
 
+def test_as_of_excludes_snapshots_from_the_future(session, stock):
+    _add_snapshot(session, stock, 2022)
+    _add_snapshot(session, stock, 2023)
+    _add_snapshot(session, stock, 2024)
+    session.commit()
+
+    facts = load_fundamental_snapshots(session, stock.id, PeriodType.ANNUAL, as_of=date(2023, 6, 1))
+
+    assert [f.fiscal_period_end.year for f in facts] == [2022]  # 2023 and 2024 not yet "as of" this date
+
+
+def test_as_of_boundary_is_inclusive(session, stock):
+    _add_snapshot(session, stock, 2023)
+    session.commit()
+
+    facts = load_fundamental_snapshots(session, stock.id, PeriodType.ANNUAL, as_of=date(2023, 12, 31))
+
+    assert len(facts) == 1
+
+
+def test_as_of_none_preserves_prior_behavior(session, stock):
+    _add_snapshot(session, stock, 2022)
+    _add_snapshot(session, stock, 2024)
+    session.commit()
+
+    with_as_of_none = load_fundamental_snapshots(session, stock.id, PeriodType.ANNUAL, as_of=None)
+    without_as_of = load_fundamental_snapshots(session, stock.id, PeriodType.ANNUAL)
+
+    assert with_as_of_none == without_as_of
+
+
 def test_optional_fields_missing_in_db_are_none_in_facts(session, stock):
     _add_snapshot(session, stock, 2024)  # gross_profit/inventory/etc. not set
     session.commit()

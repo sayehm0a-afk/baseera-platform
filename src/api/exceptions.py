@@ -39,3 +39,41 @@ class ProviderUnavailableError(APIError):
 class InvalidSymbolFormatError(APIError):
     status_code = 422
     code = "invalid_symbol_format"
+
+
+class BacktestRunNotFoundError(APIError):
+    status_code = 404
+    code = "backtest_run_not_found"
+
+
+class CalibrationNotFoundError(APIError):
+    status_code = 404
+    code = "calibration_not_found"
+
+
+class InvalidBacktestConfigError(APIError):
+    """A backtest request violates a bounded-workload limit (date
+    range too wide, too many symbols) or references an unknown
+    strategy/calibration version -- a client-correctable 422, not a
+    server failure."""
+
+    status_code = 422
+    code = "invalid_backtest_config"
+
+
+class DuplicateBacktestError(APIError):
+    """Another large-scope backtest is already PENDING/RUNNING -- the
+    "no duplicate full-market jobs" safeguard. Distinct from
+    idempotency (an exact-duplicate request returns the existing run,
+    200, rather than erroring at all)."""
+
+    status_code = 409
+    code = "duplicate_backtest"
+
+
+class InvalidCalibrationTransitionError(APIError):
+    """A calibration lifecycle action was requested from a status that
+    doesn't allow it (e.g. activating a DRAFT config)."""
+
+    status_code = 409
+    code = "invalid_calibration_transition"

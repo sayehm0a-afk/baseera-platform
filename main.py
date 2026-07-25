@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Import structured logging -- must come after sys.path.insert above so `src` is importable
 from src.core.monitoring.structured_logging import init_logging, get_logger  # noqa: E402
 from src.api.error_handlers import register_error_handlers  # noqa: E402
+from src.api.routes.backtests import router as backtests_router  # noqa: E402
+from src.api.routes.calibrations import router as calibrations_router  # noqa: E402
 from src.api.routes.stocks import router as stocks_router  # noqa: E402
 
 # Initialize structured logging
@@ -51,6 +53,8 @@ if _cors_origins:
 
 register_error_handlers(app)
 app.include_router(stocks_router)
+app.include_router(backtests_router)
+app.include_router(calibrations_router)
 
 # Global runtime kernel
 kernel = None

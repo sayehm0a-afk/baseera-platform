@@ -934,6 +934,94 @@ error shape), not a separate workstream. This milestone implements (1).
    uses, so it is a disclosed, deliberately out-of-scope extension
    point rather than a stub.
 
+## Completed: Backtesting & Calibration Engine
+
+Full detail in `docs/BACKTESTING_AND_CALIBRATION.md`; summary here.
+
+1. **`src/backtesting/`** (new package) — `BacktestingEngine` evaluates
+   one symbol, a group of symbols, or a bounded full universe over a
+   historical period at a configurable evaluation frequency, using
+   only already-ingested database data (never a live provider call).
+   `data_access.py` is the anti-look-ahead boundary: price bars are
+   read with a hard `end=as_of` cutoff, fundamentals with an
+   additional configurable reporting-lag buffer, both backed by
+   regression tests that fail loudly on a leak. `metrics.py` is a
+   pure, independently-tested statistics module (direction accuracy,
+   target/stop hit rates, win/loss/profit factor, max drawdown,
+   volatility, Sharpe/Sortino, Expected Calibration Error, and
+   breakdowns by recommendation/confidence/risk/horizon/sector/symbol/
+   regime). `baselines.py` provides transparent comparison strategies
+   (buy-and-hold, SMA-crossover, RSI-only, technical-only,
+   fundamental-only, uncalibrated AI decision engine) alongside the
+   real `AIDecisionEngineStrategy`, all through one `Strategy`
+   protocol. `walk_forward.py` splits a date range into rolling/
+   expanding (train, validation) windows plus a reserved, untouched
+   test period, structurally guaranteeing no window ever overlaps it.
+2. **Reused, not duplicated**: `TechnicalAnalysisEngine`,
+   `FundamentalAnalysisEngine`, `RecommendationEngine`,
+   `AIDecisionEngine`, and every `ScoreContributor`, called exactly as
+   the live `/recommendation`/`/decision` routes already do. Two small,
+   additive, backward-compatible extensions were made so calibration
+   could be genuinely functional: `PriceBar` gained `source`/
+   `is_synthetic` columns (both providers already returned them;
+   `upsert_price_bar` was discarding them -- migration `9d260aefc6a7`),
+   `load_fundamental_snapshots` gained an optional `as_of` parameter,
+   and `RecommendationEngine`/`AIDecisionEngine` gained an optional
+   `tuning` object whose defaults exactly reproduce their prior
+   hardcoded constants (locked in by regression tests).
+3. **`src/backtesting/calibration/`** — `CalibrationEngine` implements
+   the full propose → validate → activate → rollback lifecycle against
+   a new `CalibrationConfig` model. `validate()` runs the candidate and
+   the currently-active configuration (or engine defaults) through
+   `BacktestingEngine` over the identical validation period and applies
+   an explicit anti-overfitting guard: a candidate is only `VALIDATED`
+   if it does not regress direction accuracy **and** does not
+   materially worsen max drawdown, even when the primary metric
+   improved -- otherwise `REJECTED` with the reason recorded. At most
+   one configuration is `ACTIVE` at a time; activating a new one marks
+   the previous `SUPERSEDED`; `rollback()` is always an explicit,
+   auditable call. Not wired into the live production routes this
+   milestone (disclosed).
+4. **New domain models + migration `9d260aefc6a7`**: `RecommendationSnapshot`
+   (the durable, auditable record of one historical AI decision --
+   every score, target/stop, provenance field, and engine/calibration
+   version, upserted idempotently), `BacktestRun` (configuration,
+   status, progress, metrics), `CalibrationConfig`.
+5. **REST API** (`src/api/routes/backtests.py`, `calibrations.py`) --
+   `POST /api/v1/backtests` schedules a FastAPI `BackgroundTask` and
+   never blocks on the run itself; idempotent (an identical request
+   returns the existing run); rejects a second large-scope run while
+   one is already in flight. `GET .../status`, `/metrics`, `/trades`
+   (paginated), `/confidence-calibration`, `/comparison`; calibration
+   CRUD plus `/validate`, `/activate`, `/rollback`. Bounded symbol
+   counts and date ranges throughout, all env-var configurable.
+6. **Tests** -- 154 unit tests under `tests/unit/backtesting/`
+   (data access/anti-look-ahead, metrics, regime, baselines, engine,
+   walk-forward, calibration parameters/engine, job runner), 12 domain
+   model tests, 37 integration tests (REST routes for both routers,
+   plus a full Alembic chain upgrade/downgrade/re-upgrade round-trip
+   test against SQLite -- this repository's first migration test).
+   Every metric formula, every anti-look-ahead boundary, every
+   idempotency/retry/cancellation path, and the full calibration state
+   machine has a deterministic regression test. **1531 tests pass, 12
+   skipped, repo-wide** (up from 1315). `flake8 src/ tests/ main.py`
+   is clean at 0 violations (7 pre-existing violations from earlier
+   milestones were also fixed while here, restoring the CI-documented
+   baseline).
+7. **Disclosed limitations** -- no corporate-action price adjustment;
+   fundamental "as of" uses a configurable reporting-lag approximation,
+   not exact filing dates; market regime is per-symbol (no TASI index
+   history is ingested -- `MarketSnapshot` remains unpopulated);
+   drawdown/volatility/Sharpe/Sortino are computed on a discrete,
+   equal-weighted trade-sequence equity curve, not a true portfolio
+   simulation; an active calibration does not yet affect live
+   production routes. **No live SAHMK network access exists in this
+   environment -- every test in this milestone runs against synthetic,
+   hand-seeded data; no metric value anywhere in this codebase's tests
+   is a claim about real market performance.** Full detail, including
+   exactly what remains before the Autonomous AI Analyst phase, in
+   `docs/BACKTESTING_AND_CALIBRATION.md`.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

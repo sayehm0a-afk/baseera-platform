@@ -115,7 +115,39 @@ class ScoreContributor(Protocol):
     name: str
     default_weight: float
 
-    def contribute(self, context: AnalysisContext) -> ScoreContribution: ...
+    def contribute(self, context: AnalysisContext) -> ScoreContribution:
+        ...
+
+
+@dataclass(frozen=True)
+class RecommendationTuning:
+    """Every numeric constant `RecommendationEngine.generate()` would
+    otherwise hardcode -- recommendation-band thresholds and the
+    confidence agreement/disagreement heuristic. Field defaults are
+    exactly the values RecommendationEngine used before this dataclass
+    existed, so `RecommendationEngine(contributors=[...])` (no
+    `tuning=`) behaves identically to before -- this exists purely so
+    the Backtesting & Calibration Engine (src/backtesting/) can
+    propose and evaluate alternative values without editing this
+    engine's code, the same reasoning `ScoreContributor` already
+    applies to *which modules* run, now applied to *how their blended
+    score becomes a recommendation*.
+    """
+
+    strong_buy_threshold: float = 75.0
+    buy_threshold: float = 60.0
+    sell_threshold: float = 40.0
+    strong_sell_threshold: float = 25.0
+    agreement_spread_threshold: float = 15.0
+    agreement_bonus: float = 8.0
+    disagreement_spread_threshold: float = 40.0
+    disagreement_penalty: float = 12.0
+    # confidence = weighted_confidence * (coverage ** this) -- 1.0 (the
+    # default) is the original linear "missing modules proportionally
+    # reduce confidence" behavior; >1.0 penalizes missing data more
+    # harshly, <1.0 more gently. Calibratable per Phase 5's "confidence
+    # penalties for missing data."
+    coverage_penalty_exponent: float = 1.0
 
 
 @dataclass(frozen=True)
