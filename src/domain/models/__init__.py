@@ -10,6 +10,8 @@ from src.domain.models.stock import Stock
 from src.domain.models.price_bar import PriceBar, Timeframe
 from src.domain.models.market_snapshot import MarketSnapshot
 from src.domain.models.fundamental_snapshot import FundamentalSnapshot, PeriodType
+from src.domain.models.dividend import Dividend
+from src.domain.models.ingestion_run_log import IngestionRunLog, IngestionJobStatus
 
 __all__ = [
     "Stock",
@@ -18,4 +20,7 @@ __all__ = [
     "MarketSnapshot",
     "FundamentalSnapshot",
     "PeriodType",
+    "Dividend",
+    "IngestionRunLog",
+    "IngestionJobStatus",
 ]

@@ -50,6 +50,7 @@ class Stock(Base):
     fundamental_snapshots = relationship(
         "FundamentalSnapshot", back_populates="stock", cascade="all, delete-orphan"
     )
+    dividends = relationship("Dividend", back_populates="stock", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Stock symbol={self.symbol!r} name_en={self.name_en!r}>"

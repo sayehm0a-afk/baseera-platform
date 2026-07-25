@@ -14,6 +14,33 @@ from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, 
 from src.market_data.providers.market_data_provider import IMarketDataProvider, ProviderHealth
 
 
+class _AlwaysDownProvider(IMarketDataProvider):
+    """A minimal IMarketDataProvider that fails every real call --
+    used to test how routes degrade when the market data provider is
+    unreachable."""
+
+    async def authenticate(self):
+        return False
+
+    async def get_stock_data(self, symbol):
+        raise CircuitBreakerOpenError()
+
+    async def get_historical_ohlcv(self, symbol, start, end, interval="1d"):
+        raise CircuitBreakerOpenError()
+
+    async def get_index_data(self, index_name):
+        raise NotImplementedError
+
+    async def get_market_news(self, limit=10):
+        raise NotImplementedError
+
+    async def health_check(self):
+        return ProviderHealth.UNHEALTHY
+
+    async def disconnect(self):
+        pass
+
+
 def _make_stock(session: Session, symbol: str = "2222") -> Stock:
     stock = Stock(symbol=symbol, name_en="Saudi Aramco", sector="Energy")
     session.add(stock)
@@ -105,25 +132,6 @@ def test_get_quote_422_for_malformed_symbol(client, db_session):
 
 
 def test_get_quote_503_when_provider_unavailable(client, db_session, monkeypatch):
-    class _AlwaysDownProvider(IMarketDataProvider):
-        async def authenticate(self):
-            return False
-
-        async def get_stock_data(self, symbol):
-            raise CircuitBreakerOpenError()
-
-        async def get_index_data(self, index_name):
-            raise NotImplementedError
-
-        async def get_market_news(self, limit=10):
-            raise NotImplementedError
-
-        async def health_check(self):
-            return ProviderHealth.UNHEALTHY
-
-        async def disconnect(self):
-            pass
-
     import main
     from src.api.dependencies import get_market_provider
 
@@ -265,25 +273,6 @@ def test_get_fundamentals_still_succeeds_when_live_price_is_unavailable(client, 
     valuation ratios that need a live price become None."""
     stock = _make_stock(db_session)
     _add_fundamentals(db_session, stock)
-
-    class _AlwaysDownProvider(IMarketDataProvider):
-        async def authenticate(self):
-            return False
-
-        async def get_stock_data(self, symbol):
-            raise CircuitBreakerOpenError()
-
-        async def get_index_data(self, index_name):
-            raise NotImplementedError
-
-        async def get_market_news(self, limit=10):
-            raise NotImplementedError
-
-        async def health_check(self):
-            return ProviderHealth.UNHEALTHY
-
-        async def disconnect(self):
-            pass
 
     import main
     from src.api.dependencies import get_market_provider

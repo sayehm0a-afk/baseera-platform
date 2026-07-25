@@ -216,6 +216,54 @@ async def test_get_company_profile_tolerates_missing_fields():
     assert profile.sector is None
 
 
+# --- get_company_directory -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_parses_companies_key():
+    client = AsyncMock()
+    client.get_companies.return_value = {
+        "companies": [
+            {"symbol": "2222", "name": "Saudi Aramco", "sector": "Energy"},
+            {"symbol": "1120", "name": "Al Rajhi Bank", "sector": "Financials"},
+        ]
+    }
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert [c.symbol for c in directory] == ["2222", "1120"]
+    assert directory[0].name == "Saudi Aramco"
+    assert directory[0].sector == "Energy"
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_falls_back_to_results_and_ticker_key():
+    client = AsyncMock()
+    client.get_companies.return_value = {"results": [{"ticker": "2010", "company_name": "SABIC"}]}
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert directory[0].symbol == "2010"
+    assert directory[0].name == "SABIC"
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_skips_entries_with_no_symbol():
+    client = AsyncMock()
+    client.get_companies.return_value = {"companies": [{"name": "No Symbol Co"}]}
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert directory == []
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_is_cached():
+    client = AsyncMock()
+    client.get_companies.return_value = {"companies": [{"symbol": "2222"}]}
+    service = _service(client)
+    await service.get_company_directory()
+    await service.get_company_directory()
+    client.get_companies.assert_awaited_once()
+
+
 # --- get_financials ------------------------------------------------------
 
 

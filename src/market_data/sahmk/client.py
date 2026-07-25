@@ -44,6 +44,7 @@ from src.market_data.sahmk.exceptions import (
     SahmkRateLimitError,
     SahmkRequestError,
 )
+from src.market_data.sahmk.rate_limiter import SahmkRateLimiter, get_default_rate_limiter
 from src.market_data.validators.symbol_validator import validate_symbol_format
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,7 @@ class SahmkClient:
         timeout_seconds: float = 10.0,
         session: Optional[aiohttp.ClientSession] = None,
         circuit_breaker: Optional[CircuitBreaker] = None,
+        rate_limiter: Optional[SahmkRateLimiter] = None,
     ):
         self._api_key = api_key if api_key is not None else market_data_config.get_sahmk_api_key()
         self._base_url = (base_url or market_data_config.get_sahmk_base_url()).rstrip("/")
@@ -103,6 +105,12 @@ class SahmkClient:
         self._circuit_breaker = circuit_breaker or CircuitBreaker(
             failure_threshold=3, recovery_timeout=30
         )
+        # Shared, process-wide by default (see rate_limiter.py's module
+        # docstring for why: SAHMK's quota is per API key, not per
+        # client instance, and this class has more than one instance
+        # per process -- market data and fundamentals each hold their
+        # own). Only ever overridden explicitly, for tests.
+        self._rate_limiter = rate_limiter or get_default_rate_limiter()
 
     @property
     def has_credentials(self) -> bool:
@@ -139,6 +147,18 @@ class SahmkClient:
             raise SahmkConfigurationError(
                 "SAHMK_API_KEY is not configured -- cannot call the SAHMK API."
             )
+
+        # Rate-limited once per logical request, deliberately outside
+        # circuit_breaker.execute()'s scope below -- a daily-quota
+        # refusal (SahmkRateLimitExceededError) says nothing about
+        # whether SAHMK itself is reachable/healthy, so it must never
+        # be counted as a breaker failure, the same reasoning
+        # _BusinessError exists for. The per-minute wait only ever
+        # sleeps, never raises, so it's safe either way -- checked here
+        # for the same reason: one throttle point for the whole
+        # request, not one per retry attempt (tenacity's own backoff
+        # already spaces retries of one request out).
+        await self._rate_limiter.acquire()
 
         @retry(
             reraise=True,
@@ -319,3 +339,11 @@ class SahmkClient:
         splits/announcements endpoint distinct from this one."""
         validate_symbol_format(symbol)
         return await self._request(f"/dividends/{symbol}/")
+
+    async def get_companies(self) -> Dict[str, Any]:
+        """GET /companies/ -- company directory / symbol discovery
+        (Free tier). Used for periodic symbol-universe sync
+        (src.market_data.ingestion.ingest_symbols); a single call, not
+        one per symbol, so discovering the full ~350-symbol Tadawul+Nomu
+        universe costs one rate-limited request, not hundreds."""
+        return await self._request("/companies/")

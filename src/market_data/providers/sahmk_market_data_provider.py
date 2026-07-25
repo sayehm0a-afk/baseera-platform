@@ -15,7 +15,7 @@ implements against.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
@@ -100,6 +100,32 @@ class SahmkMarketDataProvider(IMarketDataProvider):
             "is_synthetic": False,
         }
 
+    async def get_historical_ohlcv(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        interval: str = "1d",
+    ) -> List[Dict[str, Any]]:
+        """A range of OHLCV bars via GET /historical/{symbol}/ --
+        the same endpoint get_stock_data() uses for a single day,
+        generalized to a date range for ingestion backfill."""
+        bars = await self._service.get_historical_bars(symbol, start, end, interval=interval)
+        return [
+            {
+                "symbol": bar.symbol,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume,
+                "timestamp": (bar.timestamp or datetime.now(timezone.utc)).isoformat(),
+                "source": "sahmk",
+                "is_synthetic": False,
+            }
+            for bar in bars
+        ]
+
     async def get_latest_quote(self, symbol: str) -> Dict[str, Any]:
         """Live price via GET /quote/{symbol}/. Not part of
         IMarketDataProvider -- exposed for callers that only need a
@@ -115,6 +141,24 @@ class SahmkMarketDataProvider(IMarketDataProvider):
             "source": "sahmk",
             "is_synthetic": False,
         }
+
+    async def get_symbol_directory(self) -> List[Dict[str, Any]]:
+        """The full Tadawul+Nomu symbol directory via GET /companies/.
+        Not part of IMarketDataProvider -- DevMarketDataProvider has no
+        real "discovery" concept, so this is opportunistic: callers
+        (ingest_symbols.py) check for this method's presence rather
+        than assuming every provider has it."""
+        companies = await self._service.get_company_directory()
+        return [
+            {
+                "symbol": c.symbol,
+                "name": c.name,
+                "sector": c.sector,
+                "source": "sahmk",
+                "is_synthetic": False,
+            }
+            for c in companies
+        ]
 
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:
         summary = await self._service.get_index_snapshot(index_name)

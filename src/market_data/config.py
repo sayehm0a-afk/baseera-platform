@@ -9,6 +9,7 @@ different host.
 """
 
 import os
+from typing import Optional
 
 SAHMK_DEFAULT_BASE_URL = "https://app.sahmk.sa/api/v1"
 
@@ -53,3 +54,24 @@ def get_provider_selection_cache_seconds() -> float:
     """How long provider_factory's auto-selection result is cached
     before re-probing connectivity. 0 disables caching (always re-probe)."""
     return float(os.getenv("MARKET_DATA_PROVIDER_CACHE_SECONDS", "60"))
+
+
+def get_sahmk_max_requests_per_minute() -> int:
+    """Ceiling on SAHMK requests per rolling 60s window, shared by every
+    SahmkClient in this process (src.market_data.sahmk.rate_limiter) --
+    SAHMK's quota is per API key, not per client instance. The exact
+    Starter-plan number is unverified (see docs/SAHMK_INTEGRATION.md);
+    20/minute is a deliberately conservative default, not a confirmed
+    quota -- override with the real number once known."""
+    return int(os.getenv("SAHMK_MAX_REQUESTS_PER_MINUTE", "20"))
+
+
+def get_sahmk_max_requests_per_day() -> Optional[int]:
+    """Optional calendar-day (UTC) request quota. None (the default) means
+    no daily cap is enforced client-side -- SAHMK's own daily quota (if
+    any, for this plan) still applies and is enforced server-side via
+    429s, which SahmkClient already retries/surfaces. Set this only if
+    the account's actual daily quota is known, to fail fast locally
+    instead of spending a request to discover the 429."""
+    raw = os.getenv("SAHMK_MAX_REQUESTS_PER_DAY", "")
+    return int(raw) if raw.strip() else None

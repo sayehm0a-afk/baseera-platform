@@ -1,0 +1,323 @@
+"""The ingestion scheduler: runs the four ingestion jobs (symbols,
+historical OHLCV, fundamentals, dividends) on independent recurring
+intervals, so the database stays synchronized with SAHMK automatically
+once enabled (INGESTION_SCHEDULER_ENABLED=true).
+
+Not built on src.core.runtime.task_queue.scheduler.Scheduler/IScheduler
+-- that class only ever records `{task_id, delay}` in a dict; nothing
+in this codebase reads that dict or fires anything from it. This is a
+purpose-built async interval scheduler instead: one asyncio.Task per
+job, each looping "run, then sleep(interval)" independently, so a slow
+or failing job never blocks another job's schedule.
+
+Each job run is:
+  - Never overlapping with itself by construction: each job's loop is
+    "await run, then await sleep(interval)," strictly sequential, so
+    the next run cannot start until the previous one (including all of
+    its own retries) has fully finished -- no lock is needed to
+    prevent two concurrent runs of the same job, because the loop
+    structure makes that impossible in the first place.
+  - Retried at the job level (run_ingestion_job, exponential backoff)
+    if the whole run raises -- distinct from SahmkClient's own
+    per-request retry, this is about the *job* failing outright (a DB
+    connection blip, an exception escaping the ingestion function's
+    own per-symbol isolation), not a single request.
+  - Logged twice: a structured log line (this process's normal
+    logging) and a row in IngestionRunLog (durable, queryable) --
+    execution time, symbols requested/succeeded/failed, rows upserted,
+    and retry count, exactly as requested.
+
+Idempotency, incremental updates, and duplicate prevention are NOT this
+module's concern -- they're guaranteed one layer down, by each
+ingestion job (get_or_create_stock, upsert_price_bar, PriceBar's/
+FundamentalSnapshot's/Dividend's own unique constraints). This module
+only decides *when* to call them and *what happened* when it did.
+"""
+
+import asyncio
+import contextlib
+import logging
+from datetime import datetime, timezone
+from typing import Awaitable, Callable, List, Optional
+
+from sqlalchemy.orm import Session
+
+from src.core.db import database
+from src.domain.models import IngestionJobStatus, IngestionRunLog
+from src.market_data.ingestion import config as ingestion_config
+from src.market_data.ingestion._common import IngestionResult
+from src.market_data.ingestion.ingest_dividends import ingest_dividends
+from src.market_data.ingestion.ingest_fundamentals import ingest_fundamentals
+from src.market_data.ingestion.ingest_historical_ohlcv import ingest_historical_ohlcv
+from src.market_data.ingestion.ingest_symbols import sync_symbols
+from src.market_data.fundamental_provider_factory import get_fundamental_data_provider
+from src.market_data.provider_factory import get_market_data_provider
+
+logger = logging.getLogger(__name__)
+
+
+class _NonDisconnectingProviderProxy:
+    """Wraps a provider obtained from provider_factory/
+    fundamental_provider_factory's process-wide cache.
+
+    Every ingest_*() function calls provider.authenticate() at the
+    start and provider.disconnect() at the end of its own run -- their
+    own established M2.1/M2.3 contract, unchanged here. That contract
+    is correct for a caller that owns the provider for exactly one run,
+    but the scheduler's provider is a *shared, cached* instance the
+    provider_factory layer expects to keep serving other callers (the
+    API layer, or the next scheduled run within the cache window).
+    Disconnecting it out from under them would break those other
+    callers. authenticate() is skipped for the same reason in reverse:
+    provider_factory already authenticated this instance once, during
+    selection, to decide it was worth caching at all.
+
+    Every other call (including provider-specific "extra" methods not
+    on IMarketDataProvider/IFundamentalDataProvider, like
+    get_dividends()/get_symbol_directory()) passes straight through via
+    __getattr__.
+    """
+
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    async def authenticate(self) -> bool:
+        return True
+
+    async def disconnect(self) -> None:
+        pass
+
+
+async def run_ingestion_job(
+    job_name: str,
+    job_fn: Callable[[], Awaitable[IngestionResult]],
+    session_factory: Callable[[], Session],
+    max_attempts: Optional[int] = None,
+    retry_base_delay_seconds: Optional[float] = None,
+) -> IngestionRunLog:
+    """Executes one job run to completion: writes a RUNNING
+    IngestionRunLog row immediately, retries `job_fn` with exponential
+    backoff if it raises, updates the same row in place with the
+    outcome, and emits a structured log line. Never raises -- a job
+    that fails every attempt is recorded as FAILED, not propagated,
+    so one job's failure can't take down the scheduler's other loops
+    or crash the process.
+    """
+    max_attempts = max_attempts if max_attempts is not None else ingestion_config.get_ingestion_job_max_attempts()
+    retry_base_delay_seconds = (
+        retry_base_delay_seconds
+        if retry_base_delay_seconds is not None
+        else ingestion_config.get_ingestion_job_retry_base_delay_seconds()
+    )
+
+    started_at = datetime.now(timezone.utc)
+    session = session_factory()
+    try:
+        run_log = IngestionRunLog(job_name=job_name, started_at=started_at)
+        session.add(run_log)
+        session.commit()
+        run_log_id = run_log.id
+    finally:
+        session.close()
+
+    result: Optional[IngestionResult] = None
+    error_summary: Optional[str] = None
+    retry_count = 0
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = await job_fn()
+            retry_count = attempt - 1  # set once, at the final (successful) outcome
+            break
+        except Exception as exc:  # noqa: BLE001 -- deliberate: any job failure must be caught and logged, never crash the scheduler loop
+            if attempt >= max_attempts:
+                retry_count = attempt - 1  # set once, at the final (failed) outcome
+                error_summary = f"{type(exc).__name__}: {exc}"
+                logger.error(
+                    "Ingestion job '%s' failed after %d attempt(s): %s",
+                    job_name,
+                    attempt,
+                    exc,
+                    exc_info=True,
+                )
+                break
+            delay = retry_base_delay_seconds * (2 ** (attempt - 1))
+            logger.warning(
+                "Ingestion job '%s' attempt %d/%d failed (retrying in %.1fs): %s",
+                job_name,
+                attempt,
+                max_attempts,
+                delay,
+                exc,
+            )
+            await asyncio.sleep(delay)
+
+    finished_at = datetime.now(timezone.utc)
+    duration_seconds = (finished_at - started_at).total_seconds()
+
+    session = session_factory()
+    try:
+        run_log = session.query(IngestionRunLog).filter_by(id=run_log_id).one()
+        run_log.finished_at = finished_at
+        run_log.duration_seconds = round(duration_seconds, 3)
+        run_log.retry_count = retry_count
+
+        if result is not None:
+            run_log.symbols_requested = result.symbols_requested
+            run_log.symbols_succeeded = result.symbols_succeeded
+            run_log.symbols_failed = result.symbols_failed
+            run_log.rows_upserted = result.rows_upserted
+            if result.symbols_failed == 0:
+                run_log.status = IngestionJobStatus.SUCCESS
+            elif result.symbols_succeeded > 0:
+                run_log.status = IngestionJobStatus.PARTIAL
+            else:
+                run_log.status = IngestionJobStatus.FAILED
+            if result.errors:
+                summarized = "; ".join(f"{k}: {v}" for k, v in list(result.errors.items())[:10])
+                run_log.error_summary = summarized
+        else:
+            run_log.status = IngestionJobStatus.FAILED
+            run_log.error_summary = error_summary
+
+        session.commit()
+        status = run_log.status
+        logged_requested = run_log.symbols_requested
+        logged_succeeded = run_log.symbols_succeeded
+        logged_failed = run_log.symbols_failed
+        logged_rows = run_log.rows_upserted
+    finally:
+        session.close()
+
+    logger.info(
+        "Ingestion job '%s' finished: status=%s duration=%.2fs requested=%d succeeded=%d "
+        "failed=%d rows_upserted=%d retries=%d",
+        job_name,
+        status.value,
+        duration_seconds,
+        logged_requested,
+        logged_succeeded,
+        logged_failed,
+        logged_rows,
+        retry_count,
+    )
+    return run_log
+
+
+class IngestionScheduler:
+    """Owns one recurring asyncio.Task per ingestion job. See module
+    docstring for the overall design."""
+
+    def __init__(
+        self,
+        session_factory: Optional[Callable[[], Session]] = None,
+        market_provider_getter: Optional[Callable[[], Awaitable[object]]] = None,
+        fundamental_provider_getter: Optional[Callable[[], Awaitable[object]]] = None,
+    ):
+        self._session_factory = session_factory or self._default_session_factory
+        self._get_market_provider = market_provider_getter or get_market_data_provider
+        self._get_fundamental_provider = fundamental_provider_getter or get_fundamental_data_provider
+        self._tasks: List[asyncio.Task] = []
+
+    @staticmethod
+    def _default_session_factory() -> Session:
+        return database.get_session_factory()()
+
+    @property
+    def is_running(self) -> bool:
+        return len(self._tasks) > 0
+
+    def start(self) -> None:
+        if self._tasks:
+            logger.warning("IngestionScheduler.start() called while already running -- ignoring.")
+            return
+
+        job_specs = [
+            ("symbols", ingestion_config.get_symbols_sync_interval_seconds, self._run_symbols),
+            (
+                "historical_ohlcv",
+                ingestion_config.get_ohlcv_sync_interval_seconds,
+                self._run_historical_ohlcv,
+            ),
+            (
+                "fundamentals",
+                ingestion_config.get_fundamentals_sync_interval_seconds,
+                self._run_fundamentals,
+            ),
+            ("dividends", ingestion_config.get_dividends_sync_interval_seconds, self._run_dividends),
+        ]
+        for job_name, interval_fn, job_fn in job_specs:
+            task = asyncio.ensure_future(self._loop(job_name, interval_fn, job_fn))
+            self._tasks.append(task)
+
+        logger.info("IngestionScheduler started %d job loop(s): %s", len(self._tasks), [s[0] for s in job_specs])
+
+    async def stop(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._tasks.clear()
+        logger.info("IngestionScheduler stopped.")
+
+    async def _loop(
+        self,
+        job_name: str,
+        interval_fn: Callable[[], float],
+        job_fn: Callable[[], Awaitable[IngestionResult]],
+    ) -> None:
+        while True:
+            try:
+                await run_ingestion_job(job_name, job_fn, self._session_factory)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # run_ingestion_job itself already catches and records job_fn
+                # failures -- reaching here means writing the run log failed,
+                # a DB-layer problem, not an ingestion one. Logged, not raised,
+                # so this one job's loop keeps running on schedule.
+                logger.exception(
+                    "Unexpected error recording ingestion job '%s' (outside its own "
+                    "retry handling).",
+                    job_name,
+                )
+            await asyncio.sleep(interval_fn())
+
+    async def _run_symbols(self) -> IngestionResult:
+        provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
+        symbols = ingestion_config.get_ingestion_symbol_universe()
+        return await sync_symbols(
+            symbols,
+            provider,
+            self._session_factory,
+            discover_all=ingestion_config.is_symbol_auto_discovery_enabled(),
+        )
+
+    async def _run_historical_ohlcv(self) -> IngestionResult:
+        provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
+        symbols = ingestion_config.get_ingestion_symbol_universe()
+        return await ingest_historical_ohlcv(
+            symbols,
+            provider,
+            self._session_factory,
+            backfill_days=ingestion_config.get_ohlcv_backfill_days(),
+        )
+
+    async def _run_fundamentals(self) -> IngestionResult:
+        provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
+        symbols = ingestion_config.get_ingestion_symbol_universe()
+        return await ingest_fundamentals(
+            symbols,
+            provider,
+            self._session_factory,
+            period_type=ingestion_config.get_fundamentals_period_type(),
+        )
+
+    async def _run_dividends(self) -> IngestionResult:
+        provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
+        symbols = ingestion_config.get_ingestion_symbol_universe()
+        return await ingest_dividends(symbols, provider, self._session_factory)

@@ -640,6 +640,110 @@ error shape), not a separate workstream. This milestone implements (1).
    routes don't need and this environment doesn't have running.
    1057 tests pass repo-wide.
 
+## Completed: Ingestion scheduler (automatic SAHMK → DB sync)
+
+1. **`src/market_data/ingestion/scheduler.py`** (new) — `IngestionScheduler`
+   owns four independent `asyncio.Task` loops (symbols, historical OHLCV,
+   fundamentals, dividends), each simply `await run, then await
+   sleep(interval)` — strictly sequential by construction, so a job can
+   never overlap with its own previous run and no lock is needed to
+   prevent that. A slow or failing job never blocks another job's
+   schedule. `run_ingestion_job()` wraps every run: writes a `RUNNING`
+   `IngestionRunLog` row immediately, retries the whole job with
+   exponential backoff on an uncaught exception (job-level retry — distinct
+   from `SahmkClient`'s own per-HTTP-request retry), and always updates the
+   same row in place with the final status/timing/counts, never raising —
+   one job's total failure can't crash the scheduler or stop the other
+   three loops. `_NonDisconnectingProviderProxy` suppresses
+   `authenticate()`/`disconnect()` on the shared, cached provider instance
+   from `provider_factory`/`fundamental_provider_factory` (each ingestion
+   function calls both, correct for a caller that owns a provider for one
+   run, wrong for a shared cache other callers still depend on), while
+   still forwarding every other call, including provider-specific "extra"
+   methods not on the formal interface (`get_dividends`,
+   `get_symbol_directory`).
+2. **`src/market_data/ingestion/ingest_historical_ohlcv.py`,
+   `ingest_symbols.py`, `ingest_dividends.py`** (new) — join the
+   pre-existing `ingest_ohlcv.py`/`ingest_fundamentals.py` from M2.1.
+   Historical OHLCV is incremental: for a symbol with no bars yet it
+   backfills `INGESTION_OHLCV_BACKFILL_DAYS` (default 90) days; for a
+   symbol with existing bars it only fetches the gap since the latest
+   stored bar (`func.max(PriceBar.timestamp)`), so steady-state runs are
+   cheap. Symbol sync optionally discovers SAHMK's full company directory
+   in one request (`INGESTION_AUTO_DISCOVER_SYMBOLS`) and merges it with
+   the configured explicit universe; dividend ingestion is a no-op (logged,
+   not an error) against any provider that doesn't implement
+   `get_dividends` (`DevMarketDataProvider` does not). Every job isolates
+   per-symbol failures — one bad symbol never aborts the batch — and every
+   write goes through an idempotent upsert keyed on each table's unique
+   constraint (`PriceBar(stock_id, timeframe, timestamp)`,
+   `FundamentalSnapshot(stock_id, period_type, fiscal_period_end)`,
+   `Dividend(stock_id, ex_date)`), so duplicate prevention and safe re-runs
+   fall out of the schema, not job-level bookkeeping.
+   **`src/market_data/ingestion/_common.py`** (new) factors
+   `IngestionResult`/`get_or_create_stock`/`upsert_price_bar` out of the
+   original two jobs (behavior-preserving refactor) so all four jobs share
+   one implementation instead of duplicating it.
+3. **`src/market_data/sahmk/rate_limiter.py`** (new) — `SahmkRateLimiter`,
+   a sliding-window limiter (`SAHMK_MAX_REQUESTS_PER_MINUTE`, default 20;
+   optional `SAHMK_MAX_REQUESTS_PER_DAY`) shared as a process-wide
+   singleton across every `SahmkClient` instance, since SAHMK's quota is
+   per-API-key/account, not per client object. `SahmkClient._request()`
+   calls `acquire()` before the circuit-breaker-wrapped retry logic —
+   deliberately outside the circuit breaker's view, the same reasoning
+   already applied to business errors, so being throttled can never be
+   mistaken for an infrastructure failure and trip the breaker.
+4. **`src/domain/models/dividend.py`, `ingestion_run_log.py`** (new) +
+   migration `ff4223acbe72` — `Dividend` (unique on `(stock_id, ex_date)`)
+   and `IngestionRunLog` (`job_name`, timing, symbols
+   requested/succeeded/failed, `rows_upserted`, `retry_count`, `status`,
+   `error_summary`) both carry the same `source`/`is_synthetic` honesty
+   discipline as `FundamentalSnapshot`.
+5. **`src/market_data/ingestion/config.py`** (new) — every scheduler
+   behavior is environment-configurable and secure/inert by default:
+   `INGESTION_SCHEDULER_ENABLED` defaults to `false` (matching
+   `SAHMK_API_KEY`/`CORS_ALLOWED_ORIGINS`'s existing opt-in posture), with
+   per-job intervals, backfill window, auto-discovery, fundamentals period
+   type, and job-level retry policy all overridable. See `.env.example`
+   for the full list.
+6. **`main.py`** — starts the scheduler in `startup_event()` only when
+   enabled, in its own independent `try`/`except` block that runs before
+   the Redis/kernel section, so a scheduler failure can't block kernel
+   startup and vice versa; stops it cleanly in `shutdown_event()`. New
+   `GET /ingestion/status` reports whether the scheduler is running and
+   the most recent run (status, timing, row counts) of each job, so
+   "is the database still syncing" doesn't require grepping logs.
+7. **Tests** — unit tests for the rate limiter, scheduler (proxy behavior,
+   `run_ingestion_job` success/partial/failure/retry paths, task
+   lifecycle, exception survival), all four ingestion jobs, and config
+   parsing; an integration suite
+   (`tests/integration/test_ingestion_e2e.py`) proving the full pipeline
+   against real `Dev*Provider`s and a real in-memory DB — empty database
+   to fully populated, idempotent re-runs producing no duplicates, and a
+   provider outage failing its own job without corrupting previously
+   ingested data — plus `tests/integration/api/test_ingestion_status.py`
+   for the new status endpoint. One notable test bug caught and fixed
+   along the way: `run_ingestion_job`'s `retry_count` was originally
+   computed inside the generic `except` handler using the
+   currently-failing attempt number, so a later successful attempt could
+   leave it at a stale value instead of reflecting the total retries
+   before the final outcome — moved to be set exactly once, at the point
+   of final success or exhausted-retries failure. **1151 tests pass,
+   12 skipped, repo-wide.**
+8. **Disclosed gaps** — the scheduler's symbol universe is a fixed,
+   explicitly configured list by default (`INGESTION_SYMBOL_UNIVERSE`,
+   defaulting to 5 well-known Tadawul symbols); full-market auto-discovery
+   exists (`INGESTION_AUTO_DISCOVER_SYMBOLS`) but has not been exercised
+   against the live SAHMK API in this milestone, only against
+   `DevMarketDataProvider`/mocked SAHMK responses in tests. Corporate
+   actions (as opposed to dividends specifically) are still not ingested.
+   With `INGESTION_SCHEDULER_ENABLED=true` and a valid `SAHMK_API_KEY`,
+   the database now stays synchronized with SAHMK automatically —
+   symbols, historical OHLCV, fundamentals, and dividends — without any
+   manual ingestion step; with no key set it ingests synthetic
+   `DevMarketDataProvider`/`DevFundamentalDataProvider` data on the same
+   schedule instead, which is inert but not harmful.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

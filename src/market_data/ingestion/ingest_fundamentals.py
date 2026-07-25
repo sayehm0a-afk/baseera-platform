@@ -8,7 +8,6 @@ ingest_ohlcv.py's structure and per-symbol failure isolation exactly.
 """
 
 import logging
-from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import Callable, Dict, List, Optional
@@ -16,40 +15,10 @@ from typing import Callable, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from src.domain.models import FundamentalSnapshot, PeriodType, Stock
+from src.market_data.ingestion._common import IngestionResult, get_or_create_stock
 from src.market_data.providers.fundamental_data_provider import IFundamentalDataProvider
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class IngestionResult:
-    """Summary of one ingest_fundamentals() run."""
-
-    symbols_requested: int = 0
-    symbols_succeeded: int = 0
-    symbols_failed: int = 0
-    errors: Dict[str, str] = field(default_factory=dict)
-
-    @property
-    def success(self) -> bool:
-        return self.symbols_failed == 0 and self.symbols_requested > 0
-
-
-def _get_or_create_stock(session: Session, symbol: str) -> Stock:
-    stock = session.query(Stock).filter_by(symbol=symbol).one_or_none()
-    if stock is not None:
-        return stock
-
-    logger.warning(
-        "Creating placeholder Stock row for symbol '%s' with no reference data "
-        "(name/sector) -- real reference data ingestion is a later milestone's "
-        "concern, not this one's.",
-        symbol,
-    )
-    stock = Stock(symbol=symbol, name_en=f"Stock {symbol}")
-    session.add(stock)
-    session.flush()  # assign stock.id without committing yet
-    return stock
 
 
 def _decimal_or_none(value) -> Optional[Decimal]:
@@ -121,10 +90,11 @@ async def ingest_fundamentals(
         session = session_factory()
         try:
             data = await provider.get_fundamentals(symbol, period_type=period_type)
-            stock = _get_or_create_stock(session, symbol)
+            stock = get_or_create_stock(session, symbol)
             _upsert_fundamental_snapshot(session, stock, data)
             session.commit()
             result.symbols_succeeded += 1
+            result.rows_upserted += 1
         except Exception as exc:
             session.rollback()
             result.symbols_failed += 1

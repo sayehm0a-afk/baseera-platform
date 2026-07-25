@@ -35,6 +35,7 @@ MARKET_SUMMARY_CACHE_TTL_SECONDS = 15.0
 HISTORICAL_CACHE_TTL_SECONDS = 3600.0
 EVENTS_CACHE_TTL_SECONDS = 300.0
 COMPANY_PROFILE_CACHE_TTL_SECONDS = 86400.0  # a company's profile rarely changes
+COMPANY_DIRECTORY_CACHE_TTL_SECONDS = 86400.0  # the symbol universe rarely changes
 FINANCIALS_CACHE_TTL_SECONDS = 3600.0
 DIVIDENDS_CACHE_TTL_SECONDS = 3600.0
 
@@ -208,6 +209,36 @@ class SahmkMarketDataService:
 
         return await self._cache.get_or_compute(
             ("company_profile", symbol), _compute, ttl_seconds=COMPANY_PROFILE_CACHE_TTL_SECONDS
+        )
+
+    async def get_company_directory(self) -> List[SahmkCompanyProfile]:
+        """The full Tadawul+Nomu symbol directory from GET /companies/.
+        Field names are UNVERIFIED (same discipline as get_financials):
+        several plausible keys are tried per field, and each item's
+        `symbol` is required -- an entry with no symbol at all can't be
+        used to register a Stock row, so it's skipped rather than
+        guessed."""
+
+        async def _compute() -> List[SahmkCompanyProfile]:
+            data = await self._client.get_companies()
+            items = data.get("companies", data.get("results", []))
+            result: List[SahmkCompanyProfile] = []
+            for item in items:
+                symbol = _first_present(item, ["symbol", "ticker"])
+                if symbol is None:
+                    continue
+                result.append(
+                    SahmkCompanyProfile(
+                        symbol=str(symbol),
+                        name=_first_present(item, ["name", "company_name", "name_en"]),
+                        sector=_first_present(item, ["sector", "sector_name"]),
+                        raw=item,
+                    )
+                )
+            return result
+
+        return await self._cache.get_or_compute(
+            "company_directory", _compute, ttl_seconds=COMPANY_DIRECTORY_CACHE_TTL_SECONDS
         )
 
     async def get_financials(self, symbol: str, period_type: str = "annual") -> SahmkFinancials:

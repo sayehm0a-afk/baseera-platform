@@ -87,3 +87,45 @@ async def test_health_check_reflects_authentication_state(provider):
 def test_provider_is_registered_with_factory():
     provider = FundamentalDataProviderFactory.create("dev")
     assert isinstance(provider, DevFundamentalDataProvider)
+
+
+# --- get_dividends() -----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_returns_two_per_year(provider):
+    dividends = await provider.get_dividends("2222", years_back=2)
+    assert len(dividends) == 4
+    for d in dividends:
+        assert d["symbol"] == "2222"
+        assert d["source"] == "dev-synthetic"
+        assert d["is_synthetic"] is True
+        assert 0.1 <= d["dividend_per_share"] <= 3.0
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_most_recent_first(provider):
+    dividends = await provider.get_dividends("2222", years_back=2)
+    ex_dates = [d["ex_date"] for d in dividends]
+    assert ex_dates == sorted(ex_dates, reverse=True)
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_is_deterministic(provider):
+    first = await provider.get_dividends("2222")
+    second = await provider.get_dividends("2222")
+    assert first == second
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_differs_across_symbols(provider):
+    a = await provider.get_dividends("2222")
+    b = await provider.get_dividends("1120")
+    assert a[0]["dividend_per_share"] != b[0]["dividend_per_share"]
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_payment_date_after_ex_date(provider):
+    dividends = await provider.get_dividends("2222")
+    for d in dividends:
+        assert d["payment_date"] > d["ex_date"]

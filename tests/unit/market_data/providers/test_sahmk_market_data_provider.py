@@ -4,7 +4,7 @@ network call is ever made; assertions focus on the adapter's own
 mapping/error-translation logic (already covered independently by
 test_client.py and test_service.py)."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,7 +17,13 @@ from src.market_data.sahmk.exceptions import (
     SahmkConfigurationError,
     SahmkEntitlementError,
 )
-from src.market_data.sahmk.models import SahmkEvent, SahmkHistoricalBar, SahmkMarketSummary, SahmkQuote
+from src.market_data.sahmk.models import (
+    SahmkCompanyProfile,
+    SahmkEvent,
+    SahmkHistoricalBar,
+    SahmkMarketSummary,
+    SahmkQuote,
+)
 
 
 def _provider_with_mock_service():
@@ -111,6 +117,44 @@ async def test_get_stock_data_maps_bar_to_ohlcv_dict():
     }
 
 
+# --- get_historical_ohlcv() -----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_historical_ohlcv_maps_every_bar():
+    provider = _provider_with_mock_service()
+    provider._service.get_historical_bars.return_value = [
+        SahmkHistoricalBar("1120", 10.0, 11.0, 9.5, 10.5, 1000, datetime(2026, 1, 5, tzinfo=timezone.utc)),
+        SahmkHistoricalBar("1120", 10.5, 12.0, 10.0, 11.5, 1200, datetime(2026, 1, 6, tzinfo=timezone.utc)),
+    ]
+
+    bars = await provider.get_historical_ohlcv("1120", date(2026, 1, 5), date(2026, 1, 6))
+
+    assert bars == [
+        {
+            "symbol": "1120", "open": 10.0, "high": 11.0, "low": 9.5, "close": 10.5,
+            "volume": 1000, "timestamp": "2026-01-05T00:00:00+00:00",
+            "source": "sahmk", "is_synthetic": False,
+        },
+        {
+            "symbol": "1120", "open": 10.5, "high": 12.0, "low": 10.0, "close": 11.5,
+            "volume": 1200, "timestamp": "2026-01-06T00:00:00+00:00",
+            "source": "sahmk", "is_synthetic": False,
+        },
+    ]
+    provider._service.get_historical_bars.assert_awaited_once_with(
+        "1120", date(2026, 1, 5), date(2026, 1, 6), interval="1d"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_historical_ohlcv_empty_list_when_no_bars():
+    provider = _provider_with_mock_service()
+    provider._service.get_historical_bars.return_value = []
+    bars = await provider.get_historical_ohlcv("1120", date(2026, 1, 5), date(2026, 1, 6))
+    assert bars == []
+
+
 # --- get_latest_quote() (extra, not part of IMarketDataProvider) ---------
 
 
@@ -129,6 +173,23 @@ async def test_get_latest_quote_maps_quote_to_dict():
     assert data["price"] == 10.5
     assert data["source"] == "sahmk"
     assert data["is_synthetic"] is False
+
+
+# --- get_symbol_directory() (extra, not part of IMarketDataProvider) -------
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_directory_maps_companies_to_dicts():
+    provider = _provider_with_mock_service()
+    provider._service.get_company_directory.return_value = [
+        SahmkCompanyProfile(symbol="2222", name="Saudi Aramco", sector="Energy", raw={}),
+        SahmkCompanyProfile(symbol="1120", name="Al Rajhi Bank", sector="Financials", raw={}),
+    ]
+    directory = await provider.get_symbol_directory()
+    assert directory == [
+        {"symbol": "2222", "name": "Saudi Aramco", "sector": "Energy", "source": "sahmk", "is_synthetic": False},
+        {"symbol": "1120", "name": "Al Rajhi Bank", "sector": "Financials", "source": "sahmk", "is_synthetic": False},
+    ]
 
 
 # --- get_index_data() -----------------------------------------------------

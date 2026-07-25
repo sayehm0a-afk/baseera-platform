@@ -55,6 +55,7 @@ app.include_router(stocks_router)
 # Global runtime kernel
 kernel = None
 container = None
+ingestion_scheduler = None
 
 
 class TaskRequest(BaseModel):
@@ -75,7 +76,28 @@ class TaskResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Startup event handler."""
-    global kernel, container
+    global kernel, container, ingestion_scheduler
+
+    # The ingestion scheduler needs only the DB and a market/fundamental
+    # data provider -- no Redis, no runtime kernel. Started first, in its
+    # own try/except, so a Redis/kernel outage (which the block below
+    # depends on and can raise from) never prevents scheduled ingestion
+    # from starting, and a scheduler problem never prevents the kernel
+    # from starting either.
+    try:
+        from src.market_data.ingestion.config import is_ingestion_scheduler_enabled
+        from src.market_data.ingestion.scheduler import IngestionScheduler
+
+        if is_ingestion_scheduler_enabled():
+            ingestion_scheduler = IngestionScheduler()
+            ingestion_scheduler.start()
+            logger.info("Ingestion scheduler started.")
+        else:
+            logger.info(
+                "Ingestion scheduler disabled (set INGESTION_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting ingestion scheduler: {e}", exc_info=True)
 
     try:
         logger.info("Starting Basirah Enterprise AI Platform...")
@@ -137,6 +159,9 @@ async def shutdown_event():
     """Shutdown event handler."""
     try:
         logger.info("Shutting down Basirah...")
+
+        if ingestion_scheduler is not None:
+            await ingestion_scheduler.stop()
 
         if kernel:
             await kernel.stop()
@@ -224,6 +249,56 @@ async def market_data_status():
         raise HTTPException(
             status_code=500, detail="Failed to determine market data provider status"
         )
+
+
+@app.get("/ingestion/status")
+async def ingestion_status():
+    """Reports whether the ingestion scheduler is running and the most
+    recent run of each job (status, timing, row counts), from
+    IngestionRunLog -- so an operator can see "is the database still
+    syncing with SAHMK" without grepping logs.
+    """
+    try:
+        from src.core.db.database import get_session_factory
+        from src.domain.models import IngestionRunLog
+
+        session = get_session_factory()()
+        try:
+            job_names = [
+                row[0] for row in session.query(IngestionRunLog.job_name).distinct().all()
+            ]
+            latest_runs = {}
+            for job_name in job_names:
+                run = (
+                    session.query(IngestionRunLog)
+                    .filter_by(job_name=job_name)
+                    .order_by(IngestionRunLog.started_at.desc())
+                    .first()
+                )
+                if run is not None:
+                    latest_runs[job_name] = {
+                        "status": run.status.value,
+                        "started_at": run.started_at.isoformat(),
+                        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                        "duration_seconds": (
+                            float(run.duration_seconds) if run.duration_seconds is not None else None
+                        ),
+                        "symbols_requested": run.symbols_requested,
+                        "symbols_succeeded": run.symbols_succeeded,
+                        "symbols_failed": run.symbols_failed,
+                        "rows_upserted": run.rows_upserted,
+                        "retry_count": run.retry_count,
+                    }
+        finally:
+            session.close()
+
+        return {
+            "scheduler_running": ingestion_scheduler is not None and ingestion_scheduler.is_running,
+            "jobs": latest_runs,
+        }
+    except Exception as e:
+        logger.error(f"Error checking ingestion status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to determine ingestion status")
 
 
 @app.get("/stats")

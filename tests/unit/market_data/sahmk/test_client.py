@@ -21,13 +21,24 @@ from src.market_data.sahmk.exceptions import (
     SahmkRateLimitError,
     SahmkRequestError,
 )
+from src.market_data.sahmk.rate_limiter import SahmkRateLimiter
 from src.market_data.validators.symbol_validator import InvalidSymbolError
 from tests.unit.market_data.sahmk._fakes import FakeResponse, FakeSession
 
 
 def _client(outcomes, **kwargs):
     session = FakeSession(outcomes)
-    defaults = dict(api_key="test-key", base_url="https://sahmk.example.invalid", session=session)
+    defaults = dict(
+        api_key="test-key",
+        base_url="https://sahmk.example.invalid",
+        session=session,
+        # Effectively unlimited: these tests exercise error-mapping/retry/
+        # circuit-breaker behavior, not the rate limiter (see
+        # test_rate_limiter.py for that) -- and MUST NOT share the real
+        # process-wide default limiter, whose internal usage window
+        # would otherwise accumulate across every test in this file.
+        rate_limiter=SahmkRateLimiter(max_per_minute=1_000_000),
+    )
     defaults.update(kwargs)
     client = SahmkClient(**defaults)
     return client, session
@@ -168,6 +179,15 @@ async def test_get_dividends_rejects_malformed_symbol():
     with pytest.raises(InvalidSymbolError):
         await client.get_dividends("AAPL")
     assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_companies_calls_correct_endpoint():
+    client, session = _client([FakeResponse(200, {"companies": []})])
+    result = await client.get_companies()
+    assert result == {"companies": []}
+    assert session.calls[0]["url"] == "https://sahmk.example.invalid/companies/"
+    assert session.calls[0]["params"] is None
 
 
 # --- status-code -> exception mapping -------------------------------------
@@ -368,6 +388,46 @@ async def test_mixed_business_and_infrastructure_failures_only_the_infrastructur
 
     with pytest.raises(CircuitBreakerOpenError):
         await client.get_market_summary("TASI")
+
+
+# --- rate limiter integration -----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_request_acquires_a_rate_limiter_slot_before_dispatching():
+    from unittest.mock import AsyncMock
+
+    limiter = AsyncMock()
+    client, session = _client([FakeResponse(200, {"index_value": 1})], rate_limiter=limiter)
+    await client.get_market_summary("TASI")
+    limiter.acquire.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_exceeded_never_reaches_the_circuit_breaker():
+    """SahmkRateLimitExceededError means "we decided not to call," not
+    "SAHMK failed" -- it must never count as a circuit-breaker failure,
+    the same reasoning _BusinessError exists for business responses."""
+    from src.market_data.sahmk.rate_limiter import SahmkRateLimitExceededError
+
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=9999)
+    limiter = SahmkRateLimiter(max_per_minute=10, max_per_day=1)
+    client, session = _client(
+        [FakeResponse(200, {"index_value": 1}), FakeResponse(200, {"index_value": 2})],
+        rate_limiter=limiter,
+        circuit_breaker=breaker,
+    )
+
+    await client.get_market_summary("TASI")  # spends the one daily slot
+    with pytest.raises(SahmkRateLimitExceededError):
+        await client.get_market_summary("TASI")
+
+    # Breaker must still be CLOSED -- the quota refusal never touched it.
+    assert breaker.state.value == "CLOSED"
+    # The 2nd call's refusal raised before consuming any FakeSession
+    # outcome (only 1 of the 2 queued outcomes was used), proving it
+    # happened before any network call was attempted.
+    assert len(session.calls) == 1
 
 
 # --- session lifecycle -----------------------------------------------------
