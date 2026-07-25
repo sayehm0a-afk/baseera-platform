@@ -15,9 +15,15 @@ import logging.handlers
 import os
 import sys
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 
 from src.api.middleware.request_id import request_id_var
+
+# /tmp does not survive a container restart -- LOG_DIR lets deployment
+# mount a durable volume (see docker-compose.yml's `app_logs` volume);
+# defaults to /var/log/basirah, which is still overridden by an explicit
+# `log_dir=` argument.
+_DEFAULT_LOG_DIR = os.getenv("LOG_DIR", "/var/log/basirah")
 
 
 class JSONFormatter(logging.Formatter):
@@ -56,7 +62,7 @@ class StructuredLogger:
     def __init__(
         self,
         name: str,
-        log_dir: str = "/tmp/basirah_logs",
+        log_dir: Optional[str] = None,
         log_level: str = "INFO",
         max_bytes: int = 10485760,  # 10MB
         backup_count: int = 10,
@@ -66,11 +72,13 @@ class StructuredLogger:
 
         Args:
             name: Logger name
-            log_dir: Directory for log files
+            log_dir: Directory for log files (defaults to LOG_DIR env var,
+                falling back to /var/log/basirah)
             log_level: Logging level
             max_bytes: Maximum file size before rotation
             backup_count: Number of backup files to keep
         """
+        log_dir = log_dir or _DEFAULT_LOG_DIR
         self.logger = logging.getLogger(name)
         self.logger.setLevel(getattr(logging, log_level))
 
@@ -217,7 +225,7 @@ def get_logger(name: str) -> StructuredLogger:
     return _loggers[name]
 
 
-def init_logging(log_dir: str = "/tmp/basirah_logs", log_level: str = "INFO") -> None:
+def init_logging(log_dir: Optional[str] = None, log_level: str = "INFO") -> None:
     """Initialize logging system."""
     # Create main logger
     main_logger = StructuredLogger(
