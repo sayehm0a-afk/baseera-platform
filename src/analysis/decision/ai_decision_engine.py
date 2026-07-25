@@ -56,7 +56,13 @@ _MIN_PRICE = 0.01
 # "this decision predates behavior change X."
 ENGINE_VERSION = "1.0.0"
 
-_CATEGORY_LABELS = {
+# Public (not module-private) so anything that needs to translate a
+# ScoreContribution/Signal/DecisionFactorBreakdown "source" key into
+# the same display label this module uses -- e.g.
+# src.analysis.analyst.signal_interpreter, narrating the same
+# breakdown this engine already produced -- can reuse it instead of
+# redefining the same source-key-to-label mapping.
+CATEGORY_LABELS = {
     "technical": "Technical Analysis",
     "fundamental": "Fundamental Analysis",
     "momentum": "Momentum",
@@ -181,7 +187,7 @@ def _derive_position_size(recommendation: Recommendation, confidence: float, ris
 
 
 def _to_breakdown(contribution: ScoreContribution) -> DecisionFactorBreakdown:
-    category = _CATEGORY_LABELS.get(contribution.source, contribution.source.replace("_", " ").title())
+    category = CATEGORY_LABELS.get(contribution.source, contribution.source.replace("_", " ").title())
     points = round(contribution.score - 50.0, 1) if contribution.score is not None else 0.0
     return DecisionFactorBreakdown(
         category=category,

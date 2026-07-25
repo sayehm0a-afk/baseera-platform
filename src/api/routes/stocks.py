@@ -24,8 +24,11 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
+from src.analysis.analyst.analyst_engine import AnalystEngine
+from src.analysis.analyst.output_formatter import OutputFormatter
 from src.analysis.decision.ai_decision_engine import AIDecisionEngine
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
@@ -41,6 +44,7 @@ from src.api.exceptions import (
     StockNotFoundError,
 )
 from src.api.schemas.stocks import (
+    AnalystReportOut,
     DecisionFactorBreakdownOut,
     FundamentalAnalysisOut,
     HistoricalBarOut,
@@ -351,4 +355,73 @@ async def get_investment_decision(
             for s in decision.signals
         ],
         generated_at=decision.generated_at,
+    )
+
+
+@router.get("/{symbol}/analyst-report")
+async def get_analyst_report(
+    symbol: str,
+    period_type: PeriodType = Query(PeriodType.ANNUAL),
+    format: str = Query("json", pattern="^(json|markdown|text)$"),
+    session: Session = Depends(get_db),
+    market_provider: IMarketDataProvider = Depends(get_market_provider),
+):
+    """The Autonomous AI Analyst Framework's report for one symbol:
+    everything /decision already produces, narrated into a
+    twelve-section human-quality explanation (investment summary,
+    technical/fundamental/risk reasoning, bullish/bearish factors,
+    confidence/target price/stop loss/time horizon explanations,
+    alternative scenarios, and a final rationale) -- see
+    src/analysis/analyst/ for the orchestration logic. This route
+    computes no score, target, or confidence value itself; every
+    number comes from the same AIDecisionEngine /decision already
+    calls. The same graceful-degradation and 422 rules as
+    /recommendation and /decision apply, since AnalystEngine runs the
+    same two engines first.
+
+    `format=markdown` and `format=text` return the same report
+    rendered as Markdown or plain text (e.g. for a rendered report
+    view or a log/email) instead of JSON.
+    """
+    context = await _build_analysis_context(symbol, period_type, session, market_provider)
+
+    if context.technical_result is None and context.fundamental_result is None:
+        raise InsufficientDataError(
+            f"Not enough ingested history or fundamentals for '{symbol}' to generate an analyst report."
+        )
+
+    report = await AnalystEngine().analyze(context)
+
+    if format == "markdown":
+        return PlainTextResponse(OutputFormatter.to_markdown(report), media_type="text/markdown")
+    if format == "text":
+        return PlainTextResponse(OutputFormatter.to_text(report), media_type="text/plain")
+
+    decision = report.decision
+    explanation = report.explanation
+    return AnalystReportOut(
+        symbol=report.symbol,
+        recommendation=decision.recommendation.value,
+        confidence=decision.confidence,
+        final_score=decision.final_score,
+        target_price=decision.target_price,
+        stop_loss=decision.stop_loss,
+        time_horizon=decision.time_horizon.value,
+        expected_return_pct=decision.expected_return_pct,
+        risk_level=decision.risk_level.value,
+        position_size=decision.position_size.value,
+        investment_summary=explanation.investment_summary,
+        technical_reasoning=explanation.technical_reasoning,
+        fundamental_reasoning=explanation.fundamental_reasoning,
+        risk_explanation=explanation.risk_explanation,
+        bullish_factors=explanation.bullish_factors,
+        bearish_factors=explanation.bearish_factors,
+        confidence_explanation=explanation.confidence_explanation,
+        target_price_explanation=explanation.target_price_explanation,
+        stop_loss_explanation=explanation.stop_loss_explanation,
+        time_horizon_explanation=explanation.time_horizon_explanation,
+        alternative_scenarios=explanation.alternative_scenarios,
+        final_recommendation_rationale=explanation.final_recommendation_rationale,
+        generated_at=report.generated_at,
+        engine_version=report.engine_version,
     )

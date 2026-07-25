@@ -121,3 +121,39 @@ class InvestmentDecisionOut(BaseModel):
     breakdown: List[DecisionFactorBreakdownOut]
     signals: List[SignalOut]
     generated_at: datetime
+
+
+class AnalystReportOut(BaseModel):
+    """The Autonomous AI Analyst Framework's report for one symbol --
+    everything /decision already produces (the same InvestmentDecision
+    fields, unchanged) plus the twelve-section human-quality
+    explanation ReasoningPipeline generates on top of it. See
+    src/analysis/analyst/ for the orchestration logic; this schema
+    adds no new numbers of its own."""
+
+    symbol: str
+    recommendation: str
+    confidence: float
+    final_score: float
+    target_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    time_horizon: str
+    expected_return_pct: Optional[float] = None
+    risk_level: str
+    position_size: str
+
+    investment_summary: str
+    technical_reasoning: str
+    fundamental_reasoning: str
+    risk_explanation: str
+    bullish_factors: List[str]
+    bearish_factors: List[str]
+    confidence_explanation: str
+    target_price_explanation: str
+    stop_loss_explanation: str
+    time_horizon_explanation: str
+    alternative_scenarios: List[str]
+    final_recommendation_rationale: str
+
+    generated_at: datetime
+    engine_version: str

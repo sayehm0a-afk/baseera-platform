@@ -1022,6 +1022,81 @@ Full detail in `docs/BACKTESTING_AND_CALIBRATION.md`; summary here.
    exactly what remains before the Autonomous AI Analyst phase, in
    `docs/BACKTESTING_AND_CALIBRATION.md`.
 
+## Completed: Autonomous AI Analyst Framework
+
+Full detail in `docs/AUTONOMOUS_AI_ANALYST_FRAMEWORK.md`; summary here.
+**Not an LLM integration** — no code in this codebase connects to
+OpenAI, the Claude API, Gemini, or any other external AI model.
+
+1. **`src/analysis/analyst/`** (new package) — twelve modules
+   (`AnalystEngine`, `ReasoningPipeline`, `EvidenceCollector`,
+   `SignalInterpreter`, `ConflictResolver`, `ConfidenceValidator`,
+   `NarrativeBuilder`, `RecommendationComposer`, `ExplanationGenerator`,
+   `PromptTemplateManager`, `LLMAdapter`, `OutputFormatter`) that turn
+   an already-computed `InvestmentDecision` into a twelve-section,
+   human-quality `Explanation` (investment summary; technical/
+   fundamental/risk reasoning; bullish/bearish factors; confidence,
+   target price, stop loss, and time horizon explanations; alternative
+   scenarios; final recommendation rationale). Fully deterministic and
+   template-based today — see point 3.
+2. **Reused, not duplicated**: `AnalystEngine.analyze()` calls
+   `AIDecisionEngine.decide()` as a black box, exactly as `/decision`
+   already does — no score, target price, stop loss, confidence value,
+   or risk level is computed anywhere in this new package. One small,
+   additive, precedented rename enabled reuse: `ai_decision_engine.py`'s
+   private `_CATEGORY_LABELS` became the public `CATEGORY_LABELS`, so
+   `SignalInterpreter` doesn't redefine the same source-to-label
+   mapping. No other pre-existing engine, contributor, route, or schema
+   was modified.
+3. **`LLMAdapter` is an abstract interface only** — `ReasoningPipeline`
+   accepts an optional adapter; when none is supplied (the only
+   configuration `AnalystEngine()`'s default construction ever uses),
+   every section is produced by the deterministic pipeline, no network
+   call occurs. The only implementation in this codebase is
+   `NullLLMAdapter`, a no-op test double that echoes its prompt back,
+   used solely to prove the extension point's wiring
+   (`test_reasoning_pipeline.py`) without connecting to any real
+   provider. If an adapter were ever injected, only three sections
+   (technical/fundamental/risk reasoning) would be offered to it for
+   rephrasing, always grounded in the already-computed deterministic
+   baseline, which is kept whenever the adapter's result is empty.
+4. **REST API** (`src/api/routes/stocks.py`) — `GET
+   /api/v1/stocks/{symbol}/analyst-report`, reusing
+   `_build_analysis_context()` unchanged (the same helper
+   `/recommendation`/`/decision` already share). Same
+   graceful-degradation and 422 rules. `format=json|markdown|text`
+   query parameter exercises `OutputFormatter`'s three renderers.
+5. **New schema**: `AnalystReportOut`
+   (`src/api/schemas/stocks.py`) — every `InvestmentDecision` summary
+   field plus all twelve `Explanation` fields plus
+   `generated_at`/`engine_version`.
+6. **Tests** — 78 unit tests under `tests/unit/analysis/analyst/` (one
+   file per module, hand-built fixtures, zero real engine runs) plus
+   8 integration tests
+   (`tests/integration/api/test_analyst_report_route.py`, real FastAPI
+   routing + real engines against in-memory SQLite + Dev* providers),
+   including an explicit end-to-end proof that `ReasoningPipeline`
+   correctly calls and falls back around an injected `LLMAdapter`.
+   **1617 tests pass, 12 skipped, repo-wide** (up from 1531).
+   `flake8 src/ tests/ main.py` is clean at 0 violations.
+7. **Disclosed limitations** — no real LLM integration exists or is
+   called; prose is template-based (a fixed set of named templates),
+   not free-form generation; `join_factors()` lowercases only the
+   joined clause's first character, not each factor, which can read
+   slightly awkwardly when a factor begins with an acronym;
+   `ConflictResolver`'s tension level is anchored specifically to the
+   Technical-vs-Fundamental point spread, not a general N-way conflict
+   metric; the "reference price" cited in target price/stop loss
+   explanations is reconstructed from `target_price`/
+   `expected_return_pct` (or a Bollinger midpoint fallback) since
+   `InvestmentDecision` does not itself store the price it was computed
+   against; no batch/multi-symbol report endpoint exists. **No live
+   SAHMK network access exists in this environment — every test in this
+   milestone runs against hand-built fixtures or synthetic, hand-seeded
+   data; no text produced by any test is a claim about real market
+   behavior.** Full detail in
+   `docs/AUTONOMOUS_AI_ANALYST_FRAMEWORK.md`.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.
