@@ -27,6 +27,7 @@ from src.domain.models.user import User, StaffRole
 from src.domain.models.user_session import UserSession
 from src.domain.models.email_verification_token import EmailVerificationToken
 from src.domain.models.password_reset_token import PasswordResetToken
+from src.domain.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
 
 __all__ = [
     "Stock",
@@ -62,4 +63,7 @@ __all__ = [
     "UserSession",
     "EmailVerificationToken",
     "PasswordResetToken",
+    "Subscription",
+    "SubscriptionPlan",
+    "SubscriptionStatus",
 ]

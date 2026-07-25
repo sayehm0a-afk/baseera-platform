@@ -21,9 +21,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import main
+from src.api.dependencies import get_current_user
 from src.core.db import database
 from src.core.db.database import Base, get_db
-from src.domain.models import PriceBar, Stock, Timeframe
+from src.domain.models import PriceBar, StaffRole, Stock, Timeframe, User
 
 
 @pytest.fixture
@@ -40,7 +41,15 @@ def session_factory(monkeypatch):
         finally:
             db.close()
 
+    # Every /api/v1/backtests/* route now requires an active
+    # subscription (Phase 10 M10.6) -- an in-memory staff user (never
+    # persisted; get_current_user itself is overridden so nothing
+    # queries the DB for it) satisfies require_active_subscription()'s
+    # staff bypass, keeping these tests focused on backtest behavior.
+    staff_user = User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+
     main.app.dependency_overrides[get_db] = _override_get_db
+    main.app.dependency_overrides[get_current_user] = lambda: staff_user
     yield factory
     Base.metadata.drop_all(bind=engine)
     main.app.dependency_overrides.clear()
@@ -267,3 +276,19 @@ def test_live_provenance_mode_runs_against_live_labeled_bars(client, session_fac
     trades = client.get(f"/api/v1/backtests/{run_id}/trades").json()
     assert trades["total"] > 0
     assert all(t["price_bar_is_synthetic"] is False for t in trades["trades"])
+
+
+# --- subscription gating (Phase 10 M10.6) ------------------------------
+
+
+def test_non_staff_customer_without_a_subscription_gets_402(client, session_factory):
+    non_staff_user = User(email="customer@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff_user
+    try:
+        response = client.post("/api/v1/backtests", json=_VALID_REQUEST)
+    finally:
+        main.app.dependency_overrides[get_current_user] = (
+            lambda: User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+        )
+    assert response.status_code == 402
+    assert response.json()["error"]["code"] == "subscription_required"

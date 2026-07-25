@@ -2,6 +2,12 @@
 src.backtesting.calibration.engine.CalibrationEngine, following the
 same conventions as src/api/routes/backtests.py.
 
+Every route is staff-only (Phase 10 plan decision 10: tuning/activating
+a calibration is an ops action, not a customer feature -- unlike
+backtests, which back the customer-facing "Strategies" screen).
+SUPPORT is the minimum role since this is routine ops work, not an
+account-management action.
+
 `/validate` runs synchronously within the request (unlike
 `POST /api/v1/backtests`) -- it is bounded by the same symbol-count/
 date-range limits as a backtest (CalibrationValidateRequest reuses
@@ -23,9 +29,10 @@ from src.api.schemas.backtesting import (
     CalibrationListOut,
     CalibrationValidateRequest,
 )
+from src.auth.rbac import require_staff_role
 from src.backtesting.calibration.engine import CalibrationEngine
 from src.core.db.database import get_db
-from src.domain.models import CalibrationConfig, DataProvenanceMode
+from src.domain.models import CalibrationConfig, DataProvenanceMode, StaffRole, User
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +66,11 @@ def _get_calibration_or_404(session: Session, version: str) -> CalibrationConfig
 
 
 @router.post("", response_model=CalibrationConfigOut)
-def create_calibration(request: CalibrationCreateRequest, session: Session = Depends(get_db)) -> CalibrationConfigOut:
+def create_calibration(
+    request: CalibrationCreateRequest,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.SUPPORT)),
+) -> CalibrationConfigOut:
     row = CalibrationEngine().propose(
         session,
         config=request.config,
@@ -72,19 +83,26 @@ def create_calibration(request: CalibrationCreateRequest, session: Session = Dep
 
 
 @router.get("", response_model=CalibrationListOut)
-def list_calibrations(session: Session = Depends(get_db)) -> CalibrationListOut:
+def list_calibrations(
+    session: Session = Depends(get_db), _current_user: User = Depends(require_staff_role(StaffRole.SUPPORT))
+) -> CalibrationListOut:
     rows = session.query(CalibrationConfig).order_by(CalibrationConfig.created_at.desc()).all()
     return CalibrationListOut(calibrations=[_to_calibration_out(row) for row in rows])
 
 
 @router.get("/{version}", response_model=CalibrationConfigOut)
-def get_calibration(version: str, session: Session = Depends(get_db)) -> CalibrationConfigOut:
+def get_calibration(
+    version: str, session: Session = Depends(get_db), _current_user: User = Depends(require_staff_role(StaffRole.SUPPORT))
+) -> CalibrationConfigOut:
     return _to_calibration_out(_get_calibration_or_404(session, version))
 
 
 @router.post("/{version}/validate", response_model=CalibrationConfigOut)
 def validate_calibration(
-    version: str, request: CalibrationValidateRequest, session: Session = Depends(get_db)
+    version: str,
+    request: CalibrationValidateRequest,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.SUPPORT)),
 ) -> CalibrationConfigOut:
     _get_calibration_or_404(session, version)
     try:
@@ -108,7 +126,9 @@ def validate_calibration(
 
 
 @router.post("/{version}/activate", response_model=CalibrationConfigOut)
-def activate_calibration(version: str, session: Session = Depends(get_db)) -> CalibrationConfigOut:
+def activate_calibration(
+    version: str, session: Session = Depends(get_db), _current_user: User = Depends(require_staff_role(StaffRole.SUPPORT))
+) -> CalibrationConfigOut:
     _get_calibration_or_404(session, version)
     try:
         result = CalibrationEngine().activate(session, version)
@@ -118,7 +138,9 @@ def activate_calibration(version: str, session: Session = Depends(get_db)) -> Ca
 
 
 @router.post("/{version}/rollback", response_model=CalibrationConfigOut)
-def rollback_calibration(version: str, session: Session = Depends(get_db)) -> CalibrationConfigOut:
+def rollback_calibration(
+    version: str, session: Session = Depends(get_db), _current_user: User = Depends(require_staff_role(StaffRole.SUPPORT))
+) -> CalibrationConfigOut:
     """Rolls back to `version` -- deactivates whatever is currently
     ACTIVE and reactivates this specific prior version."""
     _get_calibration_or_404(session, version)

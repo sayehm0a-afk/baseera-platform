@@ -4,6 +4,11 @@ conventions as src/api/routes/stocks.py (APIError subclasses +
 register_error_handlers for a consistent error envelope, a plain
 `Depends(get_db)` sync session, read-only where possible).
 
+Every route requires an active (trialing/active) subscription (Phase
+10 plan decision 10: backtests back the customer-facing "Strategies"
+screen, unlike calibrations, which are staff-only) -- staff bypass via
+require_active_subscription()'s own is_staff check.
+
 `POST /api/v1/backtests` never runs a backtest inline -- it creates a
 BacktestRun row (PENDING) and schedules src.backtesting.job_runner.run_backtest_job
 as a background asyncio task, then returns immediately. Every other
@@ -19,6 +24,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 
 from src.api.exceptions import BacktestRunNotFoundError, DuplicateBacktestError, InvalidBacktestConfigError
+from src.auth.rbac import require_active_subscription
 from src.api.schemas.backtesting import (
     BacktestComparisonOut,
     BacktestCreateRequest,
@@ -34,7 +40,7 @@ from src.backtesting.baselines import DEFAULT_STRATEGIES
 from src.backtesting.config import get_full_market_symbol_threshold, get_max_trades_page_size
 from src.backtesting.job_runner import run_backtest_job
 from src.core.db.database import get_db
-from src.domain.models import BacktestRun, BacktestRunStatus, DataProvenanceMode, RecommendationSnapshot
+from src.domain.models import BacktestRun, BacktestRunStatus, DataProvenanceMode, RecommendationSnapshot, User
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +95,10 @@ def _get_run_or_404(session: Session, run_id: int) -> BacktestRun:
 
 @router.post("", response_model=BacktestRunOut)
 async def create_backtest(
-    request: BacktestCreateRequest, background_tasks: BackgroundTasks, session: Session = Depends(get_db)
+    request: BacktestCreateRequest,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> BacktestRunOut:
     if request.strategy not in DEFAULT_STRATEGIES:
         raise InvalidBacktestConfigError(
@@ -159,12 +168,16 @@ async def create_backtest(
 
 
 @router.get("/{run_id}", response_model=BacktestRunOut)
-def get_backtest(run_id: int, session: Session = Depends(get_db)) -> BacktestRunOut:
+def get_backtest(
+    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+) -> BacktestRunOut:
     return _to_run_out(_get_run_or_404(session, run_id))
 
 
 @router.get("/{run_id}/status", response_model=BacktestStatusOut)
-def get_backtest_status(run_id: int, session: Session = Depends(get_db)) -> BacktestStatusOut:
+def get_backtest_status(
+    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+) -> BacktestStatusOut:
     run = _get_run_or_404(session, run_id)
     return BacktestStatusOut(
         id=run.id,
@@ -179,7 +192,9 @@ def get_backtest_status(run_id: int, session: Session = Depends(get_db)) -> Back
 
 
 @router.post("/{run_id}/cancel", response_model=BacktestStatusOut)
-def cancel_backtest(run_id: int, session: Session = Depends(get_db)) -> BacktestStatusOut:
+def cancel_backtest(
+    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+) -> BacktestStatusOut:
     """Cooperative cancellation (Phase 8): sets cancel_requested, which
     the running job checks between evaluations and honors as soon as
     practical -- not an immediate hard stop, since a snapshot already
@@ -188,11 +203,21 @@ def cancel_backtest(run_id: int, session: Session = Depends(get_db)) -> Backtest
     if run.status in (BacktestRunStatus.PENDING, BacktestRunStatus.RUNNING):
         run.cancel_requested = True
         session.commit()
-    return get_backtest_status(run_id, session)
+    # Direct call, not another HTTP round trip -- this route already
+    # gated access above, so re-running the same subscription check
+    # would be redundant.
+    return BacktestStatusOut(
+        id=run.id, status=run.status.value, progress_current=run.progress_current,
+        progress_total=run.progress_total, cancel_requested=run.cancel_requested,
+        started_at=run.started_at, finished_at=run.finished_at,
+        duration_seconds=float(run.duration_seconds) if run.duration_seconds is not None else None,
+    )
 
 
 @router.get("/{run_id}/metrics", response_model=BacktestMetricsOut)
-def get_backtest_metrics(run_id: int, session: Session = Depends(get_db)) -> BacktestMetricsOut:
+def get_backtest_metrics(
+    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+) -> BacktestMetricsOut:
     run = _get_run_or_404(session, run_id)
     return BacktestMetricsOut(
         id=run.id, status=run.status.value, data_provenance_mode=run.data_provenance_mode.value,
@@ -206,6 +231,7 @@ def get_backtest_trades(
     limit: int = Query(default=50, ge=1),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> BacktestTradesOut:
     _get_run_or_404(session, run_id)
     limit = min(limit, get_max_trades_page_size())
@@ -237,7 +263,9 @@ def get_backtest_trades(
 
 
 @router.get("/{run_id}/confidence-calibration", response_model=ConfidenceCalibrationOut)
-def get_backtest_confidence_calibration(run_id: int, session: Session = Depends(get_db)) -> ConfidenceCalibrationOut:
+def get_backtest_confidence_calibration(
+    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+) -> ConfidenceCalibrationOut:
     run = _get_run_or_404(session, run_id)
     calibration = ((run.metrics or {}).get("overall") or {}).get("calibration_error")
     if calibration is None:
@@ -246,7 +274,9 @@ def get_backtest_confidence_calibration(run_id: int, session: Session = Depends(
 
 
 @router.get("/{run_id}/comparison", response_model=BacktestComparisonOut)
-def get_backtest_comparison(run_id: int, session: Session = Depends(get_db)) -> BacktestComparisonOut:
+def get_backtest_comparison(
+    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+) -> BacktestComparisonOut:
     """Compares this run against any *other already-run* backtest that
     shares the same symbols/date range/provenance but a different
     strategy -- e.g. run the same configuration once per baseline

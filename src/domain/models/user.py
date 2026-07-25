@@ -72,9 +72,9 @@ class User(Base):
     )
 
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
-    # `subscription` (one-to-one to Subscription) is added in M10.6, once
-    # that model exists -- not declared here to avoid a dangling string
-    # reference against a table that doesn't exist yet in this milestone.
+    subscription = relationship(
+        "Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r} is_staff={self.is_staff}>"

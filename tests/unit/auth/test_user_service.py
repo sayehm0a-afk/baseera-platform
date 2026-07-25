@@ -11,7 +11,7 @@ from src.auth.exceptions import (
 )
 from src.auth.repository import AuthRepository
 from src.core.db.database import Base
-from src.domain.models import EmailVerificationToken
+from src.domain.models import EmailVerificationToken, Subscription, SubscriptionPlan, SubscriptionStatus
 
 
 @pytest.fixture
@@ -35,6 +35,14 @@ def test_register_issues_a_verification_token(session):
     user = user_service.register(session, "verify-me@example.com", "s3cret-password")
     # Can't know the raw token (never persisted), but a row must exist.
     assert session.query(EmailVerificationToken).filter_by(user_id=user.id).count() == 1
+
+
+def test_register_provisions_a_trial_subscription(session):
+    user = user_service.register(session, "trial-me@example.com", "s3cret-password")
+    subscription = session.query(Subscription).filter_by(user_id=user.id).one()
+    assert subscription.plan == SubscriptionPlan.TRIAL
+    assert subscription.status == SubscriptionStatus.TRIALING
+    assert subscription.trial_ends_at is not None
 
 
 def test_register_rejects_duplicate_email(session):

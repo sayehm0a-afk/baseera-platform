@@ -28,6 +28,7 @@ from src.api.routes.calibrations import router as calibrations_router  # noqa: E
 from src.api.routes.market import router as market_router  # noqa: E402
 from src.api.routes.portfolio import router as portfolio_router  # noqa: E402
 from src.api.routes.stocks import router as stocks_router  # noqa: E402
+from src.api.routes.subscriptions import router as subscriptions_router  # noqa: E402
 
 # Initialize structured logging
 init_logging()
@@ -66,6 +67,7 @@ app.include_router(backtests_router)
 app.include_router(calibrations_router)
 app.include_router(market_router)
 app.include_router(portfolio_router)
+app.include_router(subscriptions_router)
 
 # Global runtime kernel
 kernel = None

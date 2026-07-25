@@ -57,3 +57,13 @@ class SessionNotFoundError(APIError):
 
     status_code = 404
     code = "session_not_found"
+
+
+class SubscriptionRequiredError(APIError):
+    """No active (trialing/active) subscription -- 402 Payment
+    Required, the semantically precise status for exactly this case,
+    distinct from InsufficientPermissionError's 403 (a role/permission
+    problem, not a billing one)."""
+
+    status_code = 402
+    code = "subscription_required"

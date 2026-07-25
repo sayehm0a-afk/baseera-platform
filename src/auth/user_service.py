@@ -16,6 +16,7 @@ from src.auth.exceptions import (
 from src.auth.password_hashing import hash_password, verify_password
 from src.auth.repository import AuthRepository
 from src.domain.models import User
+from src.subscriptions import subscription_service
 
 _repository = AuthRepository()
 
@@ -27,6 +28,7 @@ def register(session: Session, email: str, password: str, full_name: "str | None
 
     user = _repository.create_user(session, normalized_email, hash_password(password), full_name)
     email_verification_service.issue_verification_token(session, user)
+    subscription_service.provision_trial_subscription(session, user)
     return user
 
 

@@ -19,9 +19,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import main
+from src.api.dependencies import get_current_user
 from src.core.db import database
 from src.core.db.database import Base, get_db
-from src.domain.models import CalibrationConfig, CalibrationStatus, PriceBar, Stock, Timeframe
+from src.domain.models import CalibrationConfig, CalibrationStatus, PriceBar, StaffRole, Stock, Timeframe, User
 
 
 @pytest.fixture
@@ -38,7 +39,15 @@ def session_factory(monkeypatch):
         finally:
             db.close()
 
+    # Every /api/v1/calibrations/* route is staff-only (Phase 10
+    # M10.6) -- an in-memory staff user (never persisted;
+    # get_current_user itself is overridden) satisfies
+    # require_staff_role(...), keeping these tests focused on
+    # calibration lifecycle behavior.
+    staff_user = User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+
     main.app.dependency_overrides[get_db] = _override_get_db
+    main.app.dependency_overrides[get_current_user] = lambda: staff_user
     yield factory
     Base.metadata.drop_all(bind=engine)
     main.app.dependency_overrides.clear()
@@ -209,3 +218,19 @@ def test_rollback_to_a_draft_version_is_rejected(client, session_factory):
     created = client.post("/api/v1/calibrations", json=_CREATE_REQUEST).json()  # DRAFT
     response = client.post(f"/api/v1/calibrations/{created['version']}/rollback")
     assert response.status_code == 409
+
+
+# --- staff-only gating (Phase 10 M10.6) --------------------------------
+
+
+def test_non_staff_user_is_rejected(client, session_factory):
+    non_staff_user = User(email="customer@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff_user
+    try:
+        response = client.get("/api/v1/calibrations")
+    finally:
+        main.app.dependency_overrides[get_current_user] = (
+            lambda: User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+        )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "insufficient_permission"
