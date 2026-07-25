@@ -1170,6 +1170,81 @@ Full detail in `docs/MARKET_INTELLIGENCE.md`; summary here.
    about real market performance.** Full detail in
    `docs/MARKET_INTELLIGENCE.md`.
 
+## Completed: Autonomous Portfolio Intelligence Layer
+
+Full detail in `docs/PORTFOLIO_INTELLIGENCE.md`; summary here.
+
+1. **`src/portfolio_intelligence/`** (new package) — reasons about an
+   entire investment portfolio rather than isolated stocks.
+   `HoldingAnalyzer`/`PortfolioEngine` orchestrate per-holding reuse of
+   `AnalystEngine` plus ten portfolio-level engines:
+   `AllocationEngine` (weight/market value), `ExposureEngine`
+   (dollar-weighted sector exposure -- deliberately distinct from
+   Phase 7's equal-weighted `SectorAnalyzer`), `DiversificationEngine`
+   (Herfindahl-Hirschman-Index concentration + score), `RiskEngine`
+   (real correlation matrix and volatility from ingested price
+   history via Modern Portfolio Theory math -- `w^T Σ w` -- plus a
+   drawdown estimate; portfolio beta is architecture-ready: the
+   `cov/var` formula is implemented and unit-tested, but always
+   returns `None` with a disclosed reason since no market/TASI index
+   data is ingested), `CashManager` (target cash-reserve band),
+   `PositionSizer` (per-holding increase/reduce/exit/hold),
+   `RebalanceEngine` (full rebalance plan; new-buy opportunities reuse
+   Phase 7's `RankingEngine`/`MarketIntelligenceRepository` directly,
+   honestly empty when no market scan has ever run), `PortfolioScore`
+   (0-100 health score), `OptimizationEngine` (prioritized
+   recommendations), `RecommendationBuilder` (pure assembly).
+2. **Reused, not duplicated**: every holding's analysis is exactly
+   `AnalystEngine.analyze()` (unmodified), called once per held symbol
+   via the same `build_analysis_context()` Phase 7 already extracted --
+   no score, target, or narrative is computed anywhere in this new
+   package. New-buy opportunities are the *same* `RankingEngine`
+   output `GET /api/v1/market/top-buy` already serves, filtered to
+   unheld symbols, never a re-implementation of "what counts as a buy."
+3. **New domain models + migration `f2b3a2cfd231`**: `Portfolio`,
+   `PortfolioHolding`, `PortfolioAnalysisSnapshot` (the durable analysis
+   record -- named scalar columns plus a JSON blob with every
+   summary field, never the full nested `AnalystReport` narrative per
+   holding, the same discipline `SymbolIntelligenceRecord` already
+   applies).
+4. **REST API** (`src/api/routes/portfolio.py`) -- `POST
+   /api/v1/portfolio/analyze` runs synchronously (no background job --
+   a portfolio's holdings count is small and bounded by
+   `PORTFOLIO_MAX_HOLDINGS`); `GET /{id}`, `/{id}/recommendations`,
+   `/{id}/risk`, `/{id}/allocation`, `/{id}/diversification`,
+   `/{id}/rebalance`, `/{id}/health` all read the latest persisted
+   `PortfolioAnalysisSnapshot`, never re-running an analysis. Routes
+   are scoped by portfolio ID in the path (`/{id}/risk`, not
+   `/risk`), a disclosed, deliberate adherence to this codebase's own
+   existing sub-resource routing convention.
+5. **Tests** -- 66 unit tests under `tests/unit/portfolio_intelligence/`
+   (including 11 repository tests against real in-memory SQLite), 17
+   integration tests (`tests/integration/api/test_portfolio_routes.py`,
+   a real synchronous analysis exercised through every route, plus a
+   genuine cross-milestone reuse test sourcing new-buy opportunities
+   from a real `POST /api/v1/market/scan`). **1803 tests pass, 12
+   skipped, repo-wide** (up from 1720). `flake8 src/ tests/ main.py`
+   is clean at 0 violations. Two real bugs were caught and fixed during
+   self-review: a `numpy.float64` leaking through the volatility
+   calculation into every downstream score (JSON/Pydantic-unsafe,
+   fixed by casting to plain `float`), and
+   `get_latest_analysis_snapshot()` ordering only by a caller-supplied,
+   collision-prone timestamp (fixed to order by `id`, matching
+   `MarketScanRun`'s existing tie-break convention).
+6. **Disclosed limitations** -- portfolio beta is never computed
+   against real market data (no TASI index history is ingested);
+   drawdown assumes constant current-day weights applied
+   retrospectively, not actual historical weight drift; a correlation
+   cell with insufficient pairwise overlap is treated as 0 rather than
+   left undefined; no user/ownership model exists yet (no auth
+   anywhere in this codebase); new-buy opportunities are empty until a
+   market scan has run at least once. **No live SAHMK network access
+   exists in this environment -- every test in this milestone runs
+   against hand-built fixtures or synthetic, hand-seeded data; no
+   allocation/risk/diversification/health/recommendation value
+   anywhere in this codebase's tests is a claim about real investment
+   performance.** Full detail in `docs/PORTFOLIO_INTELLIGENCE.md`.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

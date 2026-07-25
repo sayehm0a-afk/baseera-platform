@@ -20,6 +20,9 @@ from src.domain.models.symbol_intelligence_record import SymbolIntelligenceRecor
 from src.domain.models.sector_intelligence_summary import SectorIntelligenceSummary
 from src.domain.models.market_alert import MarketAlert, AlertType, AlertSeverity
 from src.domain.models.market_change_event import MarketChangeEvent, ChangeType
+from src.domain.models.portfolio import Portfolio
+from src.domain.models.portfolio_holding import PortfolioHolding
+from src.domain.models.portfolio_analysis_snapshot import PortfolioAnalysisSnapshot
 
 __all__ = [
     "Stock",
@@ -47,4 +50,7 @@ __all__ = [
     "AlertSeverity",
     "MarketChangeEvent",
     "ChangeType",
+    "Portfolio",
+    "PortfolioHolding",
+    "PortfolioAnalysisSnapshot",
 ]

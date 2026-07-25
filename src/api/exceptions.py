@@ -92,3 +92,26 @@ class NoMarketScanDataError(APIError):
 
     status_code = 404
     code = "no_market_scan_data"
+
+
+class PortfolioNotFoundError(APIError):
+    status_code = 404
+    code = "portfolio_not_found"
+
+
+class NoPortfolioAnalysisError(APIError):
+    """A portfolio exists but has never been analyzed -- a legitimate
+    "not yet" state, not a server failure. Every read endpoint under
+    /api/v1/portfolio/{id}/* needs at least one completed
+    POST /api/v1/portfolio/analyze for this portfolio to read from."""
+
+    status_code = 404
+    code = "no_portfolio_analysis"
+
+
+class InvalidPortfolioConfigError(APIError):
+    """A portfolio request violates a bounded-workload limit (too many
+    holdings) -- a client-correctable 422, not a server failure."""
+
+    status_code = 422
+    code = "invalid_portfolio_config"

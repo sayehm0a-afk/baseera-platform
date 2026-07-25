@@ -22,6 +22,7 @@ from src.api.error_handlers import register_error_handlers  # noqa: E402
 from src.api.routes.backtests import router as backtests_router  # noqa: E402
 from src.api.routes.calibrations import router as calibrations_router  # noqa: E402
 from src.api.routes.market import router as market_router  # noqa: E402
+from src.api.routes.portfolio import router as portfolio_router  # noqa: E402
 from src.api.routes.stocks import router as stocks_router  # noqa: E402
 
 # Initialize structured logging
@@ -57,6 +58,7 @@ app.include_router(stocks_router)
 app.include_router(backtests_router)
 app.include_router(calibrations_router)
 app.include_router(market_router)
+app.include_router(portfolio_router)
 
 # Global runtime kernel
 kernel = None
