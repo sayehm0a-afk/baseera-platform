@@ -44,6 +44,25 @@ def test_get_portfolio_returns_none_for_unknown_id(session, repo):
     assert repo.get_portfolio(session, 9999) is None
 
 
+def test_create_portfolio_with_owner_and_ownership_scoped_fetch(session, repo):
+    owned = repo.create_portfolio(session, "Mine", 100.0, user_id=1)
+    other = repo.create_portfolio(session, "Theirs", 100.0, user_id=2)
+
+    assert repo.get_portfolio_for_user(session, owned.id, user_id=1).id == owned.id
+    assert repo.get_portfolio_for_user(session, other.id, user_id=1) is None
+    assert repo.get_portfolio_for_user(session, owned.id, user_id=2) is None
+
+
+def test_list_portfolios_for_user_only_returns_that_users_portfolios(session, repo):
+    repo.create_portfolio(session, "Mine A", 0, user_id=1)
+    repo.create_portfolio(session, "Mine B", 0, user_id=1)
+    repo.create_portfolio(session, "Theirs", 0, user_id=2)
+
+    total, rows = repo.list_portfolios_for_user(session, user_id=1, limit=50, offset=0)
+    assert total == 2
+    assert {p.name for p in rows} == {"Mine A", "Mine B"}
+
+
 def test_list_portfolios(session, repo):
     repo.create_portfolio(session, "A", 0)
     repo.create_portfolio(session, "B", 0)

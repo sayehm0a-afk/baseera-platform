@@ -26,8 +26,14 @@ from src.portfolio_intelligence.types import Holding, HoldingAnalysis, Portfolio
 class PortfolioRepository:
     # --- portfolio lifecycle -----------------------------------------------
 
-    def create_portfolio(self, session: Session, name: str, cash_balance: float) -> Portfolio:
-        portfolio = Portfolio(name=name, cash_balance=cash_balance)
+    def create_portfolio(
+        self, session: Session, name: str, cash_balance: float, user_id: Optional[int] = None
+    ) -> Portfolio:
+        """`user_id` is optional here only so existing engine-level
+        tests (which exercise analysis, not ownership) don't all need
+        updating -- every route that creates a portfolio
+        (src/api/routes/portfolio.py) always supplies it."""
+        portfolio = Portfolio(name=name, cash_balance=cash_balance, user_id=user_id)
         session.add(portfolio)
         session.commit()
         return portfolio
@@ -35,8 +41,22 @@ class PortfolioRepository:
     def get_portfolio(self, session: Session, portfolio_id: int) -> Optional[Portfolio]:
         return session.query(Portfolio).filter_by(id=portfolio_id).one_or_none()
 
+    def get_portfolio_for_user(self, session: Session, portfolio_id: int, user_id: int) -> Optional[Portfolio]:
+        """Ownership-enforced fetch for the REST layer -- returns None
+        both when the portfolio doesn't exist and when it belongs to a
+        different user, so a caller can never distinguish "not yours"
+        from "doesn't exist" (404, not 403, in src/api/routes/portfolio.py)."""
+        return session.query(Portfolio).filter_by(id=portfolio_id, user_id=user_id).one_or_none()
+
     def list_portfolios(self, session: Session, limit: int, offset: int) -> Tuple[int, List[Portfolio]]:
         query = session.query(Portfolio).order_by(Portfolio.id)
+        total = query.count()
+        return total, query.offset(offset).limit(limit).all()
+
+    def list_portfolios_for_user(
+        self, session: Session, user_id: int, limit: int, offset: int
+    ) -> Tuple[int, List[Portfolio]]:
+        query = session.query(Portfolio).filter_by(user_id=user_id).order_by(Portfolio.id)
         total = query.count()
         return total, query.offset(offset).limit(limit).all()
 

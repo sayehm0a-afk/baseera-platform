@@ -21,10 +21,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import main
-from src.api.dependencies import get_market_provider
+from src.api.dependencies import get_current_user, get_market_provider
 from src.core.db import database
 from src.core.db.database import Base, get_db
-from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
+from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe, User
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 
 
@@ -51,8 +51,18 @@ def db_session(monkeypatch) -> Iterator[Session]:
         finally:
             db.close()
 
+    # Every /api/v1/portfolio/* route now requires an authenticated,
+    # ownership-scoped caller (Phase 10 M10.5) -- overriding
+    # get_current_user directly (rather than a real register/login
+    # flow) keeps these tests focused on portfolio behavior, matching
+    # how get_market_provider is already faked out below.
+    current_user = User(email="portfolio-owner@example.com", password_hash="hashed", is_email_verified=True)
+    session.add(current_user)
+    session.commit()
+
     main.app.dependency_overrides[get_db] = _override_get_db
     main.app.dependency_overrides[get_market_provider] = lambda: DevMarketDataProvider()
+    main.app.dependency_overrides[get_current_user] = lambda: current_user
 
     yield session
 
@@ -206,7 +216,8 @@ def test_get_portfolio_returns_latest_snapshot(client, db_session):
 def test_get_portfolio_404_when_never_analyzed(client, db_session):
     from src.portfolio_intelligence.repository import PortfolioRepository
 
-    portfolio = PortfolioRepository().create_portfolio(db_session, "Empty", 0.0)
+    owner = db_session.query(User).one()
+    portfolio = PortfolioRepository().create_portfolio(db_session, "Empty", 0.0, user_id=owner.id)
     response = client.get(f"/api/v1/portfolio/{portfolio.id}")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "no_portfolio_analysis"
@@ -214,6 +225,24 @@ def test_get_portfolio_404_when_never_analyzed(client, db_session):
 
 def test_get_portfolio_404_for_unknown_id(client, db_session):
     response = client.get("/api/v1/portfolio/9999")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "portfolio_not_found"
+
+
+def test_get_portfolio_404_for_another_users_portfolio(client, db_session):
+    """Ownership enforcement (Phase 10 M10.5): a portfolio that exists
+    but belongs to a different user must look identical to one that
+    doesn't exist at all -- 404, never 403 (no existence leakage)."""
+    from src.portfolio_intelligence.repository import PortfolioRepository
+
+    other_user = User(email="someone-else@example.com", password_hash="hashed", is_email_verified=True)
+    db_session.add(other_user)
+    db_session.commit()
+
+    other_users_portfolio = PortfolioRepository().create_portfolio(
+        db_session, "Not Yours", 0.0, user_id=other_user.id
+    )
+    response = client.get(f"/api/v1/portfolio/{other_users_portfolio.id}")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "portfolio_not_found"
 

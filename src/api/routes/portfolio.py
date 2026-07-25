@@ -3,6 +3,13 @@ src.portfolio_intelligence, following the same conventions as
 src/api/routes/market.py (APIError subclasses + register_error_handlers,
 GET routes that only read already-persisted state).
 
+Every route requires an authenticated user (Phase 10 M10.5) and is
+scoped to that user's own portfolios -- `_get_portfolio_or_404` looks
+up a portfolio filtered by owner, so requesting another user's
+portfolio ID looks identical to requesting one that doesn't exist
+(404, never 403): the same existence-leakage avoidance already used
+for other users' UserSessions in src/api/routes/auth.py.
+
 `POST /api/v1/portfolio/analyze` runs synchronously (no BackgroundTask,
 unlike `POST /api/v1/market/scan`) -- a portfolio's holdings count is
 inherently small and bounded (`PORTFOLIO_MAX_HOLDINGS`), so analyzing
@@ -18,7 +25,7 @@ latest already-persisted `PortfolioAnalysisSnapshot` for that portfolio
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from src.api.dependencies import get_market_provider
+from src.api.dependencies import get_current_user, get_market_provider
 from src.api.exceptions import InvalidPortfolioConfigError, NoPortfolioAnalysisError, PortfolioNotFoundError
 from src.api.schemas.portfolio_intelligence import (
     AllocationOut,
@@ -32,7 +39,7 @@ from src.api.schemas.portfolio_intelligence import (
     RiskProfileOut,
 )
 from src.core.db.database import get_db
-from src.domain.models import Portfolio, PortfolioAnalysisSnapshot
+from src.domain.models import Portfolio, PortfolioAnalysisSnapshot, User
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.portfolio_intelligence.config import get_max_holdings_per_portfolio
 from src.portfolio_intelligence.portfolio_engine import PORTFOLIO_ENGINE_VERSION, PortfolioEngine
@@ -44,15 +51,15 @@ router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
 _repository = PortfolioRepository()
 
 
-def _get_portfolio_or_404(session: Session, portfolio_id: int) -> Portfolio:
-    portfolio = _repository.get_portfolio(session, portfolio_id)
+def _get_portfolio_or_404(session: Session, portfolio_id: int, user_id: int) -> Portfolio:
+    portfolio = _repository.get_portfolio_for_user(session, portfolio_id, user_id)
     if portfolio is None:
         raise PortfolioNotFoundError(f"No portfolio {portfolio_id}.")
     return portfolio
 
 
-def _get_latest_analysis_json(session: Session, portfolio_id: int) -> dict:
-    _get_portfolio_or_404(session, portfolio_id)
+def _get_latest_analysis_json(session: Session, portfolio_id: int, user_id: int) -> dict:
+    _get_portfolio_or_404(session, portfolio_id, user_id)
     snapshot: PortfolioAnalysisSnapshot = _repository.get_latest_analysis_snapshot(session, portfolio_id)
     if snapshot is None:
         raise NoPortfolioAnalysisError(
@@ -66,6 +73,7 @@ async def analyze_portfolio(
     request: PortfolioAnalyzeRequest,
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
+    current_user: User = Depends(get_current_user),
 ) -> PortfolioAnalysisOut:
     if len(request.holdings) > get_max_holdings_per_portfolio():
         raise InvalidPortfolioConfigError(
@@ -74,10 +82,10 @@ async def analyze_portfolio(
         )
 
     if request.portfolio_id is not None:
-        portfolio = _get_portfolio_or_404(session, request.portfolio_id)
+        portfolio = _get_portfolio_or_404(session, request.portfolio_id, current_user.id)
         _repository.update_cash_balance(session, portfolio.id, request.cash)
     else:
-        portfolio = _repository.create_portfolio(session, request.name, request.cash)
+        portfolio = _repository.create_portfolio(session, request.name, request.cash, user_id=current_user.id)
 
     holdings = [Holding(symbol=h.symbol, quantity=h.quantity, average_cost=h.average_cost) for h in request.holdings]
     _repository.replace_holdings(session, portfolio.id, holdings)
@@ -91,18 +99,24 @@ async def analyze_portfolio(
 
 
 @router.get("/{portfolio_id}", response_model=PortfolioAnalysisOut)
-def get_portfolio(portfolio_id: int, session: Session = Depends(get_db)) -> PortfolioAnalysisOut:
-    return PortfolioAnalysisOut(**_get_latest_analysis_json(session, portfolio_id))
+def get_portfolio(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> PortfolioAnalysisOut:
+    return PortfolioAnalysisOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id))
 
 
 @router.get("/{portfolio_id}/recommendations", response_model=PortfolioRecommendationsOut)
-def get_recommendations(portfolio_id: int, session: Session = Depends(get_db)) -> PortfolioRecommendationsOut:
-    return PortfolioRecommendationsOut(**_get_latest_analysis_json(session, portfolio_id)["recommendations"])
+def get_recommendations(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> PortfolioRecommendationsOut:
+    return PortfolioRecommendationsOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id)["recommendations"])
 
 
 @router.get("/{portfolio_id}/risk", response_model=RiskProfileOut)
-def get_risk(portfolio_id: int, session: Session = Depends(get_db)) -> RiskProfileOut:
-    risk_profile = _get_latest_analysis_json(session, portfolio_id)["risk_profile"]
+def get_risk(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> RiskProfileOut:
+    risk_profile = _get_latest_analysis_json(session, portfolio_id, current_user.id)["risk_profile"]
     correlation_matrix = risk_profile.get("correlation_matrix")
     return RiskProfileOut(
         **{**risk_profile, "correlation_matrix": CorrelationMatrixOut(**correlation_matrix) if correlation_matrix else None}
@@ -110,18 +124,24 @@ def get_risk(portfolio_id: int, session: Session = Depends(get_db)) -> RiskProfi
 
 
 @router.get("/{portfolio_id}/allocation", response_model=AllocationOut)
-def get_allocation(portfolio_id: int, session: Session = Depends(get_db)) -> AllocationOut:
-    return AllocationOut(**_get_latest_analysis_json(session, portfolio_id)["allocation"])
+def get_allocation(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> AllocationOut:
+    return AllocationOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id)["allocation"])
 
 
 @router.get("/{portfolio_id}/diversification", response_model=DiversificationOut)
-def get_diversification(portfolio_id: int, session: Session = Depends(get_db)) -> DiversificationOut:
-    return DiversificationOut(**_get_latest_analysis_json(session, portfolio_id)["diversification"])
+def get_diversification(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> DiversificationOut:
+    return DiversificationOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id)["diversification"])
 
 
 @router.get("/{portfolio_id}/rebalance", response_model=RebalancePlanOut)
-def get_rebalance(portfolio_id: int, session: Session = Depends(get_db)) -> RebalancePlanOut:
-    recommendations = _get_latest_analysis_json(session, portfolio_id)["recommendations"]
+def get_rebalance(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> RebalancePlanOut:
+    recommendations = _get_latest_analysis_json(session, portfolio_id, current_user.id)["recommendations"]
     return RebalancePlanOut(
         rebalance_actions=recommendations["rebalance_actions"],
         new_buy_opportunities=recommendations["new_buy_opportunities"],
@@ -129,5 +149,7 @@ def get_rebalance(portfolio_id: int, session: Session = Depends(get_db)) -> Reba
 
 
 @router.get("/{portfolio_id}/health", response_model=HealthScoreOut)
-def get_health(portfolio_id: int, session: Session = Depends(get_db)) -> HealthScoreOut:
-    return HealthScoreOut(**_get_latest_analysis_json(session, portfolio_id)["health_score"])
+def get_health(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> HealthScoreOut:
+    return HealthScoreOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id)["health_score"])
