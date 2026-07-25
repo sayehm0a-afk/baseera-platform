@@ -535,6 +535,111 @@ rotation & plan upgrade" section.
    moment this code runs somewhere with real network access to
    `sahmk.sa`.
 
+## Next-phase analysis and prioritization (before this milestone)
+
+Before starting new work, the actual state of six candidate
+next-phase items was checked against the code, not assumed from a
+generic roadmap:
+
+- **Technical analysis engine (RSI/MACD/EMA/Bollinger/ATR/etc.) was
+  already fully built in M2.2** — `TechnicalAnalysisEngine` +
+  `src/analysis/indicators/{momentum,trend,volatility,_common}.py`
+  already cover RSI, MACD, SMA, EMA, ADX, SuperTrend, Bollinger Bands,
+  ATR, OBV, volume SMA, and candlestick patterns, all tested. No new
+  indicator work was needed.
+- **Fundamental analysis engine was already fully built in M2.3** —
+  `FundamentalAnalysisEngine` + `src/analysis/fundamental/ratios/*`
+  cover profitability, liquidity, leverage, efficiency, growth, and
+  valuation ratios, all tested. No new ratio work was needed either.
+- **Consumer-facing REST APIs did not exist** — `src/api/routes/`,
+  `schemas/`, and `middleware/` were empty placeholders;
+  `src/api/health_check.py` existed but was never mounted in `main.py`;
+  no CORS; no auth libraries installed.
+- **A data ingestion scheduler did not exist** — `ingest_ohlcv.py`/
+  `ingest_fundamentals.py` (M2.1/M2.3) are tested and
+  `RealWorker.register_handler`-compatible by design, but nothing ever
+  calls them. The existing `Scheduler`/`IScheduler` class
+  (`src/core/runtime/task_queue/scheduler.py`) only records
+  `{task_id, delay}` in a dict — there is no loop that actually fires
+  a task later.
+- **A recommendation/confidence-scoring engine did not exist** —
+  `src/analysis/core/bootstrap.py`/`registry.py` are explicitly built
+  as a composition root anticipating a third engine, but nothing
+  registers one.
+- **Frontend readiness**: `frontend/` is a literal empty directory
+  (`.gitkeep` only) — zero frontend code exists.
+
+Given that, prioritized by impact: (1) REST APIs — highest impact,
+lowest cost, since it wraps two already-complete engines and the
+already-hardened SAHMK provider layer rather than building new
+intelligence, and nothing downstream is possible without it; (2)
+ingestion scheduler — makes the API's DB-backed endpoints return real
+data instead of empty tables and reduces per-request dependency on a
+live, rate-limited SAHMK call; (3) recommendation/confidence engine —
+the one genuinely new capability, but needs (1) to be consumable; (4)
+frontend readiness — mostly falls out of (1) (CORS + a consistent
+error shape), not a separate workstream. This milestone implements (1).
+
+## Completed: Consumer-facing REST API (`GET /api/v1/stocks/*`)
+
+1. **`src/api/routes/stocks.py`** (new) — five read-only routes:
+   `GET /{symbol}` (DB lookup, 404 if unregistered),
+   `GET /{symbol}/quote` (live pass-through via
+   `provider_factory.get_market_data_provider()` — no DB row required,
+   since nothing is persisted; symbol format is validated at this
+   layer rather than trusted to the provider, since
+   `DevMarketDataProvider` — unlike `SahmkClient` — does not validate
+   it itself, and consumer-facing behavior must not depend on which
+   provider happens to be selected),
+   `GET /{symbol}/history` (DB-backed via the existing
+   `ohlcv_loader.load_price_bars`, optional `start`/`end`; an empty
+   `bars` list is a valid 200, not an error, for a symbol with nothing
+   ingested yet), `GET /{symbol}/technical` (runs the existing
+   `TechnicalAnalysisEngine` over DB-loaded bars; a `422
+   insufficient_data` if fewer than the engine's own 35-bar minimum),
+   and `GET /{symbol}/fundamentals` (runs the existing
+   `FundamentalAnalysisEngine` over DB-loaded facts plus a live quote
+   for valuation ratios — a provider outage degrades only the
+   price-dependent ratios to `None`, it never fails the whole
+   response).
+2. **`src/api/exceptions.py` + `error_handlers.py`** (new) — one
+   consistent error JSON shape (`{"error": {"code", "message"}}`) for
+   every API-layer exception (`stock_not_found` 404,
+   `insufficient_data` 422, `invalid_symbol_format` 422,
+   `provider_unavailable` 503), so a frontend can branch on `code`
+   rather than parse message text.
+3. **`src/api/schemas/stocks.py`** (new) — every schema carrying
+   provider-sourced data (`QuoteOut`, `FundamentalAnalysisOut`) keeps
+   `source`/`is_synthetic`, the same honesty discipline
+   Dev/SahmkMarketDataProvider already enforce, all the way to the
+   HTTP response. Disclosed gap: `PriceBar` has no
+   `source`/`is_synthetic` columns (unlike `FundamentalSnapshot`), so
+   `/history` cannot currently tell a caller whether an already-
+   ingested bar came from real or synthetic data — a schema migration,
+   not done in this milestone.
+4. **`main.py`** — routes mounted, `register_error_handlers(app)`
+   called, and `CORSMiddleware` added only when `CORS_ALLOWED_ORIGINS`
+   is explicitly set (empty/no cross-origin access by default, the
+   same secure-by-default posture as `SAHMK_LIVE_DATA_ENABLED`).
+5. **First API-level tests in this repository** — 19 new integration
+   tests (`tests/integration/api/`) using `fastapi.testclient.TestClient`
+   against an in-memory SQLite DB (`StaticPool`, so every session in a
+   test shares one database — plain `sqlite:///:memory:` gives each
+   connection its own isolated database, which silently breaks the
+   moment a route's session is different from the seeding session) and
+   `app.dependency_overrides` swapping in `Dev*Provider` instances
+   directly rather than routing through `provider_factory`'s real
+   network-aware selection (hermetic — no env-var dependence, no risk
+   of that module's process-wide cache leaking across test files).
+   Covers every route's success path, 404/422/503 error paths, the
+   empty-history-is-not-an-error case, growth ratios needing a prior
+   period, and a provider outage degrading gracefully rather than
+   failing. `TestClient(app)` is deliberately never entered as `with
+   TestClient(app) as c:` — that would run `main.py`'s startup
+   lifecycle (Redis message bus, DB kernel init), infrastructure these
+   routes don't need and this environment doesn't have running.
+   1057 tests pass repo-wide.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

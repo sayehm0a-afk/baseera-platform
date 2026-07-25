@@ -9,6 +9,7 @@ import os
 import sys
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
@@ -17,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Import structured logging -- must come after sys.path.insert above so `src` is importable
 from src.core.monitoring.structured_logging import init_logging, get_logger  # noqa: E402
+from src.api.error_handlers import register_error_handlers  # noqa: E402
+from src.api.routes.stocks import router as stocks_router  # noqa: E402
 
 # Initialize structured logging
 init_logging()
@@ -28,6 +31,26 @@ app = FastAPI(
     description="Enterprise AI Platform for Saudi Financial Market Analysis",
     version="1.0.0",
 )
+
+# CORS_ALLOWED_ORIGINS is a comma-separated list of allowed frontend
+# origins (e.g. "http://localhost:3000,https://app.example.com").
+# Deliberately empty (no cross-origin access) by default -- same
+# secure-by-default posture as SAHMK_LIVE_DATA_ENABLED: a frontend
+# origin must be explicitly opted in, never assumed or wildcarded.
+_cors_origins = [
+    origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()
+]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET"],
+        allow_headers=["*"],
+    )
+
+register_error_handlers(app)
+app.include_router(stocks_router)
 
 # Global runtime kernel
 kernel = None
