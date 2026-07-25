@@ -28,6 +28,8 @@ from src.domain.models.user_session import UserSession
 from src.domain.models.email_verification_token import EmailVerificationToken
 from src.domain.models.password_reset_token import PasswordResetToken
 from src.domain.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
+from src.domain.models.invoice import Invoice, InvoiceStatus
+from src.domain.models.payment import Payment, PaymentStatus
 
 __all__ = [
     "Stock",
@@ -66,4 +68,8 @@ __all__ = [
     "Subscription",
     "SubscriptionPlan",
     "SubscriptionStatus",
+    "Invoice",
+    "InvoiceStatus",
+    "Payment",
+    "PaymentStatus",
 ]
