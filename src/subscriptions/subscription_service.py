@@ -75,3 +75,54 @@ def is_entitled(subscription: Optional[Subscription]) -> bool:
     row has already been lazily downgraded -- this function only reads
     `.status`, it never re-checks the period itself."""
     return subscription is not None and subscription.status in _ENTITLED_STATUSES
+
+
+def extend_trial(session: Session, subscription: Subscription, additional_days: int) -> Subscription:
+    """Admin action: pushes `trial_ends_at` (and `current_period_end`)
+    forward by `additional_days` from whichever is later -- *now* or
+    the subscription's current `trial_ends_at` -- so extending an
+    already-expired trial correctly restarts it from today, while
+    extending a still-live trial adds to its existing remaining time
+    rather than shortening it."""
+    now = datetime.now(timezone.utc)
+    current_trial_ends_at = subscription.trial_ends_at
+    if current_trial_ends_at is not None and current_trial_ends_at.tzinfo is None:
+        current_trial_ends_at = current_trial_ends_at.replace(tzinfo=timezone.utc)
+    base = max(now, current_trial_ends_at) if current_trial_ends_at is not None else now
+
+    new_trial_ends_at = base + timedelta(days=additional_days)
+    _repository.update_trial_ends_at(session, subscription.id, new_trial_ends_at)
+    subscription.trial_ends_at = new_trial_ends_at
+    subscription.current_period_end = new_trial_ends_at
+    subscription.status = SubscriptionStatus.TRIALING
+    return subscription
+
+
+def admin_activate_subscription(
+    session: Session, subscription: Subscription, plan: SubscriptionPlan, period_days: int
+) -> Subscription:
+    """Admin action: manually activates a paid plan for `period_days`
+    from today -- e.g. a comped account, or confirming payment received
+    outside this system (bank transfer) before a real payment gateway
+    exists (M10.7). This is an explicit admin override, not a fake
+    payment: no Invoice/Payment row is created, and the distinction
+    from a real gateway-confirmed activation is exactly that -- an
+    admin, not a payment provider, vouched for this."""
+    if plan == SubscriptionPlan.TRIAL:
+        raise ValueError("admin_activate_subscription cannot activate the TRIAL plan -- use extend_trial instead.")
+
+    now = datetime.now(timezone.utc)
+    period_end = now + timedelta(days=period_days)
+    _repository.set_plan_and_status(
+        session,
+        subscription.id,
+        plan=plan,
+        status=SubscriptionStatus.ACTIVE,
+        current_period_start=now,
+        current_period_end=period_end,
+    )
+    subscription.plan = plan
+    subscription.status = SubscriptionStatus.ACTIVE
+    subscription.current_period_start = now
+    subscription.current_period_end = period_end
+    return subscription

@@ -63,6 +63,24 @@ class AuthRepository:
         total = query.count()
         return total, query.offset(offset).limit(limit).all()
 
+    def delete_user(self, session: Session, user_id: int) -> None:
+        """Hard delete via `session.delete()` (not a bulk `Query.delete()`)
+        so User's configured relationship cascades (sessions,
+        subscription) actually run. Distinct from `set_is_active(...,
+        False)` (suspend), which keeps the row for audit/billing
+        history -- this is the stronger, admin/OWNER-only action (see
+        src/api/routes/admin/users.py). Deliberately has no special
+        handling for FK violations from other tables (invoices, audit
+        logs, portfolios, ...): the database's own RESTRICT correctly
+        blocks deleting a user with real financial/audit history, and
+        the caller surfaces that as a clear error rather than silently
+        cascading away records that must be retained, or silently
+        succeeding while leaving orphaned data."""
+        user = session.query(User).filter_by(id=user_id).one_or_none()
+        if user is not None:
+            session.delete(user)
+            session.commit()
+
     # --- EmailVerificationToken ----------------------------------------
 
     def create_email_verification_token(

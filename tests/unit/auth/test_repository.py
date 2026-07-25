@@ -172,3 +172,18 @@ def test_list_all_active_sessions_for_admin(session, repo):
     total, rows = repo.list_all_active_sessions(session, limit=10, offset=0)
     assert total == 2
     assert len(rows) == 2
+
+
+def test_delete_user_removes_the_row_and_cascades_sessions(session, repo):
+    user = repo.create_user(session, "m@example.com", "hashed")
+    future = datetime.now(timezone.utc) + timedelta(days=30)
+    repo.create_user_session(session, user.id, "s1", "f1", future)
+
+    repo.delete_user(session, user.id)
+
+    assert repo.get_user_by_id(session, user.id) is None
+    assert repo.get_user_session_by_jti(session, "s1") is None
+
+
+def test_delete_user_is_a_no_op_for_an_unknown_id(session, repo):
+    repo.delete_user(session, 999999)  # must not raise
