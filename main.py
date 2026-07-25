@@ -161,26 +161,40 @@ async def metrics():
 
 @app.get("/market-data/status")
 async def market_data_status():
-    """Reports which market data provider is currently active.
+    """Reports which market-data and fundamentals providers are
+    currently active.
 
-    src.market_data.provider_factory automatically selects the live
-    SAHMK provider whenever SAHMK_API_KEY is configured and sahmk.sa is
-    reachable, and falls back to the synthetic dev provider otherwise
-    (e.g. in a network-restricted environment) -- this endpoint exposes
-    that decision and the provider's own health check for operators.
+    src.market_data.provider_factory / fundamental_provider_factory
+    each automatically select the live SAHMK provider whenever
+    SAHMK_API_KEY is configured and sahmk.sa is reachable, and fall
+    back to the synthetic dev provider otherwise (e.g. in a
+    network-restricted environment) -- this endpoint exposes that
+    decision and each provider's own health check for operators.
     Never returns the configured API key.
     """
     try:
+        from src.market_data.fundamental_provider_factory import (
+            get_fundamental_data_provider,
+            get_last_selected_fundamental_provider_kind,
+        )
         from src.market_data.provider_factory import (
             get_last_selected_provider_kind,
             get_market_data_provider,
         )
 
-        provider = await get_market_data_provider()
-        health = await provider.health_check()
+        market_provider = await get_market_data_provider()
+        fundamental_provider = await get_fundamental_data_provider()
+        market_health = await market_provider.health_check()
+        fundamental_health = await fundamental_provider.health_check()
         return {
-            "provider": get_last_selected_provider_kind(),
-            "health": health.value,
+            "market_data": {
+                "provider": get_last_selected_provider_kind(),
+                "health": market_health.value,
+            },
+            "fundamentals": {
+                "provider": get_last_selected_fundamental_provider_kind(),
+                "health": fundamental_health.value,
+            },
         }
     except Exception as e:
         logger.error(f"Error checking market data provider status: {e}")

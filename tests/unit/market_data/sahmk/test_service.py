@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.market_data.sahmk.exceptions import SahmkResponseValidationError
-from src.market_data.sahmk.models import SahmkEvent, SahmkHistoricalBar, SahmkMarketSummary, SahmkQuote
+from src.market_data.sahmk.models import (
+    SahmkCompanyProfile,
+    SahmkDividend,
+    SahmkEvent,
+    SahmkHistoricalBar,
+    SahmkMarketSummary,
+    SahmkQuote,
+)
 from src.market_data.sahmk.service import SahmkMarketDataService
 
 
@@ -183,6 +190,150 @@ async def test_get_recent_events_falls_back_to_results_key_and_title_field():
     events = await service.get_recent_events(limit=1)
     assert events[0].headline == "Fallback headline"
     assert events[0].symbol is None
+
+
+# --- get_company_profile ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_parses_known_field_names():
+    client = AsyncMock()
+    client.get_company_profile.return_value = {"name": "Saudi Aramco", "sector": "Energy"}
+    service = _service(client)
+    profile = await service.get_company_profile("2222")
+    assert profile == SahmkCompanyProfile(
+        symbol="2222", name="Saudi Aramco", sector="Energy", raw={"name": "Saudi Aramco", "sector": "Energy"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_tolerates_missing_fields():
+    client = AsyncMock()
+    client.get_company_profile.return_value = {}
+    service = _service(client)
+    profile = await service.get_company_profile("2222")
+    assert profile.name is None
+    assert profile.sector is None
+
+
+# --- get_financials ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_financials_parses_primary_field_names():
+    client = AsyncMock()
+    client.get_financials.return_value = {
+        "fiscal_period_end": "2025-12-31",
+        "revenue": 100.0,
+        "net_income": 20.0,
+        "total_assets": 500.0,
+        "total_liabilities": 200.0,
+        "total_equity": 300.0,
+        "current_assets": 150.0,
+        "current_liabilities": 80.0,
+        "shares_outstanding": 1000,
+        "eps": 0.02,
+    }
+    service = _service(client)
+    financials = await service.get_financials("2222", period_type="annual")
+    assert financials.revenue == 100.0
+    assert financials.net_income == 20.0
+    assert financials.shares_outstanding == 1000
+    assert financials.eps == 0.02
+    assert financials.period_type == "annual"
+    client.get_financials.assert_awaited_once_with("2222", period_type="annual")
+
+
+@pytest.mark.asyncio
+async def test_get_financials_falls_back_to_alternate_field_names():
+    client = AsyncMock()
+    client.get_financials.return_value = {
+        "period_end": "2025-12-31",
+        "total_revenue": 100.0,
+        "net_profit": 20.0,
+        "shareholders_equity": 300.0,
+        "shares": 1000,
+        "earnings_per_share": 0.02,
+    }
+    service = _service(client)
+    financials = await service.get_financials("2222")
+    assert financials.fiscal_period_end == "2025-12-31"
+    assert financials.revenue == 100.0
+    assert financials.net_income == 20.0
+    assert financials.total_equity == 300.0
+    assert financials.shares_outstanding == 1000
+    assert financials.eps == 0.02
+
+
+@pytest.mark.asyncio
+async def test_get_financials_never_raises_on_missing_fields_and_keeps_raw():
+    client = AsyncMock()
+    client.get_financials.return_value = {"unexpected_field": "x"}
+    service = _service(client)
+    financials = await service.get_financials("2222")
+    assert financials.revenue is None
+    assert financials.raw == {"unexpected_field": "x"}
+
+
+@pytest.mark.asyncio
+async def test_get_financials_is_cached_per_symbol_and_period():
+    client = AsyncMock()
+    client.get_financials.return_value = {"revenue": 1}
+    service = _service(client)
+    await service.get_financials("2222", period_type="annual")
+    await service.get_financials("2222", period_type="annual")
+    client.get_financials.assert_awaited_once()
+
+
+# --- get_dividends / get_latest_dividend_per_share ------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_parses_dividends_key():
+    first = {"dividend_per_share": 1.5, "ex_date": "2025-06-01", "payment_date": "2025-07-01"}
+    second = {"dividend_per_share": 1.2, "ex_date": "2024-06-01", "payment_date": "2024-07-01"}
+    client = AsyncMock()
+    client.get_dividends.return_value = {"dividends": [first, second]}
+    service = _service(client)
+    dividends = await service.get_dividends("2222")
+    assert dividends == [
+        SahmkDividend("2222", 1.5, "2025-06-01", "2025-07-01", first),
+        SahmkDividend("2222", 1.2, "2024-06-01", "2024-07-01", second),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_falls_back_to_results_and_amount_field():
+    client = AsyncMock()
+    client.get_dividends.return_value = {"results": [{"amount": 2.0}]}
+    service = _service(client)
+    dividends = await service.get_dividends("2222")
+    assert dividends[0].dividend_per_share == 2.0
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_skips_entries_with_no_amount():
+    client = AsyncMock()
+    client.get_dividends.return_value = {"dividends": [{"ex_date": "2025-01-01"}]}
+    service = _service(client)
+    dividends = await service.get_dividends("2222")
+    assert dividends == []
+
+
+@pytest.mark.asyncio
+async def test_get_latest_dividend_per_share_returns_most_recent():
+    client = AsyncMock()
+    client.get_dividends.return_value = {"dividends": [{"dividend_per_share": 1.5}]}
+    service = _service(client)
+    assert await service.get_latest_dividend_per_share("2222") == 1.5
+
+
+@pytest.mark.asyncio
+async def test_get_latest_dividend_per_share_none_when_no_history():
+    client = AsyncMock()
+    client.get_dividends.return_value = {"dividends": []}
+    service = _service(client)
+    assert await service.get_latest_dividend_per_share("2222") is None
 
 
 # --- check_health ------------------------------------------------------

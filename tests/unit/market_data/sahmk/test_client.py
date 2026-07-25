@@ -121,6 +121,55 @@ async def test_get_events_sends_limit_param():
     assert session.calls[0]["params"] == {"limit": 5}
 
 
+@pytest.mark.asyncio
+async def test_get_company_profile_calls_correct_endpoint():
+    client, session = _client([FakeResponse(200, {"name": "Aramco"})])
+    result = await client.get_company_profile("2222")
+    assert result == {"name": "Aramco"}
+    assert session.calls[0]["url"] == "https://sahmk.example.invalid/company/2222/"
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_rejects_malformed_symbol():
+    client, session = _client([])
+    with pytest.raises(InvalidSymbolError):
+        await client.get_company_profile("AAPL")
+    assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_financials_calls_correct_endpoint_with_period():
+    client, session = _client([FakeResponse(200, {"revenue": 1})])
+    result = await client.get_financials("2222", period_type="quarterly")
+    assert result == {"revenue": 1}
+    assert session.calls[0]["url"] == "https://sahmk.example.invalid/financials/2222/"
+    assert session.calls[0]["params"] == {"period": "quarterly"}
+
+
+@pytest.mark.asyncio
+async def test_get_financials_rejects_malformed_symbol():
+    client, session = _client([])
+    with pytest.raises(InvalidSymbolError):
+        await client.get_financials("AAPL")
+    assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_calls_correct_endpoint():
+    client, session = _client([FakeResponse(200, {"dividends": []})])
+    result = await client.get_dividends("2222")
+    assert result == {"dividends": []}
+    assert session.calls[0]["url"] == "https://sahmk.example.invalid/dividends/2222/"
+
+
+@pytest.mark.asyncio
+async def test_get_dividends_rejects_malformed_symbol():
+    client, session = _client([])
+    with pytest.raises(InvalidSymbolError):
+        await client.get_dividends("AAPL")
+    assert session.calls == []
+
+
 # --- status-code -> exception mapping -------------------------------------
 
 

@@ -466,6 +466,75 @@ worker/task-queue (still explicitly out of scope, per M2.1's own
 disclosed boundary) — `provider_factory.get_market_data_provider()` is
 available for that wiring whenever it is taken on.
 
+## Completed: SAHMK Starter-plan expansion — Fundamentals provider, key rotation, live-verification attempt
+
+Follow-up to the SAHMK Integration milestone above, after the account
+was upgraded Free → Starter and `SAHMK_API_KEY` was rotated (old key
+revoked). Every finding the previous milestone recorded about a real
+response (`403 PLAN_LIMIT` against the old Free-tier key) is superseded
+and not relied upon here — see `docs/SAHMK_INTEGRATION.md`'s "Key
+rotation & plan upgrade" section.
+
+1. **New Starter-tier endpoint wrappers** on `SahmkClient`:
+   `get_company_profile()` (`GET /company/{symbol}/`), `get_financials()`
+   (`GET /financials/{symbol}/`), `get_dividends()`
+   (`GET /dividends/{symbol}/`) — plus matching `SahmkMarketDataService`
+   methods (typed, cached) and `models.py` dataclasses
+   (`SahmkCompanyProfile`, `SahmkFinancials`, `SahmkDividend`).
+   `/financials/`'s exact field names are undocumented by every source
+   consulted, so parsing tries several plausible key names per field
+   (`_first_present()`) rather than assuming one, and always keeps the
+   untouched raw response alongside the parsed one.
+2. **`src/market_data/providers/sahmk_fundamental_data_provider.py`**
+   (new) — `SahmkFundamentalDataProvider`, an `IFundamentalDataProvider`
+   implementation (M2.3's interface, unchanged) combining
+   `/financials/` + `/dividends/` into exactly
+   `DevFundamentalDataProvider`'s dict shape (`source="sahmk"`,
+   `is_synthetic=False`), registered with the existing
+   `FundamentalDataProviderFactory` under `"sahmk"`. Raises
+   `SahmkResponseValidationError` — rather than passing a dict with a
+   missing key downstream to fail with a less legible `KeyError` in
+   `ingest_fundamentals.py`'s `_upsert_fundamental_snapshot` — if any
+   field that function actually requires is still absent after the
+   defensive multi-name parse.
+3. **`src/market_data/fundamental_provider_factory.py`** (new) — the
+   fundamentals-side twin of `provider_factory.py`: identical
+   network-aware auto-selection policy (`MARKET_DATA_PROVIDER` env var,
+   same connectivity probe, same graceful fallback to
+   `DevFundamentalDataProvider`), so the "no synthetic data left where
+   avoidable" requirement now covers both provider families, not just
+   market data. This closes the last remaining synthetic-only data path
+   in the codebase — `grep -rl is_synthetic src/` now returns only the
+   two `Dev*Provider`/`Sahmk*Provider` pairs, nothing else.
+4. **`main.py`**'s `GET /market-data/status` now reports both
+   selections (`market_data` and `fundamentals`) and each provider's
+   health, still never the key.
+5. **35 new unit tests** (mocked; no real network call) covering the
+   three new client wrappers, the three new service methods,
+   `SahmkFundamentalDataProvider` (including the required-field
+   validation raising instead of propagating a bad dict), and
+   `fundamental_provider_factory`'s selection logic — 160 total in
+   `tests/unit/market_data/`, full repo suite still green.
+6. **Live verification was attempted, honestly, and could not be
+   completed in this sandbox**: both `curl` and the real
+   `SahmkClient`/`SahmkMarketDataProvider` code path (which, since the
+   prior milestone, always sets `trust_env=True` so it honors this
+   environment's egress proxy) were used to call
+   `GET /market/summary/` with the new key. Both were rejected
+   identically by the environment's own egress-policy proxy at the
+   CONNECT layer (`403`, from the proxy's own `127.0.0.1` address, not
+   from `sahmk.sa`) — a network-policy fact about this sandbox, not
+   about the key, the plan, or this code. Per this environment's own
+   documented policy, this was not retried or routed around, and is
+   reported rather than worked around. Every endpoint's live status is
+   therefore "not verified this session" in
+   `docs/SAHMK_INTEGRATION.md`'s endpoint table, not "confirmed
+   working" — the auto-selection mechanism (item 3, and its
+   market-data twin from the prior milestone) is what actually runs in
+   this condition today, and is exactly what will self-verify the
+   moment this code runs somewhere with real network access to
+   `sahmk.sa`.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

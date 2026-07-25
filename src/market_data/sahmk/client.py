@@ -232,3 +232,30 @@ class SahmkClient:
     async def get_events(self, limit: int = 10) -> Dict[str, Any]:
         """GET /events/ -- AI-generated stock events (Pro+)."""
         return await self._request("/events/", params={"limit": limit})
+
+    async def get_company_profile(self, symbol: str) -> Dict[str, Any]:
+        """GET /company/{symbol}/ -- company profile (Free+)."""
+        validate_symbol_format(symbol)
+        return await self._request(f"/company/{symbol}/")
+
+    async def get_financials(self, symbol: str, period_type: str = "annual") -> Dict[str, Any]:
+        """GET /financials/{symbol}/ -- financial statements (Starter+).
+
+        UNVERIFIED (docs/SAHMK_INTEGRATION.md): the exact query-parameter
+        name/values for selecting annual vs. quarterly statements are not
+        confirmed by any source consulted. `period_type` is sent as-is
+        under a `period` parameter as the most defensible reading, not a
+        confirmed contract -- SahmkFundamentalDataProvider treats
+        whatever SAHMK actually returns as authoritative rather than
+        assuming this parameter is honored.
+        """
+        validate_symbol_format(symbol)
+        return await self._request(f"/financials/{symbol}/", params={"period": period_type})
+
+    async def get_dividends(self, symbol: str) -> Dict[str, Any]:
+        """GET /dividends/{symbol}/ -- dividend history and yield
+        (Starter+). The closest SAHMK endpoint to "corporate actions" --
+        no source consulted documents a separate corporate-actions/
+        splits/announcements endpoint distinct from this one."""
+        validate_symbol_format(symbol)
+        return await self._request(f"/dividends/{symbol}/")
