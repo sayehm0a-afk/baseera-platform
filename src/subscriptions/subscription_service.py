@@ -17,6 +17,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from src.core.config import settings
+from src.core.monitoring.prometheus_metrics import get_metrics
 from src.domain.models import Subscription, SubscriptionPlan, SubscriptionStatus, User
 from src.subscriptions.repository import SubscriptionRepository
 
@@ -63,8 +64,11 @@ def get_effective_subscription(session: Session, user_id: int) -> Optional[Subsc
 
     now = datetime.now(timezone.utc)
     if subscription.status in _ENTITLED_STATUSES and _is_period_expired(subscription, now):
+        was_trialing = subscription.status == SubscriptionStatus.TRIALING
         _repository.set_status(session, subscription.id, SubscriptionStatus.EXPIRED)
         subscription.status = SubscriptionStatus.EXPIRED
+        if was_trialing:
+            get_metrics().record_trial_expiration()
 
     return subscription
 

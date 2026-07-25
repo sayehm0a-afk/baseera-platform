@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from src.core.monitoring.prometheus_metrics import get_metrics
 from src.domain.models import AuditLog
 
 
@@ -48,4 +49,5 @@ def record_admin_action(
     )
     session.add(log)
     session.commit()
+    get_metrics().record_admin_action(action)
     return log

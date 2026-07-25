@@ -8,6 +8,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from src.core.monitoring.prometheus_metrics import get_metrics
 from src.domain.models import AIRequest, AIRequestStatus
 
 
@@ -41,4 +42,5 @@ def record_ai_request(
     )
     session.add(request)
     session.commit()
+    get_metrics().record_ai_request(feature=feature, status=status.value, total_tokens=total_tokens or 0)
     return request

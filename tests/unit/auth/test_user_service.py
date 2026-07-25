@@ -11,6 +11,7 @@ from src.auth.exceptions import (
 )
 from src.auth.repository import AuthRepository
 from src.core.db.database import Base
+from src.core.monitoring.prometheus_metrics import get_metrics
 from src.domain.models import EmailVerificationToken, Subscription, SubscriptionPlan, SubscriptionStatus
 
 
@@ -92,3 +93,29 @@ def test_authenticate_succeeds_when_verified_and_active(session):
     authenticated = user_service.authenticate(session, "verified@example.com", "correct-password")
     assert authenticated.email == "verified@example.com"
     assert authenticated.last_login_at is not None
+
+
+def test_register_increments_the_registrations_counter(session):
+    metrics = get_metrics()
+    before = metrics.registrations_total._value.get()
+    user_service.register(session, "metrics-register@example.com", "s3cret-password")
+    assert metrics.registrations_total._value.get() == before + 1
+
+
+def test_authenticate_increments_the_login_success_counter(session):
+    repo = AuthRepository()
+    user_service.register(session, "metrics-login-success@example.com", "correct-password")
+    repo.set_email_verified(session, repo.get_user_by_email(session, "metrics-login-success@example.com").id)
+
+    metrics = get_metrics()
+    before = metrics.logins_total.labels(status="success")._value.get()
+    user_service.authenticate(session, "metrics-login-success@example.com", "correct-password")
+    assert metrics.logins_total.labels(status="success")._value.get() == before + 1
+
+
+def test_authenticate_increments_the_login_failure_counter(session):
+    metrics = get_metrics()
+    before = metrics.logins_total.labels(status="failure")._value.get()
+    with pytest.raises(InvalidCredentialsError):
+        user_service.authenticate(session, "nobody-metrics@example.com", "whatever")
+    assert metrics.logins_total.labels(status="failure")._value.get() == before + 1

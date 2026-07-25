@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.core.db.database import Base
+from src.core.monitoring.prometheus_metrics import get_metrics
 from src.domain.models import SubscriptionPlan, SubscriptionStatus, User
 from src.subscriptions import subscription_service
 from src.subscriptions.repository import SubscriptionRepository
@@ -75,6 +76,43 @@ def test_get_effective_subscription_lazily_downgrades_an_expired_trial(session, 
     # The downgrade was persisted, not just reflected on the in-memory object.
     reloaded = repo.get_subscription_for_user(session, user.id)
     assert reloaded.status == SubscriptionStatus.EXPIRED
+
+
+def test_get_effective_subscription_records_a_trial_expiration_metric_only_for_trialing(session, user):
+    repo = SubscriptionRepository()
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    repo.create_subscription(
+        session,
+        user_id=user.id,
+        plan=SubscriptionPlan.TRIAL,
+        status=SubscriptionStatus.TRIALING,
+        trial_ends_at=past,
+        current_period_start=past - timedelta(days=14),
+        current_period_end=past,
+    )
+
+    metrics = get_metrics()
+    before = metrics.trial_expirations_total._value.get()
+    subscription_service.get_effective_subscription(session, user.id)
+    assert metrics.trial_expirations_total._value.get() == before + 1
+
+
+def test_get_effective_subscription_does_not_record_trial_expiration_for_an_expiring_active_plan(session, user):
+    repo = SubscriptionRepository()
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    repo.create_subscription(
+        session,
+        user_id=user.id,
+        plan=SubscriptionPlan.MONTHLY,
+        status=SubscriptionStatus.ACTIVE,
+        current_period_start=past - timedelta(days=30),
+        current_period_end=past,
+    )
+
+    metrics = get_metrics()
+    before = metrics.trial_expirations_total._value.get()
+    subscription_service.get_effective_subscription(session, user.id)
+    assert metrics.trial_expirations_total._value.get() == before
 
 
 def test_is_entitled_true_for_trialing_and_active(session, user):

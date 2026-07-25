@@ -17,6 +17,8 @@ import sys
 from datetime import datetime
 from typing import Dict
 
+from src.api.middleware.request_id import request_id_var
+
 
 class JSONFormatter(logging.Formatter):
     """JSON formatter for structured logging."""
@@ -32,6 +34,10 @@ class JSONFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno,
         }
+
+        request_id = request_id_var.get()
+        if request_id is not None:
+            log_data["request_id"] = request_id
 
         # Add exception info if present
         if record.exc_info:

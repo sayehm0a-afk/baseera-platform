@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.admin.audit_log import list_admin_actions, record_admin_action
 from src.core.db.database import Base
+from src.core.monitoring.prometheus_metrics import get_metrics
 from src.domain.models import User
 
 
@@ -58,3 +59,12 @@ def test_list_admin_actions_filters_by_actor_and_action(session, admin_user):
 
     total, logs = list_admin_actions(session, limit=50, offset=0, action="user.suspend")
     assert total == 2
+
+
+def test_record_admin_action_updates_prometheus_counter(session, admin_user):
+    metrics = get_metrics()
+    before = metrics.admin_actions_total.labels(action="metrics_check_action")._value.get()
+
+    record_admin_action(session, admin_user.id, "metrics_check_action", "user", target_id=1)
+
+    assert metrics.admin_actions_total.labels(action="metrics_check_action")._value.get() == before + 1

@@ -19,10 +19,12 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).parent))
 
 # Import structured logging -- must come after sys.path.insert above so `src` is importable
+from src.core.config import settings  # noqa: E402
 from src.core.monitoring.structured_logging import init_logging, get_logger  # noqa: E402
 from src.api.error_handlers import register_error_handlers  # noqa: E402
 from src.api.middleware.csrf import CSRFMiddleware  # noqa: E402
 from src.api.middleware.rate_limiting import limiter  # noqa: E402
+from src.api.middleware.request_id import RequestIDMiddleware  # noqa: E402
 from src.api.middleware.security_headers import SecurityHeadersMiddleware  # noqa: E402
 from src.api.routes.admin import router as admin_router  # noqa: E402
 from src.api.routes.auth import router as auth_router  # noqa: E402
@@ -32,6 +34,19 @@ from src.api.routes.market import router as market_router  # noqa: E402
 from src.api.routes.portfolio import router as portfolio_router  # noqa: E402
 from src.api.routes.stocks import router as stocks_router  # noqa: E402
 from src.api.routes.subscriptions import router as subscriptions_router  # noqa: E402
+
+# Sentry: opt-in only (settings.sentry_dsn is None unless SENTRY_DSN is set),
+# so a dev/CI run with no DSN configured never attempts a network call.
+if settings.sentry_dsn:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        environment=settings.environment,
+        integrations=[FastApiIntegration()],
+        traces_sample_rate=0.0,
+    )
 
 # Initialize structured logging
 init_logging()
@@ -46,9 +61,12 @@ app = FastAPI(
 
 # Middleware stack -- Starlette applies the LAST-added middleware
 # outermost, so CORS (added last, when configured) wraps everything
-# else, exactly as a preflight OPTIONS request needs.
+# else, exactly as a preflight OPTIONS request needs. RequestIDMiddleware
+# is added after CSRF/SecurityHeaders so the request_id contextvar is set
+# before either of them (and every route/log line) runs.
 app.add_middleware(CSRFMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 # CORS_ALLOWED_ORIGINS is a comma-separated list of allowed frontend
 # origins (e.g. "http://localhost:3000,https://app.example.com").
@@ -235,28 +253,77 @@ async def liveness_check():
 
 @app.get("/health/ready")
 async def readiness_check():
-    """Readiness check endpoint."""
+    """Readiness check endpoint -- a readiness probe that never touches
+    its own datastores isn't one, so this checks the in-process kernel
+    *and* issues a real `SELECT 1` against Postgres and a real `PING`
+    against Redis."""
+    from sqlalchemy import text
+
+    from src.auth.token_store import get_redis_client
+    from src.core.db.database import get_session_factory
+
+    health_status = {}
+
     try:
-        if not kernel:
-            raise HTTPException(status_code=503, detail="kernel not initialized")
-
-        health_status = kernel.health_check()
-
-        if all(health_status.values()):
-            return {"status": "healthy", "details": health_status}
+        if kernel:
+            health_status.update(kernel.health_check())
         else:
-            raise HTTPException(status_code=503, detail=f"Degraded health: {health_status}")
-
+            health_status["kernel"] = False
     except Exception as e:
-        logger.error(f"Readiness check error: {e}")
-        raise HTTPException(status_code=503, detail=str(e))
+        logger.error(f"Readiness kernel check failed: {e}")
+        health_status["kernel"] = False
+
+    try:
+        session_factory = get_session_factory()
+        db_session = session_factory()
+        try:
+            db_session.execute(text("SELECT 1"))
+            health_status["database"] = True
+        finally:
+            db_session.close()
+    except Exception as e:
+        logger.error(f"Readiness DB check failed: {e}")
+        health_status["database"] = False
+
+    try:
+        health_status["redis"] = bool(get_redis_client().ping())
+    except Exception as e:
+        logger.error(f"Readiness Redis check failed: {e}")
+        health_status["redis"] = False
+
+    if all(health_status.values()):
+        return {"status": "healthy", "details": health_status}
+    raise HTTPException(status_code=503, detail=f"Degraded health: {health_status}")
 
 
 @app.get("/metrics")
 async def metrics():
-    """Prometheus metrics endpoint."""
+    """Prometheus metrics endpoint. Must be returned as a raw
+    `text/plain` Response (the Prometheus exposition format), never a
+    bare string -- FastAPI otherwise JSON-encodes a plain `str` return
+    value, which double-escapes every newline and mislabels the
+    content-type, producing a body no real Prometheus server can
+    actually scrape."""
+    from fastapi import Response
+
+    from src.auth.repository import AuthRepository
+    from src.core.db.database import get_session_factory
     from src.core.monitoring.prometheus_metrics import get_metrics
-    return get_metrics().get_metrics().decode("utf-8")
+
+    session_factory = get_session_factory()
+    db_session = session_factory()
+    try:
+        # active_sessions is recomputed from a real COUNT() query at
+        # scrape time, not tracked incrementally, so it can never drift
+        # from the database's actual state.
+        total, _ = AuthRepository().list_all_active_sessions(db_session, limit=1, offset=0)
+        get_metrics().set_active_sessions(total)
+    except Exception as e:
+        logger.error(f"Failed to refresh active_sessions gauge: {e}")
+    finally:
+        db_session.close()
+
+    return Response(content=get_metrics().get_metrics(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.get("/market-data/status")
