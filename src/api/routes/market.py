@@ -16,6 +16,10 @@ reconstruct `SymbolScanOutcome`s from those persisted rows (via
 `src.market_intelligence.read_model`) and hand them to the exact same
 `RankingEngine`/`WatchlistEngine`/`MarketSnapshotBuilder` the scan
 itself used, so no ranking/watchlist/sentiment rule is duplicated here.
+
+Every route requires `require_active_subscription()` (Phase 13 P13.5
+fix, mirroring the identical fix applied to src/api/routes/stocks.py --
+this file had no auth dependency at all before this).
 """
 
 import logging
@@ -26,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_market_provider
 from src.api.exceptions import MarketScanRunNotFoundError, NoMarketScanDataError
+from src.auth.rbac import require_active_subscription
 from src.api.schemas.market_intelligence import (
     AlertOut,
     AlertsOut,
@@ -44,7 +49,7 @@ from src.api.schemas.market_intelligence import (
     WatchlistsOut,
 )
 from src.core.db.database import get_db
-from src.domain.models import MarketChangeEvent, MarketScanRun, SectorIntelligenceSummary
+from src.domain.models import MarketChangeEvent, MarketScanRun, SectorIntelligenceSummary, User
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_intelligence.market_snapshot import MarketSnapshotBuilder
 from src.market_intelligence.ranking import RankingEngine
@@ -159,6 +164,7 @@ async def create_scan(
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> MarketScanRunOut:
     symbols = SymbolSelector().select(session, request.symbols)
     run = _repository.create_scan_run(session, symbols_requested=len(symbols))
@@ -175,12 +181,20 @@ async def create_scan(
 
 
 @router.get("/scan/{run_id}", response_model=MarketScanRunOut)
-def get_scan(run_id: int, session: Session = Depends(get_db)) -> MarketScanRunOut:
+def get_scan(
+    run_id: int,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> MarketScanRunOut:
     return _to_run_out(_resolve_run(session, run_id))
 
 
 @router.get("/summary", response_model=MarketSummaryOut)
-def get_summary(run_id: Optional[int] = Query(None), session: Session = Depends(get_db)) -> MarketSummaryOut:
+def get_summary(
+    run_id: Optional[int] = Query(None),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> MarketSummaryOut:
     run = _resolve_run(session, run_id)
     records = _repository.get_symbol_records_by_symbol(session, run.id)
     outcomes = [outcome_from_record(r) for r in records.values()]
@@ -218,6 +232,7 @@ def get_rankings(
     run_id: Optional[int] = Query(None),
     category: Optional[str] = Query(None),
     session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> RankingsOut:
     run = _resolve_run(session, run_id)
     records = _repository.get_symbol_records_by_symbol(session, run.id)
@@ -254,13 +269,23 @@ def get_rankings(
 
 
 @router.get("/top-buy", response_model=RankingListOut)
-def get_top_buy(run_id: Optional[int] = Query(None), session: Session = Depends(get_db)) -> RankingListOut:
-    return get_rankings(run_id=run_id, category="TOP_BUY", session=session).rankings[0]
+def get_top_buy(
+    run_id: Optional[int] = Query(None),
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_active_subscription()),
+) -> RankingListOut:
+    return get_rankings(run_id=run_id, category="TOP_BUY", session=session, _current_user=current_user).rankings[0]
 
 
 @router.get("/top-strong-buy", response_model=RankingListOut)
-def get_top_strong_buy(run_id: Optional[int] = Query(None), session: Session = Depends(get_db)) -> RankingListOut:
-    return get_rankings(run_id=run_id, category="TOP_STRONG_BUY", session=session).rankings[0]
+def get_top_strong_buy(
+    run_id: Optional[int] = Query(None),
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_active_subscription()),
+) -> RankingListOut:
+    return get_rankings(
+        run_id=run_id, category="TOP_STRONG_BUY", session=session, _current_user=current_user
+    ).rankings[0]
 
 
 @router.get("/watchlists", response_model=WatchlistsOut)
@@ -268,6 +293,7 @@ def get_watchlists(
     run_id: Optional[int] = Query(None),
     category: Optional[str] = Query(None),
     session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> WatchlistsOut:
     run = _resolve_run(session, run_id)
     records = _repository.get_symbol_records_by_symbol(session, run.id)
@@ -297,7 +323,11 @@ def get_watchlists(
 
 
 @router.get("/sectors", response_model=SectorsOut)
-def get_sectors(run_id: Optional[int] = Query(None), session: Session = Depends(get_db)) -> SectorsOut:
+def get_sectors(
+    run_id: Optional[int] = Query(None),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> SectorsOut:
     run = _resolve_run(session, run_id)
     sector_rows = _repository.get_sector_summaries(session, run.id)
     return SectorsOut(
@@ -312,6 +342,7 @@ def get_changes(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> ChangesOut:
     resolved_run_id = None
     if run_id is not None:
@@ -337,6 +368,7 @@ def get_alerts(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> AlertsOut:
     total, rows = _repository.get_alerts(session, limit=limit, offset=offset, severity=severity, alert_type=alert_type)
     return AlertsOut(

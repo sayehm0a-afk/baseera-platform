@@ -21,8 +21,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import main
-from src.api.dependencies import get_fundamental_provider, get_market_provider
+from src.api.dependencies import get_current_user, get_fundamental_provider, get_market_provider
 from src.core.db.database import Base, get_db
+from src.domain.models import StaffRole, User
 from src.market_data.providers.dev_fundamental_data_provider import DevFundamentalDataProvider
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 
@@ -54,6 +55,21 @@ def db_session() -> Iterator[Session]:
     session.close()
     Base.metadata.drop_all(bind=engine)
     main.app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def authenticated_as_staff(db_session) -> Iterator[User]:
+    """Opt-in fixture (NOT autouse -- test_auth_routes.py and other
+    files sharing `db_session`/`client` need the real, unoverridden
+    get_current_user to exercise actual register/login/session flows)
+    for route files where every route now requires
+    require_active_subscription() (e.g. stocks.py/market.py, Phase 13
+    P13.5) and the test's own focus is route behavior, not auth itself.
+    An in-memory staff user (never persisted) satisfies
+    require_active_subscription()'s staff bypass."""
+    staff_user = User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+    main.app.dependency_overrides[get_current_user] = lambda: staff_user
+    yield staff_user
 
 
 @pytest.fixture

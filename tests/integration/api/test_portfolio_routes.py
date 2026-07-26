@@ -37,6 +37,7 @@ from src.domain.models import (
     User,
 )
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+from src.subscriptions import subscription_service
 
 
 @pytest.fixture
@@ -66,10 +67,15 @@ def db_session(monkeypatch) -> Iterator[Session]:
     # ownership-scoped caller (Phase 10 M10.5) -- overriding
     # get_current_user directly (rather than a real register/login
     # flow) keeps these tests focused on portfolio behavior, matching
-    # how get_market_provider is already faked out below.
+    # how get_market_provider is already faked out below. A real trial
+    # subscription is provisioned too (exactly like a real registration
+    # always does) because a couple of these tests also call
+    # /api/v1/market/scan directly, which now requires
+    # require_active_subscription() (Phase 13 P13.5).
     current_user = User(email="portfolio-owner@example.com", password_hash="hashed", is_email_verified=True)
     session.add(current_user)
     session.commit()
+    subscription_service.provision_trial_subscription(session, current_user)
 
     main.app.dependency_overrides[get_db] = _override_get_db
     main.app.dependency_overrides[get_market_provider] = lambda: DevMarketDataProvider()

@@ -17,6 +17,19 @@ only /quote and /fundamentals, which read directly from a provider or
 from FundamentalSnapshot (which does have those columns), can. Adding
 that column is a schema migration, tracked as follow-up work, not done
 here.
+
+Every route requires `require_active_subscription()` (Phase 13 P13.5
+fix -- this entire file had *no* auth dependency at all before this,
+meaning any anonymous caller could pull live quotes, technical/
+fundamental analysis, and the full AI recommendation/decision/analyst-
+report stack directly from the API, completely bypassing registration,
+trial, and subscription. The frontend's RequireSession guard never
+protected this -- it's client-side routing, not an API-layer control,
+exactly the "never trust frontend entitlement checks" failure mode.
+`require_active_subscription()` gives staff an unconditional bypass and
+is satisfied by any TRIALING/ACTIVE/still-within-period CANCELED
+subscription, so no real trial or paying customer loses access -- only
+anonymous/expired callers are newly rejected).
 """
 
 import logging
@@ -58,9 +71,10 @@ from src.api.schemas.stocks import (
     StockOut,
     TechnicalAnalysisOut,
 )
+from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
-from src.domain.models import FundamentalSnapshot, PeriodType, Stock, Timeframe
+from src.domain.models import FundamentalSnapshot, PeriodType, Stock, Timeframe, User
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
 from src.market_data.validators.symbol_validator import InvalidSymbolError, validate_symbol_format
@@ -78,7 +92,11 @@ def _get_stock_or_404(session: Session, symbol: str) -> Stock:
 
 
 @router.get("/{symbol}", response_model=StockOut)
-def get_stock(symbol: str, session: Session = Depends(get_db)) -> Stock:
+def get_stock(
+    symbol: str,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> Stock:
     return _get_stock_or_404(session, symbol)
 
 
@@ -86,6 +104,7 @@ def get_stock(symbol: str, session: Session = Depends(get_db)) -> Stock:
 async def get_quote(
     symbol: str,
     provider: IMarketDataProvider = Depends(get_market_provider),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> QuoteOut:
     # Validated here, at the API boundary, rather than relying on the
     # provider to reject a malformed symbol -- SahmkClient does, but
@@ -117,6 +136,7 @@ def get_history(
         None, description="Inclusive end (ISO-8601); omit for up to the latest ingested bar"
     ),
     session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> HistoryOut:
     stock = _get_stock_or_404(session, symbol)
     df = load_price_bars(session, stock.id, Timeframe.ONE_DAY, start=start, end=end)
@@ -135,7 +155,11 @@ def get_history(
 
 
 @router.get("/{symbol}/technical", response_model=TechnicalAnalysisOut)
-def get_technical_analysis(symbol: str, session: Session = Depends(get_db)) -> TechnicalAnalysisOut:
+def get_technical_analysis(
+    symbol: str,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> TechnicalAnalysisOut:
     stock = _get_stock_or_404(session, symbol)
     df = load_price_bars(session, stock.id, Timeframe.ONE_DAY)
     try:
@@ -159,6 +183,7 @@ async def get_fundamental_analysis(
     period_type: PeriodType = Query(PeriodType.ANNUAL),
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> FundamentalAnalysisOut:
     stock = _get_stock_or_404(session, symbol)
     snapshots = load_fundamental_snapshots(session, stock.id, period_type, limit=2)
@@ -233,6 +258,7 @@ async def get_recommendation(
     period_type: PeriodType = Query(PeriodType.ANNUAL),
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> RecommendationOut:
     """BUY/HOLD/SELL with a confidence score, produced by
     RecommendationEngine combining the existing TechnicalAnalysisEngine
@@ -282,6 +308,7 @@ async def get_investment_decision(
     period_type: PeriodType = Query(PeriodType.ANNUAL),
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
+    _current_user: User = Depends(require_active_subscription()),
 ) -> InvestmentDecisionOut:
     """The AI Decision Intelligence Layer's final output for one
     symbol: everything /recommendation already produces, plus a target
@@ -343,6 +370,7 @@ async def get_analyst_report(
     format: str = Query("json", pattern="^(json|markdown|text)$"),
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
+    _current_user: User = Depends(require_active_subscription()),
 ):
     """The Autonomous AI Analyst Framework's report for one symbol:
     everything /decision already produces, narrated into a

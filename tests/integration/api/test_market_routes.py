@@ -22,10 +22,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import main
-from src.api.dependencies import get_market_provider
+from src.api.dependencies import get_current_user, get_market_provider
 from src.core.db import database
 from src.core.db.database import Base, get_db
-from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
+from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, StaffRole, Stock, Timeframe, User
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 
 
@@ -43,8 +43,16 @@ def session_factory(monkeypatch):
         finally:
             db.close()
 
+    # Every /api/v1/market/* route now requires an active subscription
+    # (Phase 13 P13.5) -- an in-memory staff user (never persisted;
+    # get_current_user itself is overridden so nothing queries the DB
+    # for it) satisfies require_active_subscription()'s staff bypass,
+    # keeping these tests focused on market-intelligence behavior.
+    staff_user = User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+
     main.app.dependency_overrides[get_db] = _override_get_db
     main.app.dependency_overrides[get_market_provider] = lambda: DevMarketDataProvider()
+    main.app.dependency_overrides[get_current_user] = lambda: staff_user
     yield factory
     Base.metadata.drop_all(bind=engine)
     main.app.dependency_overrides.clear()

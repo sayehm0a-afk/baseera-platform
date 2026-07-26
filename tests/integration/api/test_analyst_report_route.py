@@ -10,9 +10,19 @@ comes from the deterministic pipeline.
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+import pytest
 from sqlalchemy.orm import Session
 
 from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
+
+
+@pytest.fixture(autouse=True)
+def _staff_auth(authenticated_as_staff):
+    """Every /api/v1/stocks/* route now requires require_active_
+    subscription() (Phase 13 P13.5) -- see conftest.py's
+    authenticated_as_staff for why this is opt-in per file rather than
+    on db_session/client directly."""
+
 
 _VALID_RECOMMENDATIONS = {"STRONG_BUY", "BUY", "HOLD", "SELL", "STRONG_SELL"}
 _VALID_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}

@@ -7,11 +7,20 @@ providers (see conftest.py). No live network call anywhere.
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+import pytest
 from sqlalchemy.orm import Session
 
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
 from src.market_data.providers.market_data_provider import IMarketDataProvider, ProviderHealth
+
+
+@pytest.fixture(autouse=True)
+def _staff_auth(authenticated_as_staff):
+    """Every /api/v1/stocks/* route now requires require_active_
+    subscription() (Phase 13 P13.5) -- see conftest.py's
+    authenticated_as_staff for why this is opt-in per file rather than
+    on db_session/client directly."""
 
 
 class _AlwaysDownProvider(IMarketDataProvider):
