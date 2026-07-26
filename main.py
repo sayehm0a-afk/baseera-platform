@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -50,7 +51,7 @@ if settings.sentry_dsn:
     )
 
 # Initialize structured logging
-init_logging()
+init_logging(log_level=settings.log_level)
 logger = get_logger(__name__)
 
 # FastAPI app
@@ -69,18 +70,29 @@ app.add_middleware(CSRFMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestIDMiddleware)
 
+# TRUSTED_HOSTS (Settings.trusted_hosts) is a comma-separated allowlist
+# of Host headers this app will answer to -- defends against Host
+# header injection (cache poisoning, password-reset-link poisoning via
+# a spoofed Host). Deliberately empty (not enforced) by default, same
+# secure-by-default-when-configured posture as CORS_ALLOWED_ORIGINS
+# below: every existing deployment keeps working unchanged until this
+# is explicitly set for staging/production (see
+# docs/PRODUCTION_CONFIGURATION.md).
+if settings.trusted_hosts:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
+
 # CORS_ALLOWED_ORIGINS is a comma-separated list of allowed frontend
 # origins (e.g. "http://localhost:3000,https://app.example.com").
 # Deliberately empty (no cross-origin access) by default -- same
 # secure-by-default posture as SAHMK_LIVE_DATA_ENABLED: a frontend
 # origin must be explicitly opted in, never assumed or wildcarded.
-_cors_origins = [
-    origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()
-]
-if _cors_origins:
+# Read via `settings.cors_allowed_origins` (not a second independent
+# os.getenv parse) so there is exactly one place this list is derived
+# from CORS_ALLOWED_ORIGINS.
+if settings.cors_allowed_origins:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=_cors_origins,
+        allow_origins=settings.cors_allowed_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["*"],

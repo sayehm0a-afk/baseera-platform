@@ -35,9 +35,8 @@ _client: Optional[redis.Redis] = None
 def get_redis_client() -> redis.Redis:
     global _client
     if _client is None:
-        _client = redis.Redis(
-            host=settings.redis_host,
-            port=settings.redis_port,
+        _client = redis.Redis.from_url(
+            settings.redis_dsn,
             decode_responses=True,
             socket_connect_timeout=5,
         )

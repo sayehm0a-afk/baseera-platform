@@ -37,8 +37,16 @@ class Settings(BaseSettings):
         default="postgresql://postgres:postgres@localhost:5432/basirah",
         alias="DATABASE_URL",
     )
+    # REDIS_URL (a full "redis://[:password@]host:port/db" or
+    # "rediss://" DSN, exactly what managed Redis providers -- Railway,
+    # Render, Upstash, Redis Cloud, ElastiCache with AUTH -- hand out)
+    # takes priority when set. redis_host/redis_port/redis_password
+    # remain the fallback for the current default (unauthenticated
+    # local Redis) so nothing about local dev or CI changes.
+    redis_url: Optional[str] = Field(default=None, alias="REDIS_URL")
     redis_host: str = Field(default="localhost", alias="REDIS_HOST")
     redis_port: int = Field(default=6379, alias="REDIS_PORT")
+    redis_password: Optional[str] = Field(default=None, alias="REDIS_PASSWORD")
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
 
     # --- Security -------------------------------------------------------
@@ -47,6 +55,15 @@ class Settings(BaseSettings):
     # enforcement point, not this field default.
     secret_key: str = Field(default=_DEV_INSECURE_SECRET_KEY, alias="SECRET_KEY")
     cors_allowed_origins_raw: str = Field(default="", alias="CORS_ALLOWED_ORIGINS")
+    # Host header validation (Starlette's TrustedHostMiddleware). Empty
+    # (the default) means "not enforced" -- every existing deployment
+    # keeps working unchanged until this is explicitly set. Required
+    # before production sign-off (see docs/PRODUCTION_CONFIGURATION.md);
+    # not fail-fast-enforced here because the correct value is
+    # topology-dependent (reverse proxy / platform-generated domain)
+    # and isn't knowable at this class's own definition time.
+    trusted_hosts_raw: str = Field(default="", alias="TRUSTED_HOSTS")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # --- Auth token lifetimes -------------------------------------------
     access_token_expire_minutes: int = Field(default=15, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
@@ -80,8 +97,24 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_allowed_origins_raw.split(",") if origin.strip()]
 
     @property
+    def trusted_hosts(self) -> List[str]:
+        return [host.strip() for host in self.trusted_hosts_raw.split(",") if host.strip()]
+
+    @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def redis_dsn(self) -> str:
+        """The effective Redis connection string every Redis client in
+        this codebase should be built from (`redis.Redis.from_url`) --
+        the one place "prefer REDIS_URL, else assemble from host/port/
+        password" is decided, so a managed-Redis deployment only ever
+        needs to set one variable."""
+        if self.redis_url:
+            return self.redis_url
+        auth = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/0"
 
     @model_validator(mode="after")
     def _reject_insecure_secret_in_production(self) -> "Settings":

@@ -92,6 +92,7 @@ def setup_production_dependencies() -> DependencyContainer:
             return RedisMessageBus(
                 host=os.getenv("REDIS_HOST", "localhost"),
                 port=int(os.getenv("REDIS_PORT", 6379)),
+                password=os.getenv("REDIS_PASSWORD"),
             )
         container.register_service("message_bus", create_message_bus, singleton=True)
 
@@ -100,6 +101,7 @@ def setup_production_dependencies() -> DependencyContainer:
             return RealTaskQueue(
                 host=os.getenv("REDIS_HOST", "localhost"),
                 port=int(os.getenv("REDIS_PORT", 6379)),
+                password=os.getenv("REDIS_PASSWORD"),
             )
         container.register_service("task_queue", create_task_queue, singleton=True)
 

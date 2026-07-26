@@ -24,10 +24,29 @@ ENV/
 # ===========================
 # Sensitive Configuration
 # ===========================
-.env.local
-.env.production
+.env.*
+!.env.example
 *.secret
 secrets/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+credentials.json
+*-credentials.json
+service-account*.json
+
+# ===========================
+# Database dumps / backups
+# ===========================
+*.dump
+*.sql.gz
+*.backup
+pgdata/
+pg_dump_*/
 
 # ===========================
 # Logs (لا ترفع السجلات)

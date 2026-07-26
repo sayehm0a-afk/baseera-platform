@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from src.api.middleware.request_id import request_id_var
+from src.core.monitoring.secret_masking import mask_dict_values
 
 # /tmp does not survive a container restart -- LOG_DIR lets deployment
 # mount a durable volume (see docker-compose.yml's `app_logs` volume);
@@ -49,9 +50,12 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
 
-        # Add extra fields if present
+        # Add extra fields if present -- masked by key name (e.g. a
+        # future call site accidentally passing api_key=... or
+        # database_url=... into log.info(**extra_fields) must not
+        # leak the real value into a log line or Sentry breadcrumb).
         if hasattr(record, "extra_fields"):
-            log_data.update(record.extra_fields)
+            log_data.update(mask_dict_values(record.extra_fields))
 
         return json.dumps(log_data)
 
