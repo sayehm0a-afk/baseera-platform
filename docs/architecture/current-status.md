@@ -52,12 +52,15 @@ commit):
   into `RealWorker`/`RealTaskQueue`/`main.py` — its signature is
   handler-compatible for a later milestone to register, but that wiring
   itself is out of M2.1's scope.
-- **Technical Analysis Engine** (M2.2): `src/analysis/technical_analysis_engine.py`
-  computes 11 indicators — SMA, EMA, ADX, SuperTrend (trend); RSI, MACD
-  (momentum); Bollinger Bands, ATR (volatility); OBV, Volume SMA
-  (volume); 5 candlestick patterns (Doji, Hammer, Shooting Star,
-  Bullish/Bearish Engulfing) — against one OHLCV `DataFrame`, all
-  implemented directly on `pandas`/`numpy` (no new dependency).
+- **Technical Analysis Engine** (M2.2, extended Phase 11):
+  `src/analysis/technical_analysis_engine.py` computes 16 indicators —
+  SMA, EMA, ADX, SuperTrend (trend); RSI, MACD, Stochastic Oscillator
+  (momentum); Bollinger Bands, ATR (volatility); OBV, Volume SMA, VWAP,
+  Volume Profile (volume); 5 candlestick patterns (Doji, Hammer,
+  Shooting Star, Bullish/Bearish Engulfing), Fibonacci retracement
+  levels, swing-pivot support/resistance detection (price_action) —
+  against one OHLCV `DataFrame`, all implemented directly on
+  `pandas`/`numpy` (no new dependency).
   `src/analysis/registry.py`'s `IndicatorRegistry`/`IndicatorSpec` is
   the extension point: a future indicator (including a Smart Money/ICT/
   Wyckoff-style one) is one pure function plus one registry entry, with
@@ -66,15 +69,17 @@ commit):
   value of everything" shape a future Signal Engine/Confidence Scoring/
   AI Decision Layer would consume. `ohlcv_loader.py` bridges `PriceBar`
   (M2.1) to this pure-computation layer and is the only module in
-  `src/analysis/` that touches a database session. **Not included**:
-  no persistence of computed indicator values (nothing is written back
-  to the database), no API route exposes any of this yet, no
-  support/resistance detection, no trend-strength beyond what ADX/
-  SuperTrend already provide, and no signal generation or confidence
-  scoring — those are later layers this milestone only prepared the
-  extension point for. Depends entirely on `DevMarketDataProvider`'s
-  synthetic data via `ohlcv_loader.py`; no real Tadawul vendor is
-  contracted (unchanged from M2.1).
+  `src/analysis/` that touches a database session. Exposed via
+  `GET /api/v1/stocks/{symbol}/technical`. **Not included**: no
+  persistence of computed indicator values (nothing is written back to
+  the database); VWAP is a rolling N-bar approximation, not true
+  session-anchored intraday VWAP (needs tick data this platform doesn't
+  have); Volume Profile attributes each bar's entire volume to one
+  price bucket via its typical price, not a true intrabar
+  volume-at-price distribution (same tick-data gap). None of the 5
+  Phase-11 additions are yet wired into `RecommendationEngine`/
+  `AIDecisionEngine`'s scoring/contributor layers — they exist and are
+  tested, but nothing downstream reads them yet.
 - **Fundamental Analysis Engine** (M2.3): `src/analysis/fundamental/
   fundamental_analysis_engine.py` computes 18 financial-statement
   ratios across 6 categories — net profit margin, gross profit margin,
@@ -289,10 +294,25 @@ to, a real data source.
 
 ## Completed: M2.2 — Technical Analysis Engine
 
-11 technical indicators plus a registry-based extension point and an
+16 technical indicators plus a registry-based extension point and an
 engine facade — see "Implemented" above for exactly what each is and
 isn't. Nine `[M2.2]`-prefixed commits on
-`feature/m2.2-technical-analysis-engine`, PR #6.
+`feature/m2.2-technical-analysis-engine`, PR #6. Extended (Phase 11,
+`claude/sahmk-api-key-verify-lpw25l`) with 5 more indicators the
+original 11 didn't cover: Stochastic Oscillator (%K/%D, momentum),
+VWAP (rolling N-bar volume-weighted average price -- documented as the
+daily-bar analog of session-anchored intraday VWAP, which needs tick
+data this platform doesn't have), Fibonacci retracement levels
+(0/23.6/38.2/50/61.8/78.6/100% between the window's swing high and
+low), swing-pivot support/resistance detection (a bar's high/low is a
+pivot when it's the strict, unique extreme within a symmetric
+`order`-bar window), and a Volume Profile histogram (volume-at-price
+approximated per bar via typical price, since real intrabar
+volume-at-price also needs tick data). Each addition is a pure
+function following the existing package's conventions (no I/O, no
+registry awareness) plus one new `IndicatorSpec` in
+`src/analysis/registry.py` -- `TechnicalAnalysisEngine` itself did not
+change, exactly as the extension point was designed to allow.
 
 Before implementation began, one architectural enhancement was made to
 the approved spec by explicit instruction: the engine must not become

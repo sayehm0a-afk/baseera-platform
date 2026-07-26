@@ -1,13 +1,14 @@
-"""Momentum indicators: RSI, MACD.
+"""Momentum indicators: RSI, MACD, Stochastic Oscillator.
 
-Pure computation over pandas Series input -- no I/O, no database.
+Pure computation over pandas Series/DataFrame input -- no I/O, no
+database.
 """
 
 import numpy as np
 import pandas as pd
 
-from src.analysis.indicators.trend import ema
-from src.analysis.types import MACDResult
+from src.analysis.indicators.trend import ema, sma
+from src.analysis.types import MACDResult, StochasticResult
 
 
 def rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -65,3 +66,34 @@ def macd(
     histogram = macd_line - signal_line
 
     return MACDResult(macd_line=macd_line, signal_line=signal_line, histogram=histogram)
+
+
+def stochastic_oscillator(
+    df: pd.DataFrame, k_period: int = 14, smooth_k: int = 3, d_period: int = 3
+) -> StochasticResult:
+    """The "full" Stochastic Oscillator: raw %K is the close's position
+    within its `k_period`-bar high/low range (0-100), smoothed by
+    `smooth_k` to produce the displayed %K line, and %D is that line's
+    `d_period`-bar SMA (the signal line). Bounded [0, 100]; a bar whose
+    `k_period`-bar range is exactly flat (high == low, no price
+    movement at all) is defined as 50 (neutral), matching this module's
+    existing convention for RSI's zero-loss case.
+    """
+    minimum = k_period + smooth_k + d_period - 2
+    if len(df) < minimum:
+        raise ValueError(f"need at least {minimum} data points, got {len(df)}")
+
+    lowest_low = df["low"].rolling(window=k_period, min_periods=k_period).min()
+    highest_high = df["high"].rolling(window=k_period, min_periods=k_period).max()
+    price_range = highest_high - lowest_low
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        raw_k = 100 * (df["close"] - lowest_low) / price_range
+    raw_k = raw_k.where(price_range != 0, 50.0)
+
+    valid_raw_k = raw_k.dropna()
+    percent_k = sma(valid_raw_k, smooth_k).reindex(df.index)
+    valid_percent_k = percent_k.dropna()
+    percent_d = sma(valid_percent_k, d_period).reindex(df.index)
+
+    return StochasticResult(percent_k=percent_k, percent_d=percent_d)

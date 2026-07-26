@@ -206,11 +206,16 @@ def test_get_technical_analysis_returns_full_indicator_set(client, db_session):
         "supertrend",
         "rsi_14",
         "macd",
+        "stochastic_14_3_3",
         "bollinger",
         "atr_14",
         "obv",
         "volume_sma_20",
+        "vwap_20",
+        "volume_profile",
         "candlestick_patterns",
+        "fibonacci_retracement",
+        "support_resistance",
     }
 
 
