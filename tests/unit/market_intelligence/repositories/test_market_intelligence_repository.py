@@ -5,6 +5,7 @@ layer itself.
 
 from datetime import datetime, timezone
 
+import numpy as np
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -109,6 +110,57 @@ def test_save_and_read_back_symbol_records(session, repo):
     assert "2222" in records
     assert records["2222"].recommendation is RecommendationLabel.BUY
     assert float(records["2222"].confidence) == outcome.confidence
+
+
+def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(session, repo, monkeypatch):
+    """Regression test: technical/fundamental indicator computations
+    return `numpy.float64` in places (confirmed via a live run against
+    real Postgres -- SQLAlchemy 2.0's insertmanyvalues path literal-
+    renders RETURNING parameters, and numpy's `repr()`
+    (`np.float64(1.23)`) is not valid SQL, breaking every multi-row
+    scan-result insert). SQLite (every other test here) tolerates the
+    numpy type silently, and reading a Numeric column back always
+    yields `Decimal` regardless of what was written -- so neither the
+    value nor a post-commit read-back can distinguish a fixed call
+    from a broken one. This test instead captures the exact object
+    `session.add()` receives (via a spy) and checks *its* attribute
+    types, which is what actually reaches the SQL layer."""
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    decision = make_decision(
+        symbol="2222", confidence=np.float64(75.1), final_score=np.float64(61.8),
+        target_price=np.float64(153.68), stop_loss=np.float64(148.91), expected_return_pct=np.float64(1.97),
+    )
+    outcome = make_outcome(
+        symbol="2222", decision=decision, latest_price=np.float64(150.71),
+        technical_snapshot={"rsi_14": np.float64(100.0), "adx_14": np.float64(100.0), "bollinger": {"upper": np.float64(32.889)}},
+        fundamental_snapshot={"dividend_yield": np.float64(0.0023)},
+    )
+
+    fields = (
+        "confidence", "final_score", "target_price", "stop_loss", "expected_return_pct",
+        "latest_price", "rsi", "adx", "bollinger_upper", "dividend_yield",
+    )
+    snapshots = []
+    original_add = session.add
+
+    def _spy_add(obj):
+        # Snapshot the attribute types *before* `session.commit()` (called
+        # internally by save_symbol_records) expires the instance and any
+        # later access silently re-queries the DB, which always returns
+        # `Decimal` for a Numeric column regardless of what was written --
+        # that would hide the exact bug this test exists to catch.
+        if type(obj).__name__ == "SymbolIntelligenceRecord":
+            snapshots.append({f: type(getattr(obj, f)) for f in fields})
+        return original_add(obj)
+
+    monkeypatch.setattr(session, "add", _spy_add)
+
+    repo.save_symbol_records(session, run.id, [outcome])
+
+    assert len(snapshots) == 1
+    for field, field_type in snapshots[0].items():
+        assert field_type is float, f"{field} was {field_type!r} at insert time, expected plain float"
 
 
 def test_save_symbol_records_skips_unregistered_stock(session, repo):

@@ -1,19 +1,23 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { AiSignalCard } from "@/components/patterns/AiSignalCard";
 import { EmptyState } from "@/components/patterns/EmptyState";
+import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import {
   RecommendationBadge,
   type RecommendationValue,
 } from "@/components/badges/RecommendationBadge";
-import type { PortfolioAnalysis } from "@/lib/api/portfolio-types";
+import { getPortfolioNewsAlerts, refreshPortfolioNewsAlerts } from "@/lib/api/portfolio";
+import type { PortfolioAnalysis, PortfolioNewsAlert } from "@/lib/api/portfolio-types";
 import {
   HEALTH_BAND_LABELS,
   POSITION_ACTION_LABELS,
   RISK_LEVEL_LABELS,
   healthBandColorClass,
 } from "@/lib/portfolio-labels";
+import { PORTFOLIO_ALERT_TYPE_LABELS, alertSeverityColorClass } from "@/lib/news-labels";
 
 function Stat({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
   return (
@@ -32,6 +36,91 @@ function SectionCard({ title, children }: { title: string; children: React.React
       <h2 className="mb-bsr-4 text-base font-semibold text-bsr-text-primary">{title}</h2>
       {children}
     </section>
+  );
+}
+
+function NewsAlertsSection({ portfolioId }: { portfolioId: number }) {
+  const [alerts, setAlerts] = useState<PortfolioNewsAlert[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPortfolioNewsAlerts(portfolioId)
+      .then((result) => {
+        if (!cancelled) setAlerts(result.alerts);
+      })
+      .catch(() => {
+        if (!cancelled) setError("تعذّر تحميل تنبيهات الأخبار.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [portfolioId]);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    setError(null);
+    try {
+      await refreshPortfolioNewsAlerts(portfolioId);
+      const result = await getPortfolioNewsAlerts(portfolioId);
+      setAlerts(result.alerts);
+    } catch {
+      setError("تعذّر تحديث تنبيهات الأخبار.");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  return (
+    <SectionCard title="تنبيهات الأخبار">
+      <div className="mb-bsr-4 flex items-center justify-between">
+        <p className="text-sm text-bsr-text-secondary">
+          تنبيهات مبنية على أخبار محللة تخص المراكز الحالية في المحفظة.
+        </p>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="whitespace-nowrap rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm text-bsr-text-primary hover:bg-bsr-surface-overlay disabled:opacity-50"
+        >
+          {refreshing ? "جارٍ التحديث..." : "تحديث التنبيهات"}
+        </button>
+      </div>
+
+      {alerts === null && !error ? <LoadingScreen /> : null}
+
+      {error ? <p className="text-sm text-bsr-market-down">{error}</p> : null}
+
+      {alerts !== null && alerts.length === 0 ? (
+        <EmptyState title="لا توجد تنبيهات أخبار حالياً لمراكز هذه المحفظة" />
+      ) : null}
+
+      {alerts !== null && alerts.length > 0 ? (
+        <ul className="flex flex-col divide-y divide-bsr-border-subtle">
+          {alerts.map((alert) => (
+            <li key={alert.id} className="flex flex-col gap-bsr-1 py-bsr-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-bsr-2">
+                  <span className="bsr-numeric font-semibold text-bsr-text-primary">
+                    {alert.symbol}
+                  </span>
+                  <span
+                    className={`rounded-bsr-full px-bsr-3 py-1 text-xs font-medium ${alertSeverityColorClass(alert.severity)}`}
+                  >
+                    {PORTFOLIO_ALERT_TYPE_LABELS[alert.alert_type] ?? alert.alert_type}
+                  </span>
+                </div>
+                <span className="text-xs text-bsr-text-muted">
+                  {new Date(alert.generated_at).toLocaleString("ar-SA")}
+                </span>
+              </div>
+              <p className="text-sm text-bsr-text-secondary">{alert.message}</p>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </SectionCard>
   );
 }
 
@@ -142,6 +231,8 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
           </div>
         )}
       </SectionCard>
+
+      <NewsAlertsSection portfolioId={analysis.portfolio_id} />
 
       <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-2">
         <SectionCard title="التوزيع القطاعي">

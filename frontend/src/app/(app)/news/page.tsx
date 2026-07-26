@@ -1,16 +1,11 @@
-import { EmptyState } from "@/components/patterns/EmptyState";
-import { getNewsFeed } from "@/lib/api/news";
+import { Suspense } from "react";
+import { LoadingScreen } from "@/components/patterns/LoadingScreen";
+import { NewsScreenClient } from "./NewsScreenClient";
 
-export default async function NewsPage() {
-  const feed = await getNewsFeed();
-
+export default function NewsPage() {
   return (
-    <div className="flex flex-col gap-bsr-4">
-      <h1 className="text-lg font-semibold text-bsr-text-primary">الأخبار</h1>
-      <EmptyState
-        title="مصدر الأخبار قيد الربط"
-        description={feed.reason}
-      />
-    </div>
+    <Suspense fallback={<LoadingScreen />}>
+      <NewsScreenClient />
+    </Suspense>
   );
 }

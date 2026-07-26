@@ -147,6 +147,22 @@ export interface HealthScore {
   narrative: string;
 }
 
+export interface PortfolioNewsAlert {
+  id: number;
+  portfolio_id: number;
+  symbol: string;
+  news_event_id: number;
+  alert_type: string;
+  severity: string;
+  message: string;
+  generated_at: string;
+  acknowledged_at: string | null;
+}
+
+export interface PortfolioNewsAlertList {
+  alerts: PortfolioNewsAlert[];
+}
+
 export interface PortfolioAnalysis {
   portfolio_id: number;
   name: string;

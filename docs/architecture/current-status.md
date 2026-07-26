@@ -1592,6 +1592,99 @@ Full detail in `docs/NEWS_INTELLIGENCE.md`; summary here.
    tests is a claim about real news content or real market reaction.**
    Full detail in `docs/NEWS_INTELLIGENCE.md`.
 
+## Completed: Frontend Integration (News + Portfolio News Alerts)
+
+An audit of every existing `frontend/src/app/(app)/*` screen found
+Dashboard, Scan, Watchlist, Opportunities, Portfolio, AI
+(Recommendations/Stock Details), Reports, and Strategies/Settings were
+**already** fully wired to real `/api/v1/*` endpoints with zero mock
+data (built across Phases 9–11). The one disclosed placeholder was
+`frontend/src/lib/api/news.ts`, a stub that always returned
+`{available: false}` because no `/api/v1/news/*` backend route existed
+until this session's News Intelligence milestone. This milestone:
+
+1. **News screen, rewired for real.** `news.ts` now calls the real
+   `GET /api/v1/news/market` and `GET /api/v1/news/{symbol}` routes
+   (`news-types.ts` mirrors `src/api/schemas/news.py` exactly). The
+   screen (`news/page.tsx` + new `NewsScreenClient.tsx`) defaults to
+   the market-wide/government feed and lets a user search a symbol,
+   reusing the same `useCategoryFetch` hook pattern the Scan/Watchlist
+   screens already established. Each card shows headline, source,
+   published date, category, sentiment (new `SentimentBadge`
+   component + `news-labels.ts` Arabic label maps for the 20
+   `NewsCategory`/5 `SentimentLabel` values), confidence, entities, an
+   honest "awaiting analysis" state for unanalyzed events, and a
+   synthetic-data disclosure badge when `is_synthetic` is true —
+   mirroring the Settings screen's existing data-source disclosure
+   convention.
+2. **Portfolio News Alerts** (the "Alerts" objective): two new
+   `portfolio.ts` functions (`getPortfolioNewsAlerts`/
+   `refreshPortfolioNewsAlerts`) call the Phase 12 `GET`/`POST
+   /api/v1/portfolio/{id}/news-alerts[/refresh]` routes. A new
+   "تنبيهات الأخبار" section in `PortfolioDetail.tsx` lists persisted
+   alerts with severity-colored type badges and a manual refresh
+   button — nothing here was previously surfaced anywhere in the
+   frontend.
+3. **A real, previously-undetected backend bug was found and fixed
+   during manual verification, not simulated.** Running an actual
+   scan against real PostgreSQL (not the SQLite every test in this
+   repo uses) failed: `numpy.float64` values from technical/
+   fundamental indicator computations reached
+   `MarketIntelligenceRepository.save_symbol_records()`/
+   `save_sector_summaries()`/`save_change_events()` uncast, and
+   SQLAlchemy 2.0's `insertmanyvalues` path literal-renders `RETURNING`
+   parameters for Postgres — numpy's `repr()` (`np.float64(1.23)`) is
+   not valid SQL, so every multi-row market-scan insert failed with
+   `schema "np" does not exist`. SQLite (every existing test) tolerates
+   the numpy type silently, which is exactly why this was never caught
+   before. Fixed with a small `_f()` cast helper applied at every
+   numeric field crossing into these three insert sites — the same
+   "cast to plain float at the DB boundary" fix already applied once
+   before to a different numpy leak in the Portfolio Intelligence
+   milestone. A regression test
+   (`test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm`)
+   spies on `session.add()` to check the *exact* pre-flush attribute
+   type (a post-commit read-back can't distinguish the bug, since a
+   `Numeric` column always returns `Decimal` regardless of what was
+   written) — confirmed to fail without the fix and pass with it.
+4. **Manually verified**, not just typechecked. A local Postgres +
+   Redis + real `uvicorn` + real `next dev` stack was stood up in this
+   session; a real user registered → verified email → logged in
+   through the actual `/login` form (Playwright driving real Chromium,
+   not an API bypass); disclosed-synthetic price/fundamental data was
+   seeded (`source="manual-seed"`, `is_synthetic=True`); a real market
+   scan, portfolio analysis, and news refresh were triggered through
+   the live REST API. All 8 objective screens (Dashboard, Scan,
+   Watchlist, Opportunities, Portfolio, AI/Recommendations, News ×2)
+   were screenshotted rendering real backend data with zero browser
+   console errors. Notably, the seeded Aramco earnings news event
+   appeared verbatim in the AI screen's fundamental-reasoning text
+   ("...supported by earnings news (أرامكو السعودية تعلن عن أرباح
+   سنوية ربع قياسية): +13.2 pts)"), confirming the full Phase 12 →
+   `NewsSentimentScoreContributor` → `AnalystEngine` → frontend chain
+   works end-to-end with the zero frontend changes documented in
+   `docs/NEWS_INTELLIGENCE.md` §4.
+5. **Verification**: `npm run typecheck`, `npm run lint`, `npm test`
+   (34 passed), `npx next build` all clean; backend regression test
+   added and passing; **2333 tests pass repo-wide** (up from 2329, +1
+   new regression test, +3 previously-Redis-skipped tests now running
+   since Redis was live during this verification session); `flake8
+   src/ tests/ main.py` clean at 0 violations.
+6. **Disclosed remaining gaps**: no "list my portfolios" backend
+   endpoint exists yet, so the Portfolio screen still remembers "last
+   analyzed portfolio_id" via a single-device `localStorage` key
+   (`local-portfolio.ts`) rather than a real per-account list — this
+   predates this milestone and wasn't introduced by it, but is now a
+   more visible gap given `Portfolio.user_id` ownership has existed
+   since Phase 10 M10.5. Periodic PDF report generation
+   (`docs/architecture/current-status.md`'s Reports section) remains
+   an honestly-disclosed "awaiting backend" placeholder, unrelated to
+   this milestone's scope. The admin frontend (M10.14) is still not
+   built. No live SAHMK/OpenAI network access exists in this sandbox;
+   the manual verification pass used disclosed-synthetic seed data
+   exactly like every other milestone's tests, never presented as live
+   market data.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

@@ -40,6 +40,18 @@ def _successful(outcome: SymbolScanOutcome) -> bool:
     return outcome.success and outcome.report is not None
 
 
+def _f(value: Optional[float]) -> Optional[float]:
+    """Coerce a numeric field to a plain Python float before it
+    reaches a bulk INSERT. Technical/fundamental computations upstream
+    return `numpy.float64` in places; SQLite (every test in this
+    codebase) tolerates that, but SQLAlchemy 2.0's insertmanyvalues
+    path against psycopg2 literal-renders RETURNING parameters and
+    numpy's `__repr__` (`np.float64(1.23)`) is not valid SQL, breaking
+    every multi-row scan-result insert against real Postgres. `float()`
+    is a no-op for values that are already plain floats."""
+    return None if value is None else float(value)
+
+
 class MarketIntelligenceRepository:
     # --- scan run lifecycle -------------------------------------------
 
@@ -121,21 +133,21 @@ class MarketIntelligenceRepository:
                     symbol=outcome.symbol,
                     sector=outcome.sector,
                     recommendation=RecommendationLabel(decision.recommendation.value),
-                    confidence=decision.confidence,
-                    final_score=decision.final_score,
-                    target_price=decision.target_price,
-                    stop_loss=decision.stop_loss,
-                    expected_return_pct=decision.expected_return_pct,
+                    confidence=_f(decision.confidence),
+                    final_score=_f(decision.final_score),
+                    target_price=_f(decision.target_price),
+                    stop_loss=_f(decision.stop_loss),
+                    expected_return_pct=_f(decision.expected_return_pct),
                     risk_level=decision.risk_level.value,
                     time_horizon=decision.time_horizon.value,
                     position_size=decision.position_size.value,
-                    technical_score=outcome.technical_score,
-                    fundamental_score=outcome.fundamental_score,
-                    dividend_yield=outcome.dividend_yield,
-                    rsi=outcome.rsi,
-                    adx=outcome.adx,
-                    latest_price=outcome.latest_price,
-                    bollinger_upper=outcome.bollinger_upper,
+                    technical_score=_f(outcome.technical_score),
+                    fundamental_score=_f(outcome.fundamental_score),
+                    dividend_yield=_f(outcome.dividend_yield),
+                    rsi=_f(outcome.rsi),
+                    adx=_f(outcome.adx),
+                    latest_price=_f(outcome.latest_price),
+                    bollinger_upper=_f(outcome.bollinger_upper),
                     bullish_factors=list(outcome.report.explanation.bullish_factors),
                     bearish_factors=list(outcome.report.explanation.bearish_factors),
                     evaluated_at=decision.generated_at,
@@ -157,16 +169,16 @@ class MarketIntelligenceRepository:
                     scan_run_id=run_id,
                     sector=summary.sector,
                     symbol_count=summary.symbol_count,
-                    average_confidence=summary.average_confidence,
-                    average_final_score=summary.average_final_score,
-                    average_expected_return_pct=summary.average_expected_return_pct,
-                    average_technical_score=summary.average_technical_score,
-                    average_fundamental_score=summary.average_fundamental_score,
+                    average_confidence=_f(summary.average_confidence),
+                    average_final_score=_f(summary.average_final_score),
+                    average_expected_return_pct=_f(summary.average_expected_return_pct),
+                    average_technical_score=_f(summary.average_technical_score),
+                    average_fundamental_score=_f(summary.average_fundamental_score),
                     buy_count=summary.buy_count,
                     sell_count=summary.sell_count,
                     hold_count=summary.hold_count,
-                    breadth=summary.breadth,
-                    momentum=summary.momentum,
+                    breadth=_f(summary.breadth),
+                    momentum=_f(summary.momentum),
                 )
             )
         session.commit()
@@ -229,7 +241,7 @@ class MarketIntelligenceRepository:
                     change_type=DomainChangeType(event.change_type.value),
                     previous_value=event.previous_value,
                     new_value=event.new_value,
-                    delta=event.delta,
+                    delta=_f(event.delta),
                     detected_at=event.detected_at,
                 )
             )

@@ -5,6 +5,7 @@ import type {
   HealthScore,
   PortfolioAnalysis,
   PortfolioAnalyzeRequestBody,
+  PortfolioNewsAlertList,
   PortfolioRecommendations,
   RebalancePlan,
   RiskProfile,
@@ -61,4 +62,23 @@ export function getPortfolioRebalance(
 
 export function getPortfolioHealth(portfolioId: number): Promise<HealthScore> {
   return apiFetch<HealthScore>(`/api/v1/portfolio/${portfolioId}/health`);
+}
+
+/** Already-persisted alerts (Phase 12) -- see `refreshPortfolioNewsAlerts`
+ * to re-evaluate held positions against the latest analyzed news. */
+export function getPortfolioNewsAlerts(
+  portfolioId: number
+): Promise<PortfolioNewsAlertList> {
+  return apiFetch<PortfolioNewsAlertList>(
+    `/api/v1/portfolio/${portfolioId}/news-alerts`
+  );
+}
+
+export function refreshPortfolioNewsAlerts(
+  portfolioId: number
+): Promise<PortfolioNewsAlertList> {
+  return apiFetch<PortfolioNewsAlertList>(
+    `/api/v1/portfolio/${portfolioId}/news-alerts/refresh`,
+    { method: "POST" }
+  );
 }
