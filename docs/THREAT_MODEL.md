@@ -48,7 +48,7 @@ P13.14, not yet written as of this document).
 | T10 | JWT algorithm confusion (`alg: none`, HS256↔RS256 confusion) | Network/forgery attacker | `jwt.decode(..., algorithms=["HS256"])` — explicit single-algorithm allowlist, never derived from the token's own header | **Mitigated** (Phase 10) |
 | T11 | IDOR: read/revoke another user's session | Authenticated malicious customer | `DELETE /auth/sessions/{id}` ownership-checked, 404 (not 403) either way | **Mitigated** (Phase 10) |
 | T12 | IDOR: read/modify another user's portfolio | Authenticated malicious customer | `_get_portfolio_or_404` ownership-scoped, same 404-not-403 pattern | **Mitigated** (Phase 8/10) |
-| T13 | Privilege escalation: customer grants themselves staff access | Authenticated malicious customer | No REST route exists that calls `set_staff_role()` at all today | **Not reachable** (disclosed gap — see below) |
+| T13 | Privilege escalation: customer grants themselves staff access | Authenticated malicious customer | `POST /api/v1/admin/users/{id}/staff-role` (P13.4) requires an existing OWNER and refuses to let an OWNER modify their own row — no code path lets a non-staff customer reach this at all, and no staff member can silently self-escalate | **Mitigated** (P13.4 — see `docs/ADMIN_AND_RBAC.md` §2–3) |
 | T14 | Open redirect via a login-flow redirect parameter | Anonymous, phishing-adjacent | No redirect-target parameter exists anywhere in this codebase | **Not applicable** |
 | T15 | Denial of service via unbounded `/auth/refresh` calls | Anonymous or compromised client | Now rate-limited (30/min) — was previously unlimited | **Mitigated** (P13.3, §2.2) |
 | T16 | Denial of service / brute-force via unbounded `/auth/verify-email`, `/auth/reset-password` | Anonymous | Now rate-limited (10/min, 5/min respectively) — were previously unlimited | **Mitigated** (P13.3, §2.2) |
@@ -71,12 +71,14 @@ P13.14, not yet written as of this document).
 
 ## Residual risk summary
 
-Of 21 threats enumerated: 15 mitigated, 2 explicitly accepted and
-disclosed (the unavoidable minimum enumeration surface any
-lockout/duplicate-registration-detection mechanism has), 2 not
-applicable to this architecture, 1 not reachable (no code path exists),
-1 partially mitigated pending deployment-time configuration
-(`TRUSTED_HOSTS`). No unmitigated Critical or High threat was found in
-this specific slice (authentication/session/account) — the broader
-platform sweep (P13.14) may surface others outside this document's
-scope.
+Of 21 threats enumerated: 16 mitigated (T13 moved from "not reachable"
+to "mitigated" in P13.4 once the staff-role route was actually built —
+see `docs/ADMIN_AND_RBAC.md`), 2 explicitly accepted and disclosed (the
+unavoidable minimum enumeration surface any lockout/
+duplicate-registration-detection mechanism has), 2 not applicable to
+this architecture, 1 partially mitigated pending deployment-time
+configuration (`TRUSTED_HOSTS`). No unmitigated Critical or High threat
+was found in this specific slice (authentication/session/account) — the
+broader platform sweep (P13.14) may surface others outside this
+document's scope, including the unauthenticated root-level ops-status
+endpoints disclosed in `docs/ADMIN_AND_RBAC.md` §5.

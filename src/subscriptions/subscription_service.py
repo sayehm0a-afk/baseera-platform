@@ -23,7 +23,7 @@ from src.subscriptions.repository import SubscriptionRepository
 
 _repository = SubscriptionRepository()
 
-_ENTITLED_STATUSES = (SubscriptionStatus.TRIALING, SubscriptionStatus.ACTIVE)
+_ENTITLED_STATUSES = (SubscriptionStatus.TRIALING, SubscriptionStatus.ACTIVE, SubscriptionStatus.CANCELED)
 
 
 def provision_trial_subscription(session: Session, user: User) -> Subscription:
@@ -99,6 +99,26 @@ def extend_trial(session: Session, subscription: Subscription, additional_days: 
     subscription.trial_ends_at = new_trial_ends_at
     subscription.current_period_end = new_trial_ends_at
     subscription.status = SubscriptionStatus.TRIALING
+    return subscription
+
+
+def cancel_subscription(session: Session, subscription: Subscription, immediately: bool = False) -> Subscription:
+    """Admin action: cancels a subscription. By default (`immediately=False`,
+    the standard "cancel at period end" behavior most subscription
+    products use) the customer keeps entitled access until
+    `current_period_end` -- only the status changes to CANCELED, which
+    `_ENTITLED_STATUSES` still honors as a still-live status *at read
+    time*, but `get_effective_subscription()` will lazily downgrade it to
+    EXPIRED the moment the period actually passes, exactly like an
+    ACTIVE/TRIALING subscription already does. `immediately=True` cuts
+    access off right now by also pulling `current_period_end` back to
+    the current time, so the very next `get_effective_subscription()` call
+    lazily downgrades it to EXPIRED."""
+    now = datetime.now(timezone.utc)
+    period_end = now if immediately else subscription.current_period_end
+    _repository.set_status_and_period_end(session, subscription.id, SubscriptionStatus.CANCELED, period_end)
+    subscription.status = SubscriptionStatus.CANCELED
+    subscription.current_period_end = period_end
     return subscription
 
 

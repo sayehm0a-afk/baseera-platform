@@ -16,6 +16,7 @@ from src.api.schemas.admin import (
     ActivateSubscriptionRequest,
     AdminSubscriptionListOut,
     AdminSubscriptionOut,
+    CancelSubscriptionRequest,
     ExtendTrialRequest,
 )
 from src.auth.rbac import require_staff_role
@@ -109,6 +110,31 @@ def activate_subscription(
         "subscription",
         target_id=subscription.id,
         details={"plan": body.plan, "period_days": body.period_days, "user_id": user_id},
+        ip_address=_client_ip(request),
+    )
+    return AdminSubscriptionOut.model_validate(updated)
+
+
+@router.post("/{user_id}/cancel", response_model=AdminSubscriptionOut)
+def cancel_subscription(
+    user_id: int,
+    body: CancelSubscriptionRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> AdminSubscriptionOut:
+    subscription = _repository.get_subscription_for_user(session, user_id)
+    if subscription is None:
+        raise AdminSubscriptionNotFoundError(f"No subscription for user {user_id}.")
+
+    updated = subscription_service.cancel_subscription(session, subscription, immediately=body.immediately)
+    record_admin_action(
+        session,
+        current_user.id,
+        "subscription.cancel",
+        "subscription",
+        target_id=subscription.id,
+        details={"immediately": body.immediately, "user_id": user_id},
         ip_address=_client_ip(request),
     )
     return AdminSubscriptionOut.model_validate(updated)

@@ -10,8 +10,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.admin.audit_log import record_admin_action
-from src.admin.exceptions import AdminUserNotFoundError, UserHasRelatedRecordsError
-from src.api.schemas.admin import AdminUserListOut, AdminUserOut
+from src.admin.exceptions import AdminUserNotFoundError, CannotModifyOwnStaffRoleError, UserHasRelatedRecordsError
+from src.api.schemas.admin import AdminUserListOut, AdminUserOut, SetStaffRoleRequest
 from src.auth.rbac import require_staff_role
 from src.auth.repository import AuthRepository
 from src.core.db.database import get_db
@@ -79,6 +79,38 @@ def unsuspend_user(
     _repository.set_is_active(session, user.id, True)
     record_admin_action(
         session, current_user.id, "user.unsuspend", "user", target_id=user.id, ip_address=_client_ip(request)
+    )
+    return AdminUserOut.model_validate(_get_user_or_404(session, user_id))
+
+
+@router.post("/{user_id}/staff-role", response_model=AdminUserOut)
+def set_staff_role(
+    user_id: int,
+    body: SetStaffRoleRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_staff_role(StaffRole.OWNER)),
+) -> AdminUserOut:
+    """Grants or revokes staff access. OWNER-only: this is the one route
+    that can create another OWNER, so it must require an existing OWNER
+    to call it. An OWNER may not change their own row through this route
+    (`CannotModifyOwnStaffRoleError`) -- self-service role changes could
+    strip every OWNER from the platform in a single call with no path
+    back in, since no other route can ever restore OWNER access."""
+    user = _get_user_or_404(session, user_id)
+    if user.id == current_user.id:
+        raise CannotModifyOwnStaffRoleError("You cannot change your own staff role.")
+
+    staff_role = StaffRole(body.staff_role) if body.staff_role is not None else None
+    _repository.set_staff_role(session, user.id, body.is_staff, staff_role)
+    record_admin_action(
+        session,
+        current_user.id,
+        "user.set_staff_role",
+        "user",
+        target_id=user.id,
+        details={"is_staff": body.is_staff, "staff_role": body.staff_role},
+        ip_address=_client_ip(request),
     )
     return AdminUserOut.model_validate(_get_user_or_404(session, user_id))
 

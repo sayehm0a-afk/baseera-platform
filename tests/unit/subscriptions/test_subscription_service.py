@@ -202,3 +202,83 @@ def test_admin_activate_subscription_rejects_the_trial_plan(session, user):
     )
     with pytest.raises(ValueError):
         subscription_service.admin_activate_subscription(session, subscription, SubscriptionPlan.TRIAL, period_days=30)
+
+
+def test_cancel_subscription_default_keeps_access_until_period_end(session, user):
+    repo = SubscriptionRepository()
+    future_end = datetime.now(timezone.utc) + timedelta(days=10)
+    subscription = repo.create_subscription(
+        session,
+        user_id=user.id,
+        plan=SubscriptionPlan.MONTHLY,
+        status=SubscriptionStatus.ACTIVE,
+        current_period_start=datetime.now(timezone.utc),
+        current_period_end=future_end,
+    )
+
+    updated = subscription_service.cancel_subscription(session, subscription, immediately=False)
+
+    assert updated.status == SubscriptionStatus.CANCELED
+    assert subscription_service.is_entitled(updated) is True
+
+    reloaded = repo.get_subscription_for_user(session, user.id)
+    assert reloaded.status == SubscriptionStatus.CANCELED
+    period_end = reloaded.current_period_end
+    if period_end.tzinfo is None:
+        period_end = period_end.replace(tzinfo=timezone.utc)
+    assert abs((period_end - future_end).total_seconds()) < 2
+
+
+def test_cancel_subscription_is_lazily_downgraded_to_expired_once_the_period_passes(session, user):
+    repo = SubscriptionRepository()
+    future_end = datetime.now(timezone.utc) + timedelta(days=10)
+    subscription = repo.create_subscription(
+        session,
+        user_id=user.id,
+        plan=SubscriptionPlan.MONTHLY,
+        status=SubscriptionStatus.ACTIVE,
+        current_period_start=datetime.now(timezone.utc),
+        current_period_end=future_end,
+    )
+    subscription_service.cancel_subscription(session, subscription, immediately=False)
+
+    # Simulate the period having passed since cancellation.
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    repo.set_status_and_period_end(session, subscription.id, SubscriptionStatus.CANCELED, past)
+
+    effective = subscription_service.get_effective_subscription(session, user.id)
+    assert effective.status == SubscriptionStatus.EXPIRED
+    assert subscription_service.is_entitled(effective) is False
+
+
+def test_cancel_subscription_immediately_revokes_access_right_away(session, user):
+    repo = SubscriptionRepository()
+    future_end = datetime.now(timezone.utc) + timedelta(days=10)
+    subscription = repo.create_subscription(
+        session,
+        user_id=user.id,
+        plan=SubscriptionPlan.MONTHLY,
+        status=SubscriptionStatus.ACTIVE,
+        current_period_start=datetime.now(timezone.utc),
+        current_period_end=future_end,
+    )
+
+    before = datetime.now(timezone.utc)
+    updated = subscription_service.cancel_subscription(session, subscription, immediately=True)
+    after = datetime.now(timezone.utc)
+    assert updated.status == SubscriptionStatus.CANCELED
+
+    period_end = updated.current_period_end
+    if period_end.tzinfo is None:
+        period_end = period_end.replace(tzinfo=timezone.utc)
+    assert before <= period_end <= after
+
+    # Backdate slightly to deterministically exercise the lazy-downgrade path
+    # (see test_cancel_subscription_is_lazily_downgraded_to_expired_once_the_period_passes
+    # for the general mechanism) without depending on wall-clock timing here.
+    repo.set_status_and_period_end(
+        session, subscription.id, SubscriptionStatus.CANCELED, before - timedelta(seconds=1)
+    )
+    effective = subscription_service.get_effective_subscription(session, user.id)
+    assert effective.status == SubscriptionStatus.EXPIRED
+    assert subscription_service.is_entitled(effective) is False

@@ -21,6 +21,10 @@ from src.core.db.database import Base, get_db
 from src.domain.models import (
     AIRequest,
     AIRequestStatus,
+    Invoice,
+    InvoiceStatus,
+    Payment,
+    PaymentStatus,
     StaffRole,
     Subscription,
     SubscriptionPlan,
@@ -193,6 +197,55 @@ def test_owner_cannot_delete_a_user_with_non_cascading_related_records(client, o
     assert response.json()["error"]["code"] == "user_has_related_records"
 
 
+def test_owner_can_grant_staff_role(client, owner, customer):
+    _as(owner)
+    response = client.post(
+        f"/api/v1/admin/users/{customer.id}/staff-role", json={"is_staff": True, "staff_role": "SUPPORT"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_staff"] is True
+    assert body["staff_role"] == "SUPPORT"
+
+
+def test_owner_can_revoke_staff_role(client, owner, admin):
+    _as(owner)
+    response = client.post(f"/api/v1/admin/users/{admin.id}/staff-role", json={"is_staff": False})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_staff"] is False
+    assert body["staff_role"] is None
+
+
+def test_admin_cannot_grant_staff_role_only_owner_can(client, admin, customer):
+    _as(admin)
+    response = client.post(
+        f"/api/v1/admin/users/{customer.id}/staff-role", json={"is_staff": True, "staff_role": "ADMIN"}
+    )
+    assert response.status_code == 403
+
+
+def test_owner_cannot_change_their_own_staff_role(client, owner):
+    _as(owner)
+    response = client.post(f"/api/v1/admin/users/{owner.id}/staff-role", json={"is_staff": False})
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "cannot_modify_own_staff_role"
+
+
+def test_set_staff_role_rejects_is_staff_true_without_a_role(client, owner, customer):
+    _as(owner)
+    response = client.post(f"/api/v1/admin/users/{customer.id}/staff-role", json={"is_staff": True})
+    assert response.status_code == 422
+
+
+def test_set_staff_role_audit_logged(client, owner, customer):
+    _as(owner)
+    client.post(f"/api/v1/admin/users/{customer.id}/staff-role", json={"is_staff": True, "staff_role": "SUPPORT"})
+
+    logs = client.get("/api/v1/admin/audit-log").json()["logs"]
+    assert any(log["action"] == "user.set_staff_role" and log["target_id"] == customer.id for log in logs)
+
+
 def test_audit_log_records_suspend_action(client, admin, customer):
     _as(admin)
     client.post(f"/api/v1/admin/users/{customer.id}/suspend")
@@ -250,6 +303,43 @@ def test_subscription_404_for_unknown_user(client, admin):
     assert response.status_code == 404
 
 
+def test_cancel_subscription_default_keeps_status_canceled_but_period_end_unchanged(client, admin, customer):
+    _as(admin)
+    before = client.get(f"/api/v1/admin/subscriptions/{customer.id}").json()["current_period_end"]
+
+    response = client.post(f"/api/v1/admin/subscriptions/{customer.id}/cancel", json={})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "CANCELED"
+    assert body["current_period_end"] == before
+
+
+def test_cancel_subscription_immediately_pulls_period_end_to_now(client, admin, customer):
+    _as(admin)
+    response = client.post(f"/api/v1/admin/subscriptions/{customer.id}/cancel", json={"immediately": True})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "CANCELED"
+    period_end = datetime.fromisoformat(body["current_period_end"])
+    if period_end.tzinfo is None:
+        period_end = period_end.replace(tzinfo=timezone.utc)
+    assert period_end <= datetime.now(timezone.utc) + timedelta(seconds=5)
+
+
+def test_cancel_subscription_404_for_unknown_user(client, admin):
+    _as(admin)
+    response = client.post("/api/v1/admin/subscriptions/999999/cancel", json={})
+    assert response.status_code == 404
+
+
+def test_cancel_subscription_audit_logged(client, admin, customer):
+    _as(admin)
+    client.post(f"/api/v1/admin/subscriptions/{customer.id}/cancel", json={"immediately": True})
+
+    logs = client.get("/api/v1/admin/audit-log").json()["logs"]
+    assert any(log["action"] == "subscription.cancel" for log in logs)
+
+
 # --- sessions --------------------------------------------------------------
 
 
@@ -277,6 +367,39 @@ def test_revoke_unknown_session_404s(client, admin):
     _as(admin)
     response = client.delete("/api/v1/admin/sessions/999999")
     assert response.status_code == 404
+
+
+def test_revoke_all_sessions_for_user(client, admin, customer, session):
+    future = datetime.now(timezone.utc) + timedelta(days=30)
+    session.add(UserSession(user_id=customer.id, refresh_token_jti="jti-a", family_id="fam-a", expires_at=future))
+    session.add(UserSession(user_id=customer.id, refresh_token_jti="jti-b", family_id="fam-b", expires_at=future))
+    session.commit()
+
+    _as(admin)
+    response = client.delete(f"/api/v1/admin/sessions/user/{customer.id}")
+    assert response.status_code == 200
+    assert "2" in response.json()["message"]
+
+    listing = client.get(f"/api/v1/admin/sessions/user/{customer.id}")
+    assert listing.json()["total"] == 0
+
+
+def test_revoke_all_sessions_for_unknown_user_404s(client, admin):
+    _as(admin)
+    response = client.delete("/api/v1/admin/sessions/user/999999")
+    assert response.status_code == 404
+
+
+def test_revoke_all_sessions_audit_logged(client, admin, customer, session):
+    future = datetime.now(timezone.utc) + timedelta(days=30)
+    session.add(UserSession(user_id=customer.id, refresh_token_jti="jti-c", family_id="fam-c", expires_at=future))
+    session.commit()
+
+    _as(admin)
+    client.delete(f"/api/v1/admin/sessions/user/{customer.id}")
+
+    logs = client.get("/api/v1/admin/audit-log").json()["logs"]
+    assert any(log["action"] == "session.admin_revoke_all" and log["target_id"] == customer.id for log in logs)
 
 
 # --- announcements -----------------------------------------------------
@@ -373,3 +496,81 @@ def test_system_health(client, admin):
     response = client.get("/api/v1/admin/system/health")
     assert response.status_code == 200
     assert response.json()["details"]["database"] == "healthy"
+
+
+def test_dashboard_summary(client, admin, customer):
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["database_health"] == "healthy"
+    assert isinstance(body["ingestion_scheduler_running"], bool)
+    assert isinstance(body["market_intelligence_scheduler_running"], bool)
+    assert body["new_users_last_24h"] >= 2  # admin + customer, both just created
+    assert body["locked_accounts"] == 0
+
+
+def test_dashboard_summary_counts_locked_accounts(client, admin, customer, session):
+    customer.locked_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+    session.commit()
+
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    assert response.json()["locked_accounts"] == 1
+
+
+def test_dashboard_summary_requires_staff(client, customer):
+    _as(customer)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 403
+
+
+# --- billing ---------------------------------------------------------------
+
+
+def test_list_invoices_for_user(client, admin, customer, session):
+    invoice = Invoice(user_id=customer.id, amount=99.0, currency="SAR", status=InvoiceStatus.PAID)
+    session.add(invoice)
+    session.commit()
+
+    _as(admin)
+    response = client.get(f"/api/v1/admin/billing/users/{customer.id}/invoices")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["invoices"][0]["amount"] == 99.0
+    assert body["invoices"][0]["status"] == "PAID"
+
+
+def test_list_invoices_for_unknown_user_404s(client, admin):
+    _as(admin)
+    response = client.get("/api/v1/admin/billing/users/999999/invoices")
+    assert response.status_code == 404
+
+
+def test_list_payments_for_invoice(client, admin, customer, session):
+    invoice = Invoice(user_id=customer.id, amount=99.0, currency="SAR", status=InvoiceStatus.PAID)
+    session.add(invoice)
+    session.commit()
+    session.add(Payment(invoice_id=invoice.id, amount=99.0, status=PaymentStatus.SUCCEEDED))
+    session.commit()
+
+    _as(admin)
+    response = client.get(f"/api/v1/admin/billing/invoices/{invoice.id}/payments")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["payments"]) == 1
+    assert body["payments"][0]["status"] == "SUCCEEDED"
+
+
+def test_list_payments_for_unknown_invoice_404s(client, admin):
+    _as(admin)
+    response = client.get("/api/v1/admin/billing/invoices/999999/payments")
+    assert response.status_code == 404
+
+
+def test_billing_routes_require_staff(client, customer):
+    _as(customer)
+    assert client.get(f"/api/v1/admin/billing/users/{customer.id}/invoices").status_code == 403
+    assert client.get("/api/v1/admin/billing/invoices/1/payments").status_code == 403

@@ -1,8 +1,8 @@
 """Aggregates every /api/v1/admin/* router into one `router` so
 main.py only needs a single `app.include_router(admin_router)` --
 each sub-module keeps its own file (users/subscriptions/sessions/
-announcements/feature_flags/audit_log/usage/analytics/system), one
-capability area per the Phase 10 Admin Dashboard spec, per file.
+announcements/feature_flags/audit_log/usage/analytics/system/billing),
+one capability area per the Phase 10 Admin Dashboard spec, per file.
 """
 
 from fastapi import APIRouter
@@ -11,6 +11,7 @@ from src.api.routes.admin import (
     analytics,
     announcements,
     audit_log,
+    billing,
     feature_flags,
     sessions,
     subscriptions,
@@ -29,3 +30,4 @@ router.include_router(audit_log.router)
 router.include_router(usage.router)
 router.include_router(analytics.router)
 router.include_router(system.router)
+router.include_router(billing.router)

@@ -40,3 +40,18 @@ class FeatureFlagAlreadyExistsError(APIError):
 class AnnouncementNotFoundError(APIError):
     status_code = 404
     code = "announcement_not_found"
+
+
+class AdminInvoiceNotFoundError(APIError):
+    status_code = 404
+    code = "invoice_not_found"
+
+
+class CannotModifyOwnStaffRoleError(APIError):
+    """An OWNER changing their own is_staff/staff_role could lock every
+    admin out of the platform in one call (no self-service path back to
+    OWNER exists) -- blocked outright, another OWNER must make the
+    change."""
+
+    status_code = 409
+    code = "cannot_modify_own_staff_role"

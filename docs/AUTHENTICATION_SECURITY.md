@@ -191,11 +191,9 @@ surface rather than twice.
 
 ## 5. Known gaps carried forward (disclosed)
 
-- **No REST route exists yet to grant/revoke staff access**
-  (`AuthRepository.set_staff_role()` is unreachable from any router
-  today) — P13.4's explicit scope, not a P13.3 gap, since P13.3 is
-  customer-authentication hardening and this is an owner/admin
-  capability.
+- ~~No REST route exists yet to grant/revoke staff access~~ — **closed
+  in P13.4**: `POST /api/v1/admin/users/{id}/staff-role`, OWNER-only,
+  blocks self-modification. See `docs/ADMIN_AND_RBAC.md`.
 - **No email provider is wired** — `ConsoleEmailSender` logs the
   verification/reset link instead of sending it (disclosed in
   `docs/PRODUCTION_CONFIGURATION.md` §5) — a genuine external-account

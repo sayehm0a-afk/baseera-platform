@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from src.admin.audit_log import record_admin_action
 from src.admin.exceptions import AdminUserNotFoundError
 from src.api.schemas.admin import AdminSessionListOut, AdminSessionOut
+from src.auth import session_service
 from src.auth.exceptions import SessionNotFoundError
 from src.auth.rbac import require_staff_role
 from src.auth.repository import AuthRepository
@@ -73,3 +74,33 @@ def revoke_session(
         ip_address=_client_ip(request),
     )
     return {"message": f"Session {session_id} revoked."}
+
+
+@router.delete("/user/{user_id}")
+def revoke_all_sessions_for_user(
+    user_id: int,
+    request: Request,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> dict:
+    """Revokes every active session for a user in one call (e.g.
+    alongside suspending a compromised account) -- reuses
+    `session_service.revoke_all_sessions`, the same "sign out
+    everywhere" used by the customer's own logout-all and by a password
+    reset, so it also instantly invalidates any already-issued access
+    token via `User.tokens_invalid_before`, not just the DB session rows."""
+    if _repository.get_user_by_id(session, user_id) is None:
+        raise AdminUserNotFoundError(f"No user {user_id}.")
+
+    revoked_count = len(_repository.list_active_sessions_for_user(session, user_id))
+    session_service.revoke_all_sessions(session, user_id)
+    record_admin_action(
+        session,
+        current_user.id,
+        "session.admin_revoke_all",
+        "user",
+        target_id=user_id,
+        details={"revoked_count": revoked_count},
+        ip_address=_client_ip(request),
+    )
+    return {"message": f"{revoked_count} session(s) revoked for user {user_id}."}

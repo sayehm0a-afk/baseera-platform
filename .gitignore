@@ -28,6 +28,11 @@ ENV/
 !.env.example
 *.secret
 secrets/
+
+# ===========================
+# Local Redis artifacts
+# ===========================
+dump.rdb
 *.pem
 *.key
 *.crt

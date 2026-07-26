@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AdminUserOut(BaseModel):
@@ -25,6 +25,19 @@ class AdminUserListOut(BaseModel):
     users: List[AdminUserOut]
 
 
+class SetStaffRoleRequest(BaseModel):
+    is_staff: bool
+    staff_role: Optional[str] = Field(default=None, pattern="^(OWNER|ADMIN|SUPPORT)$")
+
+    @model_validator(mode="after")
+    def _staff_role_required_iff_is_staff(self) -> "SetStaffRoleRequest":
+        if self.is_staff and self.staff_role is None:
+            raise ValueError("staff_role is required when is_staff is true.")
+        if not self.is_staff and self.staff_role is not None:
+            raise ValueError("staff_role must be omitted when is_staff is false.")
+        return self
+
+
 class AdminSubscriptionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -43,6 +56,43 @@ class AdminSubscriptionListOut(BaseModel):
     subscriptions: List[AdminSubscriptionOut]
 
 
+class AdminPaymentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    invoice_id: int
+    amount: float
+    status: str
+    provider_transaction_id: Optional[str] = None
+    failure_reason: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminInvoiceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    subscription_id: Optional[int] = None
+    amount: float
+    currency: str
+    status: str
+    provider: str
+    provider_reference: Optional[str] = None
+    issued_at: datetime
+    paid_at: Optional[datetime] = None
+
+
+class AdminInvoiceListOut(BaseModel):
+    total: int
+    invoices: List[AdminInvoiceOut]
+
+
+class AdminPaymentListOut(BaseModel):
+    payments: List[AdminPaymentOut]
+
+
 class ExtendTrialRequest(BaseModel):
     additional_days: int = Field(gt=0, le=365)
 
@@ -50,6 +100,10 @@ class ExtendTrialRequest(BaseModel):
 class ActivateSubscriptionRequest(BaseModel):
     plan: str = Field(pattern="^(MONTHLY|YEARLY)$")
     period_days: int = Field(gt=0, le=366)
+
+
+class CancelSubscriptionRequest(BaseModel):
+    immediately: bool = False
 
 
 class AdminSessionOut(BaseModel):
@@ -161,3 +215,19 @@ class AnalyticsOut(BaseModel):
 class SystemHealthOut(BaseModel):
     status: str
     details: Dict[str, Any]
+
+
+class AdminDashboardSummaryOut(BaseModel):
+    app_version: str
+    deployment_commit: Optional[str] = None
+    environment: str
+    database_health: str
+    redis_health: str
+    ingestion_scheduler_running: bool
+    market_intelligence_scheduler_running: bool
+    market_data_provider: Optional[str] = None
+    market_data_health: Optional[str] = None
+    new_users_last_24h: int
+    new_users_last_7d: int
+    logins_last_24h: int
+    locked_accounts: int

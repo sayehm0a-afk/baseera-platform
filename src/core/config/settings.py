@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     redis_port: int = Field(default=6379, alias="REDIS_PORT")
     redis_password: Optional[str] = Field(default=None, alias="REDIS_PASSWORD")
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    # Set by CI/CD at deploy time (e.g. `DEPLOYMENT_COMMIT=$(git rev-parse
+    # HEAD)`) -- None in any environment that hasn't set it, never a
+    # fabricated value, so the admin dashboard-summary endpoint (P13.4)
+    # can honestly report "unknown" rather than inventing a commit hash.
+    deployment_commit: Optional[str] = Field(default=None, alias="DEPLOYMENT_COMMIT")
 
     # --- Security -------------------------------------------------------
     # No safe production default exists for this -- see

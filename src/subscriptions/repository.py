@@ -54,6 +54,14 @@ class SubscriptionRepository:
         )
         session.commit()
 
+    def set_status_and_period_end(
+        self, session: Session, subscription_id: int, status: SubscriptionStatus, current_period_end: datetime
+    ) -> None:
+        session.query(Subscription).filter_by(id=subscription_id).update(
+            {"status": status, "current_period_end": current_period_end, "updated_at": datetime.now(timezone.utc)}
+        )
+        session.commit()
+
     def update_trial_ends_at(self, session: Session, subscription_id: int, trial_ends_at: datetime) -> None:
         session.query(Subscription).filter_by(id=subscription_id).update(
             {
