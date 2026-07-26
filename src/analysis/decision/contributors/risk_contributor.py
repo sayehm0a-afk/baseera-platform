@@ -26,8 +26,10 @@ from typing import Optional, Tuple
 from src.analysis.decision.contributors._series_utils import latest_value
 from src.analysis.recommendation.types import AnalysisContext, ScoreContribution, Signal, SignalDirection
 from src.analysis.technical_analysis_engine import TechnicalAnalysisResult
+from src.analysis.types import SupportResistanceLevels
 
-_CORE_SIGNAL_SLOTS = 2
+_CORE_SIGNAL_SLOTS = 3
+_TIGHT_HEADROOM_THRESHOLD = 0.02
 
 
 def _price_reference(context: AnalysisContext, result: TechnicalAnalysisResult) -> Optional[float]:
@@ -92,6 +94,40 @@ def _score_bollinger_width(result: TechnicalAnalysisResult) -> Optional[Tuple[fl
     )
 
 
+def _score_resistance_headroom(
+    price: Optional[float], levels: SupportResistanceLevels
+) -> Optional[Tuple[float, Signal]]:
+    """Distinct from PriceStructureScoreContributor's resistance-
+    proximity signal: that module scores *direction* (near resistance
+    is bearish for the next move); this one scores *risk* -- little
+    room between price and the nearest resistance means little room to
+    a target before facing a real rejection level, independent of
+    which way the recommendation leans."""
+    if price is None or price <= 0 or not levels.resistance:
+        return None
+
+    above = [r for r in levels.resistance if r > price]
+    if not above:
+        return None  # no resistance overhead at all -- not a headroom risk
+
+    nearest = min(above)
+    headroom = (nearest - price) / price
+    if headroom <= _TIGHT_HEADROOM_THRESHOLD:
+        return -5.0, Signal(
+            name="resistance_headroom",
+            description=(
+                f"Only {headroom:.1%} of room before the nearest resistance at {nearest:.2f} -- "
+                "limited upside runway increases near-term risk."
+            ),
+            direction=SignalDirection.BEARISH, source="risk", impact=-5.0,
+        )
+    return 0.0, Signal(
+        name="resistance_headroom",
+        description=f"{headroom:.1%} of room before the nearest resistance at {nearest:.2f} -- adequate runway.",
+        direction=SignalDirection.NEUTRAL, source="risk", impact=0.0,
+    )
+
+
 class RiskScoreContributor:
     """The risk leg of the AI Decision Intelligence Layer's
     contributor set."""
@@ -127,6 +163,13 @@ class RiskScoreContributor:
             signals.append(sig)
 
         outcome = _score_bollinger_width(result)
+        if outcome is not None:
+            computed += 1
+            pts, sig = outcome
+            points += pts
+            signals.append(sig)
+
+        outcome = _score_resistance_headroom(price, result.support_resistance)
         if outcome is not None:
             computed += 1
             pts, sig = outcome

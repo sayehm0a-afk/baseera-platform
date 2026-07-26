@@ -33,7 +33,9 @@ from src.analysis.decision.contributors.external_factor_contributors import (
     SectorRotationScoreContributor,
 )
 from src.analysis.decision.contributors.momentum_contributor import MomentumScoreContributor
+from src.analysis.decision.contributors.price_structure_contributor import PriceStructureScoreContributor
 from src.analysis.decision.contributors.risk_contributor import RiskScoreContributor
+from src.analysis.decision.contributors.value_area_contributor import ValueAreaScoreContributor
 from src.analysis.decision.contributors.volume_contributor import VolumeScoreContributor
 from src.analysis.decision.types import AIDecisionTuning
 from src.analysis.recommendation.fundamental_contributor import FundamentalScoreContributor
@@ -46,6 +48,8 @@ _CONTRIBUTOR_CLASSES = {
     "momentum": MomentumScoreContributor,
     "volume": VolumeScoreContributor,
     "risk": RiskScoreContributor,
+    "price_structure": PriceStructureScoreContributor,
+    "value_area": ValueAreaScoreContributor,
     "news_sentiment": NewsSentimentScoreContributor,
     "macro": MacroEconomicScoreContributor,
     "insider_transactions": InsiderTransactionScoreContributor,
@@ -56,7 +60,7 @@ _CONTRIBUTOR_CLASSES = {
 def build_contributors(contributor_weights: Optional[Dict[str, float]]) -> Optional[List]:
     """`None` if no override is given -- AIDecisionEngineStrategy then
     falls back to AIDecisionEngine's own default contributor set
-    unchanged. Otherwise builds the full nine-contributor list with
+    unchanged. Otherwise builds the full eleven-contributor list with
     the given weights substituted in (unnamed contributors keep their
     engine default weight)."""
     if not contributor_weights:

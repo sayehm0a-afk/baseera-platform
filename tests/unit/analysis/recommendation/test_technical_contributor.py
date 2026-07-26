@@ -18,6 +18,7 @@ from src.analysis.types import (
     IndicatorOutput,
     MACDResult,
     PatternMatch,
+    StochasticResult,
     SuperTrendResult,
 )
 
@@ -37,6 +38,11 @@ def _default_indicators(**overrides):
             "macd",
             IndicatorCategory.MOMENTUM,
             MACDResult(macd_line=pd.Series([0.0]), signal_line=pd.Series([0.0]), histogram=pd.Series([0.0])),
+        ),
+        "stochastic_14_3_3": _output(
+            "stochastic_14_3_3",
+            IndicatorCategory.MOMENTUM,
+            StochasticResult(percent_k=pd.Series([50.0]), percent_d=pd.Series([50.0])),
         ),
         "supertrend": _output(
             "supertrend",
@@ -168,6 +174,55 @@ def test_macd_missing_is_skipped_not_errored():
     contribution = _contribute(result)
     assert not any(s.name == "macd" for s in contribution.signals)
     assert contribution.score is not None  # the rest of the signals still compute
+
+
+# --- Stochastic --------------------------------------------------------
+
+
+def test_stochastic_oversold_is_bullish():
+    result = _default_indicators(
+        stochastic_14_3_3=_output(
+            "stochastic_14_3_3", IndicatorCategory.MOMENTUM,
+            StochasticResult(percent_k=pd.Series([15.0]), percent_d=pd.Series([15.0])),
+        )
+    )
+    contribution = _contribute(result)
+    sig = next(s for s in contribution.signals if s.name == "stochastic")
+    assert sig.direction == SignalDirection.BULLISH
+    assert sig.impact == 10.0
+
+
+def test_stochastic_overbought_is_bearish():
+    result = _default_indicators(
+        stochastic_14_3_3=_output(
+            "stochastic_14_3_3", IndicatorCategory.MOMENTUM,
+            StochasticResult(percent_k=pd.Series([85.0]), percent_d=pd.Series([85.0])),
+        )
+    )
+    contribution = _contribute(result)
+    sig = next(s for s in contribution.signals if s.name == "stochastic")
+    assert sig.direction == SignalDirection.BEARISH
+    assert sig.impact == -10.0
+
+
+def test_stochastic_above_50_is_mildly_bullish():
+    result = _default_indicators(
+        stochastic_14_3_3=_output(
+            "stochastic_14_3_3", IndicatorCategory.MOMENTUM,
+            StochasticResult(percent_k=pd.Series([60.0]), percent_d=pd.Series([60.0])),
+        )
+    )
+    contribution = _contribute(result)
+    sig = next(s for s in contribution.signals if s.name == "stochastic")
+    assert sig.direction == SignalDirection.BULLISH
+    assert sig.impact == 4.0
+
+
+def test_stochastic_exactly_50_is_neutral():
+    contribution = _contribute(_default_indicators())
+    sig = next(s for s in contribution.signals if s.name == "stochastic")
+    assert sig.direction == SignalDirection.NEUTRAL
+    assert sig.impact == 0.0
 
 
 # --- Supertrend ----------------------------------------------------------

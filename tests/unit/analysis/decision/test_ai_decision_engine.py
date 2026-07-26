@@ -8,6 +8,7 @@ the real Momentum/Volume/Risk/News/Macro scoring rules, which are
 covered by their own test files.
 """
 
+import pandas as pd
 import pytest
 
 from src.analysis.decision.ai_decision_engine import AIDecisionEngine
@@ -20,6 +21,8 @@ from src.analysis.recommendation.types import (
     Signal,
     SignalDirection,
 )
+from src.analysis.technical_analysis_engine import TechnicalAnalysisResult
+from src.analysis.types import IndicatorCategory, IndicatorOutput, SupportResistanceLevels
 
 
 class _FakeContributor:
@@ -50,6 +53,19 @@ def _context(latest_price=None, technical_result=None):
     return AnalysisContext(symbol="2222", latest_price=latest_price, technical_result=technical_result)
 
 
+def _technical_result_with_levels(atr=2.0, support=None, resistance=None):
+    return TechnicalAnalysisResult(
+        indicators={
+            "atr_14": IndicatorOutput(name="atr_14", category=IndicatorCategory.VOLATILITY, value=pd.Series([atr])),
+            "adx_14": IndicatorOutput(name="adx_14", category=IndicatorCategory.TREND, value=pd.Series([20.0])),
+            "support_resistance": IndicatorOutput(
+                name="support_resistance", category=IndicatorCategory.PRICE_ACTION,
+                value=SupportResistanceLevels(support=support or [], resistance=resistance or []),
+            ),
+        }
+    )
+
+
 # --- basic wiring: reuses RecommendationEngine's output verbatim -----------
 
 
@@ -70,12 +86,13 @@ def test_requesting_user_id_is_accepted_and_has_no_effect_on_the_result():
     assert decision.confidence == 90.0
 
 
-def test_default_construction_uses_all_nine_contributors():
+def test_default_construction_uses_all_eleven_contributors():
     engine = AIDecisionEngine()
     decision = engine.decide(AnalysisContext(symbol="2222"))
     sources = {b.category for b in decision.breakdown}
     assert sources == {
         "Technical Analysis", "Fundamental Analysis", "Momentum", "Volume", "Risk",
+        "Price Structure", "Value Area",
         "News", "Macro", "Insider Transactions", "Sector Rotation",
     }
 
@@ -111,6 +128,62 @@ def test_higher_conviction_widens_the_reward_distance():
     weak = _engine([_FakeContributor("technical", score=65.0, weight=1.0)]).decide(_context(latest_price=100.0))
     strong = _engine([_FakeContributor("technical", score=95.0, weight=1.0)]).decide(_context(latest_price=100.0))
     assert (strong.target_price - 100.0) > (weak.target_price - 100.0)
+
+
+# --- price targets refined by real support/resistance levels ---------------
+
+
+def test_bullish_target_is_capped_just_below_a_resistance_level_inside_the_atr_range():
+    # Default tuning at score=80 (conviction 0.6) with ATR=2 on price=100
+    # would target well above 106 -- a resistance at 103 sits inside that
+    # range and must cap the target, not the raw ATR projection.
+    technical_result = _technical_result_with_levels(atr=2.0, resistance=[103.0])
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+
+    assert decision.target_price < 103.0
+    assert decision.target_price > 100.0
+    assert any("resistance" in r for r in decision.reasons)
+
+
+def test_bullish_stop_is_tightened_to_just_below_a_support_level_inside_the_atr_range():
+    technical_result = _technical_result_with_levels(atr=2.0, support=[98.5])
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+
+    assert decision.stop_loss > 97.0  # tighter than the raw ATR-only stop would be
+    assert decision.stop_loss < 100.0
+    assert any("support" in r for r in decision.reasons)
+
+
+def test_bearish_target_is_capped_just_above_a_support_level_inside_the_atr_range():
+    technical_result = _technical_result_with_levels(atr=2.0, support=[97.0])
+    engine = _engine([_FakeContributor("technical", score=20.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+
+    assert decision.target_price > 97.0
+    assert decision.target_price < 100.0
+
+
+def test_bearish_stop_is_tightened_to_just_above_a_resistance_level_inside_the_atr_range():
+    technical_result = _technical_result_with_levels(atr=2.0, resistance=[101.5])
+    engine = _engine([_FakeContributor("technical", score=20.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+
+    assert decision.stop_loss < 103.0  # tighter than the raw ATR-only stop would be
+    assert decision.stop_loss > 100.0
+
+
+def test_no_level_inside_the_atr_range_leaves_targets_unrefined():
+    technical_result = _technical_result_with_levels(atr=2.0, resistance=[500.0], support=[1.0])
+    with_levels = _engine([_FakeContributor("technical", score=80.0, weight=1.0)]).decide(
+        _context(latest_price=100.0, technical_result=technical_result)
+    )
+    without_levels = _engine([_FakeContributor("technical", score=80.0, weight=1.0)]).decide(
+        _context(latest_price=100.0)
+    )
+    assert with_levels.target_price == without_levels.target_price
+    assert with_levels.stop_loss == without_levels.stop_loss
 
 
 # --- risk level --------------------------------------------------------

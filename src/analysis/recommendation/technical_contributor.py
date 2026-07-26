@@ -23,9 +23,58 @@ from src.analysis.recommendation.types import (
 )
 from src.analysis.technical_analysis_engine import TechnicalAnalysisResult
 
-_CORE_SIGNAL_SLOTS = 6
+_CORE_SIGNAL_SLOTS = 7
 _PATTERN_POINTS_PER_MATCH = 6.0
 _PATTERN_POINTS_CAP = 12.0
+
+
+def _score_stochastic(stochastic_latest: dict) -> Optional[Tuple[float, Signal]]:
+    percent_k = stochastic_latest.get("percent_k") if stochastic_latest else None
+    if percent_k is None:
+        return None
+
+    # Smaller point weights than RSI's -- Stochastic is highly correlated
+    # with RSI (both are bounded momentum oscillators), so it must not
+    # duplicate RSI's full weight in the blended score.
+    if percent_k <= 20:
+        return 10.0, Signal(
+            name="stochastic",
+            description=f"Stochastic %K={percent_k:.1f} is oversold (<=20), a bullish reversal signal.",
+            direction=SignalDirection.BULLISH,
+            source="technical",
+            impact=10.0,
+        )
+    if percent_k >= 80:
+        return -10.0, Signal(
+            name="stochastic",
+            description=f"Stochastic %K={percent_k:.1f} is overbought (>=80), a bearish reversal signal.",
+            direction=SignalDirection.BEARISH,
+            source="technical",
+            impact=-10.0,
+        )
+    if percent_k > 50:
+        return 4.0, Signal(
+            name="stochastic",
+            description=f"Stochastic %K={percent_k:.1f} is above 50, indicating bullish momentum.",
+            direction=SignalDirection.BULLISH,
+            source="technical",
+            impact=4.0,
+        )
+    if percent_k < 50:
+        return -4.0, Signal(
+            name="stochastic",
+            description=f"Stochastic %K={percent_k:.1f} is below 50, indicating bearish momentum.",
+            direction=SignalDirection.BEARISH,
+            source="technical",
+            impact=-4.0,
+        )
+    return 0.0, Signal(
+        name="stochastic",
+        description="Stochastic %K=50.0 is exactly neutral.",
+        direction=SignalDirection.NEUTRAL,
+        source="technical",
+        impact=0.0,
+    )
 
 
 def _score_rsi(rsi: float) -> Tuple[float, Signal]:
@@ -315,6 +364,13 @@ class TechnicalScoreContributor:
         if macd_outcome is not None:
             computed += 1
             pts, sig = macd_outcome
+            points += pts
+            signals.append(sig)
+
+        stochastic_outcome = _score_stochastic(result.indicators["stochastic_14_3_3"].latest())
+        if stochastic_outcome is not None:
+            computed += 1
+            pts, sig = stochastic_outcome
             points += pts
             signals.append(sig)
 

@@ -298,4 +298,4 @@ def test_ai_decision_engine_strategy_end_to_end(session):
     snapshot = session.query(RecommendationSnapshot).first()
     assert snapshot.recommendation is not None
     assert snapshot.contributor_breakdown is not None
-    assert len(snapshot.contributor_breakdown) == 9
+    assert len(snapshot.contributor_breakdown) == 11

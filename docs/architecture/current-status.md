@@ -954,6 +954,73 @@ error shape), not a separate workstream. This milestone implements (1).
    uses, so it is a disclosed, deliberately out-of-scope extension
    point rather than a stub.
 
+### Extended (Phase 11) — Stochastic/VWAP/Fibonacci/Support-Resistance/
+### Volume Profile wired into the decision engine
+
+The 5 Phase-11 technical indicators (see the M2.2 extension entry above)
+were computed but unused by any scoring path until this update. Now:
+
+- **`technical_contributor.py`** scores Stochastic %K alongside RSI (a
+  7th core signal, smaller point weights than RSI since the two
+  oscillators are correlated and must not double-count).
+- **`contributors/price_structure_contributor.py`** (new) — support/
+  resistance proximity (including breakout/breakdown when price clears
+  every detected level) and Fibonacci-retracement proximity
+  (direction-aware: an uptrend's level reads as support, a downtrend's
+  as resistance). Weight 0.08.
+- **`contributors/value_area_contributor.py`** (new) — price vs. VWAP
+  and price vs. the Volume Profile's point of control (institutional
+  "fair value" positioning). Weight 0.07.
+- **`risk_contributor.py`** gained a 3rd signal: resistance *headroom*
+  (tight room to the nearest resistance = elevated near-term risk,
+  independent of the recommendation's direction) — deliberately
+  distinct from `PriceStructureScoreContributor`'s resistance-proximity
+  signal, which scores direction, not risk.
+- **`AIDecisionEngine.default_contributors()`** now returns 11
+  contributors, not 9; every existing weight was proportionally trimmed
+  so the total still sums to 1.0 rather than letting the two new
+  modules dilute the blend silently — Technical/Fundamental remain the
+  two largest weights by a wide margin ("no single indicator dominates
+  the decision").
+- **Entry/stop/target refinement**: `_compute_price_targets()`'s
+  ATR-based stop loss and target price are now nudged toward a real
+  support/resistance level when one falls inside the ATR-derived range
+  — the stop tightens to just beyond a level price has actually
+  respected before, and the target caps just short of a level price has
+  struggled to clear before, rather than projecting a pure ATR multiple
+  through it. Falls back to the unrefined ATR-only values when no level
+  sits in range. The adjustment (with which level and why) is appended
+  to `InvestmentDecision.reasons`, e.g. "target price capped just below
+  the nearest resistance at 87.54" — verified with a live end-to-end
+  run against synthetic OHLCV, not only unit tests.
+- **Explainability got these signals for free**: `src/analysis/analyst/`
+  (`EvidenceCollector`, `SignalInterpreter`, etc.) reads `Signal`/
+  `DecisionFactorBreakdown` generically by source key, falling back to
+  a title-cased label for any source not in `CATEGORY_LABELS` — the two
+  new contributors' signals flow through bullish/bearish factor
+  interpretation, conflict resolution, and narrative generation with
+  zero changes to that framework, exactly the extension point it was
+  built for.
+- **Scan/Watchlist/Opportunities/Portfolio** all consume
+  `AnalystReport.decision` (`market_intelligence/scanner.py` ->
+  `AnalystEngine.analyze()` -> `AIDecisionEngine` ->
+  `RecommendationEngine`; `portfolio_intelligence/portfolio_engine.py`
+  the same path) — verified unaffected (186 tests green) since none of
+  them hardcode the contributor set; they read `DecisionFactorBreakdown`
+  by category label generically.
+- `src/backtesting/calibration/parameters.py`'s `_CONTRIBUTOR_CLASSES`
+  registry (a second, independent place that names every contributor
+  class, for calibration-candidate weight overrides) had to be updated
+  too — this was a real, caught gap: without it, a calibration
+  candidate could never touch `price_structure`/`value_area` weights,
+  silently.
+- Full pytest suite green (2089 passed, 3 skipped pre-existing/
+  unrelated), flake8 clean.
+- **Not yet done**: Fibonacci/support-resistance/VWAP/Volume-Profile do
+  not yet influence `time_horizon` or `position_size` directly (both
+  still derive from `final_score`/`confidence`/`risk_level`, which the
+  new contributors do influence indirectly through the blend).
+
 ## Completed: Backtesting & Calibration Engine
 
 Full detail in `docs/BACKTESTING_AND_CALIBRATION.md`; summary here.

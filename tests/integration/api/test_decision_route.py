@@ -123,6 +123,7 @@ def test_decision_with_both_legs_available(client, db_session):
     categories = {b["category"] for b in body["breakdown"]}
     assert categories == {
         "Technical Analysis", "Fundamental Analysis", "Momentum", "Volume", "Risk",
+        "Price Structure", "Value Area",
         "News", "Macro", "Insider Transactions", "Sector Rotation",
     }
     for b in body["breakdown"]:

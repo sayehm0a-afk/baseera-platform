@@ -10,7 +10,12 @@ import pandas as pd
 from src.analysis.decision.contributors.risk_contributor import RiskScoreContributor
 from src.analysis.recommendation.types import AnalysisContext, SignalDirection
 from src.analysis.technical_analysis_engine import TechnicalAnalysisResult
-from src.analysis.types import BollingerBandsResult, IndicatorCategory, IndicatorOutput
+from src.analysis.types import (
+    BollingerBandsResult,
+    IndicatorCategory,
+    IndicatorOutput,
+    SupportResistanceLevels,
+)
 
 
 def _output(name, category, value):
@@ -23,6 +28,13 @@ def _base_indicators(**overrides):
         "bollinger": _output(
             "bollinger", IndicatorCategory.VOLATILITY,
             BollingerBandsResult(upper=pd.Series([103.5]), middle=pd.Series([100.0]), lower=pd.Series([96.5])),
+        ),
+        # A resistance level far above the default price=100.0 fallback
+        # (Bollinger middle) so the headroom signal computes as neutral
+        # (plenty of room) rather than being skipped as "unavailable."
+        "support_resistance": _output(
+            "support_resistance", IndicatorCategory.PRICE_ACTION,
+            SupportResistanceLevels(support=[], resistance=[150.0]),
         ),
     }
     indicators.update(overrides)
@@ -117,6 +129,46 @@ def test_moderate_band_width_is_neutral():
     contribution = _contribute(_base_indicators(), latest_price=100.0)
     sig = next(s for s in contribution.signals if s.name == "bollinger_band_risk")
     assert sig.direction == SignalDirection.NEUTRAL
+
+
+# --- Resistance headroom -------------------------------------------------
+
+
+def test_tight_resistance_headroom_is_bearish_high_risk():
+    result = _base_indicators(
+        support_resistance=_output(
+            "support_resistance", IndicatorCategory.PRICE_ACTION,
+            SupportResistanceLevels(support=[], resistance=[101.0]),  # 1% above price=100.0
+        )
+    )
+    contribution = _contribute(result, latest_price=100.0)
+    sig = next(s for s in contribution.signals if s.name == "resistance_headroom")
+    assert sig.direction == SignalDirection.BEARISH
+    assert sig.impact == -5.0
+
+
+def test_ample_resistance_headroom_is_neutral():
+    result = _base_indicators(
+        support_resistance=_output(
+            "support_resistance", IndicatorCategory.PRICE_ACTION,
+            SupportResistanceLevels(support=[], resistance=[150.0]),  # 50% above price
+        )
+    )
+    contribution = _contribute(result, latest_price=100.0)
+    sig = next(s for s in contribution.signals if s.name == "resistance_headroom")
+    assert sig.direction == SignalDirection.NEUTRAL
+    assert sig.impact == 0.0
+
+
+def test_no_resistance_above_price_skips_the_headroom_signal():
+    result = _base_indicators(
+        support_resistance=_output(
+            "support_resistance", IndicatorCategory.PRICE_ACTION,
+            SupportResistanceLevels(support=[], resistance=[]),
+        )
+    )
+    contribution = _contribute(result, latest_price=100.0)
+    assert not any(s.name == "resistance_headroom" for s in contribution.signals)
 
 
 # --- Aggregate -------------------------------------------------------

@@ -13,10 +13,14 @@ from src.analysis.recommendation.types import AnalysisContext, RecommendationTun
 from src.analysis.technical_analysis_engine import TechnicalAnalysisResult
 from src.analysis.types import (
     BollingerBandsResult,
+    FibonacciLevels,
     IndicatorCategory,
     IndicatorOutput,
     MACDResult,
+    StochasticResult,
+    SupportResistanceLevels,
     SuperTrendResult,
+    VolumeProfileResult,
 )
 from src.backtesting.baselines import (
     AIDecisionEngineStrategy,
@@ -42,13 +46,29 @@ def _technical_result(rsi=50.0, sma_20=100.0, latest_close=None):
         "sma_20": _output("sma_20", IndicatorCategory.TREND, pd.Series([sma_20])),
         "ema_20": _output("ema_20", IndicatorCategory.TREND, pd.Series([sma_20])),
         "macd": _output("macd", IndicatorCategory.MOMENTUM, MACDResult(pd.Series([0.0]), pd.Series([0.0]), pd.Series([0.0]))),
+        "stochastic_14_3_3": _output(
+            "stochastic_14_3_3", IndicatorCategory.MOMENTUM, StochasticResult(pd.Series([50.0]), pd.Series([50.0]))
+        ),
         "supertrend": _output("supertrend", IndicatorCategory.TREND, SuperTrendResult(pd.Series([0.0]), pd.Series([0.0]))),
         "adx_14": _output("adx_14", IndicatorCategory.TREND, pd.Series([20.0])),
         "atr_14": _output("atr_14", IndicatorCategory.VOLATILITY, pd.Series([2.0])),
         "obv": _output("obv", IndicatorCategory.VOLUME, pd.Series([1000.0] * 11)),
         "volume_sma_20": _output("volume_sma_20", IndicatorCategory.VOLUME, pd.Series([1000.0] * 11)),
+        "vwap_20": _output("vwap_20", IndicatorCategory.VOLUME, pd.Series([100.0])),
+        "volume_profile": _output(
+            "volume_profile", IndicatorCategory.VOLUME,
+            VolumeProfileResult(bin_edges=[90.0, 100.0, 110.0], bin_volumes=[100.0, 500.0, 100.0], point_of_control=100.0),
+        ),
         "bollinger": _output("bollinger", IndicatorCategory.VOLATILITY, BollingerBandsResult(pd.Series([103.5]), pd.Series([100.0]), pd.Series([96.5]))),
         "candlestick_patterns": _output("candlestick_patterns", IndicatorCategory.PRICE_ACTION, []),
+        "fibonacci_retracement": _output(
+            "fibonacci_retracement", IndicatorCategory.PRICE_ACTION,
+            FibonacciLevels(swing_high=110.0, swing_high_at=1, swing_low=90.0, swing_low_at=0, is_uptrend=True, levels={}),
+        ),
+        "support_resistance": _output(
+            "support_resistance", IndicatorCategory.PRICE_ACTION,
+            SupportResistanceLevels(support=[], resistance=[]),
+        ),
     }
     return TechnicalAnalysisResult(indicators=indicators)
 
@@ -182,7 +202,7 @@ def test_ai_decision_engine_strategy_produces_full_call():
     assert call.recommendation in {"STRONG_BUY", "BUY", "HOLD", "SELL", "STRONG_SELL"}
     assert call.risk_level is not None
     assert call.time_horizon is not None
-    assert len(call.contributor_breakdown) == 9
+    assert len(call.contributor_breakdown) == 11
 
 
 def test_ai_decision_engine_strategy_accepts_tuning_overrides():

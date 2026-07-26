@@ -22,8 +22,8 @@ def test_build_contributors_overrides_named_weights_only():
     by_name = {c.name: c.default_weight for c in contributors}
     assert by_name["technical"] == 0.4
     assert by_name["risk"] == 0.2
-    assert len(contributors) == 9  # every contributor still present, unnamed ones keep engine defaults
-    assert by_name["fundamental"] == 0.25  # AIDecisionEngine's own default, untouched
+    assert len(contributors) == 11  # every contributor still present, unnamed ones keep engine defaults
+    assert by_name["fundamental"] == 0.22  # AIDecisionEngine's own default, untouched
 
 
 def test_build_contributors_unknown_name_raises():

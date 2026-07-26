@@ -31,7 +31,9 @@ from src.analysis.decision.contributors.external_factor_contributors import (
     SectorRotationScoreContributor,
 )
 from src.analysis.decision.contributors.momentum_contributor import MomentumScoreContributor
+from src.analysis.decision.contributors.price_structure_contributor import PriceStructureScoreContributor
 from src.analysis.decision.contributors.risk_contributor import RiskScoreContributor
+from src.analysis.decision.contributors.value_area_contributor import ValueAreaScoreContributor
 from src.analysis.decision.contributors.volume_contributor import VolumeScoreContributor
 from src.analysis.decision.types import (
     AIDecisionTuning,
@@ -45,6 +47,7 @@ from src.analysis.recommendation.fundamental_contributor import FundamentalScore
 from src.analysis.recommendation.recommendation_engine import RecommendationEngine
 from src.analysis.recommendation.technical_contributor import TechnicalScoreContributor
 from src.analysis.recommendation.types import AnalysisContext, Recommendation, ScoreContribution
+from src.analysis.types import SupportResistanceLevels
 
 _DEFAULT_ATR_PCT_FALLBACK = 0.02  # used only when ATR itself is unavailable but a price is
 _MIN_PRICE = 0.01
@@ -68,6 +71,8 @@ CATEGORY_LABELS = {
     "momentum": "Momentum",
     "volume": "Volume",
     "risk": "Risk",
+    "price_structure": "Price Structure",
+    "value_area": "Value Area",
     "news_sentiment": "News",
     "macro": "Macro",
     "insider_transactions": "Insider Transactions",
@@ -96,18 +101,28 @@ def default_contributors() -> List:
     default contributor set without also wanting its default tuning
     (e.g. src.backtesting.baselines.AIDecisionEngineStrategy, when a
     caller overrides RecommendationTuning but not the contributor
-    list) can reuse it instead of re-deriving the same nine
-    instances."""
+    list) can reuse it instead of re-deriving the same eleven
+    instances.
+
+    Phase 11: PriceStructureScoreContributor (Fibonacci +
+    support/resistance) and ValueAreaScoreContributor (VWAP + Volume
+    Profile) were added here -- every other weight was proportionally
+    trimmed to keep the total at 1.0, rather than letting the new
+    modules dilute the blend silently. Neither new module dominates:
+    each caps out well below Technical/Fundamental's weight.
+    """
     return [
-        TechnicalScoreContributor(weight=0.25),
-        FundamentalScoreContributor(weight=0.25),
-        MomentumScoreContributor(weight=0.15),
-        VolumeScoreContributor(weight=0.10),
+        TechnicalScoreContributor(weight=0.22),
+        FundamentalScoreContributor(weight=0.22),
+        MomentumScoreContributor(weight=0.13),
+        VolumeScoreContributor(weight=0.09),
         RiskScoreContributor(weight=0.10),
-        NewsSentimentScoreContributor(weight=0.05),
-        MacroEconomicScoreContributor(weight=0.05),
-        InsiderTransactionScoreContributor(weight=0.03),
-        SectorRotationScoreContributor(weight=0.02),
+        PriceStructureScoreContributor(weight=0.08),
+        ValueAreaScoreContributor(weight=0.05),
+        NewsSentimentScoreContributor(weight=0.04),
+        MacroEconomicScoreContributor(weight=0.04),
+        InsiderTransactionScoreContributor(weight=0.02),
+        SectorRotationScoreContributor(weight=0.01),
     ]
 
 
@@ -121,11 +136,67 @@ def _price_reference(context: AnalysisContext) -> Optional[float]:
     return None
 
 
+_LEVEL_BUFFER_PCT = 0.005  # place the refined stop/target a hair beyond the level itself, not exactly on it
+
+
+def _refine_with_key_levels(
+    direction: int,
+    price: float,
+    stop_loss: float,
+    target_price: float,
+    support_resistance: Optional[SupportResistanceLevels],
+) -> tuple:
+    """Nudges the ATR-based stop/target toward a real, nearby
+    support/resistance level when one sits inside the ATR-derived
+    range. A stop placed just beyond an actual level the price has
+    respected before is more defensible than an arbitrary ATR
+    multiple, and a target capped just short of a level the price has
+    struggled to clear before is more realistic than projecting
+    straight through it. Returns (stop_loss, target_price, notes) --
+    `notes` is empty when no level fell inside the range (the pure
+    ATR-based values are returned unchanged).
+    """
+    notes: List[str] = []
+    if support_resistance is None:
+        return stop_loss, target_price, notes
+
+    if direction > 0:
+        candidate_supports = [s for s in support_resistance.support if stop_loss < s < price]
+        if candidate_supports:
+            nearest = max(candidate_supports)
+            stop_loss = nearest * (1 - _LEVEL_BUFFER_PCT)
+            notes.append(f"stop loss tightened to just below the nearest support at {nearest:.2f}")
+
+        candidate_resistances = [r for r in support_resistance.resistance if price < r < target_price]
+        if candidate_resistances:
+            nearest = min(candidate_resistances)
+            target_price = nearest * (1 - _LEVEL_BUFFER_PCT)
+            notes.append(f"target price capped just below the nearest resistance at {nearest:.2f}")
+    elif direction < 0:
+        candidate_resistances = [r for r in support_resistance.resistance if price < r < stop_loss]
+        if candidate_resistances:
+            nearest = min(candidate_resistances)
+            stop_loss = nearest * (1 + _LEVEL_BUFFER_PCT)
+            notes.append(f"stop loss tightened to just above the nearest resistance at {nearest:.2f}")
+
+        candidate_supports = [s for s in support_resistance.support if target_price < s < price]
+        if candidate_supports:
+            nearest = max(candidate_supports)
+            target_price = nearest * (1 + _LEVEL_BUFFER_PCT)
+            notes.append(f"target price capped just above the nearest support at {nearest:.2f}")
+
+    return stop_loss, target_price, notes
+
+
 def _compute_price_targets(
-    final_score: float, price: Optional[float], atr_value: Optional[float], tuning: AIDecisionTuning
+    final_score: float,
+    price: Optional[float],
+    atr_value: Optional[float],
+    tuning: AIDecisionTuning,
+    support_resistance: Optional[SupportResistanceLevels] = None,
 ):
     if price is None or price <= 0:
-        return None, None, None
+        return None, None, None, []
 
     atr_pct = (atr_value / price) if (atr_value is not None and atr_value > 0) else _DEFAULT_ATR_PCT_FALLBACK
     direction = 1 if final_score >= 50 else -1
@@ -142,10 +213,14 @@ def _compute_price_targets(
         stop_loss = price + stop_distance
         target_price = price - reward_distance
 
+    stop_loss, target_price, notes = _refine_with_key_levels(
+        direction, price, stop_loss, target_price, support_resistance
+    )
+
     stop_loss = max(_MIN_PRICE, stop_loss)
     target_price = max(_MIN_PRICE, target_price)
     expected_return_pct = (target_price - price) / price * 100.0
-    return target_price, stop_loss, expected_return_pct
+    return target_price, stop_loss, expected_return_pct, notes
 
 
 def _derive_risk_level(contributions: List[ScoreContribution], tuning: AIDecisionTuning) -> RiskLevel:
@@ -263,8 +338,11 @@ class AIDecisionEngine:
         atr_value = (
             context.technical_result.indicators["atr_14"].latest() if context.technical_result is not None else None
         )
-        target_price, stop_loss, expected_return_pct = _compute_price_targets(
-            result.final_score, price, atr_value, self._tuning
+        support_resistance = (
+            context.technical_result.support_resistance if context.technical_result is not None else None
+        )
+        target_price, stop_loss, expected_return_pct, level_notes = _compute_price_targets(
+            result.final_score, price, atr_value, self._tuning, support_resistance
         )
 
         risk_level = _derive_risk_level(result.contributions, self._tuning)
@@ -274,6 +352,7 @@ class AIDecisionEngine:
             context.symbol, result.recommendation, result.final_score, result.confidence,
             result.contributions, risk_level, position_size,
         )
+        reasons.extend(level_notes)
         breakdown = [_to_breakdown(c) for c in result.contributions]
 
         return InvestmentDecision(
