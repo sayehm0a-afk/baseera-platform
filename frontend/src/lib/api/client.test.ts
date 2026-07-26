@@ -50,4 +50,70 @@ describe("apiFetch", () => {
       expect(error).toBeInstanceOf(ApiError);
     }
   });
+
+  it("sends credentials and the CSRF header read from the csrf_token cookie", async () => {
+    document.cookie = "csrf_token=the-real-token";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await apiFetch("/api/v1/whatever");
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.credentials).toBe("include");
+    expect(init.headers["X-CSRF-Token"]).toBe("the-real-token");
+
+    document.cookie = "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  });
+
+  it("silently refreshes once and retries after a 401 on a non-bootstrap path", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("unauthenticated", { status: 401 })) // original request
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 })) // /auth/refresh
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), { status: 200 })
+      ); // retried original request
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await apiFetch<{ ok: boolean }>("/api/v1/portfolios");
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1][0]).toContain("/api/v1/auth/refresh");
+  });
+
+  it("does not attempt a refresh-and-retry for a 401 on /api/v1/auth/login", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { code: "invalid_credentials", message: "no" } }),
+        { status: 401 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      apiFetch("/api/v1/auth/login", { method: "POST" })
+    ).rejects.toMatchObject({ code: "invalid_credentials" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up and surfaces the original error when the refresh attempt itself fails", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ error: { code: "unauthenticated", message: "no" } }),
+          { status: 401 }
+        )
+      ) // original request
+      .mockResolvedValueOnce(new Response("still unauthenticated", { status: 401 })); // /auth/refresh fails too
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(apiFetch("/api/v1/portfolios")).rejects.toMatchObject({
+      code: "unauthenticated",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

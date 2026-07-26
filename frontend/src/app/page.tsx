@@ -3,18 +3,21 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AiStar } from "@/components/ai/AiStar";
-import { getSession } from "@/lib/auth/temp-auth-service";
+import { fetchSession } from "@/lib/auth/auth-service";
 
 const SPLASH_DURATION_MS = 900;
 
 /** Splash screen -- shows the mark, then routes to the dashboard for
- * an already-signed-in dev session or to /login otherwise. */
+ * an already-signed-in session (a real GET /auth/me, resolved against
+ * the httpOnly cookies the browser already sent) or to /login otherwise. */
 export default function SplashPage() {
   const router = useRouter();
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      router.replace(getSession() ? "/dashboard" : "/login");
+      fetchSession().then((user) => {
+        router.replace(user ? "/dashboard" : "/login");
+      });
     }, SPLASH_DURATION_MS);
     return () => clearTimeout(timer);
   }, [router]);

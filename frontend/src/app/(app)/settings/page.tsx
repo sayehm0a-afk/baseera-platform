@@ -1,14 +1,15 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { AiStar } from "@/components/ai/AiStar";
 import {
   getSessionServerSnapshot,
   getSessionSnapshot,
   logout,
+  logoutAll,
   subscribeToSession,
-} from "@/lib/auth/temp-auth-service";
+} from "@/lib/auth/auth-service";
 
 function SettingsSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -35,9 +36,17 @@ export default function SettingsPage() {
     getSessionSnapshot,
     getSessionServerSnapshot
   );
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
-  function handleLogout() {
-    logout();
+  async function handleLogout() {
+    setIsSigningOut(true);
+    await logout();
+    router.replace("/login");
+  }
+
+  async function handleLogoutAll() {
+    setIsSigningOut(true);
+    await logoutAll();
     router.replace("/login");
   }
 
@@ -51,18 +60,29 @@ export default function SettingsPage() {
       <SettingsSection title="الحساب">
         <Row label="البريد الإلكتروني" value={session?.email ?? "—"} />
         <Row
-          label="تاريخ تسجيل الدخول"
+          label="تاريخ آخر تسجيل دخول"
           value={
-            session ? new Date(session.signedInAt).toLocaleString("ar-SA") : "—"
+            session?.last_login_at
+              ? new Date(session.last_login_at).toLocaleString("ar-SA")
+              : "—"
           }
         />
-        <div className="pt-bsr-4">
+        <div className="flex gap-bsr-3 pt-bsr-4">
           <button
             type="button"
+            disabled={isSigningOut}
             onClick={handleLogout}
-            className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm text-bsr-action-sell hover:bg-bsr-surface-overlay"
+            className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm text-bsr-action-sell hover:bg-bsr-surface-overlay disabled:opacity-50"
           >
             تسجيل الخروج
+          </button>
+          <button
+            type="button"
+            disabled={isSigningOut}
+            onClick={handleLogoutAll}
+            className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm text-bsr-text-secondary hover:bg-bsr-surface-overlay disabled:opacity-50"
+          >
+            تسجيل الخروج من جميع الأجهزة
           </button>
         </div>
       </SettingsSection>

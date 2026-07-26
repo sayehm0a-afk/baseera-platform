@@ -1,24 +1,45 @@
 "use client";
 
+import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { AiStar } from "@/components/ai/AiStar";
-import { login } from "@/lib/auth/temp-auth-service";
+import { ApiError } from "@/lib/api/client";
+import { login } from "@/lib/auth/auth-service";
+
+const ERROR_MESSAGES: Record<string, string> = {
+  invalid_credentials: "البريد الإلكتروني أو كلمة المرور غير صحيحة.",
+  email_not_verified: "يرجى تأكيد بريدك الإلكتروني قبل تسجيل الدخول.",
+  account_suspended: "تم تعليق هذا الحساب. يرجى التواصل مع الدعم.",
+};
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!email.trim() || !password.trim()) {
       setError("يرجى إدخال البريد الإلكتروني وكلمة المرور.");
       return;
     }
-    login(email.trim());
-    router.replace("/dashboard");
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      await login(email.trim(), password);
+      router.replace("/dashboard");
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : null;
+      setError(
+        (code && ERROR_MESSAGES[code]) ??
+          "تعذّر تسجيل الدخول. يرجى المحاولة مرة أخرى."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -65,10 +86,26 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            className="mt-bsr-2 rounded-bsr-md bg-bsr-gold-500 px-bsr-4 py-bsr-2 font-semibold text-bsr-navy-950 transition-colors hover:bg-bsr-gold-400"
+            disabled={isSubmitting}
+            className="mt-bsr-2 rounded-bsr-md bg-bsr-gold-500 px-bsr-4 py-bsr-2 font-semibold text-bsr-navy-950 transition-colors hover:bg-bsr-gold-400 disabled:opacity-50"
           >
-            تسجيل الدخول
+            {isSubmitting ? "جارٍ تسجيل الدخول..." : "تسجيل الدخول"}
           </button>
+
+          <div className="flex items-center justify-between text-sm">
+            <Link
+              href="/forgot-password"
+              className="text-bsr-text-secondary hover:text-bsr-gold-500"
+            >
+              نسيت كلمة المرور؟
+            </Link>
+            <Link
+              href="/register"
+              className="text-bsr-gold-500 hover:text-bsr-gold-400"
+            >
+              إنشاء حساب جديد
+            </Link>
+          </div>
         </form>
       </div>
     </div>
