@@ -12,8 +12,9 @@ only establishes the cookie so that middleware has something to check
 against from day one.
 
 Rate limiting (slowapi, Redis-backed -- see
-src/api/middleware/rate_limiting.py) is applied to the three
-brute-force/enumeration surfaces: login, register, forgot-password.
+src/api/middleware/rate_limiting.py) is applied to every brute-force/
+enumeration/abuse surface: register, verify-email, login, refresh,
+forgot-password, reset-password.
 """
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -117,7 +118,8 @@ def register(request: Request, body: RegisterRequest, session: Session = Depends
 
 
 @router.post("/verify-email", response_model=UserOut)
-def verify_email(body: VerifyEmailRequest, session: Session = Depends(get_db)) -> UserOut:
+@limiter.limit("10/minute")
+def verify_email(request: Request, body: VerifyEmailRequest, session: Session = Depends(get_db)) -> UserOut:
     user = email_verification_service.verify_email(session, body.token)
     return UserOut.model_validate(user)
 
@@ -138,6 +140,7 @@ def login(
 
 
 @router.post("/refresh", response_model=MessageOut)
+@limiter.limit("30/minute")
 def refresh(request: Request, response: Response, session: Session = Depends(get_db)) -> MessageOut:
     raw_refresh_token = request.cookies.get(_REFRESH_COOKIE)
     if not raw_refresh_token:
@@ -184,7 +187,8 @@ def forgot_password(request: Request, body: ForgotPasswordRequest, session: Sess
 
 
 @router.post("/reset-password", response_model=MessageOut)
-def reset_password(body: ResetPasswordRequest, session: Session = Depends(get_db)) -> MessageOut:
+@limiter.limit("5/minute")
+def reset_password(request: Request, body: ResetPasswordRequest, session: Session = Depends(get_db)) -> MessageOut:
     password_reset_service.reset_password(session, body.token, body.new_password)
     return MessageOut(message="Password has been reset. Please sign in again.")
 
@@ -210,6 +214,7 @@ def list_sessions(
             device_label=s.device_label,
             ip_address=s.ip_address,
             issued_at=s.issued_at,
+            last_used_at=s.last_used_at,
             expires_at=s.expires_at,
             is_current=(s.refresh_token_jti == current_jti),
         )

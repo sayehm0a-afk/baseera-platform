@@ -60,6 +60,7 @@ class AdminSessionOut(BaseModel):
     device_label: Optional[str] = None
     ip_address: Optional[str] = None
     issued_at: datetime
+    last_used_at: datetime
     expires_at: datetime
 
 

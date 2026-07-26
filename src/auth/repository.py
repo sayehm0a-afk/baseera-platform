@@ -6,7 +6,7 @@ orchestrate, a thin repository persists" separation
 establishes.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -48,7 +48,25 @@ class AuthRepository:
         session.commit()
 
     def record_login(self, session: Session, user_id: int) -> None:
-        session.query(User).filter_by(id=user_id).update({"last_login_at": datetime.now(timezone.utc)})
+        session.query(User).filter_by(id=user_id).update(
+            {"last_login_at": datetime.now(timezone.utc), "failed_login_attempts": 0, "locked_until": None}
+        )
+        session.commit()
+
+    def record_failed_login(self, session: Session, user_id: int, lockout_threshold: int, lockout_duration_minutes: int) -> None:
+        """Increments the failure counter; once it reaches
+        `lockout_threshold`, sets `locked_until` and resets the counter
+        so a subsequent lockout requires the same number of fresh
+        failures again, rather than an ever-growing count."""
+        user = session.query(User).filter_by(id=user_id).one_or_none()
+        if user is None:
+            return
+        attempts = user.failed_login_attempts + 1
+        values = {"failed_login_attempts": attempts}
+        if attempts >= lockout_threshold:
+            values["failed_login_attempts"] = 0
+            values["locked_until"] = datetime.now(timezone.utc) + timedelta(minutes=lockout_duration_minutes)
+        session.query(User).filter_by(id=user_id).update(values)
         session.commit()
 
     def invalidate_all_access_tokens(self, session: Session, user_id: int) -> None:

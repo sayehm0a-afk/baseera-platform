@@ -17,6 +17,22 @@ class InvalidCredentialsError(APIError):
     code = "invalid_credentials"
 
 
+class AccountLockedError(APIError):
+    """Too many recent failed login attempts on this specific account
+    (src/auth/user_service.py's failed_login_attempts/locked_until) --
+    distinct from the per-IP rate limit on /auth/login
+    (src/api/middleware/rate_limiting.py), which an attacker rotating
+    IPs bypasses but this does not. Deliberately still fairly generic
+    wording (never states *which* account or *how many* attempts) to
+    keep the enumeration surface as small as this mechanism allows --
+    see docs/AUTHENTICATION_SECURITY.md for the disclosed trade-off
+    this still accepts (a locked-account response is itself
+    distinguishable from a plain wrong-password response)."""
+
+    status_code = 429
+    code = "account_locked"
+
+
 class EmailNotVerifiedError(APIError):
     status_code = 403
     code = "email_not_verified"

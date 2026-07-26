@@ -117,6 +117,29 @@ def test_login_with_wrong_password_returns_401(client: TestClient, db_session):
     assert response.json()["error"]["code"] == "invalid_credentials"
 
 
+def test_repeated_wrong_passwords_lock_the_account_via_the_login_route(client: TestClient, db_session, monkeypatch):
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "login_lockout_max_attempts", 3)
+    _register_verify_and_login(client, "route-lockout@example.com")
+
+    for _ in range(3):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "route-lockout@example.com", "password": "totally-wrong"},
+            headers=_csrf_headers(client),
+        )
+        assert response.status_code == 401
+
+    locked_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "route-lockout@example.com", "password": "s3cret-password"},
+        headers=_csrf_headers(client),
+    )
+    assert locked_response.status_code == 429
+    assert locked_response.json()["error"]["code"] == "account_locked"
+
+
 def test_me_requires_authentication(client: TestClient, db_session):
     response = client.get("/api/v1/auth/me")
     assert response.status_code == 401
@@ -163,6 +186,7 @@ def test_sessions_lists_current_device_as_current(client: TestClient, db_session
     sessions = response.json()
     assert len(sessions) == 1
     assert sessions[0]["is_current"] is True
+    assert sessions[0]["last_used_at"] is not None
 
 
 def test_revoke_own_current_session_logs_it_out_immediately(client: TestClient, db_session):

@@ -47,6 +47,13 @@ class User(Base):
 
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Account-level lockout (distinct from src/api/middleware/rate_limiting.py's
+    # per-IP rate limit on /auth/login -- an attacker rotating IPs bypasses
+    # that but not this). Reset to 0/None on a successful login; see
+    # src/auth/user_service.py's `authenticate()` for the exact policy.
+    failed_login_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+
     # Set (to "now") whenever every session is force-revoked (password
     # reset, "sign out everywhere") -- an access-token JWT is stateless
     # and NOT looked up in Redis/Postgres on the ordinary request path

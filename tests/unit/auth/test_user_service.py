@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.auth import user_service
 from src.auth.exceptions import (
+    AccountLockedError,
     AccountSuspendedError,
     EmailAlreadyRegisteredError,
     EmailNotVerifiedError,
@@ -119,3 +120,92 @@ def test_authenticate_increments_the_login_failure_counter(session):
     with pytest.raises(InvalidCredentialsError):
         user_service.authenticate(session, "nobody-metrics@example.com", "whatever")
     assert metrics.logins_total.labels(status="failure")._value.get() == before + 1
+
+
+# --- Account lockout (Phase 13, P13.3) --------------------------------------
+
+
+def _verified_user(session, email, password="correct-password"):
+    repo = AuthRepository()
+    user_service.register(session, email, password)
+    user = repo.get_user_by_email(session, email)
+    repo.set_email_verified(session, user.id)
+    return user
+
+
+def test_repeated_wrong_passwords_lock_the_account(session, monkeypatch):
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "login_lockout_max_attempts", 3)
+    _verified_user(session, "lockout@example.com")
+
+    for _ in range(3):
+        with pytest.raises(InvalidCredentialsError):
+            user_service.authenticate(session, "lockout@example.com", "wrong-password")
+
+    # The 4th attempt -- even with the *correct* password -- is rejected
+    # because the account is now locked, not because of the password.
+    with pytest.raises(AccountLockedError):
+        user_service.authenticate(session, "lockout@example.com", "correct-password")
+
+
+def test_lockout_clears_after_a_successful_login_resets_the_counter(session, monkeypatch):
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "login_lockout_max_attempts", 3)
+    _verified_user(session, "reset-lockout@example.com")
+
+    for _ in range(2):  # one below the threshold
+        with pytest.raises(InvalidCredentialsError):
+            user_service.authenticate(session, "reset-lockout@example.com", "wrong-password")
+
+    user_service.authenticate(session, "reset-lockout@example.com", "correct-password")
+
+    repo = AuthRepository()
+    user = repo.get_user_by_email(session, "reset-lockout@example.com")
+    assert user.failed_login_attempts == 0
+    assert user.locked_until is None
+
+
+def test_locked_account_stays_locked_until_the_lockout_window_passes(session, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "login_lockout_max_attempts", 1)
+    user = _verified_user(session, "expired-lockout@example.com")
+
+    with pytest.raises(InvalidCredentialsError):
+        user_service.authenticate(session, "expired-lockout@example.com", "wrong-password")
+
+    repo = AuthRepository()
+    assert repo.get_user_by_email(session, "expired-lockout@example.com").locked_until is not None
+
+    # Simulate the lockout window having already elapsed.
+    session.query(type(user)).filter_by(id=user.id).update(
+        {"locked_until": datetime.now(timezone.utc) - timedelta(minutes=1)}
+    )
+    session.commit()
+
+    authenticated = user_service.authenticate(session, "expired-lockout@example.com", "correct-password")
+    assert authenticated.email == "expired-lockout@example.com"
+
+
+def test_authenticate_takes_a_real_password_verification_pass_for_an_unknown_email(session, monkeypatch):
+    """Regression guard for the user-enumeration timing fix: `verify_password`
+    must be called even when no user was found, not short-circuited away --
+    otherwise an unknown email responds measurably faster than a known one
+    with a wrong password, which is itself an enumeration oracle."""
+    calls = []
+    real_verify = user_service.verify_password
+
+    def _spy(password, password_hash):
+        calls.append(password_hash)
+        return real_verify(password, password_hash)
+
+    monkeypatch.setattr(user_service, "verify_password", _spy)
+
+    with pytest.raises(InvalidCredentialsError):
+        user_service.authenticate(session, "definitely-nobody@example.com", "whatever")
+
+    assert calls == [user_service._DUMMY_PASSWORD_HASH]

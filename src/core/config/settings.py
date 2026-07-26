@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     )
     password_reset_token_expire_hours: int = Field(default=1, alias="PASSWORD_RESET_TOKEN_EXPIRE_HOURS")
 
+    # --- Account lockout (src/auth/user_service.py) -----------------------
+    # Per-account failed-login lockout, distinct from the per-IP rate
+    # limit on /auth/login (src/api/middleware/rate_limiting.py).
+    login_lockout_max_attempts: int = Field(default=5, alias="LOGIN_LOCKOUT_MAX_ATTEMPTS")
+    login_lockout_duration_minutes: int = Field(default=15, alias="LOGIN_LOCKOUT_DURATION_MINUTES")
+
     # --- Subscriptions ----------------------------------------------------
     trial_length_days: int = Field(default=14, alias="TRIAL_LENGTH_DAYS")
 

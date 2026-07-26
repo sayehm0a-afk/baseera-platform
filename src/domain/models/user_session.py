@@ -44,6 +44,21 @@ class UserSession(Base):
     )
     expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+    # Defaults to creation time, exactly like `issued_at`. Refresh-token
+    # rotation (src/auth/session_service.py's `refresh_session()`)
+    # revokes this row and creates a brand-new one on every use, so a
+    # session's *current* (non-revoked) row's `last_used_at` == its own
+    # `issued_at` == the real time this rotation chain was last used --
+    # no separate "touch on use" write is needed, and no DB write
+    # happens on the common (non-refresh) API request path (see
+    # src/auth/jwt_service.py's docstring for why access tokens are
+    # never checked against a store on that path).
+    last_used_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
 
     created_at = Column(
         DateTime(timezone=True),
