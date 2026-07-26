@@ -12,6 +12,7 @@ from typing import List, Optional
 from src.analysis.analyst.types import Evidence
 from src.analysis.decision.types import (
     DecisionFactorBreakdown,
+    EntryQuality,
     InvestmentDecision,
     PositionSize,
     RiskLevel,
@@ -52,6 +53,12 @@ def make_decision(
     reasons: Optional[List[str]] = None,
     breakdown: Optional[List[DecisionFactorBreakdown]] = None,
     signals: Optional[List[Signal]] = None,
+    entry_quality: EntryQuality = EntryQuality.FAIR,
+    entry_quality_notes: Optional[List[str]] = None,
+    risk_reward_ratio: Optional[float] = None,
+    stop_loss_basis: str = "atr",
+    target_price_basis: str = "atr",
+    confidence_calibration_notes: Optional[List[str]] = None,
 ) -> InvestmentDecision:
     return InvestmentDecision(
         symbol=symbol,
@@ -68,6 +75,12 @@ def make_decision(
         breakdown=breakdown if breakdown is not None else [make_breakdown()],
         signals=signals if signals is not None else [make_signal()],
         generated_at=datetime.now(timezone.utc),
+        entry_quality=entry_quality,
+        entry_quality_notes=entry_quality_notes or [],
+        risk_reward_ratio=risk_reward_ratio,
+        stop_loss_basis=stop_loss_basis,
+        target_price_basis=target_price_basis,
+        confidence_calibration_notes=confidence_calibration_notes or [],
     )
 
 

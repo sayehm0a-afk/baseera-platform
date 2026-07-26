@@ -24,6 +24,7 @@ computed.
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from src.analysis.decision.contributors._series_utils import latest_value
 from src.analysis.decision.contributors.external_factor_contributors import (
     InsiderTransactionScoreContributor,
     MacroEconomicScoreContributor,
@@ -38,6 +39,7 @@ from src.analysis.decision.contributors.volume_contributor import VolumeScoreCon
 from src.analysis.decision.types import (
     AIDecisionTuning,
     DecisionFactorBreakdown,
+    EntryQuality,
     InvestmentDecision,
     PositionSize,
     RiskLevel,
@@ -47,7 +49,8 @@ from src.analysis.recommendation.fundamental_contributor import FundamentalScore
 from src.analysis.recommendation.recommendation_engine import RecommendationEngine
 from src.analysis.recommendation.technical_contributor import TechnicalScoreContributor
 from src.analysis.recommendation.types import AnalysisContext, Recommendation, ScoreContribution
-from src.analysis.types import SupportResistanceLevels
+from src.analysis.technical_analysis_engine import TechnicalAnalysisResult
+from src.analysis.types import FibonacciLevels, SupportResistanceLevels, VolumeProfileResult
 
 _DEFAULT_ATR_PCT_FALLBACK = 0.02  # used only when ATR itself is unavailable but a price is
 _MIN_PRICE = 0.01
@@ -152,40 +155,47 @@ def _refine_with_key_levels(
     respected before is more defensible than an arbitrary ATR
     multiple, and a target capped just short of a level the price has
     struggled to clear before is more realistic than projecting
-    straight through it. Returns (stop_loss, target_price, notes) --
-    `notes` is empty when no level fell inside the range (the pure
-    ATR-based values are returned unchanged).
+    straight through it. Returns (stop_loss, target_price, notes,
+    stop_basis, target_basis) -- `notes` is empty and both bases are
+    `"atr"` when no level fell inside the range (the pure ATR-based
+    values are returned unchanged).
     """
     notes: List[str] = []
+    stop_basis = "atr"
+    target_basis = "atr"
     if support_resistance is None:
-        return stop_loss, target_price, notes
+        return stop_loss, target_price, notes, stop_basis, target_basis
 
     if direction > 0:
         candidate_supports = [s for s in support_resistance.support if stop_loss < s < price]
         if candidate_supports:
             nearest = max(candidate_supports)
             stop_loss = nearest * (1 - _LEVEL_BUFFER_PCT)
+            stop_basis = "support_level"
             notes.append(f"stop loss tightened to just below the nearest support at {nearest:.2f}")
 
         candidate_resistances = [r for r in support_resistance.resistance if price < r < target_price]
         if candidate_resistances:
             nearest = min(candidate_resistances)
             target_price = nearest * (1 - _LEVEL_BUFFER_PCT)
+            target_basis = "resistance_level"
             notes.append(f"target price capped just below the nearest resistance at {nearest:.2f}")
     elif direction < 0:
         candidate_resistances = [r for r in support_resistance.resistance if price < r < stop_loss]
         if candidate_resistances:
             nearest = min(candidate_resistances)
             stop_loss = nearest * (1 + _LEVEL_BUFFER_PCT)
+            stop_basis = "resistance_level"
             notes.append(f"stop loss tightened to just above the nearest resistance at {nearest:.2f}")
 
         candidate_supports = [s for s in support_resistance.support if target_price < s < price]
         if candidate_supports:
             nearest = max(candidate_supports)
             target_price = nearest * (1 + _LEVEL_BUFFER_PCT)
+            target_basis = "support_level"
             notes.append(f"target price capped just above the nearest support at {nearest:.2f}")
 
-    return stop_loss, target_price, notes
+    return stop_loss, target_price, notes, stop_basis, target_basis
 
 
 def _compute_price_targets(
@@ -196,7 +206,7 @@ def _compute_price_targets(
     support_resistance: Optional[SupportResistanceLevels] = None,
 ):
     if price is None or price <= 0:
-        return None, None, None, []
+        return None, None, None, [], "atr", "atr"
 
     atr_pct = (atr_value / price) if (atr_value is not None and atr_value > 0) else _DEFAULT_ATR_PCT_FALLBACK
     direction = 1 if final_score >= 50 else -1
@@ -213,14 +223,14 @@ def _compute_price_targets(
         stop_loss = price + stop_distance
         target_price = price - reward_distance
 
-    stop_loss, target_price, notes = _refine_with_key_levels(
+    stop_loss, target_price, notes, stop_basis, target_basis = _refine_with_key_levels(
         direction, price, stop_loss, target_price, support_resistance
     )
 
     stop_loss = max(_MIN_PRICE, stop_loss)
     target_price = max(_MIN_PRICE, target_price)
     expected_return_pct = (target_price - price) / price * 100.0
-    return target_price, stop_loss, expected_return_pct, notes
+    return target_price, stop_loss, expected_return_pct, notes, stop_basis, target_basis
 
 
 def _derive_risk_level(contributions: List[ScoreContribution], tuning: AIDecisionTuning) -> RiskLevel:
@@ -238,9 +248,53 @@ def _derive_risk_level(contributions: List[ScoreContribution], tuning: AIDecisio
     return RiskLevel.VERY_HIGH
 
 
-def _derive_time_horizon(final_score: float, technical_result, tuning: AIDecisionTuning) -> TimeHorizon:
+def _nearest_key_level_proximity(
+    price: Optional[float],
+    support_resistance: Optional[SupportResistanceLevels],
+    fibonacci: Optional[FibonacciLevels],
+) -> Optional[float]:
+    """The smallest fractional distance from `price` to any detected
+    support/resistance or Fibonacci level -- shared by
+    `_derive_time_horizon` (a decision point right at hand argues for a
+    short-term view over a multi-month hold) and `_derive_entry_quality`
+    (the same proximity math PriceStructureScoreContributor already
+    uses, reapplied here for a decision-layer fact rather than a score).
+    """
+    if price is None or price <= 0:
+        return None
+
+    levels: List[float] = []
+    if support_resistance is not None:
+        levels.extend(support_resistance.support)
+        levels.extend(support_resistance.resistance)
+    if fibonacci is not None:
+        levels.extend(fibonacci.levels.values())
+    if not levels:
+        return None
+
+    return min(abs(price - level) / price for level in levels)
+
+
+def _derive_time_horizon(
+    final_score: float,
+    technical_result: Optional[TechnicalAnalysisResult],
+    price: Optional[float],
+    tuning: AIDecisionTuning,
+) -> TimeHorizon:
     conviction = abs(final_score - 50.0)
     adx = technical_result.indicators["adx_14"].latest() if technical_result is not None else None
+
+    support_resistance = technical_result.support_resistance if technical_result is not None else None
+    fibonacci = technical_result.fibonacci_retracement if technical_result is not None else None
+    proximity = _nearest_key_level_proximity(price, support_resistance, fibonacci)
+    if proximity is not None and proximity <= tuning.key_level_proximity_threshold:
+        # A real support/resistance/Fibonacci level sits right at the
+        # current price -- the immediate move is likely to resolve at
+        # that level one way or the other before a multi-month thesis
+        # would have time to play out, so this caps the horizon at
+        # SHORT_TERM regardless of how strong the underlying conviction
+        # or trend strength otherwise looks.
+        return TimeHorizon.SHORT_TERM
 
     if conviction >= tuning.time_horizon_long_conviction_threshold and adx is not None and adx >= tuning.time_horizon_long_adx_threshold:
         return TimeHorizon.LONG_TERM
@@ -249,7 +303,178 @@ def _derive_time_horizon(final_score: float, technical_result, tuning: AIDecisio
     return TimeHorizon.SHORT_TERM
 
 
-def _derive_position_size(recommendation: Recommendation, confidence: float, risk_level: RiskLevel) -> PositionSize:
+def _derive_entry_quality(
+    direction: int,
+    price: Optional[float],
+    support_resistance: Optional[SupportResistanceLevels],
+    fibonacci: Optional[FibonacciLevels],
+    vwap_value: Optional[float],
+    volume_profile: Optional[VolumeProfileResult],
+    tuning: AIDecisionTuning,
+) -> tuple:
+    """How favorable *this specific price* is as an entry for the
+    recommended direction -- reuses the same support/resistance/
+    Fibonacci/VWAP/Volume-Profile facts PriceStructureScoreContributor
+    and ValueAreaScoreContributor already score, applied here to a
+    single decision-layer question (buy the dip vs. chase the rally)
+    rather than to the blended score. Returns (EntryQuality, notes);
+    notes is empty (and quality FAIR) when `price` or a recommendation
+    direction is unavailable -- "not assessed," not a guess.
+    """
+    if price is None or price <= 0 or direction == 0:
+        return EntryQuality.FAIR, []
+
+    points = 0.0
+    notes: List[str] = []
+
+    if support_resistance is not None:
+        if direction > 0:
+            above = [r for r in support_resistance.resistance if r > price]
+            if above:
+                proximity = (min(above) - price) / price
+                if proximity <= tuning.key_level_proximity_threshold:
+                    points -= 15.0
+                    notes.append(
+                        f"buying just under resistance at {min(above):.2f} -- little room before "
+                        "a likely rejection, a poor entry."
+                    )
+            below = [s for s in support_resistance.support if s < price]
+            if below:
+                proximity = (price - max(below)) / price
+                if proximity <= tuning.key_level_proximity_threshold:
+                    points += 15.0
+                    notes.append(f"buying just above support at {max(below):.2f} -- a favorable, defensible entry.")
+        else:
+            below = [s for s in support_resistance.support if s < price]
+            if below:
+                proximity = (price - max(below)) / price
+                if proximity <= tuning.key_level_proximity_threshold:
+                    points -= 15.0
+                    notes.append(
+                        f"selling just above support at {max(below):.2f} -- little room before a "
+                        "likely bounce, a poor entry."
+                    )
+            above = [r for r in support_resistance.resistance if r > price]
+            if above:
+                proximity = (min(above) - price) / price
+                if proximity <= tuning.key_level_proximity_threshold:
+                    points += 15.0
+                    notes.append(f"selling just under resistance at {min(above):.2f} -- a favorable, defensible entry.")
+
+    if fibonacci is not None and fibonacci.levels:
+        nearest_name, nearest_price = min(fibonacci.levels.items(), key=lambda kv: abs(kv[1] - price))
+        proximity = abs(price - nearest_price) / price
+        if proximity <= tuning.key_level_proximity_threshold:
+            favorable = (direction > 0 and fibonacci.is_uptrend) or (direction < 0 and not fibonacci.is_uptrend)
+            if favorable:
+                points += 10.0
+                notes.append(f"entering near the {nearest_name}% Fibonacci retracement level -- good timing.")
+            else:
+                points -= 10.0
+                notes.append(f"entering against the {nearest_name}% Fibonacci retracement level -- weaker timing.")
+
+    if vwap_value is not None and vwap_value > 0:
+        deviation = (price - vwap_value) / vwap_value
+        extended = (direction > 0 and deviation >= 0.02) or (direction < 0 and deviation <= -0.02)
+        if extended:
+            points -= 10.0
+            side = "above" if direction > 0 else "below"
+            notes.append(f"price is already extended {side} its VWAP -- risk of chasing the move.")
+        elif abs(deviation) < 0.01:
+            points += 5.0
+            notes.append("price sits close to VWAP -- a fair-value entry, not a chase.")
+
+    if volume_profile is not None and volume_profile.point_of_control > 0:
+        poc_deviation = (price - volume_profile.point_of_control) / volume_profile.point_of_control
+        if abs(poc_deviation) < 0.02:
+            points += 5.0
+            notes.append("price sits near the volume profile's point of control -- an accepted, liquid price.")
+
+    score = max(0.0, min(100.0, 50.0 + points))
+    if score >= tuning.entry_quality_excellent_threshold:
+        quality = EntryQuality.EXCELLENT
+    elif score >= tuning.entry_quality_good_threshold:
+        quality = EntryQuality.GOOD
+    elif score >= tuning.entry_quality_fair_threshold:
+        quality = EntryQuality.FAIR
+    else:
+        quality = EntryQuality.POOR
+
+    return quality, notes
+
+
+def _calibrate_confidence(
+    confidence: float,
+    direction: int,
+    price: Optional[float],
+    vwap_value: Optional[float],
+    volume_profile: Optional[VolumeProfileResult],
+    tuning: AIDecisionTuning,
+) -> tuple:
+    """A small adjustment layer on top of RecommendationEngine's own
+    blended confidence -- two facts that blend never isolates on their
+    own: whether price is trading on the "right side" of VWAP for the
+    recommended direction (an intraday positioning signal), and whether
+    price currently sits in a liquid (high relative volume) or thin
+    (low relative volume) zone of the Volume Profile, since a thin zone
+    means a real move can be sharper/less reliable than the blended
+    score alone would suggest. Returns (confidence, notes); notes is
+    empty when neither input was available.
+    """
+    if price is None or price <= 0 or direction == 0:
+        return confidence, []
+
+    notes: List[str] = []
+
+    if vwap_value is not None and vwap_value > 0:
+        aligned = (direction > 0 and price >= vwap_value) or (direction < 0 and price <= vwap_value)
+        if aligned:
+            confidence += tuning.vwap_confidence_adjustment
+            notes.append(
+                f"price is on the same side of VWAP ({vwap_value:.2f}) as the recommended direction -- "
+                "intraday confidence boosted."
+            )
+        else:
+            confidence -= tuning.vwap_confidence_adjustment
+            notes.append(
+                f"price is on the opposite side of VWAP ({vwap_value:.2f}) from the recommended direction -- "
+                "intraday confidence reduced."
+            )
+
+    if volume_profile is not None and volume_profile.bin_volumes and volume_profile.bin_edges:
+        edges = volume_profile.bin_edges
+        volumes = volume_profile.bin_volumes
+        bin_index = None
+        for i in range(len(volumes)):
+            if edges[i] <= price <= edges[i + 1]:
+                bin_index = i
+                break
+        if bin_index is not None:
+            average_volume = sum(volumes) / len(volumes)
+            if average_volume > 0:
+                ratio = volumes[bin_index] / average_volume
+                if ratio <= tuning.liquidity_thin_zone_ratio:
+                    confidence -= tuning.liquidity_confidence_adjustment
+                    notes.append(
+                        "price sits in a thin-volume zone of the volume profile -- liquidity confidence reduced."
+                    )
+                elif ratio >= tuning.liquidity_thick_zone_ratio:
+                    confidence += tuning.liquidity_confidence_adjustment
+                    notes.append(
+                        "price sits in a high-volume (liquid) zone of the volume profile -- liquidity confidence boosted."
+                    )
+
+    return max(0.0, min(100.0, confidence)), notes
+
+
+def _derive_position_size(
+    recommendation: Recommendation,
+    confidence: float,
+    risk_level: RiskLevel,
+    entry_quality: EntryQuality,
+    risk_reward_ratio: Optional[float],
+    tuning: AIDecisionTuning,
+) -> PositionSize:
     idx = _SIZE_ORDER.index(_BASE_POSITION_SIZE[recommendation])
     if confidence < 50.0:
         idx -= 1
@@ -257,7 +482,26 @@ def _derive_position_size(recommendation: Recommendation, confidence: float, ris
         idx -= 1
     if risk_level is RiskLevel.VERY_HIGH:
         idx -= 1
-    idx = max(0, idx)
+
+    # Phase 11: a poor entry (chasing) or a weak reward-for-the-risk-taken
+    # setup shrinks the size even when the score/risk-level alone looked
+    # fine; a genuinely excellent entry with a strong reward:risk ratio
+    # can offset one step of downgrade, but never overrides HOLD (idx=0
+    # stays floored below) or pushes past what the recommendation itself
+    # already earned.
+    if entry_quality is EntryQuality.POOR:
+        idx -= 1
+    if risk_reward_ratio is not None and risk_reward_ratio < tuning.poor_risk_reward_threshold:
+        idx -= 1
+    if (
+        recommendation is not Recommendation.HOLD
+        and entry_quality is EntryQuality.EXCELLENT
+        and risk_reward_ratio is not None
+        and risk_reward_ratio >= tuning.excellent_risk_reward_threshold
+    ):
+        idx += 1
+
+    idx = max(0, min(len(_SIZE_ORDER) - 1, idx))
     return _SIZE_ORDER[idx]
 
 
@@ -334,31 +578,55 @@ class AIDecisionEngine:
         user or record as AI usage."""
         result = self._recommendation_engine.generate(context, requesting_user_id=requesting_user_id)
 
+        technical_result = context.technical_result
         price = _price_reference(context)
-        atr_value = (
-            context.technical_result.indicators["atr_14"].latest() if context.technical_result is not None else None
-        )
-        support_resistance = (
-            context.technical_result.support_resistance if context.technical_result is not None else None
-        )
-        target_price, stop_loss, expected_return_pct, level_notes = _compute_price_targets(
-            result.final_score, price, atr_value, self._tuning, support_resistance
+        atr_value = technical_result.indicators["atr_14"].latest() if technical_result is not None else None
+        support_resistance = technical_result.support_resistance if technical_result is not None else None
+        fibonacci = technical_result.fibonacci_retracement if technical_result is not None else None
+        vwap_value = latest_value(technical_result.vwap_20) if technical_result is not None else None
+        volume_profile = technical_result.volume_profile if technical_result is not None else None
+
+        direction = 1 if result.final_score >= 50 else -1
+
+        target_price, stop_loss, expected_return_pct, level_notes, stop_loss_basis, target_price_basis = (
+            _compute_price_targets(result.final_score, price, atr_value, self._tuning, support_resistance)
         )
 
+        risk_reward_ratio = None
+        if target_price is not None and stop_loss is not None and price is not None:
+            risk_distance = abs(price - stop_loss)
+            if risk_distance > 0:
+                risk_reward_ratio = round(abs(target_price - price) / risk_distance, 2)
+
+        entry_quality, entry_quality_notes = _derive_entry_quality(
+            direction, price, support_resistance, fibonacci, vwap_value, volume_profile, self._tuning
+        )
+
+        confidence, confidence_calibration_notes = _calibrate_confidence(
+            result.confidence, direction, price, vwap_value, volume_profile, self._tuning
+        )
+        confidence = round(confidence, 1)
+
         risk_level = _derive_risk_level(result.contributions, self._tuning)
-        time_horizon = _derive_time_horizon(result.final_score, context.technical_result, self._tuning)
-        position_size = _derive_position_size(result.recommendation, result.confidence, risk_level)
+        time_horizon = _derive_time_horizon(result.final_score, technical_result, price, self._tuning)
+        position_size = _derive_position_size(
+            result.recommendation, confidence, risk_level, entry_quality, risk_reward_ratio, self._tuning
+        )
         reasons = _build_reasons(
-            context.symbol, result.recommendation, result.final_score, result.confidence,
+            context.symbol, result.recommendation, result.final_score, confidence,
             result.contributions, risk_level, position_size,
         )
         reasons.extend(level_notes)
+        reasons.extend(entry_quality_notes)
+        reasons.extend(confidence_calibration_notes)
+        if risk_reward_ratio is not None:
+            reasons.append(f"Risk/reward ratio: {risk_reward_ratio:.2f} (entry quality: {entry_quality.value.title()}).")
         breakdown = [_to_breakdown(c) for c in result.contributions]
 
         return InvestmentDecision(
             symbol=result.symbol,
             recommendation=result.recommendation,
-            confidence=result.confidence,
+            confidence=confidence,
             final_score=result.final_score,
             target_price=round(target_price, 2) if target_price is not None else None,
             stop_loss=round(stop_loss, 2) if stop_loss is not None else None,
@@ -370,4 +638,10 @@ class AIDecisionEngine:
             breakdown=breakdown,
             signals=result.signals,
             generated_at=datetime.now(timezone.utc),
+            entry_quality=entry_quality,
+            entry_quality_notes=entry_quality_notes,
+            risk_reward_ratio=risk_reward_ratio,
+            stop_loss_basis=stop_loss_basis,
+            target_price_basis=target_price_basis,
+            confidence_calibration_notes=confidence_calibration_notes,
         )

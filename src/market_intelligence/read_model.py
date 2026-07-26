@@ -18,6 +18,8 @@ call `GET /analyst-report/{symbol}` instead, which always re-runs
 `AnalystEngine` live rather than reading a persisted summary.
 """
 
+from typing import Optional
+
 from src.analysis.analyst.types import AnalystReport, Explanation
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.analysis.decision.types import (
@@ -66,6 +68,22 @@ def _fundamental_snapshot(record: SymbolIntelligenceRecord):
     return {"dividend_yield": float(record.dividend_yield)} if record.dividend_yield is not None else None
 
 
+def _risk_reward_ratio(record: SymbolIntelligenceRecord) -> Optional[float]:
+    """Honestly derivable from what IS persisted (target_price/
+    stop_loss/latest_price) -- real math on real stored numbers, unlike
+    entry_quality/stop_loss_basis/target_price_basis, which depended on
+    intermediate state (support/resistance/Fibonacci/VWAP proximity at
+    decision time) this record's schema never captured, so those stay
+    at InvestmentDecision's honest defaults for a reconstructed record."""
+    if record.target_price is None or record.stop_loss is None or record.latest_price is None:
+        return None
+    price = float(record.latest_price)
+    risk_distance = abs(price - float(record.stop_loss))
+    if risk_distance == 0:
+        return None
+    return round(abs(float(record.target_price) - price) / risk_distance, 2)
+
+
 def outcome_from_record(record: SymbolIntelligenceRecord) -> SymbolScanOutcome:
     decision = InvestmentDecision(
         symbol=record.symbol,
@@ -82,6 +100,7 @@ def outcome_from_record(record: SymbolIntelligenceRecord) -> SymbolScanOutcome:
         breakdown=_breakdown(record),
         signals=[],
         generated_at=record.evaluated_at,
+        risk_reward_ratio=_risk_reward_ratio(record),
     )
     explanation = Explanation(
         investment_summary="", technical_reasoning="", fundamental_reasoning="", risk_explanation="",

@@ -327,6 +327,12 @@ async def get_investment_decision(
             for s in decision.signals
         ],
         generated_at=decision.generated_at,
+        entry_quality=decision.entry_quality.value,
+        entry_quality_notes=decision.entry_quality_notes,
+        risk_reward_ratio=decision.risk_reward_ratio,
+        stop_loss_basis=decision.stop_loss_basis,
+        target_price_basis=decision.target_price_basis,
+        confidence_calibration_notes=decision.confidence_calibration_notes,
     )
 
 
@@ -396,4 +402,10 @@ async def get_analyst_report(
         final_recommendation_rationale=explanation.final_recommendation_rationale,
         generated_at=report.generated_at,
         engine_version=report.engine_version,
+        entry_quality=decision.entry_quality.value,
+        entry_quality_notes=decision.entry_quality_notes,
+        risk_reward_ratio=decision.risk_reward_ratio,
+        stop_loss_basis=decision.stop_loss_basis,
+        target_price_basis=decision.target_price_basis,
+        confidence_calibration_notes=decision.confidence_calibration_notes,
     )

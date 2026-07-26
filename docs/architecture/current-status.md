@@ -1016,10 +1016,107 @@ were computed but unused by any scoring path until this update. Now:
   silently.
 - Full pytest suite green (2089 passed, 3 skipped pre-existing/
   unrelated), flake8 clean.
-- **Not yet done**: Fibonacci/support-resistance/VWAP/Volume-Profile do
-  not yet influence `time_horizon` or `position_size` directly (both
-  still derive from `final_score`/`confidence`/`risk_level`, which the
-  new contributors do influence indirectly through the blend).
+- Superseded by the next entry: Fibonacci/support-resistance/VWAP/
+  Volume-Profile now influence `time_horizon`/`position_size`/entry
+  timing/stop/target/risk-reward/confidence directly, not only through
+  the blended score.
+
+### Extended (Phase 11) — price structure drives Entry Quality, Time
+### Horizon, Position Size, Stop/Target basis, Risk/Reward, Confidence
+
+The prior entry left one gap: Fibonacci/support-resistance/VWAP/Volume
+Profile only reached the final decision indirectly, through
+`PriceStructureScoreContributor`/`ValueAreaScoreContributor`'s blended
+score. This update makes them decision-layer facts in their own right,
+each one a real conditional on the underlying indicator values (no
+constant/random adjustment):
+
+- **`EntryQuality` (new enum: POOR/FAIR/GOOD/EXCELLENT)** —
+  `_derive_entry_quality()` answers "is *this* price a good entry for
+  the recommended direction right now," reusing the exact same support/
+  resistance/Fibonacci/VWAP/Volume-Profile facts the two Phase-11
+  contributors already score, applied to a distinct decision-layer
+  question a blended score can't answer (a STRONG_BUY can still be a
+  POOR entry if price already ran up to just under resistance). ±15 pts
+  for buying/selling right at a support/resistance level (direction-
+  aware), ±10 pts for Fibonacci proximity (favorable only when the
+  retracement direction agrees with the recommended direction), ±10/+5
+  pts for VWAP extension vs. fair-value positioning, +5 pts for Volume
+  Profile point-of-control proximity; thresholds map the resulting
+  score to the enum.
+- **`_derive_time_horizon()`** now caps the horizon at `SHORT_TERM`
+  whenever price sits within 1.5% of any detected support/resistance/
+  Fibonacci level, regardless of how strong the underlying conviction
+  or ADX trend reading otherwise looks — a decision point right at hand
+  is likely to resolve before a multi-month thesis could play out.
+- **`_calibrate_confidence()` (new)** — a small adjustment layer on top
+  of `RecommendationEngine`'s blended confidence: ±3 pts for whether
+  price is on the "right side" of VWAP for the recommended direction
+  (intraday positioning), ±3 pts for whether price sits in a thin
+  (illiquid) or thick (liquid) Volume Profile bin relative to the
+  average bin. Clamped to [0, 100].
+- **`_derive_position_size()`** gained two new inputs: a POOR
+  `entry_quality` or a weak risk/reward ratio (< 1.0) each shrink the
+  size by one step; an EXCELLENT entry quality combined with a strong
+  risk/reward ratio (>= 2.0) can grow it by one step — but never for a
+  HOLD (guarded explicitly: HOLD always stays at `PositionSize.NONE`
+  regardless of entry quality/reward ratio, since HOLD means "no new
+  position warranted").
+- **Stop/target basis is now typed and explained**: `_refine_with_key_levels()`/
+  `_compute_price_targets()` return `stop_loss_basis`/`target_price_basis`
+  (`"atr" | "support_level" | "resistance_level"`) alongside the
+  refined values, threaded onto `InvestmentDecision` and into the REST
+  response — "why is the stop/target here" is answerable both
+  structurally and in prose.
+- **`risk_reward_ratio` (new field)** — `abs(target - price) /
+  abs(price - stop)`, computed once the ATR/key-level refinement has
+  settled; feeds both position sizing and the explanation.
+- **Explainability**: `NarrativeBuilder.build_target_price_explanation`/
+  `build_stop_loss_explanation` now cite the real basis ("capped just
+  below a nearby resistance level..." vs. "...average true range"),
+  the entry quality rating and its notes, and the risk/reward ratio.
+  `build_time_horizon_explanation` cites the nearby key level when it
+  capped the horizon. `build_risk_explanation` cites how entry quality/
+  risk-reward affected sizing. All four read real `InvestmentDecision`
+  fields, never re-derive or duplicate the decision itself.
+- `InvestmentDecisionOut`/`AnalystReportOut` REST schemas and their
+  route constructions gained the six new fields (`entry_quality`,
+  `entry_quality_notes`, `risk_reward_ratio`, `stop_loss_basis`,
+  `target_price_basis`, `confidence_calibration_notes`).
+  `market_intelligence/read_model.py` reconstructs `risk_reward_ratio`
+  honestly from persisted target/stop/latest-price columns; the other
+  five fields stay at `InvestmentDecision`'s honest defaults for a
+  reconstructed record since the DB schema never captured the
+  intermediate support/resistance/Fibonacci/VWAP state needed to derive
+  them after the fact — not a fabrication, a disclosed gap.
+- All new fields are defaulted on `InvestmentDecision`/`AIDecisionTuning`
+  so the existing keyword-only construction sites (`read_model.py`,
+  3 test fixture files) needed no changes beyond the one honest
+  `risk_reward_ratio` addition.
+- Verified with a live end-to-end run against synthetic OHLCV through
+  the real `TechnicalAnalysisEngine` + `AIDecisionEngine`, not only unit
+  tests: e.g. `risk_reward_ratio: 0.47`, `stop_loss_basis: atr
+  target_price_basis: resistance_level`, reasons citing "entering
+  against the 23.6% Fibonacci retracement level -- weaker timing" and
+  "price sits in a high-volume (liquid) zone of the volume profile --
+  liquidity confidence boosted."
+- New tests: 39 new cases in `test_ai_decision_engine.py` covering every
+  branch of `_derive_entry_quality`/`_derive_time_horizon`'s key-level
+  override/`_calibrate_confidence`/`_derive_position_size`'s new
+  branches (including a dedicated regression test proving HOLD never
+  receives a position size regardless of entry quality/reward ratio),
+  plus end-to-end field population via `decide()`; 17 new cases in
+  `test_narrative_builder.py` covering every new explanation clause.
+  Full pytest suite green (2142 passed, 3 skipped pre-existing/
+  unrelated), flake8 clean.
+- **Remaining gaps**: `_derive_entry_quality`'s point weights (±15/±10/
+  ±5) and `_calibrate_confidence`'s ±3-point adjustments are documented
+  heuristics, not backtested/calibrated against historical outcomes —
+  the Backtesting & Calibration Engine could validate/tune them the same
+  way it already validates `AIDecisionTuning`'s ATR multiples, but that
+  calibration run has not been executed. Volume Profile's liquidity
+  read is still the same daily-bar approximation noted at its original
+  introduction (no true intrabar volume-at-price data).
 
 ## Completed: Backtesting & Calibration Engine
 

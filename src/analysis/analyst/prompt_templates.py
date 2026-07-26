@@ -45,12 +45,13 @@ _TEMPLATES = {
     ),
     "risk_explanation": (
         "Risk is assessed as {risk_level} and the position is sized as {position_size} for a new "
-        "entry. {factor_clause}"
+        "entry. {factor_clause}{sizing_clause}"
     ),
     "target_price_explanation": (
         "A target price of {target_price:.2f} implies an expected return of "
-        "{expected_return_pct:.2f}% from the reference price of {reference_price:.2f}, derived from "
-        "the decision's overall conviction and the symbol's recent average true range."
+        "{expected_return_pct:.2f}% from the reference price of {reference_price:.2f}, "
+        "{target_basis_clause} The entry itself is rated {entry_quality} as a price to act on right "
+        "now{entry_quality_clause} with a risk/reward ratio of {risk_reward_clause}."
     ),
     "target_price_unavailable": (
         "A target price could not be computed for {symbol} -- no live or recent price was "
@@ -58,8 +59,7 @@ _TEMPLATES = {
     ),
     "stop_loss_explanation": (
         "A stop loss of {stop_loss:.2f} caps downside risk relative to the reference price of "
-        "{reference_price:.2f}, sized from the symbol's recent average true range so it reflects "
-        "this symbol's own volatility rather than a fixed percentage."
+        "{reference_price:.2f}, {stop_basis_clause}"
     ),
     "stop_loss_unavailable": (
         "A stop loss could not be computed for {symbol} -- no live or recent price was available "
@@ -67,7 +67,7 @@ _TEMPLATES = {
     ),
     "time_horizon_explanation": (
         "This recommendation is framed as a {time_horizon} view, reflecting how strong the "
-        "overall conviction is{adx_clause}."
+        "overall conviction is{adx_clause}{key_level_clause}."
     ),
     "investment_summary": (
         "{symbol} is rated {recommendation} with {confidence:.1f}% confidence (final score "

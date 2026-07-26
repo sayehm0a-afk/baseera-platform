@@ -122,6 +122,15 @@ class InvestmentDecisionOut(BaseModel):
     signals: List[SignalOut]
     generated_at: datetime
 
+    # Phase 11: price-structure-driven fields (Fibonacci, support/
+    # resistance, VWAP, Volume Profile) -- see AIDecisionEngine.decide().
+    entry_quality: str = "FAIR"
+    entry_quality_notes: List[str] = []
+    risk_reward_ratio: Optional[float] = None
+    stop_loss_basis: str = "atr"
+    target_price_basis: str = "atr"
+    confidence_calibration_notes: List[str] = []
+
 
 class AnalystReportOut(BaseModel):
     """The Autonomous AI Analyst Framework's report for one symbol --
@@ -157,3 +166,11 @@ class AnalystReportOut(BaseModel):
 
     generated_at: datetime
     engine_version: str
+
+    # Phase 11: price-structure-driven fields, same as InvestmentDecisionOut.
+    entry_quality: str = "FAIR"
+    entry_quality_notes: List[str] = []
+    risk_reward_ratio: Optional[float] = None
+    stop_loss_basis: str = "atr"
+    target_price_basis: str = "atr"
+    confidence_calibration_notes: List[str] = []

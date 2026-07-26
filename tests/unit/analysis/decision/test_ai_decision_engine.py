@@ -11,8 +11,14 @@ covered by their own test files.
 import pandas as pd
 import pytest
 
-from src.analysis.decision.ai_decision_engine import AIDecisionEngine
-from src.analysis.decision.types import AIDecisionTuning, PositionSize, RiskLevel, TimeHorizon
+from src.analysis.decision.ai_decision_engine import (
+    AIDecisionEngine,
+    _calibrate_confidence,
+    _derive_entry_quality,
+    _derive_position_size,
+    _derive_time_horizon,
+)
+from src.analysis.decision.types import AIDecisionTuning, EntryQuality, PositionSize, RiskLevel, TimeHorizon
 from src.analysis.recommendation.recommendation_engine import RecommendationEngine
 from src.analysis.recommendation.types import (
     AnalysisContext,
@@ -22,7 +28,13 @@ from src.analysis.recommendation.types import (
     SignalDirection,
 )
 from src.analysis.technical_analysis_engine import TechnicalAnalysisResult
-from src.analysis.types import IndicatorCategory, IndicatorOutput, SupportResistanceLevels
+from src.analysis.types import (
+    FibonacciLevels,
+    IndicatorCategory,
+    IndicatorOutput,
+    SupportResistanceLevels,
+    VolumeProfileResult,
+)
 
 
 class _FakeContributor:
@@ -53,14 +65,33 @@ def _context(latest_price=None, technical_result=None):
     return AnalysisContext(symbol="2222", latest_price=latest_price, technical_result=technical_result)
 
 
-def _technical_result_with_levels(atr=2.0, support=None, resistance=None):
+def _technical_result_with_levels(
+    atr=2.0, support=None, resistance=None, vwap=100.0, fib_levels=None, is_uptrend=True, adx=20.0,
+    bin_edges=None, bin_volumes=None, point_of_control=100.0,
+):
     return TechnicalAnalysisResult(
         indicators={
             "atr_14": IndicatorOutput(name="atr_14", category=IndicatorCategory.VOLATILITY, value=pd.Series([atr])),
-            "adx_14": IndicatorOutput(name="adx_14", category=IndicatorCategory.TREND, value=pd.Series([20.0])),
+            "adx_14": IndicatorOutput(name="adx_14", category=IndicatorCategory.TREND, value=pd.Series([adx])),
             "support_resistance": IndicatorOutput(
                 name="support_resistance", category=IndicatorCategory.PRICE_ACTION,
                 value=SupportResistanceLevels(support=support or [], resistance=resistance or []),
+            ),
+            "fibonacci_retracement": IndicatorOutput(
+                name="fibonacci_retracement", category=IndicatorCategory.PRICE_ACTION,
+                value=FibonacciLevels(
+                    swing_high=110.0, swing_high_at=1, swing_low=90.0, swing_low_at=0,
+                    is_uptrend=is_uptrend, levels=fib_levels or {},
+                ),
+            ),
+            "vwap_20": IndicatorOutput(name="vwap_20", category=IndicatorCategory.VOLUME, value=pd.Series([vwap])),
+            "volume_profile": IndicatorOutput(
+                name="volume_profile", category=IndicatorCategory.VOLUME,
+                value=VolumeProfileResult(
+                    bin_edges=bin_edges or [95.0, 100.0, 105.0],
+                    bin_volumes=bin_volumes or [100.0, 100.0],
+                    point_of_control=point_of_control,
+                ),
             ),
         }
     )
@@ -377,3 +408,274 @@ def test_omitting_tuning_uses_default_ai_decision_tuning():
     )
     decision = engine.decide(_context())
     assert decision.risk_level == RiskLevel.LOW  # default risk_low_threshold=65.0
+
+
+# --- entry quality (Phase 11) -----------------------------------------
+
+_TUNING = AIDecisionTuning()
+
+
+def test_entry_quality_fair_with_no_price():
+    quality, notes = _derive_entry_quality(1, None, None, None, None, None, _TUNING)
+    assert quality == EntryQuality.FAIR
+    assert notes == []
+
+
+def test_entry_quality_fair_with_no_direction():
+    quality, notes = _derive_entry_quality(0, 100.0, None, None, None, None, _TUNING)
+    assert quality == EntryQuality.FAIR
+    assert notes == []
+
+
+def test_entry_quality_fair_when_no_structural_data_available():
+    quality, notes = _derive_entry_quality(1, 100.0, None, None, None, None, _TUNING)
+    assert quality == EntryQuality.FAIR
+    assert notes == []
+
+
+def test_entry_quality_bullish_near_support_is_good():
+    sr = SupportResistanceLevels(support=[99.5], resistance=[])
+    quality, notes = _derive_entry_quality(1, 100.0, sr, None, None, None, _TUNING)
+    assert quality == EntryQuality.GOOD
+    assert any("favorable, defensible entry" in n for n in notes)
+
+
+def test_entry_quality_bullish_near_resistance_is_poor():
+    sr = SupportResistanceLevels(support=[], resistance=[100.5])
+    quality, notes = _derive_entry_quality(1, 100.0, sr, None, None, None, _TUNING)
+    assert quality == EntryQuality.POOR
+    assert any("poor entry" in n for n in notes)
+
+
+def test_entry_quality_bearish_near_resistance_is_good():
+    sr = SupportResistanceLevels(support=[], resistance=[100.5])
+    quality, notes = _derive_entry_quality(-1, 100.0, sr, None, None, None, _TUNING)
+    assert quality == EntryQuality.GOOD
+    assert any("favorable, defensible entry" in n for n in notes)
+
+
+def test_entry_quality_bearish_near_support_is_poor():
+    sr = SupportResistanceLevels(support=[99.5], resistance=[])
+    quality, notes = _derive_entry_quality(-1, 100.0, sr, None, None, None, _TUNING)
+    assert quality == EntryQuality.POOR
+    assert any("poor entry" in n for n in notes)
+
+
+def test_entry_quality_fibonacci_favorable_bullish_uptrend_is_good():
+    fib = FibonacciLevels(
+        swing_high=110.0, swing_high_at=1, swing_low=90.0, swing_low_at=0, is_uptrend=True, levels={"61.8": 99.7}
+    )
+    quality, notes = _derive_entry_quality(1, 100.0, None, fib, None, None, _TUNING)
+    assert quality == EntryQuality.GOOD
+    assert any("good timing" in n for n in notes)
+
+
+def test_entry_quality_fibonacci_unfavorable_bullish_downtrend_is_weaker():
+    fib = FibonacciLevels(
+        swing_high=110.0, swing_high_at=1, swing_low=90.0, swing_low_at=0, is_uptrend=False, levels={"61.8": 99.7}
+    )
+    quality, notes = _derive_entry_quality(1, 100.0, None, fib, None, None, _TUNING)
+    assert quality == EntryQuality.FAIR
+    assert any("weaker timing" in n for n in notes)
+
+
+def test_entry_quality_vwap_extended_bullish_is_penalized():
+    quality, notes = _derive_entry_quality(1, 100.0, None, None, 97.0, None, _TUNING)
+    assert quality == EntryQuality.FAIR
+    assert any("extended" in n for n in notes)
+
+
+def test_entry_quality_vwap_fair_value_boosts_quality():
+    quality, notes = _derive_entry_quality(1, 100.0, None, None, 100.5, None, _TUNING)
+    assert quality == EntryQuality.GOOD
+    assert any("fair-value entry" in n for n in notes)
+
+
+def test_entry_quality_near_point_of_control_boosts_quality():
+    vp = VolumeProfileResult(bin_edges=[95.0, 100.0, 105.0], bin_volumes=[100.0, 100.0], point_of_control=100.5)
+    quality, notes = _derive_entry_quality(1, 100.0, None, None, None, vp, _TUNING)
+    assert quality == EntryQuality.GOOD
+    assert any("point of control" in n for n in notes)
+
+
+def test_entry_quality_excellent_when_multiple_factors_align():
+    sr = SupportResistanceLevels(support=[99.5], resistance=[])
+    fib = FibonacciLevels(
+        swing_high=110.0, swing_high_at=1, swing_low=90.0, swing_low_at=0, is_uptrend=True, levels={"61.8": 99.6}
+    )
+    quality, notes = _derive_entry_quality(1, 100.0, sr, fib, None, None, _TUNING)
+    assert quality == EntryQuality.EXCELLENT
+    assert len(notes) == 2
+
+
+# --- time horizon key-level override (Phase 11) ------------------------
+
+
+def test_time_horizon_key_level_proximity_forces_short_term_despite_high_conviction():
+    technical_result = _technical_result_with_levels(support=[99.5], adx=30.0)
+    horizon = _derive_time_horizon(90.0, technical_result, 100.0, _TUNING)
+    assert horizon == TimeHorizon.SHORT_TERM
+
+
+def test_time_horizon_long_term_when_no_key_level_nearby():
+    technical_result = _technical_result_with_levels(support=[1.0], resistance=[500.0], adx=30.0)
+    horizon = _derive_time_horizon(90.0, technical_result, 100.0, _TUNING)
+    assert horizon == TimeHorizon.LONG_TERM
+
+
+def test_time_horizon_key_level_override_skipped_without_price():
+    technical_result = _technical_result_with_levels(support=[99.5], adx=30.0)
+    horizon = _derive_time_horizon(90.0, technical_result, None, _TUNING)
+    assert horizon == TimeHorizon.LONG_TERM
+
+
+# --- confidence calibration (Phase 11) ----------------------------------
+
+
+def test_calibrate_confidence_no_change_without_price_or_direction():
+    confidence, notes = _calibrate_confidence(70.0, 0, 100.0, 100.0, None, _TUNING)
+    assert confidence == 70.0
+    assert notes == []
+
+
+def test_calibrate_confidence_no_notes_when_no_vwap_or_volume_profile():
+    confidence, notes = _calibrate_confidence(70.0, 1, 100.0, None, None, _TUNING)
+    assert confidence == 70.0
+    assert notes == []
+
+
+def test_calibrate_confidence_vwap_aligned_boosts():
+    confidence, notes = _calibrate_confidence(70.0, 1, 101.0, 100.0, None, _TUNING)
+    assert confidence == 73.0
+    assert any("intraday confidence boosted" in n for n in notes)
+
+
+def test_calibrate_confidence_vwap_misaligned_reduces():
+    confidence, notes = _calibrate_confidence(70.0, 1, 99.0, 100.0, None, _TUNING)
+    assert confidence == 67.0
+    assert any("intraday confidence reduced" in n for n in notes)
+
+
+def test_calibrate_confidence_thin_liquidity_zone_reduces():
+    vp = VolumeProfileResult(bin_edges=[95.0, 100.0, 105.0], bin_volumes=[10.0, 100.0], point_of_control=100.0)
+    confidence, notes = _calibrate_confidence(70.0, 1, 97.0, None, vp, _TUNING)
+    assert confidence == 67.0
+    assert any("liquidity confidence reduced" in n for n in notes)
+
+
+def test_calibrate_confidence_thick_liquidity_zone_boosts():
+    vp = VolumeProfileResult(bin_edges=[95.0, 100.0, 105.0], bin_volumes=[10.0, 100.0], point_of_control=100.0)
+    confidence, notes = _calibrate_confidence(70.0, 1, 103.0, None, vp, _TUNING)
+    assert confidence == 73.0
+    assert any("liquidity confidence boosted" in n for n in notes)
+
+
+def test_calibrate_confidence_combines_vwap_and_liquidity():
+    vp = VolumeProfileResult(bin_edges=[95.0, 100.0, 105.0], bin_volumes=[10.0, 100.0], point_of_control=100.0)
+    confidence, notes = _calibrate_confidence(70.0, 1, 103.0, 100.0, vp, _TUNING)
+    assert confidence == 76.0
+    assert len(notes) == 2
+
+
+def test_calibrate_confidence_clamped_at_100():
+    vp = VolumeProfileResult(bin_edges=[95.0, 100.0, 105.0], bin_volumes=[10.0, 100.0], point_of_control=100.0)
+    confidence, _notes = _calibrate_confidence(99.0, 1, 103.0, 100.0, vp, _TUNING)
+    assert confidence == 100.0
+
+
+def test_calibrate_confidence_clamped_at_0():
+    confidence, _notes = _calibrate_confidence(1.0, 1, 99.0, 100.0, None, _TUNING)
+    assert confidence == 0.0
+
+
+# --- position size: entry quality / risk-reward (Phase 11) -------------
+
+
+def test_position_size_poor_entry_quality_downgrades():
+    size = _derive_position_size(Recommendation.BUY, 80.0, RiskLevel.LOW, EntryQuality.POOR, 1.5, _TUNING)
+    assert size == PositionSize.MODERATE
+
+
+def test_position_size_weak_risk_reward_downgrades():
+    size = _derive_position_size(Recommendation.BUY, 80.0, RiskLevel.LOW, EntryQuality.FAIR, 0.5, _TUNING)
+    assert size == PositionSize.MODERATE
+
+
+def test_position_size_excellent_entry_and_strong_reward_upgrades():
+    size = _derive_position_size(Recommendation.BUY, 80.0, RiskLevel.LOW, EntryQuality.EXCELLENT, 2.5, _TUNING)
+    assert size == PositionSize.LARGE
+
+
+def test_position_size_no_risk_reward_data_has_no_effect():
+    size = _derive_position_size(Recommendation.BUY, 80.0, RiskLevel.LOW, EntryQuality.FAIR, None, _TUNING)
+    assert size == PositionSize.STANDARD
+
+
+def test_position_size_poor_entry_and_weak_reward_combine_downgrades():
+    size = _derive_position_size(Recommendation.STRONG_BUY, 80.0, RiskLevel.LOW, EntryQuality.POOR, 0.5, _TUNING)
+    assert size == PositionSize.MODERATE
+
+
+def test_position_size_hold_stays_none_even_with_excellent_entry_and_strong_reward():
+    # Regression test: a HOLD must never receive a position size, even
+    # when entry_quality/risk_reward_ratio would otherwise earn the
+    # EXCELLENT-entry upgrade -- HOLD means "no new position warranted."
+    size = _derive_position_size(Recommendation.HOLD, 90.0, RiskLevel.LOW, EntryQuality.EXCELLENT, 5.0, _TUNING)
+    assert size == PositionSize.NONE
+
+
+# --- end-to-end Phase 11 fields via decide() ----------------------------
+
+
+def test_decide_populates_risk_reward_ratio():
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0))
+    assert decision.risk_reward_ratio is not None
+    assert decision.risk_reward_ratio > 0
+
+
+def test_decide_risk_reward_ratio_none_without_price():
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=None))
+    assert decision.risk_reward_ratio is None
+
+
+def test_decide_target_price_basis_reflects_resistance_refinement():
+    technical_result = _technical_result_with_levels(atr=2.0, resistance=[103.0])
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+    assert decision.target_price_basis == "resistance_level"
+
+
+def test_decide_stop_loss_basis_reflects_support_refinement():
+    technical_result = _technical_result_with_levels(atr=2.0, support=[98.5])
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+    assert decision.stop_loss_basis == "support_level"
+
+
+def test_decide_basis_defaults_to_atr_without_levels():
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0))
+    assert decision.target_price_basis == "atr"
+    assert decision.stop_loss_basis == "atr"
+
+
+def test_decide_entry_quality_notes_populate_when_near_support():
+    technical_result = _technical_result_with_levels(atr=2.0, support=[99.5])
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+    assert decision.entry_quality_notes
+
+
+def test_decide_confidence_calibration_notes_populate_when_vwap_present():
+    technical_result = _technical_result_with_levels(atr=2.0, vwap=99.0)
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+    assert decision.confidence_calibration_notes
+
+
+def test_decide_reasons_include_risk_reward_ratio_line():
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0))
+    assert any("Risk/reward ratio" in r for r in decision.reasons)

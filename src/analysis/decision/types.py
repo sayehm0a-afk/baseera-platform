@@ -15,7 +15,7 @@ to `RecommendationEngine`, so `RecommendationEngine`/`ScoreContributor`
 themselves need zero changes.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional
@@ -44,6 +44,21 @@ class PositionSize(str, Enum):
     LARGE = "LARGE"
 
 
+class EntryQuality(str, Enum):
+    """How favorable *right now* is as an entry price for the
+    recommended direction -- distinct from the recommendation itself
+    (a STRONG_BUY can still be a POOR entry if price has already run
+    up to just under a resistance level; better to wait for a pullback
+    to support). Derived entirely from PriceStructureScoreContributor's
+    same inputs (support/resistance, Fibonacci) plus ValueAreaScoreContributor's
+    (VWAP, Volume Profile) -- never a new computation of its own."""
+
+    POOR = "POOR"
+    FAIR = "FAIR"
+    GOOD = "GOOD"
+    EXCELLENT = "EXCELLENT"
+
+
 @dataclass(frozen=True)
 class AIDecisionTuning:
     """Every numeric constant `AIDecisionEngine` would otherwise
@@ -66,6 +81,20 @@ class AIDecisionTuning:
     time_horizon_long_conviction_threshold: float = 25.0
     time_horizon_long_adx_threshold: float = 25.0
     time_horizon_medium_conviction_threshold: float = 10.0
+
+    # Phase 11: price-structure-aware entry/time-horizon/confidence/
+    # position-size tuning -- see AIDecisionEngine's _derive_entry_quality,
+    # _derive_time_horizon, _calibrate_confidence, _derive_position_size.
+    key_level_proximity_threshold: float = 0.015  # 1.5% of price, matches PriceStructureScoreContributor
+    entry_quality_excellent_threshold: float = 70.0
+    entry_quality_good_threshold: float = 55.0
+    entry_quality_fair_threshold: float = 40.0
+    poor_risk_reward_threshold: float = 1.0
+    excellent_risk_reward_threshold: float = 2.0
+    vwap_confidence_adjustment: float = 3.0
+    liquidity_confidence_adjustment: float = 3.0
+    liquidity_thin_zone_ratio: float = 0.5  # a price bin below this fraction of the average bin is "thin"
+    liquidity_thick_zone_ratio: float = 1.2  # a price bin above this fraction of the average bin is "liquid"
 
 
 @dataclass(frozen=True)
@@ -104,3 +133,17 @@ class InvestmentDecision:
     breakdown: List[DecisionFactorBreakdown]
     signals: List[Signal]
     generated_at: datetime
+
+    # Phase 11: price-structure-driven fields. Defaulted (not required)
+    # so the handful of call sites that reconstruct an InvestmentDecision
+    # from data that never had these computed -- src/market_intelligence/
+    # read_model.py rebuilding from a persisted RecommendationSnapshot
+    # whose schema predates them, and test fixtures -- keep working
+    # unchanged; AIDecisionEngine.decide() itself always passes real,
+    # computed values, never relies on these defaults.
+    entry_quality: EntryQuality = EntryQuality.FAIR
+    entry_quality_notes: List[str] = field(default_factory=list)
+    risk_reward_ratio: Optional[float] = None
+    stop_loss_basis: str = "atr"
+    target_price_basis: str = "atr"
+    confidence_calibration_notes: List[str] = field(default_factory=list)

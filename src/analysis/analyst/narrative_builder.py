@@ -14,11 +14,17 @@ from typing import Any, List, Optional
 
 from src.analysis.analyst.prompt_templates import PromptTemplateManager
 from src.analysis.analyst.types import Evidence, InterpretedFactor, InterpretedSignals
-from src.analysis.decision.types import TimeHorizon
+from src.analysis.decision.types import EntryQuality, TimeHorizon
 
 _TECHNICAL_CATEGORIES = {"Technical Analysis", "Momentum", "Volume"}
 _FUNDAMENTAL_CATEGORIES = {"Fundamental Analysis", "News", "Macro", "Insider Transactions", "Sector Rotation"}
 _RISK_CATEGORIES = {"Risk"}
+
+# Matches AIDecisionTuning.key_level_proximity_threshold's default --
+# used only to narrate *whether* a key level was nearby, never to
+# recompute the time horizon itself (that decision already happened in
+# AIDecisionEngine; this only explains it).
+_KEY_LEVEL_PROXIMITY_THRESHOLD = 0.015
 
 _TIME_HORIZON_LABELS = {
     TimeHorizon.SHORT_TERM: "short-term (days to a few weeks)",
@@ -105,11 +111,26 @@ class NarrativeBuilder:
     def build_risk_explanation(self, evidence: Evidence, interpreted: InterpretedSignals) -> str:
         relevant = _factors_in(interpreted.bullish_factors + interpreted.bearish_factors, _RISK_CATEGORIES)
         factor_clause = self._templates.join_factors(relevant)
+        decision = evidence.decision
+
+        sizing_bits = []
+        if decision.entry_quality is EntryQuality.POOR:
+            sizing_bits.append("a poor entry quality reduced the position size")
+        elif decision.entry_quality is EntryQuality.EXCELLENT:
+            sizing_bits.append("an excellent entry quality supported the position size")
+        if decision.risk_reward_ratio is not None:
+            if decision.risk_reward_ratio < 1.0:
+                sizing_bits.append(f"a weak risk/reward ratio of {decision.risk_reward_ratio:.2f} further reduced it")
+            else:
+                sizing_bits.append(f"a risk/reward ratio of {decision.risk_reward_ratio:.2f} was factored in")
+        sizing_clause = f" In sizing this position, {'; '.join(sizing_bits)}." if sizing_bits else ""
+
         return self._templates.render(
             "risk_explanation",
             risk_level=evidence.decision.risk_level.value.title(),
             position_size=evidence.decision.position_size.value.title(),
             factor_clause=factor_clause,
+            sizing_clause=sizing_clause,
         )
 
     def build_target_price_explanation(self, evidence: Evidence) -> str:
@@ -117,11 +138,36 @@ class NarrativeBuilder:
         reference_price = _reference_price(evidence)
         if decision.target_price is None or decision.expected_return_pct is None or reference_price is None:
             return self._templates.render("target_price_unavailable", symbol=evidence.symbol)
+
+        if decision.target_price_basis == "resistance_level":
+            target_basis_clause = (
+                "capped just below a nearby resistance level the price has struggled to clear before, "
+                "rather than projected purely from volatility."
+            )
+        elif decision.target_price_basis == "support_level":
+            target_basis_clause = (
+                "capped just above a nearby support level the price has struggled to break below "
+                "before, rather than projected purely from volatility."
+            )
+        else:
+            target_basis_clause = (
+                "derived from the decision's overall conviction and the symbol's recent average true range."
+            )
+
+        entry_quality_clause = f" ({'; '.join(decision.entry_quality_notes)})" if decision.entry_quality_notes else ""
+        risk_reward_clause = (
+            f"{decision.risk_reward_ratio:.2f}" if decision.risk_reward_ratio is not None else "not available"
+        )
+
         return self._templates.render(
             "target_price_explanation",
             target_price=decision.target_price,
             expected_return_pct=decision.expected_return_pct,
             reference_price=reference_price,
+            target_basis_clause=target_basis_clause,
+            entry_quality=decision.entry_quality.value.title(),
+            entry_quality_clause=entry_quality_clause,
+            risk_reward_clause=risk_reward_clause,
         )
 
     def build_stop_loss_explanation(self, evidence: Evidence) -> str:
@@ -129,10 +175,22 @@ class NarrativeBuilder:
         reference_price = _reference_price(evidence)
         if decision.stop_loss is None or reference_price is None:
             return self._templates.render("stop_loss_unavailable", symbol=evidence.symbol)
+
+        if decision.stop_loss_basis == "support_level":
+            stop_basis_clause = "tightened to just below a nearby support level the price has actually respected before."
+        elif decision.stop_loss_basis == "resistance_level":
+            stop_basis_clause = "tightened to just above a nearby resistance level the price has actually respected before."
+        else:
+            stop_basis_clause = (
+                "sized from the symbol's recent average true range so it reflects this symbol's own "
+                "volatility rather than a fixed percentage."
+            )
+
         return self._templates.render(
             "stop_loss_explanation",
             stop_loss=decision.stop_loss,
             reference_price=reference_price,
+            stop_basis_clause=stop_basis_clause,
         )
 
     def build_time_horizon_explanation(self, evidence: Evidence) -> str:
@@ -140,7 +198,17 @@ class NarrativeBuilder:
         label = _TIME_HORIZON_LABELS[decision.time_horizon]
         adx = _format_number(_indicator_latest(evidence.technical_result, "adx_14"))
         adx_clause = f", including trend strength (ADX at {adx})" if adx is not None else ""
-        return self._templates.render("time_horizon_explanation", time_horizon=label, adx_clause=adx_clause)
+
+        key_level_clause = ""
+        if decision.time_horizon is TimeHorizon.SHORT_TERM and _is_near_a_key_level(evidence):
+            key_level_clause = (
+                " and a nearby support/resistance/Fibonacci level, which is likely to resolve this move "
+                "before a longer-term thesis could play out"
+            )
+
+        return self._templates.render(
+            "time_horizon_explanation", time_horizon=label, adx_clause=adx_clause, key_level_clause=key_level_clause
+        )
 
 
 def _reference_price(evidence: Evidence) -> Optional[float]:
@@ -159,3 +227,25 @@ def _reference_price(evidence: Evidence) -> Optional[float]:
     if isinstance(bollinger_latest, dict):
         return bollinger_latest.get("middle")
     return None
+
+
+def _is_near_a_key_level(evidence: Evidence) -> bool:
+    """Whether the reference price sits within
+    `_KEY_LEVEL_PROXIMITY_THRESHOLD` of any detected support/resistance
+    or Fibonacci retracement level -- purely for narrating *why*
+    `AIDecisionEngine._derive_time_horizon` already capped the horizon
+    at SHORT_TERM (that decision already happened; this only explains
+    it), so it deliberately reuses the same real
+    `TechnicalAnalysisResult` fields rather than a stored flag."""
+    price = _reference_price(evidence)
+    if price is None or price <= 0 or evidence.technical_result is None:
+        return False
+
+    levels: List[float] = []
+    levels.extend(evidence.technical_result.support_resistance.support)
+    levels.extend(evidence.technical_result.support_resistance.resistance)
+    levels.extend(evidence.technical_result.fibonacci_retracement.levels.values())
+    if not levels:
+        return False
+
+    return min(abs(price - level) / price for level in levels) <= _KEY_LEVEL_PROXIMITY_THRESHOLD
