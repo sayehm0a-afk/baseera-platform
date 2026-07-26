@@ -14,11 +14,13 @@ from sqlalchemy.orm import sessionmaker
 
 from src.backtesting.data_access import (
     bars_match_provenance,
+    collect_as_of_evaluations,
+    evaluation_dates,
     load_as_of_dataset,
     load_forward_price_path,
 )
 from src.core.db.database import Base
-from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
+from src.domain.models import DataProvenanceMode, FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
 
 
 @pytest.fixture
@@ -207,3 +209,61 @@ def test_provenance_detects_a_mixed_range(session, stock):
 def test_provenance_trivially_matches_when_no_bars_exist(session, stock):
     assert bars_match_provenance(session, stock.id, date(2030, 1, 1), date(2030, 1, 30), expect_synthetic=True)
     assert bars_match_provenance(session, stock.id, date(2030, 1, 1), date(2030, 1, 30), expect_synthetic=False)
+
+
+# --- evaluation_dates -------------------------------------------------
+
+
+def test_evaluation_dates_spans_the_range_at_the_configured_frequency():
+    dates = evaluation_dates(date(2026, 1, 1), date(2026, 1, 21), frequency_days=10)
+    assert dates == [date(2026, 1, 1), date(2026, 1, 11), date(2026, 1, 21)]
+
+
+def test_evaluation_dates_rejects_nonpositive_frequency():
+    with pytest.raises(ValueError):
+        evaluation_dates(date(2026, 1, 1), date(2026, 1, 5), frequency_days=0)
+
+
+# --- collect_as_of_evaluations ------------------------------------------
+
+
+def test_collect_as_of_evaluations_returns_one_per_symbol_per_date(session, stock):
+    _add_bars(session, stock, count=120)
+    evaluations, skipped = collect_as_of_evaluations(
+        session, ["2222"], date(2026, 2, 15), date(2026, 3, 1), frequency_days=7,
+        data_provenance_mode=DataProvenanceMode.SYNTHETIC,
+    )
+    assert len(evaluations) == 3  # 2026-02-15, 02-22, 03-01
+    assert all(e.symbol == "2222" for e in evaluations)
+    assert all(e.dataset.context.technical_result is not None for e in evaluations)
+    assert skipped == {"symbol_not_found": 0, "provenance_mismatch": 0, "insufficient_data": 0}
+
+
+def test_collect_as_of_evaluations_skips_unknown_symbol(session, stock):
+    _add_bars(session, stock, count=120)
+    evaluations, skipped = collect_as_of_evaluations(
+        session, ["9999"], date(2026, 2, 15), date(2026, 3, 1), frequency_days=7,
+        data_provenance_mode=DataProvenanceMode.SYNTHETIC,
+    )
+    assert evaluations == []
+    assert skipped["symbol_not_found"] == 3
+
+
+def test_collect_as_of_evaluations_skips_provenance_mismatch(session, stock):
+    _add_bars(session, stock, count=60, is_synthetic=True)
+    evaluations, skipped = collect_as_of_evaluations(
+        session, ["2222"], date(2026, 1, 20), date(2026, 1, 27), frequency_days=7,
+        data_provenance_mode=DataProvenanceMode.LIVE,  # declared LIVE but bars are synthetic
+    )
+    assert evaluations == []
+    assert skipped["provenance_mismatch"] == 2
+
+
+def test_collect_as_of_evaluations_skips_insufficient_data(session, stock):
+    _add_bars(session, stock, count=5)  # far too few bars for a technical result
+    evaluations, skipped = collect_as_of_evaluations(
+        session, ["2222"], date(2026, 1, 1), date(2026, 1, 3), frequency_days=1,
+        data_provenance_mode=DataProvenanceMode.SYNTHETIC,
+    )
+    assert evaluations == []
+    assert skipped["insufficient_data"] == 3

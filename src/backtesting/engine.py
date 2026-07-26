@@ -14,7 +14,7 @@ strategy produced the call.
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timezone
 from typing import Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -25,6 +25,7 @@ from src.backtesting.data_access import (
     AsOfDataset,
     DEFAULT_FUNDAMENTAL_REPORTING_LAG_DAYS,
     bars_match_provenance,
+    evaluation_dates,
     load_as_of_dataset,
     load_forward_price_path,
 )
@@ -62,14 +63,10 @@ class BacktestConfig:
 
 
 def _evaluation_dates(start: date, end: date, frequency_days: int) -> List[date]:
-    if frequency_days <= 0:
-        raise ValueError("evaluation_frequency_days must be positive")
-    dates = []
-    current = start
-    while current <= end:
-        dates.append(current)
-        current += timedelta(days=frequency_days)
-    return dates
+    """Thin wrapper over the shared src.backtesting.data_access.evaluation_dates
+    -- kept as a module-level name here since it predates that extraction
+    and existing tests/call sites already import it from this module."""
+    return evaluation_dates(start, end, frequency_days)
 
 
 def _round_trip_cost_pct(transaction_cost_bps: float, slippage_bps: float) -> float:
@@ -269,6 +266,7 @@ class BacktestingEngine:
                         total_score=call.total_score,
                         risk_level=call.risk_level,
                         time_horizon=call.time_horizon,
+                        position_size=call.position_size,
                         sector=stock.sector,
                         market_regime=regime,
                         market_price_at_evaluation=dataset.context.latest_price,

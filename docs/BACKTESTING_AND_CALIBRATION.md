@@ -73,7 +73,9 @@ tested against hand-built fixtures, not only through a full backtest run.
 
 - `src/backtesting/data_access.py`, `metrics.py`, `regime.py`,
   `baselines.py`, `engine.py`, `walk_forward.py`, `job_runner.py`,
-  `config.py`, `calibration/parameters.py`, `calibration/engine.py`.
+  `config.py`, `calibration/parameters.py`, `calibration/engine.py`,
+  `calibration/indicator_signals.py`, `calibration/indicator_attribution.py`,
+  `calibration/statistical_calibration.py` (the last three: §5a/§5b).
 - Three new domain models: `RecommendationSnapshot`, `BacktestRun`,
   `CalibrationConfig` (migration `9d260aefc6a7`).
 - `src/api/routes/backtests.py`, `src/api/routes/calibrations.py`,
@@ -173,6 +175,8 @@ tests with hand-computed expected values.
 | **Sharpe ratio** | mean(directional P&L − risk-free rate) / volatility. Non-annualized unless `periods_per_year` is supplied. |
 | **Sortino ratio** | Same, divided by downside deviation instead of volatility. |
 | **calibration error (ECE)** | Calls are bucketed by stated confidence (0–20, 20–40, …, 80–100); for each bucket, `|mean_confidence/100 − realized_accuracy|`, weighted by bucket size and summed. 0 = perfectly calibrated confidence; higher = systematically over/under-confident. |
+| **precision / recall** | Standard binary-classification metrics: each directional call is a prediction, the sign of the realized forward return is ground truth. Bullish calls (predicting UP) and bearish calls (predicting DOWN) are independent classes, scored separately then macro-averaged — a BUY call is never penalized against the DOWN class it never claimed anything about. HOLD calls and zero/unknown forward returns are excluded from both. |
+| **position sizing quality** | Buckets directional calls with a known outcome by their recorded `position_size` (NONE/SMALL/MODERATE/STANDARD/LARGE) and reports each bucket's win rate/average directional P&L, plus `monotonicity_score` — the Pearson correlation between the size ordinal and the bucket's average P&L. Close to +1 means larger sizes really do earn better outcomes (well-calibrated sizing); near 0 or negative means they don't. |
 
 Breakdowns (`full_report()`) group every metric above by recommendation
 class, confidence bucket, risk level, time horizon, sector, symbol, and
@@ -263,6 +267,163 @@ proves the calibration lifecycle machinery; making production traffic
 actually respect an active calibration is a natural, bounded follow-up,
 not started here.
 
+## 5a. Per-indicator attribution
+
+Every prior milestone's metrics were computed at the *contributor*
+level (technical, fundamental, momentum, ...) or at the *whole-engine*
+level — no existing code measured a single named indicator's (RSI,
+MACD, Fibonacci, ...) own standalone predictive quality in isolation.
+`src/backtesting/calibration/indicator_signals.py` and
+`indicator_attribution.py` close that gap for all eleven indicators
+named in this milestone's requirements: **Fibonacci, Support/Resistance,
+VWAP, Volume Profile, RSI, MACD, ADX, EMA, SMA, Bollinger Band width,
+ATR.**
+
+`indicator_signals.py` defines one standalone, backtesting-only pure
+reader per indicator — deliberately **not** a reuse of the live
+scoring contributors' internal `_score_*` functions, which would only
+show how an indicator performs already blended with everything else in
+that contributor's score. This is the same "one indicator, one
+opinion" idea `src.backtesting.baselines`'s `RSIOnlyStrategy`/
+`SMACrossoverStrategy` already established for two of these eleven,
+extended here to the other nine. Two disclosed categories:
+
+- **Nine directional indicators** (Fibonacci, Support/Resistance,
+  VWAP, Volume Profile, RSI, MACD, EMA, SMA, ADX) make a genuine
+  BULLISH/BEARISH/NEUTRAL claim, each with a bounded 0–100 `magnitude`
+  ("how strong is this specific reading") used for the confidence-
+  accuracy metric. **ADX** is a special case: it measures trend
+  *strength*, not direction, in this codebase's own live scoring (see
+  `TechnicalScoreContributor`/`RiskScoreContributor` — neither ever
+  treats it as directional) — its real, testable claim is "a strong
+  trend reading predicts the concurrent price trend continuing," so
+  it's paired with the sign of the recent price move over the same
+  10-bar lookback the rest of the codebase already uses for trend
+  comparisons, disclosed explicitly as this module's own convention,
+  not a fabricated ADX-is-directional claim.
+- **Two risk/volatility indicators** (ATR, Bollinger Band width) make
+  no directional claim at all in this codebase (see
+  `RiskScoreContributor`) — forcing a win-rate framing on them would
+  misrepresent what they actually predict. Their `direction` is always
+  `NEUTRAL`; their real signal is the raw ATR/price or band-width/price
+  ratio, consumed by a dedicated volatility-bucket report instead.
+
+`indicator_attribution.run_indicator_attribution()` replays the same
+anti-look-ahead (symbol, date) grid every other historical replay in
+this engine walks (via the shared `data_access.collect_as_of_evaluations()`
+— see below), reads all eleven indicators at each point, and scores:
+
+- The nine directional indicators through the *exact same*
+  `metrics.compute_all_metrics()` every other report in this engine
+  uses (win rate, average/median forward return, drawdown, Sharpe/
+  Sortino, precision/recall, calibration error/confidence accuracy) —
+  computed completely independently per indicator, zero blending.
+- ATR and Bollinger through a volatility-bucket report: each historical
+  point is bucketed "low"/"moderate"/"high" using the *exact same*
+  thresholds `RiskScoreContributor` already uses in production (ATR
+  ratio 0.012/0.03, Bollinger width ratio 0.04/0.10), and each bucket
+  reports its sample size, average forward return, and realized
+  volatility (stdev of forward returns) — directly testing the claim
+  "a low reading really does precede calmer forward price action."
+
+### Shared grid-walk primitive
+
+`data_access.collect_as_of_evaluations(session, symbols, start_date,
+end_date, frequency_days, data_provenance_mode,
+fundamental_reporting_lag_days)` extracts the (symbol, date) grid walk
++ safety checks (symbol exists, provenance matches, at least one input
+available) that `BacktestingEngine.run()`, `run_indicator_attribution()`,
+and `propose_statistical_weights()` (§5b) all need, into one shared,
+independently-tested function — so all three historical replays always
+mean the same thing by "which (symbol, date) points get evaluated."
+`BacktestingEngine.run()` itself is left using its own established,
+heavily-tested inline loop (its own extra machinery — snapshot
+persistence, cancellation, regime classification, progress callbacks —
+isn't needed by the other two callers) rather than being migrated onto
+the new primitive; only its tiny `_evaluation_dates()` date-generation
+helper now delegates to the shared `evaluation_dates()` to remove exact
+duplication, with zero behavior change (regression-tested).
+
+## 5b. Statistical weight calibration
+
+`CalibrationEngine.propose_random_candidates()` (§4/§5) samples
+candidate parameter values uniformly at random and lets `validate()`'s
+same-period backtest comparison decide if one happens to be better —
+useful, but not evidence-driven: nothing measures *why* a candidate's
+weights should change before proposing them.
+`src/backtesting/calibration/statistical_calibration.py` adds a
+second, complementary path: it *measures* each of the eleven scoring
+contributors' (technical, fundamental, momentum, volume, risk,
+price_structure, value_area, news_sentiment, macro,
+insider_transactions, sector_rotation) own standalone directional edge
+over a training period — reusing the exact same "run
+`RecommendationEngine` with only this one contributor at weight 1.0"
+technique `TechnicalOnlyStrategy`/`FundamentalOnlyStrategy` already
+use for two of them — and proposes a new weight **only where a
+significance test says the evidence actually supports it**.
+
+### The significance test
+
+`significance_test(values, min_sample_size, significance_level)` is a
+two-sided one-sample z-test of a contributor's directional P&L series
+against zero (the null hypothesis: "this contributor has no real
+edge"). No `scipy` dependency: `statistics.NormalDist` (Python 3.8+
+stdlib) supplies the standard normal CDF this needs — the normal
+approximation to the t-distribution, exact as sample size grows and
+the conventional, textbook-standard approximation once
+`n >= ~30`, which is exactly this module's own default
+`DEFAULT_MIN_SAMPLE_SIZE`. A candidate is `significant` only when
+**both** the p-value is below `significance_level` (default 0.05)
+**and** the sample size meets the floor — a low p-value from a
+handful of lucky calls is never treated as evidence on its own.
+
+### The weight-proposal formula
+
+For a significant contributor, `_propose_weight()` scales the old
+weight by a bounded function of the t-statistic: `edge_scale =
+clamp(t_statistic / 10, -0.5, 0.5)`, `new_weight = max(0.01, old_weight
+* (1 + edge_scale))` — a disclosed, bounded heuristic (a t-statistic of
+5+ already saturates the ±50% adjustment cap, so one extreme outlier
+run can't dominate a single calibration pass), not fabricated
+precision. Non-significant or insufficient-sample contributors keep
+their **exact** existing weight — no renormalization drift, because
+`RecommendationEngine.generate()` already self-normalizes by whatever
+weights are actually present among available contributors (divides by
+`sum(c.weight for c in available)`), so proposing a new weight for
+only *some* contributors and leaving the rest at their engine defaults
+is always mathematically correct, not an approximation.
+
+### The report
+
+`StatisticalCalibrationReport` (one `ContributorCalibrationEntry` per
+contributor) is exactly the shape requirement 5 asked for: **old
+weight, new weight, mean edge, t-statistic, p-value, sample size, and
+an explicit `action`** (`"reweighted"` / `"unchanged_insufficient_evidence"`
+/ `"unchanged_not_significant"`) — every contributor is listed, even
+the four external-factor ones (news/macro/insider/sector-rotation)
+that honestly report `sample_size=0` and `unchanged_insufficient_evidence`
+every time, since `data_access.py`'s `AsOfDataset` has no real news/
+macro/insider/sector feed wired in for them to score against — a
+disclosed gap, not a silently fabricated result.
+
+### Reusability (requirement 6)
+
+`report.contributor_weights` (only the `"reweighted"` entries) is the
+*exact* `config["contributor_weights"]` JSON shape
+`calibration/parameters.py`'s `build_contributors()` already consumes
+— handing it straight to the existing, unmodified
+`CalibrationEngine.propose()` produces a normal `DRAFT`
+`CalibrationConfig`, which then goes through the same
+`validate()` → `activate()` → `rollback()` lifecycle every other
+calibration candidate already uses (§5). `POST
+/api/v1/calibrations/statistical-weights` (§6) can do this in one call
+via `create_draft_calibration: true`. Because this is just a function
+call over whatever date range and symbols are supplied, running it
+again against a later date range once new market data has been
+ingested produces a fresh, independently re-validated candidate — this
+*is* the "continuously improve the model" reusability requirement,
+with no new infrastructure beyond calling the same function again.
+
 ## 6. REST API
 
 All routes follow `src/api/routes/stocks.py`'s conventions: `APIError`
@@ -292,12 +453,15 @@ Pydantic request validation, plain `Depends(get_db)` sessions.
 | `POST /api/v1/calibrations/{version}/validate` | Runs **synchronously** (see below), bounded by the same symbol-count/date-range limits as a backtest. |
 | `POST /api/v1/calibrations/{version}/activate` | Requires `VALIDATED`. |
 | `POST /api/v1/calibrations/{version}/rollback` | Rolls back to the `{version}` in the path. |
+| `POST /api/v1/calibrations/indicator-attribution` | §5a — replays historical data and returns each of the eleven named indicators' standalone predictive-quality report. Runs synchronously, bounded the same way `/validate` is. |
+| `POST /api/v1/calibrations/statistical-weights` | §5b — measures each contributor's standalone directional edge, statistically tests it, and returns a per-contributor old-weight/new-weight/confidence/significance/sample-size report. `create_draft_calibration: true` (plus a `validation_period_start`/`_end`) additionally creates a `DRAFT` `CalibrationConfig` from any reweighted contributors in the same call. |
 
-`/validate` is the one route that doesn't defer to a background task —
-it is bounded by the same `BacktestCreateRequest`-style validators
-(reused via `CalibrationValidateRequest`), so it is never a "large
-full-market backtest" by construction. A genuinely asynchronous
-validate-in-background is a natural extension, not built here.
+`/validate`, `/indicator-attribution`, and `/statistical-weights` are
+the three routes that don't defer to a background task — all three are
+bounded by the same `BacktestCreateRequest`-style validators, so none
+is ever a "large full-market backtest" by construction. A genuinely
+asynchronous background path for any of them is a natural extension,
+not built here.
 
 ### Operational limits (Phase 7/8)
 
@@ -358,6 +522,26 @@ validate-in-background is a natural extension, not built here.
   execution endpoint (submit one run per symbol list, or one run with
   multiple symbols — a full-market run reuses the same mechanism, just
   bounded by `BACKTEST_MAX_SYMBOLS`).
+- **Per-indicator `magnitude` scaling constants are disclosed
+  heuristics, not backtested/calibrated** (§5a) — e.g. EMA/SMA/VWAP/
+  Volume-Profile deviation-to-magnitude scaling factors, the RSI
+  proportional magnitude formula. They only affect the confidence-
+  accuracy metric's bucketing, never win rate/precision/recall/average
+  return (those depend only on `direction`, which is not a scaled
+  heuristic — it's the same threshold logic already used in
+  production, or an explicitly disclosed convention for ADX).
+- **The statistical weight-proposal formula's edge-to-weight scaling
+  (§5b) is a disclosed, bounded heuristic** — a t-statistic-based
+  ±50%-max adjustment, not a formally derived optimal weight. The
+  significance *test* itself (a standard z-test/normal approximation)
+  is not a heuristic; only the translation from "how significant" to
+  "how much to change the weight" is.
+- **The four external-factor contributors (news/macro/insider/sector-
+  rotation) have zero backtestable sample size** (§5b) — no real news/
+  macro/insider/sector-rotation feed is wired into
+  `data_access.AsOfDataset`, so `propose_statistical_weights()` always
+  reports them as `unchanged_insufficient_evidence`, honestly, rather
+  than fabricating a result.
 
 ## 8. What was live-verified vs. what was only mock/synthetic-tested
 
@@ -381,7 +565,7 @@ idempotency/retry/cancellation logic. These are correctness properties
 of the *code*, verified with deterministic fixtures — they do not depend
 on whether the underlying price data is real or synthetic to be true.
 
-## 9. What remains before the Autonomous AI Analyst phase
+## 9. What remains before the News Intelligence phase
 
 - Wiring an `ACTIVE` calibration into the live `/recommendation` and
   `/decision` routes.
@@ -392,11 +576,20 @@ on whether the underlying price data is real or synthetic to be true.
 - A true portfolio/position-sizing model, if position-level metrics
   (rather than the current discrete equal-weighted trade sequence) are
   needed.
-- An asynchronous `/calibrations/{version}/validate` path, if validation
+- An asynchronous `/calibrations/{version}/validate`,
+  `/indicator-attribution`, or `/statistical-weights` path, if
   workloads grow beyond the current bounded-synchronous limits.
 - A batch/universe-wide scheduled backtest job (reusing
   `src/market_data/ingestion/config.py`'s symbol-universe pattern), if
   recurring, unattended backtest runs are wanted.
+- **Backtesting the per-indicator `magnitude` scaling constants and the
+  statistical weight-proposal edge-to-weight formula themselves** (§5a/
+  §5b) — both are disclosed heuristics today, not yet validated the way
+  `AIDecisionTuning`'s ATR multiples are (§1).
+- **Real news/macro/insider/sector-rotation data sources**, so the four
+  external-factor contributors can finally be measured by
+  `propose_statistical_weights()` instead of always reporting zero
+  sample size (§5b).
 
-This document is superseded by whatever the Autonomous AI Analyst
-milestone's own status document says, once that work is code-verified.
+This document is superseded by whatever the next milestone's own
+status document says, once that work is code-verified.

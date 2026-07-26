@@ -19,6 +19,8 @@ from src.backtesting.metrics import (
     loss_rate,
     max_drawdown,
     median_forward_return,
+    position_sizing_quality,
+    precision_recall,
     profit_factor,
     sharpe_ratio,
     sortino_ratio,
@@ -256,7 +258,7 @@ def test_compute_all_metrics_has_every_expected_key():
         "evaluation_count", "direction_accuracy", "target_price_hit_rate", "stop_loss_hit_rate",
         "average_forward_return_pct", "median_forward_return_pct", "win_rate", "loss_rate",
         "profit_factor", "max_drawdown", "volatility", "downside_deviation", "sharpe_ratio",
-        "sortino_ratio", "calibration_error",
+        "sortino_ratio", "calibration_error", "precision_recall", "position_sizing_quality",
     }
     assert expected_keys.issubset(result.keys())
 
@@ -283,3 +285,108 @@ def test_compute_all_metrics_empty_input_is_all_none_not_an_error():
     assert result["evaluation_count"] == 0
     assert result["direction_accuracy"] is None
     assert result["sharpe_ratio"] is None
+
+
+# --- precision / recall --------------------------------------------------
+
+
+def test_precision_recall_none_with_no_known_outcomes():
+    assert precision_recall([]) is None
+    assert precision_recall([_outcome(forward_return_pct=None)]) is None
+
+
+def test_precision_recall_perfect_bullish_classifier():
+    outcomes = [
+        _outcome(recommendation="BUY", forward_return_pct=5.0),
+        _outcome(recommendation="BUY", forward_return_pct=3.0),
+    ]
+    result = precision_recall(outcomes)
+    assert result["bullish"]["precision"] == pytest.approx(1.0)
+    assert result["bullish"]["recall"] == pytest.approx(1.0)
+
+
+def test_precision_recall_bullish_false_positive_reduces_precision_not_recall():
+    outcomes = [
+        _outcome(recommendation="BUY", forward_return_pct=5.0),  # true positive
+        _outcome(recommendation="BUY", forward_return_pct=-2.0),  # false positive (called up, went down)
+    ]
+    result = precision_recall(outcomes)
+    assert result["bullish"]["precision"] == pytest.approx(0.5)
+    assert result["bullish"]["recall"] == pytest.approx(1.0)  # the one actual UP was caught
+
+
+def test_precision_recall_missed_bullish_case_reduces_recall_not_precision():
+    outcomes = [
+        _outcome(recommendation="BUY", forward_return_pct=5.0),  # true positive
+        _outcome(recommendation="HOLD", forward_return_pct=3.0),  # actual UP, never predicted -- false negative
+    ]
+    result = precision_recall(outcomes)
+    assert result["bullish"]["precision"] == pytest.approx(1.0)
+    assert result["bullish"]["recall"] == pytest.approx(0.5)
+
+
+def test_precision_recall_bearish_class_is_independent_of_bullish():
+    outcomes = [
+        _outcome(recommendation="SELL", forward_return_pct=-4.0),  # true positive for bearish
+        _outcome(recommendation="BUY", forward_return_pct=6.0),  # true positive for bullish
+    ]
+    result = precision_recall(outcomes)
+    assert result["bearish"]["precision"] == pytest.approx(1.0)
+    assert result["bearish"]["recall"] == pytest.approx(1.0)
+    assert result["macro_precision"] == pytest.approx(1.0)
+    assert result["macro_recall"] == pytest.approx(1.0)
+
+
+def test_precision_recall_excludes_zero_forward_return():
+    outcomes = [_outcome(recommendation="BUY", forward_return_pct=0.0)]
+    assert precision_recall(outcomes) is None
+
+
+def test_precision_recall_reports_sample_size():
+    outcomes = [_outcome(recommendation="BUY", forward_return_pct=v) for v in [1.0, 2.0, -1.0]]
+    result = precision_recall(outcomes)
+    assert result["sample_size"] == 3
+
+
+# --- position sizing quality ---------------------------------------------
+
+
+def test_position_sizing_quality_none_with_no_directional_data():
+    assert position_sizing_quality([]) is None
+    assert position_sizing_quality([_outcome(recommendation="HOLD", forward_return_pct=5.0, position_size="LARGE")]) is None
+
+
+def test_position_sizing_quality_excludes_calls_without_a_recorded_size():
+    outcomes = [_outcome(recommendation="BUY", forward_return_pct=5.0, position_size=None)]
+    assert position_sizing_quality(outcomes) is None
+
+
+def test_position_sizing_quality_buckets_by_recorded_size():
+    outcomes = [
+        _outcome(recommendation="BUY", forward_return_pct=10.0, position_size="LARGE"),
+        _outcome(recommendation="BUY", forward_return_pct=8.0, position_size="LARGE"),
+        _outcome(recommendation="BUY", forward_return_pct=-6.0, position_size="SMALL"),
+        _outcome(recommendation="BUY", forward_return_pct=2.0, position_size="SMALL"),
+    ]
+    result = position_sizing_quality(outcomes)
+    assert result["buckets"]["LARGE"]["count"] == 2
+    assert result["buckets"]["LARGE"]["win_rate"] == pytest.approx(1.0)
+    assert result["buckets"]["SMALL"]["count"] == 2
+    assert result["buckets"]["SMALL"]["win_rate"] == pytest.approx(0.5)
+
+
+def test_position_sizing_quality_well_calibrated_sizing_scores_positive_monotonicity():
+    # Larger sizes consistently earn a better average P&L -- a
+    # well-calibrated sizing rule.
+    outcomes = (
+        [_outcome(recommendation="BUY", forward_return_pct=-2.0, position_size="SMALL", evaluated_at=date(2026, 1, i + 1)) for i in range(3)]
+        + [_outcome(recommendation="BUY", forward_return_pct=8.0, position_size="LARGE", evaluated_at=date(2026, 2, i + 1)) for i in range(3)]
+    )
+    result = position_sizing_quality(outcomes)
+    assert result["monotonicity_score"] == pytest.approx(1.0)
+
+
+def test_position_sizing_quality_none_monotonicity_with_fewer_than_two_buckets():
+    outcomes = [_outcome(recommendation="BUY", forward_return_pct=5.0, position_size="LARGE")]
+    result = position_sizing_quality(outcomes)
+    assert result["monotonicity_score"] is None

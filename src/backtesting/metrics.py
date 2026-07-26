@@ -37,6 +37,23 @@ Metric definitions (also documented in docs/BACKTESTING_AND_CALIBRATION.md):
   bucket's average stated confidence and its realized direction
   accuracy, weighted by bucket size (a standard Expected Calibration
   Error, ECE).
+- precision / recall: standard binary-classification metrics treating
+  each directional call as a prediction and the sign of the realized
+  forward return as ground truth. Bullish calls (predicting an UP
+  move) and bearish calls (predicting a DOWN move) are two independent
+  classes -- a BUY call has no opinion about the DOWN class and is
+  never counted against it -- scored separately, then macro-averaged.
+  HOLD calls and zero/unknown forward returns make no directional
+  claim and are excluded from both.
+- position sizing quality: buckets directional calls with a known
+  outcome by their recorded `position_size` and compares each
+  bucket's win rate / average directional P&L -- a well-calibrated
+  sizing rule should show larger sizes earning better (or at least not
+  worse) outcomes than smaller ones, since size is meant to track
+  conviction quality, not just be a fixed multiplier. `monotonicity_score`
+  is the Pearson correlation between the size ordinal (NONE=0 ...
+  LARGE=4) and each bucket's average directional P&L -- close to +1
+  means sizing is well-calibrated, near 0 or negative means it is not.
 """
 
 import statistics
@@ -48,6 +65,7 @@ _BULLISH = {"STRONG_BUY", "BUY"}
 _BEARISH = {"STRONG_SELL", "SELL"}
 
 _CONFIDENCE_BUCKET_EDGES = [0, 20, 40, 60, 80, 100]
+_POSITION_SIZE_ORDER = ["NONE", "SMALL", "MODERATE", "STANDARD", "LARGE"]
 
 
 @dataclass(frozen=True)
@@ -71,6 +89,7 @@ class EvaluationOutcome:
     forward_return_pct: Optional[float] = None
     hit_target: Optional[bool] = None
     hit_stop_loss: Optional[bool] = None
+    position_size: Optional[str] = None
 
 
 def _is_bullish(recommendation: str) -> bool:
@@ -176,6 +195,15 @@ def max_drawdown(outcomes: List[EvaluationOutcome]) -> Optional[float]:
     return max_dd
 
 
+def directional_pnl_values(outcomes: List[EvaluationOutcome]) -> List[float]:
+    """The raw, signed per-call directional P&L series win_rate/
+    profit_factor/sharpe_ratio/etc. are all built from -- exposed
+    publicly so a caller that genuinely needs the raw values (e.g. a
+    significance test in src.backtesting.calibration.statistical_calibration)
+    doesn't have to re-derive the same sign convention a second time."""
+    return _directional_pnl_series(outcomes)
+
+
 def volatility(outcomes: List[EvaluationOutcome]) -> Optional[float]:
     pnl = _directional_pnl_series(outcomes)
     if len(pnl) < 2:
@@ -259,6 +287,70 @@ def calibration_error(outcomes: List[EvaluationOutcome]) -> Optional[Dict]:
     return {"overall_error": weighted_error / total, "buckets": buckets}
 
 
+def _class_precision_recall(known: List[EvaluationOutcome], is_predicted: Callable, is_actual: Callable) -> Dict:
+    predicted_positive = [o for o in known if is_predicted(o)]
+    actual_positive = [o for o in known if is_actual(o)]
+    true_positive = [o for o in predicted_positive if is_actual(o)]
+    return {
+        "precision": len(true_positive) / len(predicted_positive) if predicted_positive else None,
+        "recall": len(true_positive) / len(actual_positive) if actual_positive else None,
+        "predicted_count": len(predicted_positive),
+        "actual_count": len(actual_positive),
+    }
+
+
+def precision_recall(outcomes: List[EvaluationOutcome]) -> Optional[Dict]:
+    known = [o for o in outcomes if o.forward_return_pct is not None and o.forward_return_pct != 0]
+    if not known:
+        return None
+
+    bullish = _class_precision_recall(known, lambda o: _is_bullish(o.recommendation), lambda o: o.forward_return_pct > 0)
+    bearish = _class_precision_recall(known, lambda o: _is_bearish(o.recommendation), lambda o: o.forward_return_pct < 0)
+
+    precisions = [m["precision"] for m in (bullish, bearish) if m["precision"] is not None]
+    recalls = [m["recall"] for m in (bullish, bearish) if m["recall"] is not None]
+
+    return {
+        "bullish": bullish,
+        "bearish": bearish,
+        "macro_precision": statistics.mean(precisions) if precisions else None,
+        "macro_recall": statistics.mean(recalls) if recalls else None,
+        "sample_size": len(known),
+    }
+
+
+def position_sizing_quality(outcomes: List[EvaluationOutcome]) -> Optional[Dict]:
+    directional = [
+        o for o in outcomes
+        if o.position_size in _POSITION_SIZE_ORDER
+        and (_is_bullish(o.recommendation) or _is_bearish(o.recommendation))
+        and o.forward_return_pct is not None
+    ]
+    if not directional:
+        return None
+
+    buckets: Dict[str, Dict] = {}
+    for size in _POSITION_SIZE_ORDER:
+        in_bucket = [o for o in directional if o.position_size == size]
+        pnl = [p for o in in_bucket for p in [_directional_pnl_pct(o)] if p is not None]
+        if not pnl:
+            continue
+        buckets[size] = {
+            "count": len(pnl),
+            "win_rate": sum(1 for p in pnl if p > 0) / len(pnl),
+            "average_directional_pnl_pct": statistics.mean(pnl),
+        }
+
+    monotonicity_score = None
+    if len(buckets) >= 2:
+        ordinals = [float(_POSITION_SIZE_ORDER.index(size)) for size in buckets]
+        pnls = [buckets[size]["average_directional_pnl_pct"] for size in buckets]
+        if len(set(ordinals)) > 1 and len(set(pnls)) > 1:
+            monotonicity_score = statistics.correlation(ordinals, pnls)
+
+    return {"buckets": buckets, "monotonicity_score": monotonicity_score}
+
+
 def breakdown_by(outcomes: List[EvaluationOutcome], key_fn: Callable[[EvaluationOutcome], Optional[str]]) -> Dict[str, Dict]:
     """Groups outcomes by an arbitrary key (recommendation class, risk
     level, time horizon, sector, symbol, market regime, ...) and
@@ -291,6 +383,8 @@ def compute_all_metrics(outcomes: List[EvaluationOutcome]) -> Dict:
         "sharpe_ratio": sharpe_ratio(outcomes),
         "sortino_ratio": sortino_ratio(outcomes),
         "calibration_error": calibration_error(outcomes),
+        "precision_recall": precision_recall(outcomes),
+        "position_sizing_quality": position_sizing_quality(outcomes),
     }
 
 

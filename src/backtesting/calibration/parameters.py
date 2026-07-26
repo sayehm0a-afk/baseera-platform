@@ -57,6 +57,23 @@ _CONTRIBUTOR_CLASSES = {
 }
 
 
+def contributor_names() -> List[str]:
+    """Every known contributor name, sorted -- the single-contributor
+    equivalent of `build_contributors()`'s own key set, for a caller
+    (e.g. statistical_calibration.py) that needs to iterate contributors
+    one at a time rather than build the full eleven-contributor list."""
+    return sorted(_CONTRIBUTOR_CLASSES)
+
+
+def contributor_class(name: str):
+    """Looks up a single contributor class by its `ScoreContributor.name`.
+    Raises `KeyError` for an unknown name, matching `build_contributors()`'s
+    own fail-loudly convention for a typo'd contributor name."""
+    if name not in _CONTRIBUTOR_CLASSES:
+        raise KeyError(f"Unknown contributor name {name!r}. Known contributors: {sorted(_CONTRIBUTOR_CLASSES)}")
+    return _CONTRIBUTOR_CLASSES[name]
+
+
 def build_contributors(contributor_weights: Optional[Dict[str, float]]) -> Optional[List]:
     """`None` if no override is given -- AIDecisionEngineStrategy then
     falls back to AIDecisionEngine's own default contributor set

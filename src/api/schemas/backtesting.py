@@ -229,3 +229,130 @@ class CalibrationValidateRequest(BaseModel):
         if value not in _VALID_PROVENANCE_MODES:
             raise ValueError(f"data_provenance_mode must be one of {sorted(_VALID_PROVENANCE_MODES)}")
         return value
+
+
+class IndicatorAttributionRequest(BaseModel):
+    """Bounded the same way CalibrationValidateRequest is -- this runs
+    synchronously within the request, so it must never be a large
+    full-market replay by construction."""
+
+    symbols: List[str] = Field(..., min_length=1)
+    start_date: date
+    end_date: date
+    data_provenance_mode: str = "SYNTHETIC"
+    evaluation_frequency_days: int = Field(default=7, ge=1, le=365)
+    holding_horizon_days: int = Field(default=20, ge=1, le=730)
+    fundamental_reporting_lag_days: int = Field(default=45, ge=0, le=365)
+
+    @field_validator("symbols")
+    @classmethod
+    def _normalize_symbols(cls, value: List[str]) -> List[str]:
+        deduped = list(dict.fromkeys(s.strip() for s in value if s.strip()))
+        if not deduped:
+            raise ValueError("symbols must contain at least one non-empty symbol")
+        if len(deduped) > get_max_backtest_symbols():
+            raise ValueError(f"symbols exceeds the maximum of {get_max_backtest_symbols()} per run")
+        return deduped
+
+    @field_validator("data_provenance_mode")
+    @classmethod
+    def _validate_provenance_mode(cls, value: str) -> str:
+        if value not in _VALID_PROVENANCE_MODES:
+            raise ValueError(f"data_provenance_mode must be one of {sorted(_VALID_PROVENANCE_MODES)}")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_date_range(self) -> "IndicatorAttributionRequest":
+        if self.end_date <= self.start_date:
+            raise ValueError("end_date must be after start_date")
+        span = (self.end_date - self.start_date).days
+        max_days = get_max_backtest_range_days()
+        if span > max_days:
+            raise ValueError(f"date range ({span} days) exceeds the maximum of {max_days} days")
+        return self
+
+
+class IndicatorAttributionOut(BaseModel):
+    evaluated_count: int
+    skipped: Dict[str, int]
+    directional_indicators: Dict[str, Dict[str, Any]]
+    risk_indicators: Dict[str, Dict[str, Any]]
+
+
+class StatisticalCalibrationRequest(BaseModel):
+    """Bounded the same way CalibrationValidateRequest is. `create_draft_calibration`
+    optionally closes the loop end to end: when true, any statistically
+    reweighted contributor is handed straight to
+    CalibrationEngine.propose() as a new DRAFT CalibrationConfig,
+    ready for the existing validate -> activate -> rollback lifecycle
+    -- `validation_period_start`/`validation_period_end` are required
+    in that case (propose() always needs a validation period)."""
+
+    symbols: List[str] = Field(..., min_length=1)
+    training_period_start: date
+    training_period_end: date
+    data_provenance_mode: str = "SYNTHETIC"
+    evaluation_frequency_days: int = Field(default=7, ge=1, le=365)
+    holding_horizon_days: int = Field(default=20, ge=1, le=730)
+    fundamental_reporting_lag_days: int = Field(default=45, ge=0, le=365)
+    min_sample_size: int = Field(default=30, ge=2, le=100_000)
+    significance_level: float = Field(default=0.05, gt=0, lt=1)
+    create_draft_calibration: bool = False
+    validation_period_start: Optional[date] = None
+    validation_period_end: Optional[date] = None
+    notes: Optional[str] = None
+
+    @field_validator("symbols")
+    @classmethod
+    def _normalize_symbols(cls, value: List[str]) -> List[str]:
+        deduped = list(dict.fromkeys(s.strip() for s in value if s.strip()))
+        if not deduped:
+            raise ValueError("symbols must contain at least one non-empty symbol")
+        if len(deduped) > get_max_backtest_symbols():
+            raise ValueError(f"symbols exceeds the maximum of {get_max_backtest_symbols()} per run")
+        return deduped
+
+    @field_validator("data_provenance_mode")
+    @classmethod
+    def _validate_provenance_mode(cls, value: str) -> str:
+        if value not in _VALID_PROVENANCE_MODES:
+            raise ValueError(f"data_provenance_mode must be one of {sorted(_VALID_PROVENANCE_MODES)}")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_periods(self) -> "StatisticalCalibrationRequest":
+        if self.training_period_end <= self.training_period_start:
+            raise ValueError("training_period_end must be after training_period_start")
+        span = (self.training_period_end - self.training_period_start).days
+        max_days = get_max_backtest_range_days()
+        if span > max_days:
+            raise ValueError(f"training period ({span} days) exceeds the maximum of {max_days} days")
+
+        if self.create_draft_calibration:
+            if self.validation_period_start is None or self.validation_period_end is None:
+                raise ValueError(
+                    "validation_period_start and validation_period_end are required when create_draft_calibration is true"
+                )
+            if self.validation_period_end <= self.validation_period_start:
+                raise ValueError("validation_period_end must be after validation_period_start")
+        return self
+
+
+class StatisticalCalibrationEntryOut(BaseModel):
+    contributor: str
+    old_weight: float
+    new_weight: float
+    sample_size: int
+    mean_edge: Optional[float] = None
+    t_statistic: Optional[float] = None
+    p_value: Optional[float] = None
+    significant: bool
+    action: str
+
+
+class StatisticalCalibrationOut(BaseModel):
+    training_period_start: date
+    training_period_end: date
+    symbols: List[str]
+    entries: List[StatisticalCalibrationEntryOut]
+    draft_calibration_version: Optional[str] = None

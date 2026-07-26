@@ -234,3 +234,117 @@ def test_non_staff_user_is_rejected(client, session_factory):
         )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "insufficient_permission"
+
+
+# --- indicator-attribution ------------------------------------------------
+
+
+def test_indicator_attribution_returns_all_eleven_indicators(client, session_factory):
+    _seed_bars(session_factory)
+    response = client.post(
+        "/api/v1/calibrations/indicator-attribution",
+        json={
+            "symbols": ["2222"], "start_date": "2026-03-01", "end_date": "2026-08-01",
+            "data_provenance_mode": "SYNTHETIC", "evaluation_frequency_days": 7, "holding_horizon_days": 20,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["evaluated_count"] > 0
+    assert set(body["directional_indicators"].keys()) == {
+        "fibonacci", "support_resistance", "vwap", "volume_profile", "rsi", "macd", "adx", "ema", "sma",
+    }
+    assert set(body["risk_indicators"].keys()) == {"atr", "bollinger"}
+    assert "win_rate" in body["directional_indicators"]["rsi"]
+
+
+def test_indicator_attribution_rejects_invalid_date_range(client, session_factory):
+    response = client.post(
+        "/api/v1/calibrations/indicator-attribution",
+        json={"symbols": ["2222"], "start_date": "2026-08-01", "end_date": "2026-03-01", "data_provenance_mode": "SYNTHETIC"},
+    )
+    assert response.status_code == 422
+
+
+def test_indicator_attribution_staff_only(client, session_factory):
+    non_staff_user = User(email="customer@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff_user
+    try:
+        response = client.post(
+            "/api/v1/calibrations/indicator-attribution",
+            json={"symbols": ["2222"], "start_date": "2026-03-01", "end_date": "2026-08-01"},
+        )
+    finally:
+        main.app.dependency_overrides[get_current_user] = (
+            lambda: User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+        )
+    assert response.status_code == 403
+
+
+# --- statistical-weights ---------------------------------------------------
+
+
+def test_statistical_weights_returns_every_contributor(client, session_factory):
+    _seed_bars(session_factory)
+    response = client.post(
+        "/api/v1/calibrations/statistical-weights",
+        json={
+            "symbols": ["2222"], "training_period_start": "2026-03-01", "training_period_end": "2026-09-01",
+            "data_provenance_mode": "SYNTHETIC", "evaluation_frequency_days": 5, "holding_horizon_days": 15,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["entries"]) == 11
+    assert body["draft_calibration_version"] is None
+    for entry in body["entries"]:
+        assert entry["action"] in ("reweighted", "unchanged_insufficient_evidence", "unchanged_not_significant")
+
+
+def test_statistical_weights_requires_validation_period_when_creating_a_draft(client, session_factory):
+    response = client.post(
+        "/api/v1/calibrations/statistical-weights",
+        json={
+            "symbols": ["2222"], "training_period_start": "2026-03-01", "training_period_end": "2026-09-01",
+            "data_provenance_mode": "SYNTHETIC", "create_draft_calibration": True,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_statistical_weights_can_create_a_draft_calibration(client, session_factory):
+    _seed_bars(session_factory)
+    response = client.post(
+        "/api/v1/calibrations/statistical-weights",
+        json={
+            "symbols": ["2222"], "training_period_start": "2026-03-01", "training_period_end": "2026-09-01",
+            "data_provenance_mode": "SYNTHETIC", "evaluation_frequency_days": 5, "holding_horizon_days": 15,
+            "create_draft_calibration": True,
+            "validation_period_start": "2026-09-02", "validation_period_end": "2026-11-01",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    reweighted = [e for e in body["entries"] if e["action"] == "reweighted"]
+    if reweighted:
+        assert body["draft_calibration_version"] is not None
+        draft = client.get(f"/api/v1/calibrations/{body['draft_calibration_version']}").json()
+        assert draft["status"] == "DRAFT"
+        assert draft["config"]["contributor_weights"]
+    else:
+        assert body["draft_calibration_version"] is None
+
+
+def test_statistical_weights_staff_only(client, session_factory):
+    non_staff_user = User(email="customer@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff_user
+    try:
+        response = client.post(
+            "/api/v1/calibrations/statistical-weights",
+            json={"symbols": ["2222"], "training_period_start": "2026-03-01", "training_period_end": "2026-09-01"},
+        )
+    finally:
+        main.app.dependency_overrides[get_current_user] = (
+            lambda: User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+        )
+    assert response.status_code == 403

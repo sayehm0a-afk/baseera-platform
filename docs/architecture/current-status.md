@@ -1206,6 +1206,95 @@ Full detail in `docs/BACKTESTING_AND_CALIBRATION.md`; summary here.
    exactly what remains before the Autonomous AI Analyst phase, in
    `docs/BACKTESTING_AND_CALIBRATION.md`.
 
+### Extended (Phase 12) -- per-indicator attribution + statistically
+### calibrated contributor weights
+
+Full detail in `docs/BACKTESTING_AND_CALIBRATION.md` §5a/§5b; summary
+here. Closes the last major gap named in requirement 4 of the Phase 11
+milestone report: point weights inside the decision engine were still
+purely heuristic, never measured against real replayed history.
+
+- **`calibration/indicator_signals.py`** (new) -- eleven standalone,
+  backtesting-only pure readers, one per named indicator (Fibonacci,
+  Support/Resistance, VWAP, Volume Profile, RSI, MACD, ADX, EMA, SMA,
+  Bollinger, ATR), deliberately independent of the live scoring
+  contributors' internal functions so each indicator's own predictive
+  power can be measured in isolation, not blended. Nine make a real
+  BULLISH/BEARISH/NEUTRAL claim; ATR and Bollinger (non-directional in
+  this codebase's own live risk scoring) get a volatility-ratio
+  reading instead of a fabricated direction.
+- **`calibration/indicator_attribution.py`** (new) -- replays the same
+  anti-look-ahead (symbol, date) grid as `BacktestingEngine` (via a
+  newly-shared `data_access.collect_as_of_evaluations()` primitive) and
+  scores each directional indicator through the exact same
+  `metrics.compute_all_metrics()` every other report in this engine
+  uses (win rate, average return, drawdown, Sharpe, **precision/
+  recall** and **calibration/confidence accuracy** -- both new, see
+  below), plus a dedicated volatility-bucket report for ATR/Bollinger.
+- **`metrics.py` gained two new metrics**: `precision_recall()`
+  (standard binary-classification precision/recall, ground truth from
+  the sign of the realized forward return) and
+  `position_sizing_quality()` (buckets directional calls by their
+  recorded `position_size`, reports win rate/average P&L per bucket
+  plus a Pearson-correlation `monotonicity_score` -- does a larger size
+  really earn a better outcome). `EvaluationOutcome` gained a
+  `position_size` field; `engine.py`'s own outcome construction was
+  fixed to actually populate it (a real, caught gap -- it was computed
+  on every `StrategyCall` and persisted to `RecommendationSnapshot`,
+  but silently dropped before reaching `EvaluationOutcome`).
+- **`calibration/statistical_calibration.py`** (new) -- measures each
+  of the eleven scoring contributors' own standalone directional edge
+  over a training period (the same "one contributor, weight 1.0"
+  technique two baseline strategies already used for two contributors,
+  now generalized to all eleven), tests it with a dependency-free
+  two-sided z-test (`statistics.NormalDist`, no scipy) against "no real
+  edge," and proposes a new weight only when the evidence is
+  significant **and** the sample size clears a floor (default 30) --
+  non-significant or under-sampled contributors keep their *exact*
+  existing weight, never drift from renormalization
+  (`RecommendationEngine.generate()` already self-normalizes by
+  whichever weights are present). The weight-proposal formula (a
+  bounded, disclosed t-statistic-to-weight-multiplier scaling, capped
+  at ±50%) is itself a heuristic -- disclosed as such, not fabricated
+  precision; the significance *test* underneath it is not.
+- **Report shape matches the requirement exactly**: every contributor
+  gets old weight, new weight, mean edge, t-statistic, p-value, sample
+  size, and an explicit action
+  (`reweighted`/`unchanged_insufficient_evidence`/`unchanged_not_significant`)
+  -- including the four external-factor contributors
+  (news/macro/insider/sector-rotation), which honestly report zero
+  sample size every time since no real feed for them exists in
+  `data_access.AsOfDataset` (disclosed gap, not a fabricated result).
+- **Reusable for continuous improvement**: `report.contributor_weights`
+  is the exact JSON shape the *existing, unmodified*
+  `CalibrationEngine.propose()` already accepts -- any later date range
+  with newly ingested data can be re-run through
+  `propose_statistical_weights()` to produce a fresh, independently
+  re-validated candidate through the same propose -> validate ->
+  activate -> rollback lifecycle. No new lifecycle infrastructure was
+  built or needed.
+- **REST API**: `POST /api/v1/calibrations/indicator-attribution` and
+  `POST /api/v1/calibrations/statistical-weights` (the latter can
+  create a `DRAFT` `CalibrationConfig` directly via
+  `create_draft_calibration: true`), both staff-only, both bounded and
+  synchronous like the existing `/validate` route.
+- **Tests**: 83 new unit tests (indicator signals, indicator
+  attribution, statistical calibration, the two new metrics, the
+  shared grid-walk primitive, `position_size` passthrough regression),
+  7 new integration tests for the two new routes. Full repo-wide suite:
+  2232 passed, 3 skipped (pre-existing/unrelated), `flake8 src/ tests/
+  main.py` clean at 0.
+- **Remaining gaps**: the per-indicator `magnitude` scaling constants
+  and the statistical weight-proposal edge-to-weight formula are
+  themselves disclosed heuristics, not yet backtested/calibrated the
+  way `AIDecisionTuning`'s ATR multiples already are; the four
+  external-factor contributors need a real data source before they can
+  ever be statistically calibrated; nothing from this milestone is
+  wired into live production routes (an `ACTIVE` calibration still
+  doesn't affect `/recommendation`/`/decision` -- an existing, already-
+  disclosed gap from the original Backtesting & Calibration milestone,
+  not new here).
+
 ## Completed: Autonomous AI Analyst Framework
 
 Full detail in `docs/AUTONOMOUS_AI_ANALYST_FRAMEWORK.md`; summary here.

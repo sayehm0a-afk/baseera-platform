@@ -26,6 +26,21 @@ from src.backtesting.engine import (
 from src.backtesting.metrics import EvaluationOutcome
 from src.core.db.database import Base
 from src.domain.models import DataProvenanceMode, FundamentalSnapshot, PeriodType, PriceBar, RecommendationSnapshot, Stock, Timeframe
+from src.analysis.recommendation.types import ScoreContribution
+
+
+class _AlwaysStrongBullishContributor:
+    """A minimal ScoreContributor that always scores maximally bullish,
+    regardless of the actual technical/fundamental data -- used to force
+    a deterministic STRONG_BUY/LARGE-position call so a test can assert
+    on position sizing without depending on what a specific synthetic
+    price series happens to make RSI/MACD/etc. read as."""
+
+    name = "technical"
+    default_weight = 1.0
+
+    def contribute(self, context) -> ScoreContribution:
+        return ScoreContribution(source=self.name, score=95.0, weight=1.0, confidence=95.0, signals=[])
 
 
 # --- pure helpers ------------------------------------------------------
@@ -189,6 +204,18 @@ def test_run_evaluates_and_persists_snapshots_on_a_monotonic_uptrend(session):
     # Buy-and-hold on a monotonic uptrend: every call is a win.
     assert report["overall"]["win_rate"] == pytest.approx(1.0)
     assert report["overall"]["direction_accuracy"] == pytest.approx(1.0)
+
+
+def test_position_size_flows_through_to_evaluation_outcomes(session):
+    # Regression: EvaluationOutcome.position_size used to be left at its
+    # dataclass default (None) even though StrategyCall.position_size was
+    # already computed and persisted to RecommendationSnapshot -- position
+    # sizing quality could never be measured as a result.
+    _seed_stock_with_monotonic_bars(session)
+    config = _config(strategy="ai_decision_engine", strategy_kwargs={"contributors": [_AlwaysStrongBullishContributor()]})
+    report = BacktestingEngine().run(session, config)
+    assert report["evaluated_count"] > 0
+    assert report["overall"]["position_sizing_quality"] is not None
 
 
 def test_run_is_idempotent_on_rerun_with_the_same_run_id(session):

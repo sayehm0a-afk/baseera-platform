@@ -24,7 +24,7 @@ one mistake that would silently reintroduce look-ahead bias:
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -34,7 +34,7 @@ from src.analysis.fundamental.fundamental_loader import load_fundamental_snapsho
 from src.analysis.ohlcv_loader import load_price_bars
 from src.analysis.recommendation.types import AnalysisContext
 from src.analysis.technical_analysis_engine import TechnicalAnalysisEngine
-from src.domain.models import PeriodType, PriceBar, Stock, Timeframe
+from src.domain.models import DataProvenanceMode, PeriodType, PriceBar, Stock, Timeframe
 
 # A fiscal_period_end alone is when a period *ended*, not when the
 # company's results became public -- FundamentalSnapshot has no filing/
@@ -185,3 +185,77 @@ def bars_match_provenance(
         .first()
     )
     return mismatch is None
+
+
+def evaluation_dates(start: date, end: date, frequency_days: int) -> List[date]:
+    """The evaluation-date grid every historical replay (BacktestingEngine,
+    indicator attribution, statistical calibration) walks -- one shared
+    definition of "which dates get evaluated at this frequency" so all
+    three always mean the same thing by it."""
+    if frequency_days <= 0:
+        raise ValueError("evaluation_frequency_days must be positive")
+    dates = []
+    current = start
+    while current <= end:
+        dates.append(current)
+        current += timedelta(days=frequency_days)
+    return dates
+
+
+@dataclass(frozen=True)
+class AsOfEvaluation:
+    """One (symbol, evaluation date) grid point that passed every
+    safety check (symbol exists, provenance matches, at least one of
+    technical/fundamental input was available) -- ready for a strategy
+    or an indicator reader to evaluate."""
+
+    symbol: str
+    stock: Stock
+    eval_date: date
+    dataset: AsOfDataset
+
+
+def collect_as_of_evaluations(
+    session: Session,
+    symbols: List[str],
+    start_date: date,
+    end_date: date,
+    frequency_days: int,
+    data_provenance_mode: DataProvenanceMode,
+    fundamental_reporting_lag_days: int = DEFAULT_FUNDAMENTAL_REPORTING_LAG_DAYS,
+) -> Tuple[List[AsOfEvaluation], Dict[str, int]]:
+    """The (symbol, date) grid walk shared by every historical-replay
+    consumer that doesn't need BacktestingEngine's own extra
+    machinery (snapshot persistence, cancellation, regime
+    classification, progress callbacks) -- just the safety-checked
+    list of evaluable (symbol, date, AsOfDataset) points and a count
+    of what was skipped and why. Bounded by the same caller-supplied
+    date range/symbol list every existing backtest/calibration route
+    already enforces (src.backtesting.config) -- materializing the
+    full list (rather than a lazy generator) is safe at that scale and
+    simpler for callers to consume.
+    """
+    dates = evaluation_dates(start_date, end_date, frequency_days)
+    expect_synthetic = data_provenance_mode == DataProvenanceMode.SYNTHETIC
+    skipped = {"symbol_not_found": 0, "provenance_mismatch": 0, "insufficient_data": 0}
+    evaluations: List[AsOfEvaluation] = []
+
+    for symbol in symbols:
+        stock = session.query(Stock).filter_by(symbol=symbol).one_or_none()
+        if stock is None:
+            skipped["symbol_not_found"] += len(dates)
+            continue
+
+        for eval_date in dates:
+            if not bars_match_provenance(session, stock.id, start_date, eval_date, expect_synthetic):
+                skipped["provenance_mismatch"] += 1
+                continue
+
+            dataset = load_as_of_dataset(session, stock, eval_date, fundamental_reporting_lag_days)
+            if not dataset.has_any_input:
+                skipped["insufficient_data"] += 1
+                continue
+
+            evaluations.append(AsOfEvaluation(symbol=symbol, stock=stock, eval_date=eval_date, dataset=dataset))
+
+    return evaluations, skipped
