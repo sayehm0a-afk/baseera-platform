@@ -19,9 +19,21 @@ from sqlalchemy.pool import StaticPool
 from src.analysis.context_builder import build_analysis_context
 from src.core.db.database import Base
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
-from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
+from src.domain.models import (
+    FundamentalSnapshot,
+    NewsCategory,
+    NewsEntity,
+    NewsEntityType,
+    NewsEvent,
+    PeriodType,
+    PriceBar,
+    SentimentLabel,
+    Stock,
+    Timeframe,
+)
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 from src.market_data.providers.market_data_provider import IMarketDataProvider, ProviderHealth
+from src.news_intelligence.service import NewsIntelligenceService
 
 
 class _AlwaysDownProvider(IMarketDataProvider):
@@ -126,3 +138,41 @@ async def test_degrades_gracefully_when_provider_is_down(session):
 
     assert context.technical_result is not None
     assert context.latest_price is None
+
+
+@pytest.mark.asyncio
+async def test_no_news_leaves_extra_empty(session):
+    stock = _make_stock(session)
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
+    assert context.extra == {}
+
+
+@pytest.mark.asyncio
+async def test_real_persisted_news_populates_extra_news_sentiment(session):
+    # This is the exact mechanism behind "the recommendation must
+    # automatically change when important news appears" (Phase 12,
+    # requirement 8): build_analysis_context is the one hook point
+    # every consumer (routes, portfolio, market scanner) shares, and a
+    # NewsEvent persisted by the News Intelligence Engine flows through
+    # it with zero changes anywhere else.
+    stock = _make_stock(session)
+    event = NewsEvent(
+        external_key="test-key-1", headline="Saudi Aramco reports record quarterly profit", source="sahmk",
+        source_reliability_score=0.8, published_at=datetime.now(timezone.utc), is_synthetic=False,
+        category=NewsCategory.EARNINGS, sentiment_score=0.7, sentiment_label=SentimentLabel.POSITIVE,
+        confidence=85.0, explanation="Strong profit beat.", analyzed_at=datetime.now(timezone.utc),
+        analysis_model="gpt-4o-mini",
+    )
+    session.add(event)
+    session.commit()
+    session.add(NewsEntity(news_event_id=event.id, entity_type=NewsEntityType.COMPANY, stock_id=stock.id, symbol="2222"))
+    session.commit()
+
+    context = await build_analysis_context(
+        stock, PeriodType.ANNUAL, session, DevMarketDataProvider(), news_service=NewsIntelligenceService()
+    )
+
+    assert "news_sentiment" in context.extra
+    assert context.extra["news_sentiment"]["sentiment_score"] == pytest.approx(0.7)
+    assert context.extra["news_sentiment"]["article_count"] == 1
+    assert context.extra["news_sentiment"]["events"][0]["headline"] == "Saudi Aramco reports record quarterly profit"

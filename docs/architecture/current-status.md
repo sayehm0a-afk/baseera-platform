@@ -1518,6 +1518,80 @@ Full detail in `docs/PORTFOLIO_INTELLIGENCE.md`; summary here.
    anywhere in this codebase's tests is a claim about real investment
    performance.** Full detail in `docs/PORTFOLIO_INTELLIGENCE.md`.
 
+## Completed: Real News Intelligence Engine
+
+Full detail in `docs/NEWS_INTELLIGENCE.md`; summary here.
+
+1. **`src/news_intelligence/`** (new package) — collects, deduplicates,
+   classifies, and scores news, then feeds the result into the
+   **existing** AI Decision Engine rather than a second recommendation
+   path. `NewsCollector` wraps the already-existing
+   `IMarketDataProvider.get_market_news()` (real for `SahmkMarketDataProvider`
+   via SAHMK's `/events/` endpoint, honestly synthetic for
+   `DevMarketDataProvider`) in a `TTLCache`; `NewsAnalyzer` uses the
+   already-existing `OpenAILLMClient` for entity recognition,
+   20-category classification, 5-label sentiment, and short/medium/
+   long-term + price/risk/volatility impact estimation, one LLM call per
+   canonical article, never fabricating a result on failure (returns
+   `None`, persisted as an honestly-unanalyzed event).
+2. **Reused, not duplicated**: `context_builder.build_analysis_context()`
+   — the one function `/recommendation`, `/decision`, `/analyst-report`,
+   portfolio holding analysis, and market scan all already call — now
+   populates `context.extra["news_sentiment"]` from a pure,
+   network-free DB read (`NewsIntelligenceService.get_symbol_sentiment()`).
+   Zero changes to any of those five call sites. The pre-existing
+   `NewsSentimentScoreContributor`'s blended score/confidence formula is
+   unchanged; it now emits one `Signal` per news event (for
+   explainability) instead of a single aggregate signal, flowing through
+   `AIDecisionEngine`'s already-existing top-signals explanation logic
+   with zero changes to `ai_decision_engine.py` itself.
+3. **Deduplication and idempotency**, two independent mechanisms: an
+   `external_key` (hash of source + normalized headline + timestamp)
+   unique constraint makes re-ingesting the same article a structural
+   no-op; `difflib`-based headline-similarity matching merges syndicated/
+   republished copies into their canonical event via `duplicate_of_id`
+   — a duplicate is never independently analyzed and never increases
+   `SourceReliabilityService`'s `articles_seen` count, directly
+   implementing "duplicate news must not increase confidence."
+4. **New domain models + migration `6a9ccaf29e1f`**: `NewsEvent`,
+   `NewsEntity`, `NewsSourceReliability`, `PortfolioNewsAlert` (the last
+   reuses the pre-existing `AlertSeverity` enum rather than redefining
+   it).
+5. **Portfolio integration**: `PortfolioNewsAlertEngine` re-evaluates
+   held positions against newly analyzed news via a pure, confidence-
+   gated classification function (`HIGH_RISK`/`MAJOR_OPPORTUNITY`/
+   `UPGRADE`/`DOWNGRADE`), persisting idempotent alerts plus reusing the
+   pre-existing `Notification(type=PORTFOLIO_ALERT)` model — no new
+   notification infrastructure built.
+6. **REST API**: `GET /api/v1/news/{symbol}`, `GET /api/v1/news/market`,
+   `GET /api/v1/news/sources` (staff-only), `POST /api/v1/news/refresh`
+   (staff-only, synchronous, bounded), `GET
+   /api/v1/portfolio/{id}/news-alerts`, `POST
+   /api/v1/portfolio/{id}/news-alerts/refresh` (both owner-scoped,
+   404-not-403 for another user's portfolio).
+7. **Tests** — 74 unit tests (`tests/unit/domain/models/
+   test_news_intelligence_models.py`, `tests/unit/news_intelligence/`,
+   plus new cases added to `test_external_factor_contributors.py` and
+   `test_context_builder.py`), 36 integration tests
+   (`tests/integration/api/test_news_routes.py`, new cases in
+   `test_portfolio_routes.py`). **2329 tests pass, 3 skipped,
+   repo-wide.** `flake8 src/ tests/ main.py` is clean at 0 violations.
+8. **Disclosed limitations** — market-wide/government news is not yet
+   blended into per-symbol decision-engine sentiment (only `COMPANY`
+   entities matching the exact symbol are aggregated); source
+   reliability is seeded neutral and only changes via manual staff
+   override, no automated outcome-driven calibration yet; both refresh
+   routes run synchronously rather than as background jobs; no
+   scheduled/recurring refresh job exists (must be explicitly
+   triggered); `Notification` rows are generated but not delivered
+   (push/email/SMS), matching the platform's existing `MarketAlert`
+   posture. **No live SAHMK or OpenAI network access exists in this
+   environment — every test in this milestone runs against synthetic,
+   hand-seeded data and a fake LLM client returning deterministic JSON;
+   no sentiment/classification/impact value anywhere in this codebase's
+   tests is a claim about real news content or real market reaction.**
+   Full detail in `docs/NEWS_INTELLIGENCE.md`.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

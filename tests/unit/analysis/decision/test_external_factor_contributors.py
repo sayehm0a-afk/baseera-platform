@@ -61,6 +61,69 @@ def test_news_sentiment_is_clamped_to_valid_range():
     assert contribution.score == 70.0  # 50 + clamp(5.0, -1, 1)*20 = 50+20
 
 
+def test_news_sentiment_with_events_emits_one_signal_per_event():
+    contributor = NewsSentimentScoreContributor()
+    contribution = contributor.contribute(
+        _context(
+            {
+                "news_sentiment": {
+                    "sentiment_score": 0.5, "article_count": 2,
+                    "events": [
+                        {
+                            "news_event_id": 1, "headline": "Aramco reports record earnings",
+                            "category": "EARNINGS", "sentiment_score": 0.8, "confidence": 90.0, "impact_points": 8.0,
+                        },
+                        {
+                            "news_event_id": 2, "headline": "New government infrastructure project awarded",
+                            "category": "CONTRACT_AWARD", "sentiment_score": 0.4, "confidence": 70.0, "impact_points": 5.0,
+                        },
+                    ],
+                }
+            }
+        )
+    )
+    # The blended score/confidence math is unchanged -- only the signals differ.
+    assert contribution.score == 60.0
+    assert contribution.confidence == 40.0
+    assert len(contribution.signals) == 2
+    assert contribution.signals[0].impact == 8.0
+    assert contribution.signals[0].direction == SignalDirection.BULLISH
+    assert "Earnings news (+8.0 pts)" in contribution.signals[0].description
+    assert "Aramco reports record earnings" in contribution.signals[0].description
+    assert contribution.signals[1].impact == 5.0
+    assert "Contract Award news (+5.0 pts)" in contribution.signals[1].description
+
+
+def test_news_sentiment_events_signal_direction_follows_impact_sign():
+    contributor = NewsSentimentScoreContributor()
+    contribution = contributor.contribute(
+        _context(
+            {
+                "news_sentiment": {
+                    "sentiment_score": -0.3, "article_count": 1,
+                    "events": [
+                        {
+                            "news_event_id": 3, "headline": "Company faces lawsuit", "category": "LAWSUIT",
+                            "sentiment_score": -0.6, "confidence": 80.0, "impact_points": -6.0,
+                        },
+                    ],
+                }
+            }
+        )
+    )
+    assert contribution.signals[0].direction == SignalDirection.BEARISH
+    assert "(-6.0 pts)" in contribution.signals[0].description
+
+
+def test_news_sentiment_empty_events_list_falls_back_to_the_aggregate_signal():
+    contributor = NewsSentimentScoreContributor()
+    contribution = contributor.contribute(
+        _context({"news_sentiment": {"sentiment_score": 0.5, "article_count": 5, "events": []}})
+    )
+    assert len(contribution.signals) == 1
+    assert contribution.signals[0].name == "news_sentiment"
+
+
 # --- Macro economy -----------------------------------------------------
 
 

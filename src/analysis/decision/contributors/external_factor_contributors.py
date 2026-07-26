@@ -5,16 +5,24 @@ Intelligence, Macro Economy, Insider Transactions, and Sector Rotation
 Volume/Risk which are implemented in their own files since they need
 real computation over TechnicalAnalysisResult).
 
-No real News/Macro/Insider/Sector Rotation data vendor is contracted
-(same disclosed-gap status as `SaudiMarketDataProvider` before SAHMK,
-or `IFundamentalDataProvider` before a real fundamentals vendor) -- so
-each of these reads its input from `AnalysisContext.extra`, a
+No real Macro/Insider/Sector Rotation data vendor is contracted (same
+disclosed-gap status as `SaudiMarketDataProvider` before SAHMK, or
+`IFundamentalDataProvider` before a real fundamentals vendor) -- each
+of those three reads its input from `AnalysisContext.extra`, a
 free-form bag any future caller can populate once such a vendor
 exists, and honestly reports itself unavailable (`score=None,
 weight=0.0`) when that key is absent, exactly like
-FundamentalScoreContributor already does for a missing ratio. This is
-proven end-to-end, not just asserted: the unit tests supply fake
-`extra` data and confirm each contributor scores it correctly, and
+FundamentalScoreContributor already does for a missing ratio.
+
+News Intelligence is the one exception (Phase 12): a real pipeline
+now exists (`src.news_intelligence`), populating
+`context.extra["news_sentiment"]` from real, LLM-analyzed
+`NewsEvent` rows via `src.analysis.context_builder.build_analysis_context()`
+-- this contributor itself is unchanged in *how* it reads that key
+(still `context.extra["news_sentiment"]`, still honestly unavailable
+when absent), only in what can now populate it. This is proven
+end-to-end, not just asserted: the unit tests supply fake `extra` data
+and confirm each contributor scores it correctly, and
 AIDecisionEngine's own pluggability test does the same at the
 orchestration level.
 
@@ -24,14 +32,25 @@ about that protocol, `RecommendationEngine`, or any existing
 contributor changes to add these.
 """
 
-from typing import List
+from typing import Any, Dict, List
 
 from src.analysis.recommendation.types import AnalysisContext, ScoreContribution, Signal, SignalDirection
 
 
 class NewsSentimentScoreContributor:
     """Expects `context.extra["news_sentiment"] = {"sentiment_score":
-    float in [-1, 1], "article_count": int}`."""
+    float in [-1, 1], "article_count": int}`, optionally with an
+    `"events"` list (each `{"news_event_id", "headline", "category",
+    "sentiment_score", "confidence", "impact_points"}` -- the exact
+    shape `src.news_intelligence.service.NewsIntelligenceService.get_symbol_sentiment()`
+    produces). When `events` is present, one Signal is emitted per
+    event (citing its own headline/category/impact) instead of a
+    single blended one, so `AIDecisionEngine`'s existing top-signals-
+    by-impact explainability shows each news item individually --
+    "Earnings news (+8.0 pts): ..." -- next to every other
+    contributor's signals, without any change to that mechanism. The
+    blended `score`/`confidence` math is identical either way; only
+    which Signal objects carry the explanation changes."""
 
     name = "news_sentiment"
 
@@ -51,16 +70,36 @@ class NewsSentimentScoreContributor:
         points = round(sentiment * 20.0, 1)
         score = max(0.0, min(100.0, 50.0 + points))
         confidence = round(min(100.0, article_count * 20.0), 1)
-        direction = (
-            SignalDirection.BULLISH if points > 0 else SignalDirection.BEARISH if points < 0 else SignalDirection.NEUTRAL
-        )
-        signal = Signal(
-            name="news_sentiment",
-            description=f"News sentiment score {sentiment:+.2f} across {article_count} article(s).",
-            direction=direction, source=self.name, impact=points,
-        )
+
+        events = data.get("events") or []
+        if events:
+            signals = [self._event_signal(event) for event in events]
+        else:
+            direction = (
+                SignalDirection.BULLISH if points > 0 else SignalDirection.BEARISH if points < 0 else SignalDirection.NEUTRAL
+            )
+            signals = [
+                Signal(
+                    name="news_sentiment",
+                    description=f"News sentiment score {sentiment:+.2f} across {article_count} article(s).",
+                    direction=direction, source=self.name, impact=points,
+                )
+            ]
+
         return ScoreContribution(
-            source=self.name, score=round(score, 1), weight=self.default_weight, confidence=confidence, signals=[signal]
+            source=self.name, score=round(score, 1), weight=self.default_weight, confidence=confidence, signals=signals
+        )
+
+    def _event_signal(self, event: Dict[str, Any]) -> Signal:
+        impact = float(event.get("impact_points", 0.0) or 0.0)
+        category = str(event.get("category", "OTHER")).replace("_", " ").title()
+        headline = str(event.get("headline", ""))
+        sign = "+" if impact >= 0 else ""
+        direction = SignalDirection.BULLISH if impact > 0 else SignalDirection.BEARISH if impact < 0 else SignalDirection.NEUTRAL
+        return Signal(
+            name=f"news_event:{event.get('news_event_id', '')}",
+            description=f"{category} news ({sign}{impact:.1f} pts): {headline}",
+            direction=direction, source=self.name, impact=impact,
         )
 
 

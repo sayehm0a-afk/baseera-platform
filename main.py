@@ -31,6 +31,7 @@ from src.api.routes.auth import router as auth_router  # noqa: E402
 from src.api.routes.backtests import router as backtests_router  # noqa: E402
 from src.api.routes.calibrations import router as calibrations_router  # noqa: E402
 from src.api.routes.market import router as market_router  # noqa: E402
+from src.api.routes.news import router as news_router  # noqa: E402
 from src.api.routes.portfolio import router as portfolio_router  # noqa: E402
 from src.api.routes.stocks import router as stocks_router  # noqa: E402
 from src.api.routes.subscriptions import router as subscriptions_router  # noqa: E402
@@ -94,6 +95,7 @@ app.include_router(stocks_router)
 app.include_router(backtests_router)
 app.include_router(calibrations_router)
 app.include_router(market_router)
+app.include_router(news_router)
 app.include_router(portfolio_router)
 app.include_router(subscriptions_router)
 

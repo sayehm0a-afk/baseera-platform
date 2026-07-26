@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_current_user, get_market_provider
 from src.api.exceptions import InvalidPortfolioConfigError, NoPortfolioAnalysisError, PortfolioNotFoundError
+from src.api.schemas.news import PortfolioNewsAlertListOut, PortfolioNewsAlertOut
 from src.api.schemas.portfolio_intelligence import (
     AllocationOut,
     CorrelationMatrixOut,
@@ -39,8 +40,9 @@ from src.api.schemas.portfolio_intelligence import (
     RiskProfileOut,
 )
 from src.core.db.database import get_db
-from src.domain.models import Portfolio, PortfolioAnalysisSnapshot, User
+from src.domain.models import Portfolio, PortfolioAnalysisSnapshot, PortfolioNewsAlert, User
 from src.market_data.providers.market_data_provider import IMarketDataProvider
+from src.news_intelligence.portfolio_alerts import PortfolioNewsAlertEngine
 from src.portfolio_intelligence.config import get_max_holdings_per_portfolio
 from src.portfolio_intelligence.portfolio_engine import PORTFOLIO_ENGINE_VERSION, PortfolioEngine
 from src.portfolio_intelligence.repository import PortfolioRepository, serialize_portfolio_analysis
@@ -153,3 +155,57 @@ def get_health(
     portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
 ) -> HealthScoreOut:
     return HealthScoreOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id)["health_score"])
+
+
+@router.get("/{portfolio_id}/news-alerts", response_model=PortfolioNewsAlertListOut)
+def get_news_alerts(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> PortfolioNewsAlertListOut:
+    """Already-persisted alerts -- see `POST .../news-alerts/refresh`
+    to generate new ones from the latest news."""
+    _get_portfolio_or_404(session, portfolio_id, current_user.id)
+    rows = (
+        session.query(PortfolioNewsAlert)
+        .filter_by(portfolio_id=portfolio_id)
+        .order_by(PortfolioNewsAlert.generated_at.desc())
+        .all()
+    )
+    return PortfolioNewsAlertListOut(
+        alerts=[
+            PortfolioNewsAlertOut(
+                id=a.id, portfolio_id=a.portfolio_id, symbol=a.symbol, news_event_id=a.news_event_id,
+                alert_type=a.alert_type.value, severity=a.severity.value, message=a.message,
+                generated_at=a.generated_at, acknowledged_at=a.acknowledged_at,
+            )
+            for a in rows
+        ]
+    )
+
+
+@router.post("/{portfolio_id}/news-alerts/refresh", response_model=PortfolioNewsAlertListOut)
+def refresh_news_alerts(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> PortfolioNewsAlertListOut:
+    """Re-evaluates this portfolio's held positions against the latest
+    analyzed news (requirement 10: "portfolio positions must be
+    re-evaluated automatically when critical news arrives") and
+    persists any new Upgrade/Downgrade/High Risk/Major Opportunity
+    alerts -- idempotent, never duplicates an alert already generated
+    for the same (portfolio, news event) pair. Does not itself collect
+    new news -- pair with `POST /api/v1/news/refresh` (or a scheduled
+    job calling both) to pick up genuinely new articles first."""
+    portfolio = _get_portfolio_or_404(session, portfolio_id, current_user.id)
+    holdings = _repository.get_holdings(session, portfolio_id)
+    symbols = [h.symbol for h in holdings]
+
+    alerts = PortfolioNewsAlertEngine().generate_and_persist(session, portfolio, symbols)
+    return PortfolioNewsAlertListOut(
+        alerts=[
+            PortfolioNewsAlertOut(
+                id=a.id, portfolio_id=a.portfolio_id, symbol=a.symbol, news_event_id=a.news_event_id,
+                alert_type=a.alert_type.value, severity=a.severity.value, message=a.message,
+                generated_at=a.generated_at, acknowledged_at=None,
+            )
+            for a in alerts
+        ]
+    )

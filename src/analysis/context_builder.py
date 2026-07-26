@@ -1,15 +1,21 @@
 """build_analysis_context: assembles the technical/fundamental/live-
-price inputs every downstream engine (`RecommendationEngine`,
-`AIDecisionEngine`, `AnalystEngine`) consumes as one `AnalysisContext`.
+price/news-sentiment inputs every downstream engine
+(`RecommendationEngine`, `AIDecisionEngine`, `AnalystEngine`) consumes
+as one `AnalysisContext`.
 
 Originally private to `src/api/routes/stocks.py` (shared there by
 `/recommendation`, `/decision`, and `/analyst-report`); extracted here,
-unchanged in behavior, so `src/market_intelligence/` can reuse the
-exact same "run the two existing analysis engines against this
-symbol's ingested data" work for a market-wide scan instead of
-duplicating it -- the Phase 7 "no duplicate business logic" mandate,
-applied to the one piece of orchestration every consumer of these
-engines needs.
+unchanged in behavior, so `src/market_intelligence/` and
+`src/portfolio_intelligence/` can reuse the exact same "run the
+existing analysis engines against this symbol's ingested data" work
+instead of duplicating it -- the Phase 7 "no duplicate business logic"
+mandate, applied to the one piece of orchestration every consumer of
+these engines needs. This is also the single hook point Phase 12's
+News Intelligence Engine uses to reach every one of those consumers at
+once (see the `news_service` leg below) -- populating `extra` here,
+with zero changes required at any of the four call sites, is what
+makes "the recommendation must automatically change when important
+news appears" true without a second, parallel recommendation path.
 
 Deliberately takes an already-resolved `Stock` row, not a bare symbol
 string -- looking a symbol up (and deciding what "not found" means for
@@ -20,7 +26,7 @@ lives in the engine layer, not the API layer.
 """
 
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
@@ -33,8 +39,42 @@ from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpe
 from src.domain.models import PeriodType, Stock, Timeframe
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
+from src.news_intelligence.service import NewsIntelligenceService
 
 logger = logging.getLogger(__name__)
+
+
+def _news_sentiment_extra(session: Session, symbol: str, news_service: NewsIntelligenceService) -> Dict[str, Any]:
+    """A cheap, synchronous, DB-only read (see
+    `NewsIntelligenceService.get_symbol_sentiment`'s own docstring for
+    why it never touches the network or an LLM) -- degrades exactly
+    like every other leg here: no persisted, analyzed news for this
+    symbol simply means an empty `extra`, never a raised exception or
+    a fabricated sentiment value."""
+    try:
+        sentiment = news_service.get_symbol_sentiment(session, symbol)
+    except Exception as exc:  # noqa: BLE001 -- a news-read failure must never break the whole context
+        logger.info("News sentiment leg unavailable for '%s': %s", symbol, exc)
+        return {}
+    if sentiment is None:
+        return {}
+    return {
+        "news_sentiment": {
+            "sentiment_score": sentiment.sentiment_score,
+            "article_count": sentiment.article_count,
+            "events": [
+                {
+                    "news_event_id": event.news_event_id,
+                    "headline": event.headline,
+                    "category": event.category.value,
+                    "sentiment_score": event.sentiment_score,
+                    "confidence": event.confidence,
+                    "impact_points": event.impact_points,
+                }
+                for event in sentiment.events
+            ],
+        }
+    }
 
 
 async def build_analysis_context(
@@ -42,12 +82,18 @@ async def build_analysis_context(
     period_type: PeriodType,
     session: Session,
     market_provider: IMarketDataProvider,
+    news_service: Optional[NewsIntelligenceService] = None,
 ) -> AnalysisContext:
     """Each leg degrades independently and gracefully: insufficient
-    price history, no ingested fundamentals, or a provider outage on
-    the live quote only omits that piece (`None`), never raises -- the
-    caller decides whether the resulting context has enough to
-    proceed."""
+    price history, no ingested fundamentals, a provider outage on the
+    live quote, or no analyzed news for this symbol only omits that
+    piece, never raises -- the caller decides whether the resulting
+    context has enough to proceed. `news_service` defaults to a fresh
+    `NewsIntelligenceService()` (safe to construct even with no
+    `OPENAI_API_KEY` configured -- it only degrades to "analysis
+    unavailable," it never raises); pass one explicitly to reuse an
+    instance across many symbols in one request (e.g. a market scan or
+    a portfolio) instead of constructing one per symbol."""
     symbol = stock.symbol
 
     technical_result = None
@@ -72,9 +118,13 @@ async def build_analysis_context(
             latest, prior_facts=prior, market_price=market_price
         )
 
+    news_service = news_service if news_service is not None else NewsIntelligenceService()
+    extra = _news_sentiment_extra(session, symbol, news_service)
+
     return AnalysisContext(
         symbol=symbol,
         technical_result=technical_result,
         fundamental_result=fundamental_result,
         latest_price=market_price,
+        extra=extra,
     )

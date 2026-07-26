@@ -42,6 +42,10 @@ from src.domain.models.support_ticket import SupportTicket, SupportTicketStatus
 from src.domain.models.ai_request import AIRequest, AIRequestStatus
 from src.domain.models.recommendation_history import RecommendationHistory
 from src.domain.models.report import Report, ReportType, ReportStatus
+from src.domain.models.news_event import NewsEvent, NewsCategory, SentimentLabel
+from src.domain.models.news_entity import NewsEntity, NewsEntityType
+from src.domain.models.news_source_reliability import NewsSourceReliability
+from src.domain.models.portfolio_news_alert import PortfolioNewsAlert, PortfolioAlertType
 
 __all__ = [
     "Stock",
@@ -104,4 +108,12 @@ __all__ = [
     "Report",
     "ReportType",
     "ReportStatus",
+    "NewsEvent",
+    "NewsCategory",
+    "SentimentLabel",
+    "NewsEntity",
+    "NewsEntityType",
+    "NewsSourceReliability",
+    "PortfolioNewsAlert",
+    "PortfolioAlertType",
 ]

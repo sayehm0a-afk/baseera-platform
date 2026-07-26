@@ -24,7 +24,18 @@ import main
 from src.api.dependencies import get_current_user, get_market_provider
 from src.core.db import database
 from src.core.db.database import Base, get_db
-from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe, User
+from src.domain.models import (
+    FundamentalSnapshot,
+    NewsCategory,
+    NewsEntity,
+    NewsEntityType,
+    NewsEvent,
+    PeriodType,
+    PriceBar,
+    Stock,
+    Timeframe,
+    User,
+)
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 
 
@@ -308,3 +319,90 @@ def test_portfolio_responses_never_expose_credentials(client, db_session):
         body_text = response.text.lower()
         assert "sahmk_api_key" not in body_text
         assert "shmk_" not in body_text
+
+
+# --- news alerts (Phase 12 -- requirement 10) --------------------------------
+
+
+def _seed_analyzed_news_event(session, symbol, category, sentiment_score, confidence, external_key="k1"):
+    event = NewsEvent(
+        external_key=external_key, headline=f"Breaking news about {symbol}", source="sahmk", category=category,
+        sentiment_score=sentiment_score, confidence=confidence, analyzed_at=datetime.now(timezone.utc),
+        published_at=datetime.now(timezone.utc),
+    )
+    session.add(event)
+    session.commit()
+    session.add(NewsEntity(news_event_id=event.id, entity_type=NewsEntityType.COMPANY, symbol=symbol))
+    session.commit()
+    return event
+
+
+def test_get_news_alerts_is_empty_before_any_refresh(client, db_session):
+    portfolio_id = _create_and_analyze(client, db_session)
+    response = client.get(f"/api/v1/portfolio/{portfolio_id}/news-alerts")
+    assert response.status_code == 200
+    assert response.json()["alerts"] == []
+
+
+def test_get_news_alerts_404_for_unknown_portfolio(client, db_session):
+    response = client.get("/api/v1/portfolio/9999/news-alerts")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "portfolio_not_found"
+
+
+def test_get_news_alerts_404_for_another_users_portfolio(client, db_session):
+    from src.portfolio_intelligence.repository import PortfolioRepository
+
+    other_user = User(email="alerts-someone-else@example.com", password_hash="hashed", is_email_verified=True)
+    db_session.add(other_user)
+    db_session.commit()
+    other_users_portfolio = PortfolioRepository().create_portfolio(db_session, "Not Yours", 0.0, user_id=other_user.id)
+
+    response = client.get(f"/api/v1/portfolio/{other_users_portfolio.id}/news-alerts")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "portfolio_not_found"
+
+
+def test_refresh_news_alerts_generates_an_alert_for_a_held_symbol_with_critical_news(client, db_session):
+    portfolio_id = _create_and_analyze(client, db_session)  # holds 2222 and 1010
+    _seed_analyzed_news_event(db_session, "2222", NewsCategory.LAWSUIT, -0.7, 90.0)
+
+    response = client.post(f"/api/v1/portfolio/{portfolio_id}/news-alerts/refresh")
+    assert response.status_code == 200
+    alerts = response.json()["alerts"]
+    assert len(alerts) == 1
+    assert alerts[0]["symbol"] == "2222"
+    assert alerts[0]["alert_type"] == "HIGH_RISK"
+    assert alerts[0]["id"] is not None
+    assert alerts[0]["portfolio_id"] == portfolio_id
+
+    persisted = client.get(f"/api/v1/portfolio/{portfolio_id}/news-alerts")
+    assert len(persisted.json()["alerts"]) == 1
+
+
+def test_refresh_news_alerts_is_idempotent_on_rerun(client, db_session):
+    portfolio_id = _create_and_analyze(client, db_session)
+    _seed_analyzed_news_event(db_session, "2222", NewsCategory.LAWSUIT, -0.7, 90.0)
+
+    first = client.post(f"/api/v1/portfolio/{portfolio_id}/news-alerts/refresh")
+    second = client.post(f"/api/v1/portfolio/{portfolio_id}/news-alerts/refresh")
+
+    assert len(first.json()["alerts"]) == 1
+    assert len(second.json()["alerts"]) == 0
+
+
+def test_refresh_news_alerts_ignores_news_for_symbols_not_held(client, db_session):
+    portfolio_id = _create_and_analyze(client, db_session)  # holds only 2222 and 1010
+    db_session.add(Stock(symbol="1120", name_en="Al Rajhi", sector="Banks"))
+    db_session.commit()
+    _seed_analyzed_news_event(db_session, "1120", NewsCategory.LAWSUIT, -0.7, 90.0)
+
+    response = client.post(f"/api/v1/portfolio/{portfolio_id}/news-alerts/refresh")
+    assert response.status_code == 200
+    assert response.json()["alerts"] == []
+
+
+def test_refresh_news_alerts_404_for_unknown_portfolio(client, db_session):
+    response = client.post("/api/v1/portfolio/9999/news-alerts/refresh")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "portfolio_not_found"
