@@ -177,11 +177,29 @@ in this network-restricted sandbox today, and automatically switches to
 live SAHMK data the moment it runs somewhere with real network access
 to `sahmk.sa` -- no code change and no manual flag required.
 
+## Live verification outside this sandbox
+
+`.github/workflows/sahmk-live-verification.yml` (manual `workflow_dispatch`
+only) runs `scripts/verify_sahmk_live.py` on a GitHub-hosted runner,
+which has no egress restriction to `app.sahmk.sa` -- the exact
+blocker described above. It performs four layers against symbol
+`2222` (Saudi Aramco): DNS/TLS reachability, a raw direct HTTP call
+(independent of any Basirah code), a call through the real
+`SahmkClient`/`SahmkMarketDataService` (no mocking), and a real
+historical-data fetch through the real `TechnicalAnalysisEngine` and
+`RecommendationEngine`. It ends in exactly one of 8 named diagnoses
+(`SAHMK_CONNECTION_CONFIRMED` through `FULL_END_TO_END_SUCCESS` --
+see `scripts/sahmk_live_diagnosis.py`'s module docstring for the full
+decision tree). **As of this revision the workflow has been created
+and pushed but has not yet been run** -- this document is not updated
+to claim a result until an actual run's `$GITHUB_STEP_SUMMARY`
+confirms one. See the PR/commit that introduced this workflow for
+exact manual-run instructions.
+
 ## Known gaps -- to verify against a real, unrestricted network path
 
 1. Every row in the endpoint table above marked "No -- network-policy
-   blocked": this is the actual next step once run somewhere with real
-   egress to `sahmk.sa`.
+   blocked": tracked by the live-verification workflow above, not yet run.
 2. Exact `from`/`to` date wire format for `/historical/{symbol}/`
    (`YYYY-MM-DD` is sent, matching `interval=1d`, not confirmed against
    a real 200 response).

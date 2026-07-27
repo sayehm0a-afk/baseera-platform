@@ -1,0 +1,103 @@
+name: SAHMK Live Verification
+
+# Manually-triggered, real, unmocked end-to-end verification that this
+# repository's SAHMK integration actually works against the live
+# production API (https://app.sahmk.sa). See
+# scripts/verify_sahmk_live.py and scripts/sahmk_live_diagnosis.py for
+# the full four-layer design and docs/SAHMK_INTEGRATION.md for why
+# this could never be confirmed from inside the Claude Code sandbox
+# (its egress to app.sahmk.sa is policy-blocked at the proxy).
+#
+# Deliberately workflow_dispatch-only: this makes a real, metered call
+# against a production third-party API using a real credential, so it
+# must never run automatically on a push, a schedule, or (especially)
+# a pull_request from a fork -- none of those triggers exist here at
+# all, so there is nothing to additionally guard against a fork PR
+# with.
+#
+# SECURITY: SAHMK_API_KEY is injected only as an environment variable
+# on the one step that runs the live script, is never echoed by this
+# workflow file itself, and scripts/verify_sahmk_live.py never prints
+# it (see that script's module docstring for the redaction discipline).
+# No raw API response is ever written to a workflow artifact -- the
+# only persisted output is the sanitized $GITHUB_STEP_SUMMARY the
+# script itself writes (status codes, latency, an explicit field
+# allow-list, never a full response body).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Live SAHMK production verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail fast if SAHMK_API_KEY secret is not configured
+        env:
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+        run: |
+          if [ -z "$SAHMK_API_KEY" ]; then
+            echo "::error::SAHMK_API_KEY repository secret is not set. Add it under" \
+                 "Settings -> Secrets and variables -> Actions -> New repository secret" \
+                 "before running this workflow."
+            exit 1
+          fi
+          echo "SAHMK_API_KEY secret is present (value not shown)."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install dependencies (from this repository)
+        run: pip install -r requirements.txt
+
+      - name: Install package in editable mode
+        run: pip install -e . --no-deps
+
+      - name: Targeted tests -- diagnostic classification logic (local, no network)
+        run: |
+          python -m pytest tests/unit/scripts/test_sahmk_live_diagnosis.py -v
+
+      - name: Run live SAHMK diagnostic (real, unmocked, read-only)
+        id: diagnostic
+        env:
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+          SAHMK_BASE_URL: https://app.sahmk.sa/api/v1
+          SAHMK_VERIFY_TIMEOUT_SECONDS: "25"
+        run: |
+          set -o pipefail
+          python scripts/verify_sahmk_live.py | tee /tmp/sahmk_verify_output.txt
+          DIAGNOSIS_LINE=$(grep '^FINAL_DIAGNOSIS=' /tmp/sahmk_verify_output.txt | tail -1)
+          DIAGNOSIS_VALUE="${DIAGNOSIS_LINE#FINAL_DIAGNOSIS=}"
+          echo "diagnosis=${DIAGNOSIS_VALUE}" >> "$GITHUB_OUTPUT"
+
+      - name: Final summary
+        if: always()
+        run: |
+          echo "======================================================"
+          echo " SAHMK LIVE VERIFICATION -- FINAL DIAGNOSIS"
+          echo "======================================================"
+          echo " ${{ steps.diagnostic.outputs.diagnosis }}"
+          echo "======================================================"
+          echo "See the 'Summary' tab on this workflow run for the full" \
+               "layer-by-layer breakdown (scripts/verify_sahmk_live.py" \
+               "writes it to \$GITHUB_STEP_SUMMARY, sanitized)."
+
+      - name: Fail the job only on a genuinely inconclusive result
+        if: steps.diagnostic.outputs.diagnosis == 'INCONCLUSIVE' || steps.diagnostic.outputs.diagnosis == ''
+        run: |
+          echo "::error::SAHMK live verification did not reach a conclusive diagnosis" \
+               "(got: '${{ steps.diagnostic.outputs.diagnosis }}'). See the step logs above" \
+               "and the job summary for details, then re-run."
+          exit 1
