@@ -13,29 +13,23 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-# Known anomaly (PR #17, observed on 2 of 3 pushes: commits d0c36ac
-# [run 30286448550] and ebab35e [run 30295068978]): a push to a
-# non-main branch that already has an open PR against main can
-# surface on GitHub's side as an `event: push` run instead of the
-# expected `event: pull_request` (synchronize) run, with 0 jobs
-# scheduled and conclusion=failure -- despite `push.branches` above
-# correctly excluding non-main branches. This is not consistently
-# reproducible (the first push on this same branch/PR, commit 18373d4,
-# triggered a normal `pull_request` run with real jobs) and looks like
-# an intermittent GitHub-side webhook race/dedup between the `push`
-# and `pull_request` events for the same commit SHA, not a defect in
-# this file -- the run cannot even be retried via the Actions API
-# ("This workflow run cannot be retried", 403), which is only ever
-# returned for a run that never got past scheduling, never a normal
-# job failure. Because a second plain push hit the same anomaly, "push
-# again and hope" is not a reliable workaround by itself -- the
-# `workflow_dispatch` trigger above exists so a check can always be
-# fired deterministically for a specific commit, independent of
-# whichever webhook race may or may not occur. If you see a run with
-# `event: push` and 0 jobs on a branch this trigger should have
-# excluded, that's this anomaly, not a new bug -- use workflow_dispatch
-# (or manually re-run via Actions -> CI -> Run workflow) instead of
-# re-diagnosing the YAML from scratch.
+# `workflow_dispatch` above: lets a specific commit's checks be fired
+# deterministically from the Actions UI/API without needing a new
+# push -- also what surfaced the actual root cause of PR #17's
+# mysterious "event: push, 0 jobs, conclusion: failure" runs on
+# commits d0c36ac/ebab35e: `jobs.<job_id>.env` (below, at the time)
+# referenced `${{ runner.temp }}`, but the `runner` context is not
+# available at that position (only within `steps` -- see "Context
+# availability" in GitHub's own Actions docs). `push`/`pull_request`
+# events apparently degrade this specific parse failure into a
+# 0-job "failure" run with no visible error anywhere in the job logs
+# (because there are no job logs -- the run never got past
+# scheduling); `workflow_dispatch`'s API returned the exact error
+# outright ("Unrecognized named-value: 'runner'"), which is what
+# actually diagnosed it. Fixed by setting LOG_DIR from a step (see
+# "Configure LOG_DIR" below) using the plain `$RUNNER_TEMP` shell
+# environment variable instead, which needs no `${{ }}` context
+# expression at all.
 
 # Pre-existing repo-wide flake8 violation count as of the M0 milestone,
 # recorded so new violations are blocked without requiring an immediate
@@ -61,21 +55,27 @@ jobs:
   build-and-test:
     name: Install, compile, test, lint, boot
     runs-on: ubuntu-latest
-    # GitHub-hosted runners execute as a non-root `runner` user with no
-    # write access to /var/log (structured_logging.py's production
-    # default, LOG_DIR unset). Point logging at the job's own writable
-    # scratch directory instead -- RUNNER_TEMP is provided by the
-    # runner and cleaned up automatically after the job, so this needs
-    # no cleanup step of its own. structured_logging.py also falls back
-    # on its own if this were ever unset/wrong (see
-    # _ensure_writable_log_dir), but setting it explicitly here means
-    # CI logs land somewhere predictable rather than relying on that
-    # fallback path.
-    env:
-      LOG_DIR: ${{ runner.temp }}/basirah-logs
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # GitHub-hosted runners execute as a non-root `runner` user with
+      # no write access to /var/log (structured_logging.py's
+      # production default, LOG_DIR unset). Point logging at the job's
+      # own writable scratch directory instead -- $RUNNER_TEMP is a
+      # plain shell environment variable the runner always provides
+      # (no `${{ }}` expression/context needed, unlike the `runner`
+      # context object which is NOT available in `jobs.<job_id>.env` --
+      # see this file's top-of-file comment for how that exact mistake
+      # broke CI for two commits on PR #17), and is cleaned up
+      # automatically after the job. Writing to $GITHUB_ENV makes this
+      # a job-wide env var for every later step. structured_logging.py
+      # also falls back on its own if this were ever unset/wrong (see
+      # _ensure_writable_log_dir), but setting it explicitly here means
+      # CI logs land somewhere predictable rather than relying on that
+      # fallback path.
+      - name: Configure LOG_DIR
+        run: echo "LOG_DIR=${RUNNER_TEMP}/basirah-logs" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5
