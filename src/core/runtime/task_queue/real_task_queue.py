@@ -10,11 +10,16 @@ logger = logging.getLogger(__name__)
 class RealTaskQueue:
     """Production-grade task queue using Redis."""
 
-    def __init__(self, host: str = None, port: int = None, db: int = 0):
+    def __init__(self, host: str = None, port: int = None, db: int = 0, password: str = None):
         """Initialize real task queue."""
         self.host = host or os.getenv("REDIS_HOST", "localhost")
         self.port = port or int(os.getenv("REDIS_PORT", 6379))
         self.db = db
+        # Matches RedisMessageBus's existing password-fallback convention
+        # -- unset in every current deployment (unauthenticated local
+        # Redis), but required by any managed Redis provider (Railway,
+        # Render, Redis Cloud, ElastiCache with AUTH) in production.
+        self.password = password or os.getenv("REDIS_PASSWORD")
         self.redis_client = None
         self.queue_name = "basirah:tasks"
         self.dead_letter_queue_name = "basirah:tasks:dead_letter"
@@ -27,6 +32,7 @@ class RealTaskQueue:
                 host=self.host,
                 port=self.port,
                 db=self.db,
+                password=self.password,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_keepalive=True,

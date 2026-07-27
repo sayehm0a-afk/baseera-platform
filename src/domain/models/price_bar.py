@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Enum,
     ForeignKey,
     Integer,
     Numeric,
+    String,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
@@ -46,6 +48,17 @@ class PriceBar(Base):
     low = Column(Numeric(18, 4), nullable=False)
     close = Column(Numeric(18, 4), nullable=False)
     volume = Column(BigInteger, nullable=False, default=0, server_default="0")
+    # Provenance -- same honesty discipline as FundamentalSnapshot/Dividend
+    # (added after this table already existed in some deployments, hence
+    # the server_defaults below): every bar must be traceable to whether
+    # it's real (SAHMK) or synthetic (DevMarketDataProvider) data. A bar
+    # written before this column existed has unknown provenance -- it is
+    # conservatively defaulted to is_synthetic=True (never silently
+    # treated as verified-real data it was never confirmed to be), and
+    # backtesting must never report a "live" result built on unknown-
+    # provenance bars as a consequence of that same conservative default.
+    source = Column(String(64), nullable=False, server_default="unknown")
+    is_synthetic = Column(Boolean, nullable=False, default=True, server_default="true")
     # server_default so a non-ORM insert still satisfies NOT NULL --
     # see stock.py for the same reasoning.
     created_at = Column(

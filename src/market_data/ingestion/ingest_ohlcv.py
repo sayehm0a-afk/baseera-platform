@@ -7,84 +7,22 @@ which lists only this module's creation, not runtime-kernel wiring).
 Its (task-dict-shaped) signature is deliberately compatible with
 RealWorker.register_handler(task_type, handler) so a later milestone
 can register it as a task handler without a redesign.
+
+Fetches only the single latest bar per symbol (via get_stock_data());
+for incremental/backfilling ingestion of a date range, see
+ingest_historical_ohlcv.py, added alongside the ingestion scheduler --
+this module's own contract (and every test against it) is unchanged.
 """
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from decimal import Decimal
-from typing import Callable, Dict, List
+from typing import Callable, List
 
 from sqlalchemy.orm import Session
 
-from src.domain.models import PriceBar, Stock, Timeframe
+from src.market_data.ingestion._common import IngestionResult, get_or_create_stock, upsert_price_bar
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class IngestionResult:
-    """Summary of one ingest_ohlcv() run."""
-
-    symbols_requested: int = 0
-    symbols_succeeded: int = 0
-    symbols_failed: int = 0
-    errors: Dict[str, str] = field(default_factory=dict)
-
-    @property
-    def success(self) -> bool:
-        return self.symbols_failed == 0 and self.symbols_requested > 0
-
-
-def _get_or_create_stock(session: Session, symbol: str) -> Stock:
-    stock = session.query(Stock).filter_by(symbol=symbol).one_or_none()
-    if stock is not None:
-        return stock
-
-    logger.warning(
-        "Creating placeholder Stock row for symbol '%s' with no reference data "
-        "(name/sector) -- real reference data ingestion is a later milestone's "
-        "concern, not this one's.",
-        symbol,
-    )
-    stock = Stock(symbol=symbol, name_en=f"Stock {symbol}")
-    session.add(stock)
-    session.flush()  # assign stock.id without committing yet
-    return stock
-
-
-def _upsert_price_bar(session: Session, stock: Stock, data: Dict) -> None:
-    timestamp = datetime.fromisoformat(data["timestamp"])
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
-
-    existing = (
-        session.query(PriceBar)
-        .filter_by(stock_id=stock.id, timeframe=Timeframe.ONE_DAY, timestamp=timestamp)
-        .one_or_none()
-    )
-
-    if existing is not None:
-        existing.open = Decimal(str(data["open"]))
-        existing.high = Decimal(str(data["high"]))
-        existing.low = Decimal(str(data["low"]))
-        existing.close = Decimal(str(data["close"]))
-        existing.volume = int(data["volume"])
-        return
-
-    session.add(
-        PriceBar(
-            stock_id=stock.id,
-            timeframe=Timeframe.ONE_DAY,
-            timestamp=timestamp,
-            open=Decimal(str(data["open"])),
-            high=Decimal(str(data["high"])),
-            low=Decimal(str(data["low"])),
-            close=Decimal(str(data["close"])),
-            volume=int(data["volume"]),
-        )
-    )
 
 
 async def ingest_ohlcv(
@@ -105,10 +43,11 @@ async def ingest_ohlcv(
         session = session_factory()
         try:
             data = await provider.get_stock_data(symbol)
-            stock = _get_or_create_stock(session, symbol)
-            _upsert_price_bar(session, stock, data)
+            stock = get_or_create_stock(session, symbol)
+            upsert_price_bar(session, stock, data)
             session.commit()
             result.symbols_succeeded += 1
+            result.rows_upserted += 1
         except Exception as exc:
             session.rollback()
             result.symbols_failed += 1

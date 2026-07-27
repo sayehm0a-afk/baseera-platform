@@ -6,13 +6,23 @@ services:
     ports:
       - "8000:8000"
     environment:
+      BASEERA_ENV: ${BASEERA_ENV:-production}
       DATABASE_URL: ${DATABASE_URL}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      SECRET_KEY: ${SECRET_KEY}
+      TRIAL_LENGTH_DAYS: ${TRIAL_LENGTH_DAYS:-14}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      LOG_DIR: /var/log/basirah
+    volumes:
+      - app_logs:/var/log/basirah
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   db:
     image: postgres:13
@@ -22,6 +32,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:6-alpine
@@ -38,3 +53,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  app_logs:

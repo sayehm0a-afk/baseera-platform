@@ -197,6 +197,53 @@ class PrometheusMetrics:
             registry=self.registry,
         )
 
+        # Phase 10 M10.11: auth/subscription/AI/admin metrics
+        self.logins_total = Counter(
+            "basirah_logins_total",
+            "Total login attempts",
+            ["status"],
+            registry=self.registry,
+        )
+
+        self.registrations_total = Counter(
+            "basirah_registrations_total",
+            "Total user registrations",
+            registry=self.registry,
+        )
+
+        self.active_sessions = Gauge(
+            "basirah_active_sessions",
+            "Current count of active (unrevoked, unexpired) UserSession rows",
+            registry=self.registry,
+        )
+
+        self.trial_expirations_total = Counter(
+            "basirah_trial_expirations_total",
+            "Total trial subscriptions lazily downgraded from TRIALING to EXPIRED",
+            registry=self.registry,
+        )
+
+        self.ai_requests_total = Counter(
+            "basirah_ai_requests_total",
+            "Total AI/LLM requests recorded via AIRequest",
+            ["feature", "status"],
+            registry=self.registry,
+        )
+
+        self.ai_tokens_total = Counter(
+            "basirah_ai_tokens_total",
+            "Total AI/LLM tokens consumed, by feature",
+            ["feature"],
+            registry=self.registry,
+        )
+
+        self.admin_actions_total = Counter(
+            "basirah_admin_actions_total",
+            "Total admin actions recorded to AuditLog, by action",
+            ["action"],
+            registry=self.registry,
+        )
+
     def record_http_request(
         self,
         method: str,
@@ -322,6 +369,35 @@ class PrometheusMetrics:
     def record_exception(self, exception_type: str) -> None:
         """Record exception."""
         self.exceptions_total.labels(exception_type=exception_type).inc()
+
+    def record_login(self, status: str) -> None:
+        """Record a login attempt -- status is 'success' or 'failure'."""
+        self.logins_total.labels(status=status).inc()
+
+    def record_registration(self) -> None:
+        """Record a new user registration."""
+        self.registrations_total.inc()
+
+    def set_active_sessions(self, count: int) -> None:
+        """Set the current active-session count -- recomputed from a
+        real COUNT() query at scrape time (see GET /metrics in main.py),
+        not tracked incrementally, so it can never drift from the
+        database's actual state."""
+        self.active_sessions.set(count)
+
+    def record_trial_expiration(self) -> None:
+        """Record a trial subscription lazily downgraded to EXPIRED."""
+        self.trial_expirations_total.inc()
+
+    def record_ai_request(self, feature: str, status: str, total_tokens: int = 0) -> None:
+        """Record one AIRequest -- status is SUCCESS/FAILED/TIMEOUT."""
+        self.ai_requests_total.labels(feature=feature, status=status).inc()
+        if total_tokens:
+            self.ai_tokens_total.labels(feature=feature).inc(total_tokens)
+
+    def record_admin_action(self, action: str) -> None:
+        """Record one admin action written to AuditLog."""
+        self.admin_actions_total.labels(action=action).inc()
 
     def get_metrics(self) -> bytes:
         """Get metrics in Prometheus format."""

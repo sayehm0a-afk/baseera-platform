@@ -17,7 +17,7 @@ be mistaken for, real trading data.
 
 import hashlib
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from src.market_data.providers.market_data_provider import (
@@ -57,18 +57,21 @@ class DevMarketDataProvider(IMarketDataProvider):
         )
         return True
 
-    async def get_stock_data(self, symbol: str) -> Dict[str, Any]:
-        day_start = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        today = day_start.date().isoformat()
-        base = _seeded_value(f"{symbol}:{today}", 10.0, 200.0)
+    @staticmethod
+    def _bar_for_day(symbol: str, day: date) -> Dict[str, Any]:
+        """The single synthetic OHLCV bar for `symbol` on `day` --
+        deterministic (same symbol+day always produces the same bar),
+        shared by get_stock_data() (day=today) and
+        get_historical_ohlcv() (one call per day in the range)."""
+        day_start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+        day_key = day.isoformat()
+        base = _seeded_value(f"{symbol}:{day_key}", 10.0, 200.0)
         spread = base * 0.02
         open_price = round(base, 2)
         high_price = round(base + spread, 2)
         low_price = round(base - spread, 2)
-        close_price = round(_seeded_value(f"{symbol}:{today}:close", low_price, high_price), 2)
-        volume = int(_seeded_value(f"{symbol}:{today}:volume", 10_000, 5_000_000))
+        close_price = round(_seeded_value(f"{symbol}:{day_key}:close", low_price, high_price), 2)
+        volume = int(_seeded_value(f"{symbol}:{day_key}:volume", 10_000, 5_000_000))
         return {
             "symbol": symbol,
             "open": open_price,
@@ -84,6 +87,36 @@ class DevMarketDataProvider(IMarketDataProvider):
             "source": "dev-synthetic",
             "is_synthetic": True,
         }
+
+    async def get_stock_data(self, symbol: str) -> Dict[str, Any]:
+        today = datetime.now(timezone.utc).date()
+        return self._bar_for_day(symbol, today)
+
+    async def get_historical_ohlcv(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        interval: str = "1d",
+    ) -> List[Dict[str, Any]]:
+        """One synthetic bar per calendar day in [start, end] --
+        deliberately does not skip weekends/holidays like a real
+        Tadawul calendar would, the same simplification get_stock_data()
+        already makes by always returning a bar regardless of what day
+        it is. `interval` other than daily is not supported (no
+        synthetic intraday model exists); anything else raises."""
+        if interval != "1d":
+            raise ValueError(
+                f"DevMarketDataProvider.get_historical_ohlcv only supports interval='1d', got {interval!r}"
+            )
+        if start > end:
+            return []
+        bars = []
+        day = start
+        while day <= end:
+            bars.append(self._bar_for_day(symbol, day))
+            day += timedelta(days=1)
+        return bars
 
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:
         day_start = datetime.now(timezone.utc).replace(

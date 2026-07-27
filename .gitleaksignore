@@ -1,0 +1,43 @@
+# Gitleaks ignore list for Basirah.
+#
+# Each line is a fingerprint (commit:file:rule-id:start-line) for one
+# specific, individually-reviewed finding -- never a broad pattern,
+# path, or rule-wide exemption. This is gitleaks' own supported
+# mechanism for a confirmed false positive that lives in git history
+# and cannot be edited without rewriting published commits (a
+# destructive operation this repository's workflow deliberately
+# avoids). It does not disable or weaken any detection rule; every
+# other finding gitleaks' default ruleset can produce is still
+# reported normally.
+#
+# NEVER add a fingerprint here without first confirming, by manual
+# review of the actual diff at that commit, that the flagged string is
+# not a real secret. NEVER add an entry for a rule you have not
+# personally verified.
+
+# tests/unit/market_data/test_config.py:12 -- a pytest fixture that
+# uses monkeypatch to point the SAHMK API key environment variable at
+# a low-entropy, obviously-synthetic placeholder (it literally says
+# "test" in it) while asserting src.market_data.config's reader
+# function reads back whatever the environment provides. That
+# placeholder has never been a valid SAHMK credential -- confirmed by
+# reading the actual diff at this commit before adding this line. The
+# exact source text is deliberately not quoted here (an earlier
+# revision of this comment did quote it verbatim and that alone
+# produced a second, self-inflicted generic-api-key match on this
+# very file -- see git history if curious).
+a28c7360c6fbb82d8fba5517a3bbcb824cdc63c2:tests/unit/market_data/test_config.py:generic-api-key:12
+
+# .gitleaksignore itself, line 19 of an earlier revision of this file
+# (before the reword above) -- that revision's explanatory comment
+# quoted the finding directly above verbatim, in the same quoted
+# key-then-value shape the generic-api-key rule looks for, which
+# produced this second, purely self-inflicted match on the comment
+# text itself rather than on any code or credential. No secret was
+# ever present at that historical line either; the content there was
+# prose describing the first finding, not a key assignment of any
+# kind. Fixed going forward by no longer quoting flagged source text
+# verbatim in this file, but the historical commit that once contained
+# the quote cannot be edited without rewriting published history, so
+# it is allowlisted the same way as every other entry here.
+d0c36ac715b4fdb7173092380d40f16ce9de2dee:.gitleaksignore:generic-api-key:19

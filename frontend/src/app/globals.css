@@ -1,0 +1,164 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------
+ * Basirah design tokens (bsr-*)
+ *
+ * Values traced to docs/DESIGN_INVENTORY.md. The 6 core brand colors,
+ * the 2 market semantic colors, and the AI motion durations are frozen
+ * values taken verbatim from the Design System. The recommendation
+ * action colors follow the Phase 9 decision (buy=green, sell=red,
+ * watch=yellow, hold=neutral/blue); watch/hold have no DS-authored hex
+ * (see DESIGN_INVENTORY.md §10 "Open escalation points") so they are
+ * composed here from a standard accessible dark-theme palette and kept
+ * as isolated tokens so a literal value can replace them later without
+ * touching call sites. Spacing/radius/shadow scales are an initial
+ * 4px-based ramp measured against the approved mockups; treat as
+ * provisional pending literal DS §5-§7 values if a discrepancy surfaces.
+ * ------------------------------------------------------------------- */
+
+@theme {
+  /* Brand core -- frozen, never recolor */
+  --color-bsr-gold-500: #d4af37;
+  --color-bsr-teal-500: #00b894;
+  --color-bsr-teal-700: #0e7c86;
+  --color-bsr-navy-950: #0a0e14;
+  --color-bsr-navy-800: #232a36;
+  --color-bsr-white: #ffffff;
+
+  /* Brand core -- derived tints/shades (color-mix, not hand-picked hexes) */
+  --color-bsr-gold-400: color-mix(in srgb, var(--color-bsr-gold-500) 80%, white);
+  --color-bsr-gold-600: color-mix(in srgb, var(--color-bsr-gold-500) 85%, black);
+  --color-bsr-teal-400: color-mix(in srgb, var(--color-bsr-teal-500) 80%, white);
+  --color-bsr-teal-600: color-mix(in srgb, var(--color-bsr-teal-500) 85%, black);
+  --color-bsr-navy-900: color-mix(in srgb, var(--color-bsr-navy-950) 85%, var(--color-bsr-navy-800));
+  --color-bsr-navy-700: color-mix(in srgb, var(--color-bsr-navy-800) 80%, white);
+  --color-bsr-navy-600: color-mix(in srgb, var(--color-bsr-navy-800) 60%, white);
+
+  /* Market semantic (distinct from brand teal) */
+  --color-bsr-market-up: #3fb950;
+  --color-bsr-market-down: #e5484d;
+
+  /* Recommendation action badges (Phase 9 decision) */
+  --color-bsr-action-buy: #3fb950;
+  --color-bsr-action-sell: #e5484d;
+  --color-bsr-action-watch: #e3b341;
+  --color-bsr-action-hold: #64748b;
+
+  /* Surfaces & text */
+  --color-bsr-surface-base: var(--color-bsr-navy-950);
+  --color-bsr-surface-raised: var(--color-bsr-navy-800);
+  --color-bsr-surface-overlay: var(--color-bsr-navy-700);
+  --color-bsr-border-subtle: color-mix(in srgb, var(--color-bsr-white) 12%, transparent);
+  --color-bsr-border-strong: color-mix(in srgb, var(--color-bsr-white) 24%, transparent);
+  --color-bsr-text-primary: var(--color-bsr-white);
+  --color-bsr-text-secondary: color-mix(in srgb, var(--color-bsr-white) 64%, transparent);
+  --color-bsr-text-muted: color-mix(in srgb, var(--color-bsr-white) 42%, transparent);
+
+  /* Typography */
+  --font-arabic: var(--font-ibm-plex-sans-arabic), "IBM Plex Sans Arabic", sans-serif;
+  --font-latin: var(--font-inter), "Inter", sans-serif;
+
+  /* Spacing (4px base grid) */
+  --spacing-bsr-1: 0.25rem;
+  --spacing-bsr-2: 0.5rem;
+  --spacing-bsr-3: 0.75rem;
+  --spacing-bsr-4: 1rem;
+  --spacing-bsr-5: 1.25rem;
+  --spacing-bsr-6: 1.5rem;
+  --spacing-bsr-8: 2rem;
+  --spacing-bsr-10: 2.5rem;
+  --spacing-bsr-12: 3rem;
+  --spacing-bsr-16: 4rem;
+
+  /* Radius */
+  --radius-bsr-sm: 0.375rem;
+  --radius-bsr-md: 0.625rem;
+  --radius-bsr-lg: 1rem;
+  --radius-bsr-full: 9999px;
+
+  /* Shadow / elevation (dark-theme appropriate, low opacity) */
+  --shadow-bsr-raised: 0 1px 2px color-mix(in srgb, black 40%, transparent), 0 2px 8px color-mix(in srgb, black 24%, transparent);
+  --shadow-bsr-overlay: 0 4px 16px color-mix(in srgb, black 48%, transparent), 0 8px 32px color-mix(in srgb, black 32%, transparent);
+
+  /* AI motion durations -- exactly 5 AI motions exist system-wide */
+  --duration-bsr-sweep: 700ms;
+  --duration-bsr-pulse: 1000ms;
+  --duration-bsr-glint: 200ms;
+  --duration-bsr-explain: 320ms;
+  --duration-bsr-confidence-fill: 400ms;
+}
+
+html,
+body {
+  background: var(--color-bsr-surface-base);
+  color: var(--color-bsr-text-primary);
+}
+
+body {
+  font-family: var(--font-arabic);
+}
+
+:lang(en) {
+  font-family: var(--font-latin);
+}
+
+/* Financial data is always set in Western digits + tabular figures,
+   regardless of surrounding language (DS typography rule). */
+.bsr-numeric {
+  font-family: var(--font-latin);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* The Basirah Sweep -- one of exactly 5 AI motions system-wide.
+   700ms teal radial arc, plays once, never loops or repeats ambiently. */
+@keyframes bsr-sweep {
+  0% {
+    opacity: 0;
+    background-position: -120% 0;
+  }
+  35% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+    background-position: 120% 0;
+  }
+}
+
+.bsr-ai-sweep {
+  background: linear-gradient(
+    100deg,
+    transparent 40%,
+    color-mix(in srgb, var(--color-bsr-teal-500) 55%, transparent) 50%,
+    transparent 60%
+  );
+  background-size: 250% 100%;
+  animation: bsr-sweep var(--duration-bsr-sweep) ease-out 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bsr-ai-sweep {
+    animation: none;
+    display: none;
+  }
+}
+
+/* AI pulse -- the loop-tolerant exception among the 5 AI motions,
+   reserved for "AI is actively processing / live" states only. */
+@keyframes bsr-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.92);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[bsr-pulse_1s_ease-in-out_infinite\] {
+    animation: none;
+  }
+}

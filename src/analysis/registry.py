@@ -20,12 +20,15 @@ from typing import Callable, List
 
 import pandas as pd
 
-from src.analysis.indicators.momentum import macd, rsi
+from src.analysis.indicators.fibonacci import fibonacci_retracement_levels
+from src.analysis.indicators.momentum import macd, rsi, stochastic_oscillator
+from src.analysis.indicators.support_resistance import support_resistance_levels
 from src.analysis.indicators.trend import adx, ema, sma, supertrend
 from src.analysis.indicators.volatility import atr, bollinger_bands
 from src.analysis.price_action.candlestick_patterns import detect_patterns
 from src.analysis.types import IndicatorCategory
-from src.analysis.volume.volume_indicators import obv, volume_sma
+from src.analysis.volume.volume_indicators import obv, volume_sma, vwap
+from src.analysis.volume.volume_profile import volume_profile
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,13 @@ def build_default_registry() -> IndicatorRegistry:
     registry.register(
         IndicatorSpec("macd", IndicatorCategory.MOMENTUM, lambda df: macd(df["close"], 12, 26, 9))
     )
+    registry.register(
+        IndicatorSpec(
+            "stochastic_14_3_3",
+            IndicatorCategory.MOMENTUM,
+            lambda df: stochastic_oscillator(df, 14, 3, 3),
+        )
+    )
 
     registry.register(
         IndicatorSpec(
@@ -92,10 +102,32 @@ def build_default_registry() -> IndicatorRegistry:
     registry.register(
         IndicatorSpec("volume_sma_20", IndicatorCategory.VOLUME, lambda df: volume_sma(df, 20))
     )
+    registry.register(
+        IndicatorSpec("vwap_20", IndicatorCategory.VOLUME, lambda df: vwap(df, 20))
+    )
+    registry.register(
+        IndicatorSpec(
+            "volume_profile", IndicatorCategory.VOLUME, lambda df: volume_profile(df, 10)
+        )
+    )
 
     registry.register(
         IndicatorSpec(
             "candlestick_patterns", IndicatorCategory.PRICE_ACTION, lambda df: detect_patterns(df)
+        )
+    )
+    registry.register(
+        IndicatorSpec(
+            "fibonacci_retracement",
+            IndicatorCategory.PRICE_ACTION,
+            lambda df: fibonacci_retracement_levels(df),
+        )
+    )
+    registry.register(
+        IndicatorSpec(
+            "support_resistance",
+            IndicatorCategory.PRICE_ACTION,
+            lambda df: support_resistance_levels(df, 5),
         )
     )
 

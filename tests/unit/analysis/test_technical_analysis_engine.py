@@ -40,11 +40,16 @@ EXPECTED_DEFAULT_INDICATOR_NAMES = {
     "supertrend",
     "rsi_14",
     "macd",
+    "stochastic_14_3_3",
     "bollinger",
     "atr_14",
     "obv",
     "volume_sma_20",
+    "vwap_20",
+    "volume_profile",
     "candlestick_patterns",
+    "fibonacci_retracement",
+    "support_resistance",
 }
 
 
@@ -68,6 +73,11 @@ def test_analyze_typed_properties_match_indicators_dict():
     assert result.bollinger is result.indicators["bollinger"].value
     assert result.supertrend is result.indicators["supertrend"].value
     assert result.patterns is result.indicators["candlestick_patterns"].value
+    assert result.stochastic_14_3_3 is result.indicators["stochastic_14_3_3"].value
+    assert result.vwap_20 is result.indicators["vwap_20"].value
+    assert result.volume_profile is result.indicators["volume_profile"].value
+    assert result.fibonacci_retracement is result.indicators["fibonacci_retracement"].value
+    assert result.support_resistance is result.indicators["support_resistance"].value
 
 
 def test_latest_snapshot_has_one_entry_per_indicator_with_no_exceptions():
@@ -83,6 +93,11 @@ def test_latest_snapshot_has_one_entry_per_indicator_with_no_exceptions():
     assert set(snapshot["macd"].keys()) == {"macd_line", "signal_line", "histogram"}
     assert set(snapshot["bollinger"].keys()) == {"upper", "middle", "lower"}
     assert set(snapshot["supertrend"].keys()) == {"trend", "direction"}
+    assert set(snapshot["stochastic_14_3_3"].keys()) == {"percent_k", "percent_d"}
+    assert isinstance(snapshot["vwap_20"], float)
+    assert set(snapshot["volume_profile"].keys()) == {"point_of_control", "bin_volumes"}
+    assert set(snapshot["fibonacci_retracement"].keys()) == {"is_uptrend", "levels"}
+    assert set(snapshot["support_resistance"].keys()) == {"support", "resistance"}
     # candlestick_patterns resolves to a list of pattern names at the latest bar
     assert isinstance(snapshot["candlestick_patterns"], list)
 

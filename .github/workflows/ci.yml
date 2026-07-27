@@ -11,6 +11,25 @@ on:
     branches: [main]
   push:
     branches: [main]
+  workflow_dispatch: {}
+
+# `workflow_dispatch` above: lets a specific commit's checks be fired
+# deterministically from the Actions UI/API without needing a new
+# push -- also what surfaced the actual root cause of PR #17's
+# mysterious "event: push, 0 jobs, conclusion: failure" runs on
+# commits d0c36ac/ebab35e: `jobs.<job_id>.env` (below, at the time)
+# referenced `${{ runner.temp }}`, but the `runner` context is not
+# available at that position (only within `steps` -- see "Context
+# availability" in GitHub's own Actions docs). `push`/`pull_request`
+# events apparently degrade this specific parse failure into a
+# 0-job "failure" run with no visible error anywhere in the job logs
+# (because there are no job logs -- the run never got past
+# scheduling); `workflow_dispatch`'s API returned the exact error
+# outright ("Unrecognized named-value: 'runner'"), which is what
+# actually diagnosed it. Fixed by setting LOG_DIR from a step (see
+# "Configure LOG_DIR" below) using the plain `$RUNNER_TEMP` shell
+# environment variable instead, which needs no `${{ }}` context
+# expression at all.
 
 # Pre-existing repo-wide flake8 violation count as of the M0 milestone,
 # recorded so new violations are blocked without requiring an immediate
@@ -36,9 +55,50 @@ jobs:
   build-and-test:
     name: Install, compile, test, lint, boot
     runs-on: ubuntu-latest
+    # Real Redis, matching docker-compose.yml's own `redis:6-alpine` --
+    # most Redis-dependent tests already skip gracefully when Redis is
+    # unavailable (see e.g. tests/unit/auth/test_token_store.py), but a
+    # few (tests/integration/api/test_admin_routes.py's session-revoke
+    # tests) call the real client unconditionally and hard-fail with
+    # `redis.exceptions.ConnectionError` instead of skipping when there
+    # is nothing at localhost:6379 to connect to. Settings' own
+    # defaults (redis_host=localhost, redis_port=6379 --
+    # src/core/config/settings.py) already match a service container
+    # mapped this way, so no extra env var is needed here. This also
+    # means every other Redis-conditional test in the suite runs for
+    # real in CI instead of skipping, which is a real coverage gain,
+    # not just a fix for these 3.
+    services:
+      redis:
+        image: redis:6-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # GitHub-hosted runners execute as a non-root `runner` user with
+      # no write access to /var/log (structured_logging.py's
+      # production default, LOG_DIR unset). Point logging at the job's
+      # own writable scratch directory instead -- $RUNNER_TEMP is a
+      # plain shell environment variable the runner always provides
+      # (no `${{ }}` expression/context needed, unlike the `runner`
+      # context object which is NOT available in `jobs.<job_id>.env` --
+      # see this file's top-of-file comment for how that exact mistake
+      # broke CI for two commits on PR #17), and is cleaned up
+      # automatically after the job. Writing to $GITHUB_ENV makes this
+      # a job-wide env var for every later step. structured_logging.py
+      # also falls back on its own if this were ever unset/wrong (see
+      # _ensure_writable_log_dir), but setting it explicitly here means
+      # CI logs land somewhere predictable rather than relying on that
+      # fallback path.
+      - name: Configure LOG_DIR
+        run: echo "LOG_DIR=${RUNNER_TEMP}/basirah-logs" >> "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -77,7 +137,7 @@ jobs:
           python -c "
           import main
           print('main.py imported successfully')
-          print('Routes:', sorted(r.path for r in main.app.routes))
+          print('Routes registered:', len(main.app.routes))
           "
 
       - name: Test collection check

@@ -59,6 +59,47 @@ class PatternMatch:
     bullish: bool
 
 
+@dataclass(frozen=True)
+class StochasticResult:
+    percent_k: pd.Series
+    percent_d: pd.Series
+
+
+@dataclass(frozen=True)
+class FibonacciLevels:
+    """Retracement levels between one swing high and one swing low
+    found within the analyzed window. `is_uptrend` records which
+    extreme occurred first: True when the low preceded the high (the
+    classic "retrace down from the high" case), False when the high
+    preceded the low ("retrace up from the low")."""
+
+    swing_high: float
+    swing_high_at: Any
+    swing_low: float
+    swing_low_at: Any
+    is_uptrend: bool
+    levels: Dict[str, float]
+
+
+@dataclass(frozen=True)
+class VolumeProfileResult:
+    """A daily-bar approximation of volume-at-price: each bar's entire
+    volume is attributed to the price bucket containing that bar's
+    typical price ((high+low+close)/3), not distributed across the
+    bar's true intrabar range -- real volume-at-price needs tick data,
+    which this platform does not have."""
+
+    bin_edges: List[float]
+    bin_volumes: List[float]
+    point_of_control: float
+
+
+@dataclass(frozen=True)
+class SupportResistanceLevels:
+    support: List[float]
+    resistance: List[float]
+
+
 def _latest_series_value(series: pd.Series) -> Any:
     non_null = series.dropna()
     if non_null.empty:
@@ -81,7 +122,7 @@ class IndicatorOutput:
 
     name: str
     category: IndicatorCategory
-    value: Any  # pd.Series | MACDResult | BollingerBandsResult | SuperTrendResult | List[PatternMatch]
+    value: Any  # pd.Series | MACDResult | BollingerBandsResult | SuperTrendResult | StochasticResult | FibonacciLevels | VolumeProfileResult | SupportResistanceLevels | List[PatternMatch]
 
     def latest(self) -> Any:
         """The most recent scalar/summary value(s) -- what a decision
@@ -105,6 +146,20 @@ class IndicatorOutput:
                 "trend": _latest_series_value(self.value.trend),
                 "direction": _latest_series_value(self.value.direction),
             }
+        if isinstance(self.value, StochasticResult):
+            return {
+                "percent_k": _latest_series_value(self.value.percent_k),
+                "percent_d": _latest_series_value(self.value.percent_d),
+            }
+        if isinstance(self.value, FibonacciLevels):
+            return {"is_uptrend": self.value.is_uptrend, "levels": self.value.levels}
+        if isinstance(self.value, VolumeProfileResult):
+            return {
+                "point_of_control": self.value.point_of_control,
+                "bin_volumes": self.value.bin_volumes,
+            }
+        if isinstance(self.value, SupportResistanceLevels):
+            return {"support": self.value.support, "resistance": self.value.resistance}
         if isinstance(self.value, list):
             matches: List[PatternMatch] = self.value
             if not matches:

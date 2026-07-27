@@ -1,4 +1,5 @@
-"""Unit tests for src.analysis.volume.volume_indicators: OBV, Volume SMA.
+"""Unit tests for src.analysis.volume.volume_indicators: OBV, Volume SMA,
+VWAP.
 
 Reference values are hand-computed by executing the documented
 algorithm by hand on a small series.
@@ -8,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.analysis.volume.volume_indicators import obv, volume_sma
+from src.analysis.volume.volume_indicators import obv, volume_sma, vwap
 
 
 def _make_df():
@@ -61,3 +62,50 @@ def test_volume_sma_insufficient_data_raises():
     df = _make_df().iloc[:2]
     with pytest.raises(ValueError):
         volume_sma(df, period=5)
+
+
+# ---------------------------------------------------------------------------
+# VWAP
+# ---------------------------------------------------------------------------
+
+
+def test_vwap_reference_value_over_full_window():
+    df = _make_df()
+    result = vwap(df, period=6)
+
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3
+    expected_last = (typical_price * df["volume"]).sum() / df["volume"].sum()
+    assert result.dropna().iloc[-1] == pytest.approx(expected_last)
+
+
+def test_vwap_matches_a_simple_average_when_volume_is_constant():
+    # Equal volume on every bar reduces VWAP to a plain average of the
+    # typical price over the window -- an easy independent check.
+    n = 10
+    df = pd.DataFrame(
+        {
+            "open": np.arange(n, dtype="float64") + 100,
+            "high": np.arange(n, dtype="float64") + 100.5,
+            "low": np.arange(n, dtype="float64") + 99.5,
+            "close": np.arange(n, dtype="float64") + 100,
+            "volume": np.full(n, 500.0),
+        }
+    )
+    result = vwap(df, period=5)
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3
+    expected = typical_price.rolling(window=5, min_periods=5).mean()
+    np.testing.assert_allclose(
+        result.dropna().to_numpy(), expected.dropna().to_numpy(), rtol=1e-9
+    )
+
+
+def test_vwap_is_nan_for_the_warmup_period():
+    df = _make_df()
+    result = vwap(df, period=6)
+    assert result.iloc[:5].isna().all()
+
+
+def test_vwap_insufficient_data_raises():
+    df = _make_df().iloc[:2]
+    with pytest.raises(ValueError):
+        vwap(df, period=6)

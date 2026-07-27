@@ -20,8 +20,8 @@ be mistaken for, real reported financial data.
 
 import hashlib
 import logging
-from datetime import date, datetime, timezone
-from typing import Any, Dict
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List
 
 from src.market_data.providers.fundamental_data_provider import (
     FundamentalDataProviderFactory,
@@ -118,6 +118,33 @@ class DevFundamentalDataProvider(IFundamentalDataProvider):
             "source": "dev-synthetic",
             "is_synthetic": True,
         }
+
+    async def get_dividends(self, symbol: str, years_back: int = 2) -> List[Dict[str, Any]]:
+        """Synthetic semi-annual dividend history for the last
+        `years_back` *completed* years -- two ex-dates per year (June 1,
+        December 1), most-recent-first. Not part of
+        IFundamentalDataProvider -- exposed for symmetry with
+        SahmkFundamentalDataProvider.get_dividends() so ingest_dividends.py
+        can exercise its full pipeline against synthetic data too."""
+        today = datetime.now(timezone.utc).date()
+        dividends: List[Dict[str, Any]] = []
+        for year_offset in range(1, years_back + 1):
+            year = today.year - year_offset
+            for month, day in ((12, 1), (6, 1)):
+                ex_date = date(year, month, day)
+                key = f"{symbol}:dividend:{ex_date.isoformat()}"
+                amount = round(_seeded_value(key, 0.1, 3.0), 4)
+                dividends.append(
+                    {
+                        "symbol": symbol,
+                        "dividend_per_share": amount,
+                        "ex_date": ex_date.isoformat(),
+                        "payment_date": (ex_date + timedelta(days=30)).isoformat(),
+                        "source": "dev-synthetic",
+                        "is_synthetic": True,
+                    }
+                )
+        return dividends
 
     async def health_check(self) -> ProviderHealth:
         return ProviderHealth.HEALTHY if self._connected else ProviderHealth.UNHEALTHY

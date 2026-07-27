@@ -24,10 +24,14 @@ from src.analysis.registry import DEFAULT_REGISTRY, IndicatorRegistry
 from src.analysis.types import (
     REQUIRED_OHLCV_COLUMNS,
     BollingerBandsResult,
+    FibonacciLevels,
     IndicatorMap,
     IndicatorOutput,
     MACDResult,
+    StochasticResult,
+    SupportResistanceLevels,
     SuperTrendResult,
+    VolumeProfileResult,
 )
 
 
@@ -80,6 +84,10 @@ class TechnicalAnalysisResult:
         return self.indicators["macd"].value
 
     @property
+    def stochastic_14_3_3(self) -> StochasticResult:
+        return self.indicators["stochastic_14_3_3"].value
+
+    @property
     def bollinger(self) -> BollingerBandsResult:
         return self.indicators["bollinger"].value
 
@@ -96,8 +104,24 @@ class TechnicalAnalysisResult:
         return self.indicators["volume_sma_20"].value
 
     @property
+    def vwap_20(self) -> pd.Series:
+        return self.indicators["vwap_20"].value
+
+    @property
+    def volume_profile(self) -> VolumeProfileResult:
+        return self.indicators["volume_profile"].value
+
+    @property
     def patterns(self):
         return self.indicators["candlestick_patterns"].value
+
+    @property
+    def fibonacci_retracement(self) -> FibonacciLevels:
+        return self.indicators["fibonacci_retracement"].value
+
+    @property
+    def support_resistance(self) -> SupportResistanceLevels:
+        return self.indicators["support_resistance"].value
 
 
 class TechnicalAnalysisEngine:

@@ -8,7 +8,7 @@ Supports authentication, reconnection, retry logic, rate limiting, health checki
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 from enum import Enum
 
@@ -49,6 +49,28 @@ class IMarketDataProvider(ABC):
     @abstractmethod
     async def get_stock_data(self, symbol: str) -> Dict[str, Any]:
         """Get stock data for a symbol."""
+
+    @abstractmethod
+    async def get_historical_ohlcv(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        interval: str = "1d",
+    ) -> List[Dict[str, Any]]:
+        """Get a range of OHLCV bars for a symbol, ascending by date.
+
+        Added for ingestion backfill: get_stock_data() only ever
+        returns the current/latest bar, which cannot backfill a new
+        symbol's history or catch an ingestion job up after downtime.
+        Each returned dict has the same shape get_stock_data() returns
+        (symbol/open/high/low/close/volume/timestamp/source/
+        is_synthetic) so ingestion code can upsert either kind of
+        result through one shared code path. Returns an empty list,
+        not an error, if no bars exist for the range (e.g. a
+        non-trading period) -- a genuine provider/network failure still
+        raises.
+        """
 
     @abstractmethod
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:
@@ -255,6 +277,40 @@ class SaudiMarketDataProvider(IMarketDataProvider):
             return data
         except Exception as e:
             logger.error(f"Error retrieving stock data for {symbol}: {e}")
+            raise
+
+    async def get_historical_ohlcv(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        interval: str = "1d",
+    ) -> List[Dict[str, Any]]:
+        """
+        Get a range of OHLCV bars for a symbol.
+
+        Speculative, like every other endpoint on this class (see the
+        module docstring -- no real vendor is contracted behind
+        SaudiMarketDataProvider). Guessed to extend the same
+        `/stocks/data` endpoint get_stock_data() already (also
+        speculatively) uses, with a date range instead of a single
+        implicit "now".
+        """
+        try:
+            data = await self._make_request(
+                "/stocks/data",
+                params={
+                    "symbol": symbol,
+                    "interval": interval,
+                    "from": start.isoformat(),
+                    "to": end.isoformat(),
+                },
+            )
+            bars = data.get("bars", [])
+            logger.debug(f"Retrieved {len(bars)} historical bar(s) for {symbol}")
+            return bars
+        except Exception as e:
+            logger.error(f"Error retrieving historical OHLCV for {symbol}: {e}")
             raise
 
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:

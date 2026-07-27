@@ -1,4 +1,4 @@
-"""Volume indicators: On-Balance Volume, Volume SMA.
+"""Volume indicators: On-Balance Volume, Volume SMA, VWAP.
 
 Pure computation over a pandas DataFrame -- no I/O, no database.
 """
@@ -25,3 +25,27 @@ def volume_sma(df: pd.DataFrame, period: int = 20) -> pd.Series:
     volume relative to its recent average.
     """
     return sma(df["volume"], period)
+
+
+def vwap(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """Rolling Volume-Weighted Average Price over the trailing `period`
+    bars: sum(typical_price * volume) / sum(volume), typical_price =
+    (high + low + close) / 3.
+
+    True VWAP is computed per intraday trading session from tick-level
+    data and resets at the session open; this platform only has daily
+    OHLCV bars, so this is the standard daily-bar analog -- a rolling
+    N-bar volume-weighted average, not a session-anchored one. A bar
+    range with zero total volume across the window is undefined (NaN).
+    """
+    if len(df) < period:
+        raise ValueError(f"need at least {period} data points, got {len(df)}")
+
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3
+    price_volume = typical_price * df["volume"]
+    rolling_volume = df["volume"].rolling(window=period, min_periods=period).sum()
+    rolling_price_volume = price_volume.rolling(window=period, min_periods=period).sum()
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = rolling_price_volume / rolling_volume
+    return result.where(rolling_volume != 0)

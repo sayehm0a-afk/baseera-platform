@@ -24,6 +24,16 @@ from src.core.db.database import Base
 import src.domain.models  # noqa: E402,F401 -- registers all models on Base.metadata
 target_metadata = Base.metadata
 
+# alembic.ini's sqlalchemy.url is a local-dev-only default -- without
+# this override, `alembic upgrade head` would silently connect to
+# localhost:5432 in every environment, including inside a container
+# where the real database lives on a different host entirely (e.g. the
+# `db` service in docker-compose.yml), matching the same DATABASE_URL
+# env var src.core.db.database already reads.
+_database_url = os.getenv("DATABASE_URL")
+if _database_url:
+    config.set_main_option("sqlalchemy.url", _database_url)
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
