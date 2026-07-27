@@ -359,7 +359,7 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
                 sector={opportunity.sector}
                 recommendation={opportunity.recommendation as RecommendationValue}
                 confidence={opportunity.confidence}
-                href={`/ai?symbol=${encodeURIComponent(opportunity.symbol)}`}
+                href={`/stocks/${encodeURIComponent(opportunity.symbol)}`}
               />
             ))}
           </div>

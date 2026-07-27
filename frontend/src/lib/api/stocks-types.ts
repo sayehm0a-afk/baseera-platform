@@ -36,6 +36,29 @@ export interface History {
   bars: HistoricalBar[];
 }
 
+/** `indicators`/`ratios` are typed loosely on purpose -- they mirror
+ * src/api/schemas/stocks.py's `Dict[str, Any]`, since the indicator/
+ * ratio registries (src/analysis/registry.py,
+ * src/analysis/fundamental/registry.py) can grow without a schema
+ * change on either side. Consumers must read defensively (typeof
+ * checks), never assume a key exists. */
+export interface TechnicalAnalysis {
+  symbol: string;
+  timeframe: string;
+  bars_used: number;
+  as_of: string;
+  indicators: Record<string, unknown>;
+}
+
+export interface FundamentalAnalysis {
+  symbol: string;
+  period_type: string;
+  fiscal_period_end: string | null;
+  ratios: Record<string, unknown>;
+  source: string;
+  is_synthetic: boolean;
+}
+
 export interface Signal {
   name: string;
   description: string;

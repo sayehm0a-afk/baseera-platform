@@ -129,7 +129,7 @@ export default async function DashboardPage() {
                 confidence={entry.confidence}
                 targetPrice={entry.target_price}
                 expectedReturnPct={entry.expected_return_pct}
-                href={`/ai?symbol=${encodeURIComponent(entry.symbol)}`}
+                href={`/stocks/${encodeURIComponent(entry.symbol)}`}
               />
             ))}
           </div>

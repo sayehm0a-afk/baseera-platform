@@ -30,3 +30,20 @@ export const RISK_LEVEL_LABELS: Record<string, string> = {
   HIGH: "مرتفعة",
   VERY_HIGH: "مرتفعة جداً",
 };
+
+/** Mirrors src.analysis.decision.types.TimeHorizon, used by
+ * /api/v1/stocks/{symbol}/decision. */
+export const TIME_HORIZON_LABELS: Record<string, string> = {
+  SHORT_TERM: "قصير المدى",
+  MEDIUM_TERM: "متوسط المدى",
+  LONG_TERM: "طويل المدى",
+};
+
+/** Mirrors src.analysis.decision.types.PositionSize. */
+export const POSITION_SIZE_LABELS: Record<string, string> = {
+  NONE: "لا يُنصح بالدخول",
+  SMALL: "صغير",
+  MODERATE: "متوسط",
+  STANDARD: "قياسي",
+  LARGE: "كبير",
+};

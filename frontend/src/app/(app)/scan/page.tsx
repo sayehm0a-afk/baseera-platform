@@ -73,7 +73,7 @@ export default function ScanPage() {
                     (entry.recommendation as RecommendationValue) ?? undefined
                   }
                   confidence={entry.confidence}
-                  href={`/ai?symbol=${encodeURIComponent(entry.symbol)}`}
+                  href={`/stocks/${encodeURIComponent(entry.symbol)}`}
                 />
               </li>
             ))}
