@@ -55,6 +55,29 @@ jobs:
   build-and-test:
     name: Install, compile, test, lint, boot
     runs-on: ubuntu-latest
+    # Real Redis, matching docker-compose.yml's own `redis:6-alpine` --
+    # most Redis-dependent tests already skip gracefully when Redis is
+    # unavailable (see e.g. tests/unit/auth/test_token_store.py), but a
+    # few (tests/integration/api/test_admin_routes.py's session-revoke
+    # tests) call the real client unconditionally and hard-fail with
+    # `redis.exceptions.ConnectionError` instead of skipping when there
+    # is nothing at localhost:6379 to connect to. Settings' own
+    # defaults (redis_host=localhost, redis_port=6379 --
+    # src/core/config/settings.py) already match a service container
+    # mapped this way, so no extra env var is needed here. This also
+    # means every other Redis-conditional test in the suite runs for
+    # real in CI instead of skipping, which is a real coverage gain,
+    # not just a fix for these 3.
+    services:
+      redis:
+        image: redis:6-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
