@@ -12,6 +12,22 @@ on:
   push:
     branches: [main]
 
+# Known anomaly (observed on run 30286448550, commit d0c36ac, PR #17):
+# a push to a non-main branch that already has an open PR against main
+# can occasionally surface on GitHub's side as an `event: push` run
+# instead of the expected `event: pull_request` (synchronize) run, with
+# 0 jobs scheduled and conclusion=failure -- despite `push.branches`
+# above correctly excluding non-main branches, and despite this exact
+# workflow file successfully producing real jobs on every other push to
+# the same branch/PR before and after. This looks like a GitHub-side
+# webhook/scheduling anomaly (the run cannot even be retried via the
+# Actions API -- "This workflow run cannot be retried" -- which is
+# itself only ever returned for a run that never got past scheduling,
+# not a normal job failure), not a defect in this file. If it recurs,
+# a fresh push is the known workaround; this comment exists so the next
+# person to see a green push-history but a red check doesn't re-diagnose
+# the same YAML from scratch.
+
 # Pre-existing repo-wide flake8 violation count as of the M0 milestone,
 # recorded so new violations are blocked without requiring an immediate
 # repo-wide reformat (out of M0/M1 scope -- see the planned M1.5 "Lint
