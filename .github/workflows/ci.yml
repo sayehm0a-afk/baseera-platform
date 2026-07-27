@@ -114,7 +114,7 @@ jobs:
           python -c "
           import main
           print('main.py imported successfully')
-          print('Routes:', sorted(r.path for r in main.app.routes))
+          print('Routes registered:', len(main.app.routes))
           "
 
       - name: Test collection check

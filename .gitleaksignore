@@ -15,11 +15,15 @@
 # not a real secret. NEVER add an entry for a rule you have not
 # personally verified.
 
-# tests/unit/market_data/test_config.py:12 --
-# `monkeypatch.setenv("SAHMK_API_KEY", "shmk_test_abc123")`, a pytest
-# fixture asserting src.market_data.config.get_sahmk_api_key() reads
-# the env var it's told to. "shmk_test_abc123" is a low-entropy,
-# obviously-synthetic literal (it says "test" in it) that has never
-# been a valid SAHMK credential -- confirmed by reading the actual
-# diff at this commit before adding this line.
+# tests/unit/market_data/test_config.py:12 -- a pytest fixture that
+# uses monkeypatch to point the SAHMK API key environment variable at
+# a low-entropy, obviously-synthetic placeholder (it literally says
+# "test" in it) while asserting src.market_data.config's reader
+# function reads back whatever the environment provides. That
+# placeholder has never been a valid SAHMK credential -- confirmed by
+# reading the actual diff at this commit before adding this line. The
+# exact source text is deliberately not quoted here (an earlier
+# revision of this comment did quote it verbatim and that alone
+# produced a second, self-inflicted generic-api-key match on this
+# very file -- see git history if curious).
 a28c7360c6fbb82d8fba5517a3bbcb824cdc63c2:tests/unit/market_data/test_config.py:generic-api-key:12
