@@ -36,6 +36,18 @@ jobs:
   build-and-test:
     name: Install, compile, test, lint, boot
     runs-on: ubuntu-latest
+    # GitHub-hosted runners execute as a non-root `runner` user with no
+    # write access to /var/log (structured_logging.py's production
+    # default, LOG_DIR unset). Point logging at the job's own writable
+    # scratch directory instead -- RUNNER_TEMP is provided by the
+    # runner and cleaned up automatically after the job, so this needs
+    # no cleanup step of its own. structured_logging.py also falls back
+    # on its own if this were ever unset/wrong (see
+    # _ensure_writable_log_dir), but setting it explicitly here means
+    # CI logs land somewhere predictable rather than relying on that
+    # fallback path.
+    env:
+      LOG_DIR: ${{ runner.temp }}/basirah-logs
     steps:
       - name: Checkout
         uses: actions/checkout@v4

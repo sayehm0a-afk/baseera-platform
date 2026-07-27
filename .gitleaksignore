@@ -1,0 +1,25 @@
+# Gitleaks ignore list for Basirah.
+#
+# Each line is a fingerprint (commit:file:rule-id:start-line) for one
+# specific, individually-reviewed finding -- never a broad pattern,
+# path, or rule-wide exemption. This is gitleaks' own supported
+# mechanism for a confirmed false positive that lives in git history
+# and cannot be edited without rewriting published commits (a
+# destructive operation this repository's workflow deliberately
+# avoids). It does not disable or weaken any detection rule; every
+# other finding gitleaks' default ruleset can produce is still
+# reported normally.
+#
+# NEVER add a fingerprint here without first confirming, by manual
+# review of the actual diff at that commit, that the flagged string is
+# not a real secret. NEVER add an entry for a rule you have not
+# personally verified.
+
+# tests/unit/market_data/test_config.py:12 --
+# `monkeypatch.setenv("SAHMK_API_KEY", "shmk_test_abc123")`, a pytest
+# fixture asserting src.market_data.config.get_sahmk_api_key() reads
+# the env var it's told to. "shmk_test_abc123" is a low-entropy,
+# obviously-synthetic literal (it says "test" in it) that has never
+# been a valid SAHMK credential -- confirmed by reading the actual
+# diff at this commit before adding this line.
+a28c7360c6fbb82d8fba5517a3bbcb824cdc63c2:tests/unit/market_data/test_config.py:generic-api-key:12
