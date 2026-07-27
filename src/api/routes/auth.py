@@ -17,12 +17,15 @@ enumeration/abuse surface: register, verify-email, login, refresh,
 forgot-password, reset-password.
 """
 
+from typing import Any, Dict
+
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_current_user
 from src.api.middleware.rate_limiting import limiter
 from src.api.schemas.auth import (
+    DeleteAccountRequest,
     ForgotPasswordRequest,
     LoginRequest,
     MessageOut,
@@ -32,7 +35,7 @@ from src.api.schemas.auth import (
     UserOut,
     VerifyEmailRequest,
 )
-from src.auth import email_verification_service, password_reset_service, session_service, user_service
+from src.auth import data_export_service, email_verification_service, password_reset_service, session_service, user_service
 from src.auth.exceptions import InvalidOrExpiredTokenError, SessionNotFoundError
 from src.auth.jwt_service import InvalidAccessTokenError, decode_access_token
 from src.auth.repository import AuthRepository
@@ -196,6 +199,30 @@ def reset_password(request: Request, body: ResetPasswordRequest, session: Sessio
 @router.get("/me", response_model=UserOut)
 def get_me(current_user: User = Depends(get_current_user)) -> UserOut:
     return UserOut.model_validate(current_user)
+
+
+@router.get("/me/export")
+@limiter.limit("5/minute")
+def export_own_data(
+    request: Request,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    return data_export_service.build_user_data_export(session, current_user)
+
+
+@router.delete("/me", response_model=MessageOut)
+@limiter.limit("5/minute")
+def delete_own_account(
+    request: Request,
+    body: DeleteAccountRequest,
+    response: Response,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> MessageOut:
+    user_service.delete_own_account(session, current_user, body.password)
+    _clear_session_cookies(response)
+    return MessageOut(message="Account deleted.")
 
 
 @router.get("/sessions", response_model=list[SessionOut])

@@ -29,7 +29,7 @@ class AIRequest(Base):
     __tablename__ = "ai_requests"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     feature = Column(String(100), nullable=False, index=True)
     symbol = Column(String(20), nullable=True)

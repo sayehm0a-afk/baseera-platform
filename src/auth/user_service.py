@@ -4,17 +4,21 @@ repository" split every other package in this codebase already uses
 (e.g. PortfolioEngine vs. PortfolioRepository).
 """
 
+import logging
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.auth import email_verification_service
 from src.auth.exceptions import (
+    AccountHasBillingHistoryError,
     AccountLockedError,
     AccountSuspendedError,
     EmailAlreadyRegisteredError,
     EmailNotVerifiedError,
     InvalidCredentialsError,
+    StaffAccountSelfDeletionError,
 )
 from src.auth.password_hashing import hash_password, verify_password
 from src.auth.repository import AuthRepository
@@ -22,6 +26,8 @@ from src.core.config import settings
 from src.core.monitoring.prometheus_metrics import get_metrics
 from src.domain.models import User
 from src.subscriptions import subscription_service
+
+logger = logging.getLogger(__name__)
 
 _repository = AuthRepository()
 
@@ -95,3 +101,60 @@ def authenticate(session: Session, email: str, password: str) -> User:
     _repository.record_login(session, user.id)
     get_metrics().record_login("success")
     return user
+
+
+def delete_own_account(session: Session, user: User, password: str) -> None:
+    """Self-service account deletion (Phase 13 P13.6 -- customer data
+    protection): a real password confirmation is required (never just
+    "you're logged in, click delete") so a hijacked-but-not-fully-
+    compromised browser session (e.g. an unattended unlocked laptop)
+    can't be used to destroy the account outright. Hard-deletes via the
+    same `AuthRepository.delete_user` the admin OWNER-only route uses,
+    including the same FK-RESTRICT-aware handling: a real financial/
+    audit history (invoices, audit log entries) blocks the delete
+    rather than silently discarding it, surfaced here with
+    customer-facing wording pointing at support instead of the
+    admin-facing `user_has_related_records` code. Blocked outright for
+    any staff account (`is_staff=True`) -- see
+    `StaffAccountSelfDeletionError`'s own docstring for why.
+
+    Audit trail: logged via structured application logging (masked by
+    `mask_dict_values`, P13.2), not `AuditLog` (the SQL table). AuditLog
+    is explicitly scoped to admin/staff actions (see its own docstring)
+    and, more fundamentally, `actor_user_id` is a NOT NULL FK to
+    `users.id` with no cascade -- a row logging "user X deleted
+    themselves" could never coexist with user X's own row actually
+    being gone, so it structurally cannot represent this event without
+    either violating that FK or weakening the exact RESTRICT guarantee
+    P13.4/P13.6 depend on elsewhere. Structured logs have no such
+    constraint."""
+    user_id = user.id
+    logger.info("Self-service account deletion requested.", extra={"extra_fields": {"user_id": user_id}})
+
+    if user.is_staff:
+        logger.info(
+            "Self-service account deletion blocked -- staff account.",
+            extra={"extra_fields": {"user_id": user_id}},
+        )
+        raise StaffAccountSelfDeletionError(
+            "Staff accounts cannot be deleted through self-service. Ask another owner to revoke your "
+            "staff access first."
+        )
+
+    if not verify_password(password, user.password_hash):
+        raise InvalidCredentialsError("Password is incorrect.")
+
+    try:
+        _repository.delete_user(session, user_id)
+    except IntegrityError as exc:
+        session.rollback()
+        logger.info(
+            "Self-service account deletion blocked by retained billing/audit history.",
+            extra={"extra_fields": {"user_id": user_id}},
+        )
+        raise AccountHasBillingHistoryError(
+            "This account has billing or audit history and can't be deleted automatically. "
+            "Please contact support."
+        ) from exc
+
+    logger.info("Self-service account deletion completed.", extra={"extra_fields": {"user_id": user_id}})

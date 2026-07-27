@@ -19,7 +19,7 @@ class UserWatchlist(Base):
     __tablename__ = "user_watchlists"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
 
     created_at = Column(
@@ -40,7 +40,7 @@ class UserWatchlistItem(Base):
     __table_args__ = (UniqueConstraint("watchlist_id", "stock_id", name="uq_user_watchlist_item_stock"),)
 
     id = Column(Integer, primary_key=True)
-    watchlist_id = Column(Integer, ForeignKey("user_watchlists.id"), nullable=False, index=True)
+    watchlist_id = Column(Integer, ForeignKey("user_watchlists.id", ondelete="CASCADE"), nullable=False, index=True)
     stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False, index=True)
     symbol = Column(String(20), nullable=False)  # denormalized for cheap listing without a join
 

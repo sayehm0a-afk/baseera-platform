@@ -31,7 +31,7 @@ class PortfolioNewsAlert(Base):
     __tablename__ = "portfolio_news_alerts"
 
     id = Column(Integer, primary_key=True)
-    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
     symbol = Column(String(16), nullable=False, index=True)
     news_event_id = Column(Integer, ForeignKey("news_events.id"), nullable=False, index=True)
 

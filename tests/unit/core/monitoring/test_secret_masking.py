@@ -42,3 +42,37 @@ def test_mask_dict_values_only_masks_sensitive_keys():
     assert masked["api_key"] == "sk-a...wxyz"
     # never mutates the caller's dict
     assert original["api_key"] == "sk-abcdefghijklmnopqrstuvwxyz"
+
+
+def test_mask_dict_values_recurses_into_nested_dicts():
+    original = {
+        "request": {
+            "headers": {"authorization": "Bearer sk-abcdefghijklmnopqrstuvwxyz"},
+            "path": "/api/v1/auth/login",
+        }
+    }
+    masked = mask_dict_values(original)
+
+    assert masked["request"]["headers"]["authorization"] == "Bear...wxyz"
+    assert masked["request"]["path"] == "/api/v1/auth/login"
+    # never mutates the caller's (nested) dict either
+    assert original["request"]["headers"]["authorization"] == "Bearer sk-abcdefghijklmnopqrstuvwxyz"
+
+
+def test_mask_dict_values_recurses_into_lists_of_dicts():
+    original = {"users": [{"email": "a@example.com", "password": "hunter2"}, {"email": "b@example.com"}]}
+    masked = mask_dict_values(original)
+
+    assert masked["users"][0]["email"] == "a@example.com"
+    assert masked["users"][0]["password"] == "***"
+    assert masked["users"][1]["email"] == "b@example.com"
+
+
+def test_mask_dict_values_masks_a_sensitive_key_even_when_its_value_is_a_nested_structure():
+    original = {"credentials": {"user": "admin", "pass": "hunter2"}}
+    masked = mask_dict_values(original)
+
+    # the whole nested structure is masked as one opaque value, since
+    # the key itself ("credentials") is what marked it sensitive
+    assert "admin" not in str(masked["credentials"])
+    assert "hunter2" not in str(masked["credentials"])

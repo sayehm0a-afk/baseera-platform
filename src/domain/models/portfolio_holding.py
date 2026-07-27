@@ -26,7 +26,7 @@ class PortfolioHolding(Base):
     )
 
     id = Column(Integer, primary_key=True)
-    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
     stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False, index=True)
     symbol = Column(String(16), nullable=False, index=True)
 

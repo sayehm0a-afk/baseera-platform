@@ -23,7 +23,7 @@ class PortfolioAnalysisSnapshot(Base):
     __tablename__ = "portfolio_analysis_snapshots"
 
     id = Column(Integer, primary_key=True)
-    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False, index=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id", ondelete="CASCADE"), nullable=False, index=True)
 
     total_value = Column(Numeric(18, 4), nullable=False)
     cash = Column(Numeric(18, 4), nullable=False)

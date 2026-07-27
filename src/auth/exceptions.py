@@ -83,3 +83,33 @@ class SubscriptionRequiredError(APIError):
 
     status_code = 402
     code = "subscription_required"
+
+
+class StaffAccountSelfDeletionError(APIError):
+    """A staff account (`is_staff=True` -- SUPPORT/ADMIN/OWNER) tried to
+    delete itself through the consumer self-service DELETE /auth/me
+    route. Blocked outright: staff identities are operational/
+    administrative, not customer accounts, and this route has no
+    concept of "who else still holds OWNER" the way a deliberate staff
+    off-boarding process would need to check -- an OWNER self-deleting
+    here could leave the platform with zero OWNERs and no path back in
+    (mirrors the same reasoning `CannotModifyOwnStaffRoleError`,
+    src/admin/exceptions.py, already applies to the admin staff-role
+    route). Revoking staff access is an admin action
+    (`POST /api/v1/admin/users/{id}/staff-role`, OWNER-only) that must
+    happen before this account could ever use this route."""
+
+    status_code = 403
+    code = "staff_account_self_deletion_blocked"
+
+
+class AccountHasBillingHistoryError(APIError):
+    """Self-service DELETE /auth/me hit the same FK RESTRICT the admin
+    hard-delete route (src/api/routes/admin/users.py) already surfaces
+    as `user_has_related_records` -- a real invoice/payment/audit
+    history exists for this account and must not be silently discarded.
+    Distinct code/message (customer-facing: "contact support" rather
+    than the admin-facing wording) for the same underlying condition."""
+
+    status_code = 409
+    code = "account_has_billing_history"

@@ -1685,6 +1685,78 @@ until this session's News Intelligence milestone. This milestone:
    exactly like every other milestone's tests, never presented as live
    market data.
 
+## Completed: Phase 13 P13.1–P13.6 — Production Readiness (Branch Integrity, Secrets, Auth Hardening, RBAC, Entitlements, Data Protection)
+
+A sequence of security/production-readiness milestones, each with its
+own dedicated doc (not repeated in full here):
+
+1. **P13.1 Branch and repository integrity** (`docs/PHASE_13_BRANCH_STATE.md`)
+   — confirmed no divergent unmerged work, clean git history.
+2. **P13.2 Production configuration and secret audit**
+   (`docs/PRODUCTION_CONFIGURATION.md`, `docs/SECRET_ROTATION.md`) —
+   `TrustedHostMiddleware`, managed-Redis URL/password support
+   (`Settings.redis_dsn`), secret masking in structured logging
+   (`src/core/monitoring/secret_masking.py`), full git-history secret
+   scan (clean), hardened `.env.example` files.
+3. **P13.3 Authentication hardening** (`docs/AUTHENTICATION_SECURITY.md`,
+   `docs/THREAT_MODEL.md`) — fixed a real user-enumeration timing
+   side-channel (`or` short-circuit skipping bcrypt for unknown
+   emails), added per-account login lockout, added missing rate limits
+   (`/verify-email`, `/refresh`, `/reset-password`), added
+   `UserSession.last_used_at`.
+4. **P13.4 RBAC and owner/admin access** (`docs/ADMIN_AND_RBAC.md`) —
+   staff role grant/revoke route (OWNER-only, self-modification
+   blocked), bulk session revocation, owner-bootstrap CLI
+   (`scripts/bootstrap_owner.py`), admin dashboard-summary endpoint,
+   billing/invoice admin views, and a real subscription-lifecycle bug
+   fix (`CANCELED` subscriptions were losing access immediately instead
+   of at period end).
+5. **P13.5 Trial and subscription entitlements**
+   (`docs/SUBSCRIPTION_ENTITLEMENTS.md`) — found and closed a critical
+   gap: `src/api/routes/market.py` and `src/api/routes/stocks.py` (live
+   quotes, technical/fundamental analysis, the full AI recommendation/
+   decision/analyst-report stack, market scans) had **no authentication
+   dependency at all**, letting any anonymous caller bypass
+   registration/trial/subscription entirely. Every route in both files
+   now requires `require_active_subscription()`.
+6. **P13.6 Database & customer data protection**
+   (`docs/DATABASE_SECURITY_AND_RETENTION.md`,
+   `docs/ACCOUNT_DELETION_AND_EXPORT.md`) — self-service account
+   deletion (`DELETE /api/v1/auth/me`, password-confirmed, staff
+   accounts blocked, billing/audit history blocked via FK RESTRICT),
+   self-service data export (`GET /api/v1/auth/me/export`), a real
+   per-category referential-integrity policy for every table
+   referencing `users.id` (migration `c4d8e6f19a2b` — CASCADE for
+   purely personal data, SET NULL for independently-valuable data,
+   unchanged RESTRICT for financial/audit records — verified against
+   both SQLite and a real PostgreSQL 16 instance), an idempotent
+   retention-cleanup service for stale sessions/tokens
+   (`src/auth/retention_cleanup_service.py`,
+   `scripts/run_retention_cleanup.py`), recursive nested-structure
+   support added to `mask_dict_values` (a real, previously-untested gap
+   in the P13.2 log-redaction infrastructure), and an audit trail for
+   every self-service deletion/export event via structured logging.
+
+**Verification across all six milestones**: full backend suite (2433
+tests as of P13.6, up from ~2320 at the start of Phase 13), `flake8
+src/ tests/ main.py` at 0 violations throughout, and — a first for this
+project — a real local PostgreSQL 16 instance stood up specifically to
+verify the Phase 13 P13.6 migration's `ON DELETE` constraint behavior
+end to end (not just SQLite's structural migration-chain smoke test),
+including a full upgrade → downgrade → re-upgrade round trip.
+
+**Disclosed gaps carried forward**: the admin frontend (M10.14) is
+still not built — every P13.4 admin capability is API-only so far. No
+soft-delete/anonymization path exists yet for accounts blocked from
+self-service deletion by real billing history (disclosed in
+`docs/ACCOUNT_DELETION_AND_EXPORT.md` §6). Unauthenticated root-level
+ops-status endpoints (`GET /ingestion/status`, `/stats`,
+`/market-data-provider/status` in `main.py`) were noticed during P13.4
+but are out of that milestone's scope — flagged for the P13.14 full
+security sweep. No live SAHMK/OpenAI network access exists in this
+sandbox for any of P13.1–P13.6; nothing in these milestones claims live
+market-data validation.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

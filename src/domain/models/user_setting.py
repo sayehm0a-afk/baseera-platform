@@ -17,7 +17,7 @@ class UserSetting(Base):
     __table_args__ = (UniqueConstraint("user_id", name="uq_user_setting_user"),)
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     preferences_json = Column(JSON, nullable=False, default=dict, server_default="{}")
 
     updated_at = Column(

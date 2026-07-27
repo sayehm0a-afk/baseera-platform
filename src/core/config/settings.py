@@ -84,6 +84,16 @@ class Settings(BaseSettings):
     login_lockout_max_attempts: int = Field(default=5, alias="LOGIN_LOCKOUT_MAX_ATTEMPTS")
     login_lockout_duration_minutes: int = Field(default=15, alias="LOGIN_LOCKOUT_DURATION_MINUTES")
 
+    # --- Data retention (src/auth/retention_cleanup_service.py, Phase 13
+    # P13.6) -- how long a *revoked/expired* UserSession row or an
+    # *expired* verification/reset token is kept before permanent
+    # deletion. These are engineering defaults, not a confirmed legal
+    # retention requirement for any jurisdiction (see
+    # docs/DATABASE_SECURITY_AND_RETENTION.md) -- deliberately
+    # configurable per deployment rather than hardcoded.
+    session_retention_days: int = Field(default=30, alias="SESSION_RETENTION_DAYS")
+    token_retention_days: int = Field(default=7, alias="TOKEN_RETENTION_DAYS")
+
     # --- Subscriptions ----------------------------------------------------
     trial_length_days: int = Field(default=14, alias="TRIAL_LENGTH_DAYS")
 

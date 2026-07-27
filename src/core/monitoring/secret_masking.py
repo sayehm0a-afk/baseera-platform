@@ -39,12 +39,25 @@ def mask_secret(value: Any, keep: int = 4) -> str:
 
 
 def mask_dict_values(data: dict) -> dict:
-    """Return a shallow copy of `data` with every value whose key name
-    looks sensitive replaced by `mask_secret()`. Never mutates the
-    input -- callers (e.g. the JSON log formatter) must not have a log
-    call's caller-visible `extra_fields` dict altered out from under
-    them."""
+    """Return a deep copy of `data` with every value whose key name
+    looks sensitive replaced by `mask_secret()`, recursing into nested
+    dicts and lists-of-dicts (a caller-supplied `extra_fields` payload
+    is free-form and can legitimately nest, e.g. `{"request": {"headers":
+    {"authorization": "..."}}}` -- masking only ever checked the
+    top level until Phase 13 P13.6, which is exactly the kind of gap
+    that lets a secret leak through one layer of structure). Never
+    mutates the input -- callers (e.g. the JSON log formatter) must not
+    have a log call's caller-visible `extra_fields` dict altered out
+    from under them."""
+
+    def _mask_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return mask_dict_values(value)
+        if isinstance(value, list):
+            return [_mask_value(item) for item in value]
+        return value
+
     return {
-        key: (mask_secret(value) if is_sensitive_field_name(str(key)) else value)
+        key: (mask_secret(value) if is_sensitive_field_name(str(key)) else _mask_value(value))
         for key, value in data.items()
     }

@@ -9,6 +9,7 @@ establishes.
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
+import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from src.domain.models import EmailVerificationToken, PasswordResetToken, StaffRole, User, UserSession
@@ -120,6 +121,21 @@ class AuthRepository:
         )
         session.commit()
 
+    def delete_stale_email_verification_tokens(self, session: Session, cutoff: datetime) -> int:
+        """Removes tokens whose `expires_at` is before `cutoff` --
+        whether ever consumed or not. An expired, unconsumed token can
+        never be redeemed (`email_verification_service.verify_email`
+        already rejects it on expiry); an expired, already-consumed one
+        has no further purpose either. Used by
+        `src.auth.retention_cleanup_service`, Phase 13 P13.6."""
+        deleted = (
+            session.query(EmailVerificationToken)
+            .filter(EmailVerificationToken.expires_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        session.commit()
+        return deleted
+
     # --- PasswordResetToken -----------------------------------------------
 
     def create_password_reset_token(
@@ -138,6 +154,17 @@ class AuthRepository:
             {"consumed_at": datetime.now(timezone.utc)}
         )
         session.commit()
+
+    def delete_stale_password_reset_tokens(self, session: Session, cutoff: datetime) -> int:
+        """Same reasoning as `delete_stale_email_verification_tokens`,
+        for `PasswordResetToken`."""
+        deleted = (
+            session.query(PasswordResetToken)
+            .filter(PasswordResetToken.expires_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        session.commit()
+        return deleted
 
     # --- UserSession ------------------------------------------------------
 
@@ -210,3 +237,25 @@ class AuthRepository:
         total = query.count()
         rows = query.order_by(UserSession.issued_at.desc()).offset(offset).limit(limit).all()
         return total, rows
+
+    def delete_stale_sessions(self, session: Session, cutoff: datetime) -> int:
+        """Permanently removes `UserSession` rows that have been dead
+        (revoked, or expired and never revoked) since before `cutoff` --
+        used by `src.auth.retention_cleanup_service`, Phase 13 P13.6.
+        Never touches a still-active session (`revoked_at IS NULL AND
+        expires_at > cutoff` is excluded by construction) -- the two
+        `OR` branches below cover "revoked a while ago" and "quietly
+        expired a while ago and was never revoked at all" (e.g. the
+        user simply never came back to trigger a refresh)."""
+        deleted = (
+            session.query(UserSession)
+            .filter(
+                sa.or_(
+                    UserSession.revoked_at.isnot(None) & (UserSession.revoked_at < cutoff),
+                    UserSession.revoked_at.is_(None) & (UserSession.expires_at < cutoff),
+                )
+            )
+            .delete(synchronize_session=False)
+        )
+        session.commit()
+        return deleted

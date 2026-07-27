@@ -4,16 +4,19 @@ from sqlalchemy.orm import sessionmaker
 
 from src.auth import user_service
 from src.auth.exceptions import (
+    AccountHasBillingHistoryError,
     AccountLockedError,
     AccountSuspendedError,
     EmailAlreadyRegisteredError,
     EmailNotVerifiedError,
     InvalidCredentialsError,
+    StaffAccountSelfDeletionError,
 )
+from src.auth.password_hashing import hash_password
 from src.auth.repository import AuthRepository
 from src.core.db.database import Base
 from src.core.monitoring.prometheus_metrics import get_metrics
-from src.domain.models import EmailVerificationToken, Subscription, SubscriptionPlan, SubscriptionStatus
+from src.domain.models import EmailVerificationToken, Subscription, SubscriptionPlan, SubscriptionStatus, User
 
 
 @pytest.fixture
@@ -209,3 +212,55 @@ def test_authenticate_takes_a_real_password_verification_pass_for_an_unknown_ema
         user_service.authenticate(session, "definitely-nobody@example.com", "whatever")
 
     assert calls == [user_service._DUMMY_PASSWORD_HASH]
+
+
+# --- delete_own_account (Phase 13 P13.6) --------------------------------
+
+
+def test_delete_own_account_rejects_the_wrong_password(session):
+    user = User(email="deleteme@example.com", password_hash=hash_password("correct-password"))
+    session.add(user)
+    session.commit()
+
+    with pytest.raises(InvalidCredentialsError):
+        user_service.delete_own_account(session, user, "wrong-password")
+
+    assert AuthRepository().get_user_by_email(session, "deleteme@example.com") is not None
+
+
+def test_delete_own_account_removes_the_user_row_on_correct_password(session):
+    user = User(email="deleteme@example.com", password_hash=hash_password("correct-password"))
+    session.add(user)
+    session.commit()
+    user_id = user.id
+
+    user_service.delete_own_account(session, user, "correct-password")
+
+    assert AuthRepository().get_user_by_id(session, user_id) is None
+
+
+def test_delete_own_account_raises_a_customer_facing_error_when_billing_history_blocks_it(session, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    user = User(email="deleteme@example.com", password_hash=hash_password("correct-password"))
+    session.add(user)
+    session.commit()
+
+    def _raise_integrity_error(*args, **kwargs):
+        raise IntegrityError("statement", {}, Exception("FK violation"))
+
+    monkeypatch.setattr(user_service._repository, "delete_user", _raise_integrity_error)
+
+    with pytest.raises(AccountHasBillingHistoryError):
+        user_service.delete_own_account(session, user, "correct-password")
+
+
+def test_delete_own_account_blocks_a_staff_account_regardless_of_password(session):
+    staff_user = User(email="staff-self-delete@example.com", password_hash=hash_password("correct-password"), is_staff=True)
+    session.add(staff_user)
+    session.commit()
+
+    with pytest.raises(StaffAccountSelfDeletionError):
+        user_service.delete_own_account(session, staff_user, "correct-password")
+
+    assert AuthRepository().get_user_by_email(session, "staff-self-delete@example.com") is not None

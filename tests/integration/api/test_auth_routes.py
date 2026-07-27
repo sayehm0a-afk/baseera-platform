@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.middleware.rate_limiting import limiter
+from src.domain.models import User
 
 pytest.importorskip("redis")
 
@@ -151,6 +152,158 @@ def test_me_returns_current_user_after_login(client: TestClient, db_session):
     response = client.get("/api/v1/auth/me")
     assert response.status_code == 200
     assert response.json()["email"] == "me@example.com"
+
+
+def test_delete_own_account_requires_the_correct_password(client: TestClient, db_session):
+    _register_verify_and_login(client, "deleteme@example.com")
+    response = client.request(
+        "DELETE",
+        "/api/v1/auth/me",
+        json={"password": "totally-wrong"},
+        headers=_csrf_headers(client),
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "invalid_credentials"
+
+    # The account is still there and the caller is still logged in.
+    assert client.get("/api/v1/auth/me").status_code == 200
+
+
+def test_delete_own_account_removes_the_account_and_clears_cookies(client: TestClient, db_session):
+    _register_verify_and_login(client, "deleteme@example.com")
+    response = client.request(
+        "DELETE",
+        "/api/v1/auth/me",
+        json={"password": "s3cret-password"},
+        headers=_csrf_headers(client),
+    )
+    assert response.status_code == 200
+    assert "access_token" not in client.cookies
+
+    # A deleted account can no longer log in.
+    login_response = client.post(
+        "/api/v1/auth/login", json={"email": "deleteme@example.com", "password": "s3cret-password"}
+    )
+    assert login_response.status_code == 401
+
+
+def test_deleting_an_already_deleted_account_is_a_clean_401_not_a_500(client: TestClient, db_session):
+    """Idempotency: the second DELETE call reuses the exact same
+    (now-stale) access-token cookie -- get_current_user's own user-
+    lookup-by-id fails cleanly (401 unauthenticated) the moment the row
+    is gone, so a retried/duplicated delete request can never 500 or
+    silently "succeed" a second time against nothing."""
+    _register_verify_and_login(client, "deletetwice@example.com")
+    csrf_headers = _csrf_headers(client)
+
+    first = client.request(
+        "DELETE", "/api/v1/auth/me", json={"password": "s3cret-password"}, headers=csrf_headers
+    )
+    assert first.status_code == 200
+
+    second = client.request(
+        "DELETE", "/api/v1/auth/me", json={"password": "s3cret-password"}, headers=csrf_headers
+    )
+    assert second.status_code == 401
+    assert second.json()["error"]["code"] == "unauthenticated"
+
+
+def test_delete_own_account_can_never_target_another_user(client: TestClient, db_session):
+    """DeleteAccountRequest has no user-id/target field at all -- the
+    route only ever operates on get_current_user's own resolved
+    identity. Proven concretely: deleting "self" while logged in as
+    user A never removes user B."""
+    from src.auth.password_hashing import hash_password
+
+    victim = User(email="untouched@example.com", password_hash=hash_password("victim-password"))
+    db_session.add(victim)
+    db_session.commit()
+    victim_id = victim.id
+
+    _register_verify_and_login(client, "selfdeleter@example.com")
+    response = client.request(
+        "DELETE", "/api/v1/auth/me", json={"password": "s3cret-password"}, headers=_csrf_headers(client)
+    )
+    assert response.status_code == 200
+
+    assert db_session.query(User).filter_by(id=victim_id).one_or_none() is not None
+
+
+def test_delete_own_account_ignores_an_injected_target_user_id_in_the_request_body(client: TestClient, db_session):
+    """Belt-and-suspenders on top of the previous test: even if a
+    caller tries to smuggle a target identifier into the request body,
+    DeleteAccountRequest only ever declares `password`, so it's
+    silently ignored -- the deletion still only ever affects the
+    caller's own account (proven by the login-now-fails assertion)."""
+    _register_verify_and_login(client, "injecttarget@example.com")
+    response = client.request(
+        "DELETE",
+        "/api/v1/auth/me",
+        json={"password": "s3cret-password", "user_id": 999999, "target_user_id": 1},
+        headers=_csrf_headers(client),
+    )
+    assert response.status_code == 200
+
+    login_response = client.post(
+        "/api/v1/auth/login", json={"email": "injecttarget@example.com", "password": "s3cret-password"}
+    )
+    assert login_response.status_code == 401
+
+
+def test_export_own_data_requires_authentication(client: TestClient, db_session):
+    response = client.get("/api/v1/auth/me/export")
+    assert response.status_code == 401
+
+
+def test_export_own_data_returns_the_callers_profile(client: TestClient, db_session):
+    _register_verify_and_login(client, "exportme@example.com")
+    response = client.get("/api/v1/auth/me/export")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["profile"]["email"] == "exportme@example.com"
+    assert "password_hash" not in body["profile"]
+    assert body["subscription"]["plan"] == "TRIAL"  # provisioned automatically on register
+
+
+def test_export_own_data_never_leaks_another_users_email(client: TestClient, db_session):
+    from src.auth.password_hashing import hash_password
+
+    db_session.add(User(email="victim@example.com", password_hash=hash_password("whatever-password")))
+    db_session.commit()
+
+    _register_verify_and_login(client, "exporter@example.com")
+
+    response = client.get("/api/v1/auth/me/export")
+    assert response.status_code == 200
+    assert "victim@example.com" not in response.text
+
+
+def test_delete_own_account_blocks_a_staff_account(client: TestClient, db_session):
+    from src.domain.models import StaffRole
+
+    _register_verify_and_login(client, "staffowner@example.com")
+    staff_user = db_session.query(User).filter_by(email="staffowner@example.com").one()
+    staff_user.is_staff = True
+    staff_user.staff_role = StaffRole.OWNER
+    db_session.commit()
+
+    # get_current_user re-reads the User row fresh from the DB on every
+    # request, so the already-issued session cookie from the login
+    # above picks up the is_staff promotion above with no override
+    # needed -- exactly like a real staff-role grant would take effect
+    # on a customer's very next request.
+    response = client.request(
+        "DELETE", "/api/v1/auth/me", json={"password": "s3cret-password"}, headers=_csrf_headers(client)
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "staff_account_self_deletion_blocked"
+    assert db_session.query(User).filter_by(email="staffowner@example.com").one_or_none() is not None
+
+
+def test_delete_own_account_requires_authentication(client: TestClient, db_session):
+    response = client.request("DELETE", "/api/v1/auth/me", json={"password": "whatever"})
+    assert response.status_code == 401
 
 
 def test_refresh_rotates_cookies_and_old_refresh_token_is_dead(client: TestClient, db_session):
