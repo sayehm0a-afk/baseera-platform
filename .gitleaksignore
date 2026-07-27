@@ -27,3 +27,17 @@
 # produced a second, self-inflicted generic-api-key match on this
 # very file -- see git history if curious).
 a28c7360c6fbb82d8fba5517a3bbcb824cdc63c2:tests/unit/market_data/test_config.py:generic-api-key:12
+
+# .gitleaksignore itself, line 19 of an earlier revision of this file
+# (before the reword above) -- that revision's explanatory comment
+# quoted the finding directly above verbatim, in the same quoted
+# key-then-value shape the generic-api-key rule looks for, which
+# produced this second, purely self-inflicted match on the comment
+# text itself rather than on any code or credential. No secret was
+# ever present at that historical line either; the content there was
+# prose describing the first finding, not a key assignment of any
+# kind. Fixed going forward by no longer quoting flagged source text
+# verbatim in this file, but the historical commit that once contained
+# the quote cannot be edited without rewriting published history, so
+# it is allowlisted the same way as every other entry here.
+d0c36ac715b4fdb7173092380d40f16ce9de2dee:.gitleaksignore:generic-api-key:19
