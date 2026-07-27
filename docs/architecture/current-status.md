@@ -1298,8 +1298,19 @@ purely heuristic, never measured against real replayed history.
 ## Completed: Autonomous AI Analyst Framework
 
 Full detail in `docs/AUTONOMOUS_AI_ANALYST_FRAMEWORK.md`; summary here.
-**Not an LLM integration** — no code in this codebase connects to
-OpenAI, the Claude API, Gemini, or any other external AI model.
+**Update (CTO review, Phase R3):** the claim below that "no code in
+this codebase connects to OpenAI... or any other external AI model"
+was true when originally written and is **no longer accurate** — a
+real, concrete `OpenAILLMAdapter` now exists
+(`src/analysis/analyst/openai_llm_adapter.py`) and is wired into the
+live `/analyst-report` route via `get_analyst_engine()`
+(`src/analysis/analyst/analyst_engine_factory.py`), activated **only**
+when `OPENAI_API_KEY` is configured. In every environment without that
+key (which includes this repository's own test/CI environment), the
+behavior described in points 3-4 below is still exactly correct —
+100% deterministic, zero network calls. See the new "LLM-Grounded
+Narration" section immediately below for what changed and how it
+stays safe.
 
 1. **`src/analysis/analyst/`** (new package) — twelve modules
    (`AnalystEngine`, `ReasoningPipeline`, `EvidenceCollector`,
@@ -1321,18 +1332,17 @@ OpenAI, the Claude API, Gemini, or any other external AI model.
    `SignalInterpreter` doesn't redefine the same source-to-label
    mapping. No other pre-existing engine, contributor, route, or schema
    was modified.
-3. **`LLMAdapter` is an abstract interface only** — `ReasoningPipeline`
-   accepts an optional adapter; when none is supplied (the only
-   configuration `AnalystEngine()`'s default construction ever uses),
-   every section is produced by the deterministic pipeline, no network
-   call occurs. The only implementation in this codebase is
-   `NullLLMAdapter`, a no-op test double that echoes its prompt back,
-   used solely to prove the extension point's wiring
-   (`test_reasoning_pipeline.py`) without connecting to any real
-   provider. If an adapter were ever injected, only three sections
-   (technical/fundamental/risk reasoning) would be offered to it for
+3. **`LLMAdapter` is an interface `ReasoningPipeline` accepts
+   optionally** — when none is supplied, every section is produced by
+   the deterministic pipeline, no network call occurs.
+   `NullLLMAdapter` is a no-op test double that echoes its prompt
+   back, used solely to prove the extension point's wiring
+   (`test_reasoning_pipeline.py`). Only three sections (technical/
+   fundamental/risk reasoning) are ever offered to an adapter for
    rephrasing, always grounded in the already-computed deterministic
-   baseline, which is kept whenever the adapter's result is empty.
+   baseline, which is kept whenever the adapter's result is empty. See
+   "LLM-Grounded Narration" below for the real, production-eligible
+   adapter added in Phase R3.
 4. **REST API** (`src/api/routes/stocks.py`) — `GET
    /api/v1/stocks/{symbol}/analyst-report`, reusing
    `_build_analysis_context()` unchanged (the same helper
@@ -1352,11 +1362,83 @@ OpenAI, the Claude API, Gemini, or any other external AI model.
    correctly calls and falls back around an injected `LLMAdapter`.
    **1617 tests pass, 12 skipped, repo-wide** (up from 1531).
    `flake8 src/ tests/ main.py` is clean at 0 violations.
-7. **Disclosed limitations** — no real LLM integration exists or is
+7. **Disclosed limitations (as of the original Analyst Framework
+   milestone, before Phase R3)** — no real LLM integration exists or is
    called; prose is template-based (a fixed set of named templates),
    not free-form generation; `join_factors()` lowercases only the
    joined clause's first character, not each factor, which can read
    slightly awkwardly when a factor begins with an acronym;
+
+### LLM-Grounded Narration (Phase R3, added after the milestone above)
+
+The CTO engineering review identified this as the platform's biggest
+gap between its "AI-powered" positioning and what the code actually
+did: the one real, working `OpenAILLMClient`
+(`src/core/llm_abstraction/`, already in production use by News
+Intelligence) was never connected to the Analyst Framework's own,
+purpose-built `LLMAdapter` extension point. This phase activates it,
+without touching any of the already-tested files above.
+
+1. **`src/analysis/analyst/openai_llm_adapter.py`** (new) — the first
+   concrete, network-calling `LLMAdapter` in this codebase. Wraps
+   `OpenAILLMClient` and adds three safety properties none of the
+   underlying pieces had on their own:
+   - **Never raises.** Every failure (timeout, provider error,
+     malformed response) is caught and converted to an empty-text
+     result, which `ReasoningPipeline._narrate()`'s existing,
+     already-tested fallback (`return result.text if result.text else
+     baseline_text`) turns back into the deterministic baseline — a
+     stock page can never break because an LLM call failed.
+   - **Hard timeout independent of the client's own retry count**
+     (`ANALYST_LLM_TIMEOUT_SECONDS`, default 12s, via `asyncio.wait_for`)
+     — bounds total wall-clock time even if the client's internal
+     retry/backoff would otherwise take longer.
+   - **Grounding check (`_is_grounded`)** — every numeric token in the
+     model's rephrased text must already appear in the prompt (which
+     contains the deterministic baseline it was told to rephrase, per
+     the existing `PromptTemplateManager.build_prompt` instruction
+     "do not invent any figures... only rephrase"). A completion that
+     introduces a new number is treated as a hallucination and
+     discarded, falling back to the baseline — never surfaced to a
+     user. This is a structural guarantee on top of an architectural
+     one: the LLM is only ever asked to rephrase prose, never to
+     produce a recommendation, score, target price, or stop loss —
+     every number in an `AnalystReport` still comes from
+     `AIDecisionEngine`, unconditionally, whether or not narration used
+     a real model.
+2. **`src/analysis/analyst/config.py`** (new) — `ANALYST_LLM_MODEL`
+   (default `gpt-4o-mini`, mirrors `NEWS_LLM_MODEL`'s own pattern),
+   `ANALYST_LLM_TIMEOUT_SECONDS` (default 12), and
+   `is_analyst_llm_narration_enabled()` (`bool(OPENAI_API_KEY)`).
+3. **`src/analysis/analyst/analyst_engine_factory.py`** (new) —
+   `get_analyst_engine(session)`, the one place production code
+   decides: constructs `OpenAILLMAdapter` only when
+   `is_analyst_llm_narration_enabled()` is true, else passes
+   `llm_adapter=None` — identical behavior to before this phase in
+   every environment without a configured key.
+4. **`src/api/routes/stocks.py`**'s `/analyst-report` route now calls
+   `get_analyst_engine(session)` instead of constructing
+   `AnalystEngine()` directly, and threads `requesting_user_id` through
+   (previously discarded) so real `AIRequest` audit rows record who
+   triggered a narration call.
+5. **Tests** — 20 new unit tests (`test_openai_llm_adapter.py`,
+   `test_analyst_engine_factory.py`, `test_config.py`), all against a
+   fake client (no real OpenAI call anywhere in the suite, same
+   technique `tests/unit/news_intelligence/test_analyzer.py` already
+   uses), covering: success path, exception → empty-text fallback,
+   timeout → empty-text fallback, ungrounded-number rejection, empty
+   response, and the enabled/disabled factory switch. All 8 pre-existing
+   `/analyst-report` integration tests pass unchanged.
+6. **Not done in this phase** (explicitly out of scope, matching the
+   review's own Priority 2 framing — this was an activation, not a
+   rebuild): no real OpenAI call was made anywhere in this session (no
+   `OPENAI_API_KEY` configured in this environment, same posture News
+   Intelligence has always had here); `AIRequest` traceability records
+   model/latency/status/user but not prompt version or token usage yet;
+   the grounding check is a blunt numeric-substring guard, not a full
+   schema validator (the LLM never produces structured/JSON output
+   today — only rephrased prose — so a JSON schema would have nothing
+   to validate against).
    `ConflictResolver`'s tension level is anchored specifically to the
    Technical-vs-Fundamental point spread, not a general N-way conflict
    metric; the "reference price" cited in target price/stop loss

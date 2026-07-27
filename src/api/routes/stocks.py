@@ -40,7 +40,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
-from src.analysis.analyst.analyst_engine import AnalystEngine
+from src.analysis.analyst.analyst_engine_factory import get_analyst_engine
 from src.analysis.analyst.output_formatter import OutputFormatter
 from src.analysis.context_builder import build_analysis_context
 from src.analysis.decision.ai_decision_engine import AIDecisionEngine
@@ -370,7 +370,7 @@ async def get_analyst_report(
     format: str = Query("json", pattern="^(json|markdown|text)$"),
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
-    _current_user: User = Depends(require_active_subscription()),
+    current_user: User = Depends(require_active_subscription()),
 ):
     """The Autonomous AI Analyst Framework's report for one symbol:
     everything /decision already produces, narrated into a
@@ -385,6 +385,14 @@ async def get_analyst_report(
     /recommendation and /decision apply, since AnalystEngine runs the
     same two engines first.
 
+    The technical/fundamental/risk narrative paragraphs are rephrased
+    by a real LLM (src/analysis/analyst/openai_llm_adapter.py) when
+    OPENAI_API_KEY is configured, grounded in and verified against the
+    same deterministic baseline text every environment without a key
+    already returns -- see get_analyst_engine()'s module docstring.
+    Every number in the report always comes from AIDecisionEngine,
+    never from the LLM.
+
     `format=markdown` and `format=text` return the same report
     rendered as Markdown or plain text (e.g. for a rendered report
     view or a log/email) instead of JSON.
@@ -396,7 +404,7 @@ async def get_analyst_report(
             f"Not enough ingested history or fundamentals for '{symbol}' to generate an analyst report."
         )
 
-    report = await AnalystEngine().analyze(context)
+    report = await get_analyst_engine(session).analyze(context, requesting_user_id=current_user.id)
 
     if format == "markdown":
         return PlainTextResponse(OutputFormatter.to_markdown(report), media_type="text/markdown")
