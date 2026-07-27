@@ -82,6 +82,14 @@ jobs:
           DIAGNOSIS_VALUE="${DIAGNOSIS_LINE#FINAL_DIAGNOSIS=}"
           echo "diagnosis=${DIAGNOSIS_VALUE}" >> "$GITHUB_OUTPUT"
 
+      - name: Full endpoint coverage sweep (real, unmocked, read-only)
+        if: always() && steps.diagnostic.outcome == 'success'
+        env:
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+          SAHMK_BASE_URL: https://app.sahmk.sa/api/v1
+        run: |
+          python scripts/verify_sahmk_endpoint_coverage.py
+
       - name: Final summary
         if: always()
         run: |
