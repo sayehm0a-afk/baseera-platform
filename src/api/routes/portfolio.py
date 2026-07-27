@@ -3,9 +3,14 @@ src.portfolio_intelligence, following the same conventions as
 src/api/routes/market.py (APIError subclasses + register_error_handlers,
 GET routes that only read already-persisted state).
 
-Every route requires an authenticated user (Phase 10 M10.5) and is
-scoped to that user's own portfolios -- `_get_portfolio_or_404` looks
-up a portfolio filtered by owner, so requesting another user's
+Every route requires an active subscription via `require_active_subscription()`
+(Phase 10 M10.5 ownership + this fix, matching the same gate already
+applied to src/api/routes/stocks.py and market.py per Phase 13 P13.5
+-- previously this file only required plain authentication via
+`get_current_user`, letting any registered account reach premium
+portfolio-intelligence output for free; that gap is closed here) and
+is scoped to that user's own portfolios -- `_get_portfolio_or_404`
+looks up a portfolio filtered by owner, so requesting another user's
 portfolio ID looks identical to requesting one that doesn't exist
 (404, never 403): the same existence-leakage avoidance already used
 for other users' UserSessions in src/api/routes/auth.py.
@@ -25,7 +30,7 @@ latest already-persisted `PortfolioAnalysisSnapshot` for that portfolio
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from src.api.dependencies import get_current_user, get_market_provider
+from src.api.dependencies import get_market_provider
 from src.api.exceptions import InvalidPortfolioConfigError, NoPortfolioAnalysisError, PortfolioNotFoundError
 from src.api.schemas.news import PortfolioNewsAlertListOut, PortfolioNewsAlertOut
 from src.api.schemas.portfolio_intelligence import (
@@ -39,6 +44,7 @@ from src.api.schemas.portfolio_intelligence import (
     RebalancePlanOut,
     RiskProfileOut,
 )
+from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
 from src.domain.models import Portfolio, PortfolioAnalysisSnapshot, PortfolioNewsAlert, User
 from src.market_data.providers.market_data_provider import IMarketDataProvider
@@ -75,7 +81,7 @@ async def analyze_portfolio(
     request: PortfolioAnalyzeRequest,
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> PortfolioAnalysisOut:
     if len(request.holdings) > get_max_holdings_per_portfolio():
         raise InvalidPortfolioConfigError(
@@ -102,21 +108,21 @@ async def analyze_portfolio(
 
 @router.get("/{portfolio_id}", response_model=PortfolioAnalysisOut)
 def get_portfolio(
-    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> PortfolioAnalysisOut:
     return PortfolioAnalysisOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id))
 
 
 @router.get("/{portfolio_id}/recommendations", response_model=PortfolioRecommendationsOut)
 def get_recommendations(
-    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> PortfolioRecommendationsOut:
     return PortfolioRecommendationsOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id)["recommendations"])
 
 
 @router.get("/{portfolio_id}/risk", response_model=RiskProfileOut)
 def get_risk(
-    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> RiskProfileOut:
     risk_profile = _get_latest_analysis_json(session, portfolio_id, current_user.id)["risk_profile"]
     correlation_matrix = risk_profile.get("correlation_matrix")
@@ -127,21 +133,21 @@ def get_risk(
 
 @router.get("/{portfolio_id}/allocation", response_model=AllocationOut)
 def get_allocation(
-    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> AllocationOut:
     return AllocationOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id)["allocation"])
 
 
 @router.get("/{portfolio_id}/diversification", response_model=DiversificationOut)
 def get_diversification(
-    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> DiversificationOut:
     return DiversificationOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id)["diversification"])
 
 
 @router.get("/{portfolio_id}/rebalance", response_model=RebalancePlanOut)
 def get_rebalance(
-    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> RebalancePlanOut:
     recommendations = _get_latest_analysis_json(session, portfolio_id, current_user.id)["recommendations"]
     return RebalancePlanOut(
@@ -152,14 +158,14 @@ def get_rebalance(
 
 @router.get("/{portfolio_id}/health", response_model=HealthScoreOut)
 def get_health(
-    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> HealthScoreOut:
     return HealthScoreOut(**_get_latest_analysis_json(session, portfolio_id, current_user.id)["health_score"])
 
 
 @router.get("/{portfolio_id}/news-alerts", response_model=PortfolioNewsAlertListOut)
 def get_news_alerts(
-    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> PortfolioNewsAlertListOut:
     """Already-persisted alerts -- see `POST .../news-alerts/refresh`
     to generate new ones from the latest news."""
@@ -184,7 +190,7 @@ def get_news_alerts(
 
 @router.post("/{portfolio_id}/news-alerts/refresh", response_model=PortfolioNewsAlertListOut)
 def refresh_news_alerts(
-    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> PortfolioNewsAlertListOut:
     """Re-evaluates this portfolio's held positions against the latest
     analyzed news (requirement 10: "portfolio positions must be
