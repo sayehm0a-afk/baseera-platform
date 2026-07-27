@@ -1,10 +1,13 @@
 # SAHMK (sahmk.sa) Integration
 
 Status: **provider implemented for every Starter-tier endpoint this
-integration needs; live verification in this sandbox is currently
-blocked at the network-policy layer, not by SAHMK or the key.** See
-"Key rotation & plan upgrade" and "Live verification attempt" below for
-exactly what was and wasn't possible to confirm, and when.
+integration needs; live verification is blocked inside this sandbox's
+network policy, but has been confirmed for real via
+`.github/workflows/sahmk-live-verification.yml` on a GitHub-hosted
+runner** (see "Live verification outside this sandbox" below) --
+quotes, market summary, company profile/directory, financials,
+dividends, and historical bars have all returned real 200 responses,
+and the two field-name bugs that discovery surfaced have been fixed.
 
 ## Key rotation & plan upgrade
 
@@ -88,21 +91,21 @@ responses. "Live-verified" means a real 2xx response was actually
 observed in this environment -- which, per above, was not possible this
 session for any endpoint.
 
-| Basirah need | SAHMK endpoint | Plan (per SDK docs) | Implemented | Live-verified this session |
+| Basirah need | SAHMK endpoint | Plan (per SDK docs) | Implemented | Live-verified (2026-07-27) |
 |---|---|---|---|---|
-| Live quote | `GET /quote/{symbol}/` | Free | Yes (`get_quote`, `get_latest_quote`) | No -- network-policy blocked, see above |
-| Historical OHLCV / today's bar | `GET /historical/{symbol}/` | Starter+ | Yes (`get_historical`, `get_stock_data`, `get_daily_bar`) | No -- network-policy blocked |
-| Market summary (index snapshot) | `GET /market/summary/?index=...` | Free | Yes (`get_market_summary`, `get_index_data`); also the `authenticate()`/`health_check()` probe call | No -- network-policy blocked |
-| Company fundamentals (financial statements) | `GET /financials/{symbol}/` | Starter+ | Yes (`get_financials`, `SahmkFundamentalDataProvider.get_fundamentals`) | No -- network-policy blocked |
-| Dividends | `GET /dividends/{symbol}/` | Starter+ | Yes (`get_dividends`, folded into `get_fundamentals`'s `dividend_per_share`) | No -- network-policy blocked |
-| Company profile | `GET /company/{symbol}/` | Free+ | Yes (`get_company_profile`) | No -- network-policy blocked |
+| Live quote | `GET /quote/{symbol}/` | Free | Yes (`get_quote`, `get_latest_quote`) | **Yes -- 200 OK, real price 26.56 SAR** |
+| Historical OHLCV / today's bar | `GET /historical/{symbol}/` | Starter+ | Yes (`get_historical`, `get_stock_data`, `get_daily_bar`) | **Yes -- 200 OK, 118 real daily bars, full schema confirmed** |
+| Market summary (index snapshot) | `GET /market/summary/?index=...` | Free | Yes (`get_market_summary`, `get_index_data`); also the `authenticate()`/`health_check()` probe call | **Yes -- 200 OK** |
+| Company fundamentals (financial statements) | `GET /financials/{symbol}/` | Starter+ | Yes (`get_financials`, `SahmkFundamentalDataProvider.get_fundamentals`) | **Yes -- 200 OK (top-level envelope only; nested field names still unverified, see Known gaps)** |
+| Dividends | `GET /dividends/{symbol}/` | Starter+ | Yes (`get_dividends`, folded into `get_fundamentals`'s `dividend_per_share`) | **Yes -- 200 OK** |
+| Company profile | `GET /company/{symbol}/` | Free+ | Yes (`get_company_profile`) | **Yes -- 200 OK** |
 | Corporate actions | *(no distinct endpoint documented)* | -- | Not implemented | N/A |
-| "Market news" / stock events | `GET /events/` | **Pro+** | Yes (`get_events`, `get_market_news`) | No -- network-policy blocked; also above the Starter plan, so expect `403 PLAN_LIMIT` even once reachable |
+| "Market news" / stock events | `GET /events/` | **Pro+** | Yes (`get_events`, `get_market_news`) | Not yet exercised live -- plan access still unconfirmed |
 | Batch quotes | `GET /quotes/?symbols=...` | Starter+ | Not implemented | N/A |
 | Gainers/losers/volume/value/sectors | `GET /market/{gainers,losers,volume,value,sectors}/` | Free | Not implemented | N/A |
 | Market depth (order book) | `GET /market/depth/{symbol}/` | Entitled | Not implemented | N/A |
 | Analytics ratios / comparison | `GET /analytics/{ratios,compare}/` | Starter+ | Not implemented | N/A |
-| Symbol discovery | `GET /companies/` | Free | Not implemented | N/A |
+| Symbol discovery (company directory) | `GET /companies/` | Free | Yes (`get_companies`, `SahmkMarketDataService.get_company_directory`) | **Yes -- 200 OK, paginated** |
 | WebSocket streams | `stream()`, `stream_depth()` | Pro+ | Not implemented (not supported through this environment's proxy in general -- WebSocket upgrades are explicitly unsupported) | N/A |
 
 **"Corporate Actions"**: no source consulted (SAHMK's own developer
@@ -180,35 +183,69 @@ to `sahmk.sa` -- no code change and no manual flag required.
 ## Live verification outside this sandbox
 
 `.github/workflows/sahmk-live-verification.yml` (manual `workflow_dispatch`
-only) runs `scripts/verify_sahmk_live.py` on a GitHub-hosted runner,
-which has no egress restriction to `app.sahmk.sa` -- the exact
-blocker described above. It performs four layers against symbol
-`2222` (Saudi Aramco): DNS/TLS reachability, a raw direct HTTP call
-(independent of any Basirah code), a call through the real
-`SahmkClient`/`SahmkMarketDataService` (no mocking), and a real
-historical-data fetch through the real `TechnicalAnalysisEngine` and
-`RecommendationEngine`. It ends in exactly one of 8 named diagnoses
-(`SAHMK_CONNECTION_CONFIRMED` through `FULL_END_TO_END_SUCCESS` --
-see `scripts/sahmk_live_diagnosis.py`'s module docstring for the full
-decision tree). **As of this revision the workflow has been created
-and pushed but has not yet been run** -- this document is not updated
-to claim a result until an actual run's `$GITHUB_STEP_SUMMARY`
-confirms one. See the PR/commit that introduced this workflow for
-exact manual-run instructions.
+only) runs on a GitHub-hosted runner, which has no egress restriction
+to `app.sahmk.sa` -- the exact blocker described above. It now runs
+three scripts in sequence against symbol `2222` (Saudi Aramco):
 
-## Known gaps -- to verify against a real, unrestricted network path
+1. `scripts/verify_sahmk_live.py` -- four layers: DNS/TLS reachability,
+   a raw direct HTTP call, a call through the real
+   `SahmkClient`/`SahmkMarketDataService` (no mocking), and a real
+   historical-data fetch through the real `TechnicalAnalysisEngine` and
+   `RecommendationEngine`, ending in one of 8 named diagnoses (see
+   `scripts/sahmk_live_diagnosis.py`).
+2. `scripts/verify_sahmk_endpoint_coverage.py` -- a full sweep of every
+   remaining `SahmkClient` method (market summary, company profile,
+   company directory, financials, dividends) plus a rate-limit probe.
+3. `scripts/verify_sahmk_historical_deep_dive.py` -- a byte-level
+   schema/type/chronology/timezone audit of the raw `/historical/`
+   response, bypassing `SahmkMarketDataService` entirely, plus live
+   SMA/RSI/MACD computed directly from the raw closes.
 
-1. Every row in the endpoint table above marked "No -- network-policy
-   blocked": tracked by the live-verification workflow above, not yet run.
-2. Exact `from`/`to` date wire format for `/historical/{symbol}/`
-   (`YYYY-MM-DD` is sent, matching `interval=1d`, not confirmed against
-   a real 200 response).
-3. Exact `/financials/{symbol}/` field names and its `period` query
-   parameter's accepted values -- `get_financials()`'s defensive
-   multi-name parsing is a mitigation for this gap, not a resolution of
-   it.
-4. Full response field list for `/historical/`, `/market/summary/`,
-   `/dividends/`, and `/company/` -- only the fields this integration
-   reads are asserted; unrecognized fields are neither dropped nor
-   relied upon (`raw` always keeps the untouched payload).
-5. Full per-plan-tier rate-limit numbers for Starter.
+**This has now actually been run** (workflow runs `30302024204` and
+`30303216761`, both `conclusion: success`). Confirmed live results as
+of 2026-07-27:
+
+- Authentication, DNS/TLS, and every endpoint below returned real 200
+  responses with the current key -- no 401/403 seen anywhere.
+- Real quote fields: `ask, ask_size, bid, bid_size, change,
+  change_percent, high, is_delayed, liquidity, low, name, name_en,
+  open, previous_close, price, symbol, updated_at, value, volume`.
+  **The quote timestamp field is `updated_at`, not `timestamp`** --
+  `SahmkMarketDataService.get_latest_quote` read the wrong key until
+  this was fixed (see Known gaps history below).
+- Real `/historical/{symbol}/` top-level fields: `count, data, from,
+  interval, is_final, is_intraday, latest_bar_at, partial, source,
+  symbol, to`. **The bar array is under `data`, not `bars`.** Each bar
+  has exactly `open, high, low, close, volume, date, adjusted_close,
+  turnover` -- `date` is an ISO8601 **date-only** string (`"2026-01-28"`,
+  no time component), ascending oldest-to-newest, every field present
+  on all 118 bars returned for a 180-day range. `SahmkMarketDataService
+  .get_historical_bars` read the wrong top-level key (`bars`) and the
+  wrong per-bar key (`timestamp` instead of `date`) until fixed -- see
+  below.
+- `get_market_summary` top-level fields include a real `timestamp` key
+  (unlike the quote endpoint) -- `get_index_snapshot`'s existing
+  `data.get("timestamp")` was already correct and needed no change.
+- 5 rapid sequential `get_quote` calls: no throttling observed.
+- `get_events` (Pro-tier) has not yet been exercised live.
+
+**Fixed as of this revision** (`src/market_data/sahmk/service.py`):
+`get_latest_quote` now reads `updated_at`; `get_historical_bars` now
+reads the top-level `data` key and each bar's `date` key. Both were
+verified against the real API response shown above, not guessed.
+
+## Known gaps -- still open
+
+1. `get_events` (Pro-tier) -- plan/entitlement access not yet confirmed
+   live.
+2. Exact `/financials/{symbol}/` **nested** field names (inside
+   `balance_sheets`/`cash_flows`/`income_statements`) -- the top-level
+   envelope is confirmed live, but `get_financials()`'s defensive
+   multi-name parsing per line-item has not been checked against the
+   real nested structure the way `/historical/` and `/quote/` now have
+   been.
+3. `adjusted_close` and `turnover`, present on every real historical
+   bar, are not currently modeled by `SahmkHistoricalBar` -- confirmed
+   available, not yet consumed.
+4. Full per-plan-tier rate-limit numbers for Starter -- 5 rapid calls
+   showed no throttling, but the real ceiling is still unconfirmed.

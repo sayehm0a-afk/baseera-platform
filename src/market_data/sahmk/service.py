@@ -109,7 +109,7 @@ class SahmkMarketDataService:
                 change=_optional_float(data.get("change")),
                 change_percent=_optional_float(data.get("change_percent")),
                 volume=_optional_int(data.get("volume")),
-                timestamp=_parse_timestamp(data.get("timestamp")) or datetime.now(timezone.utc),
+                timestamp=_parse_timestamp(data.get("updated_at")) or datetime.now(timezone.utc),
             )
 
         return await self._cache.get_or_compute(
@@ -127,11 +127,11 @@ class SahmkMarketDataService:
             data = await self._client.get_historical(
                 symbol, interval=interval, date_from=date_from, date_to=date_to
             )
-            bars = data.get("bars", [])
+            bars = data.get("data", [])
             result: List[SahmkHistoricalBar] = []
             for bar in bars:
                 _require_fields(
-                    bar, ["open", "high", "low", "close", "volume", "timestamp"], "historical bar"
+                    bar, ["open", "high", "low", "close", "volume", "date"], "historical bar"
                 )
                 result.append(
                     SahmkHistoricalBar(
@@ -141,7 +141,7 @@ class SahmkMarketDataService:
                         low=float(bar["low"]),
                         close=float(bar["close"]),
                         volume=int(bar["volume"]),
-                        timestamp=_parse_timestamp(bar["timestamp"]),
+                        timestamp=_parse_timestamp(bar["date"]),
                     )
                 )
             return result

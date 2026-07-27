@@ -33,7 +33,7 @@ async def test_get_latest_quote_parses_full_response():
         "change": 1.2,
         "change_percent": 2.9,
         "volume": 1000,
-        "timestamp": "2026-01-05T12:00:00Z",
+        "updated_at": "2026-01-05T12:00:00Z",
     }
     service = _service(client)
     quote = await service.get_latest_quote("1120")
@@ -77,6 +77,23 @@ async def test_get_latest_quote_is_cached():
     client.get_quote.assert_awaited_once_with("1120")
 
 
+@pytest.mark.asyncio
+async def test_get_latest_quote_reads_updated_at_not_timestamp():
+    """Regression test: the real SAHMK /quote/ response has no
+    "timestamp" field -- confirmed live 2026-07-27 (run 30302024204) --
+    only "updated_at". A response carrying an unrelated "timestamp" key
+    alongside the real "updated_at" must not be misread."""
+    client = AsyncMock()
+    client.get_quote.return_value = {
+        "price": 26.56,
+        "updated_at": "2026-07-27T12:19:08+00:00",
+        "timestamp": "2099-01-01T00:00:00Z",  # decoy: must be ignored
+    }
+    service = _service(client)
+    quote = await service.get_latest_quote("2222")
+    assert quote.timestamp == datetime(2026, 7, 27, 12, 19, 8, tzinfo=timezone.utc)
+
+
 # --- get_historical_bars / get_daily_bar ------------------------------------
 
 
@@ -84,9 +101,9 @@ async def test_get_latest_quote_is_cached():
 async def test_get_historical_bars_parses_every_bar():
     client = AsyncMock()
     client.get_historical.return_value = {
-        "bars": [
-            {"open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 10, "timestamp": "2026-01-05T00:00:00Z"},
-            {"open": 2, "high": 3, "low": 1.5, "close": 2.5, "volume": 20, "timestamp": "2026-01-06T00:00:00Z"},
+        "data": [
+            {"open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 10, "date": "2026-01-05"},
+            {"open": 2, "high": 3, "low": 1.5, "close": 2.5, "volume": 20, "date": "2026-01-06"},
         ]
     }
     service = _service(client)
@@ -98,9 +115,26 @@ async def test_get_historical_bars_parses_every_bar():
 
 
 @pytest.mark.asyncio
+async def test_get_historical_bars_reads_the_data_key_not_bars():
+    """Regression test: the real SAHMK /historical/ response has no
+    top-level "bars" key -- confirmed live 2026-07-27 (run 30303216761,
+    118 real daily bars for symbol 2222) -- the array is under "data".
+    A response carrying a decoy "bars" key must not be read instead."""
+    client = AsyncMock()
+    client.get_historical.return_value = {
+        "data": [{"open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 10, "date": "2026-01-05"}],
+        "bars": [{"open": 999, "high": 999, "low": 999, "close": 999, "volume": 999, "date": "2099-01-01"}],
+    }
+    service = _service(client)
+    bars = await service.get_historical_bars("1120", date(2026, 1, 5), date(2026, 1, 5))
+    assert len(bars) == 1
+    assert bars[0].close == 1.5
+
+
+@pytest.mark.asyncio
 async def test_get_historical_bars_raises_on_bar_missing_required_field():
     client = AsyncMock()
-    client.get_historical.return_value = {"bars": [{"open": 1, "close": 1.5}]}
+    client.get_historical.return_value = {"data": [{"open": 1, "close": 1.5}]}
     service = _service(client)
     with pytest.raises(SahmkResponseValidationError):
         await service.get_historical_bars("1120", date(2026, 1, 5), date(2026, 1, 5))
@@ -110,9 +144,9 @@ async def test_get_historical_bars_raises_on_bar_missing_required_field():
 async def test_get_daily_bar_returns_last_bar():
     client = AsyncMock()
     client.get_historical.return_value = {
-        "bars": [
-            {"open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 10, "timestamp": "t1"},
-            {"open": 2, "high": 3, "low": 1.5, "close": 2.9, "volume": 20, "timestamp": "t2"},
+        "data": [
+            {"open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 10, "date": "2026-01-05"},
+            {"open": 2, "high": 3, "low": 1.5, "close": 2.9, "volume": 20, "date": "2026-01-06"},
         ]
     }
     service = _service(client)
@@ -123,7 +157,7 @@ async def test_get_daily_bar_returns_last_bar():
 @pytest.mark.asyncio
 async def test_get_daily_bar_raises_when_no_bars_returned():
     client = AsyncMock()
-    client.get_historical.return_value = {"bars": []}
+    client.get_historical.return_value = {"data": []}
     service = _service(client)
     with pytest.raises(SahmkResponseValidationError):
         await service.get_daily_bar("1120", on=date(2026, 1, 5))
