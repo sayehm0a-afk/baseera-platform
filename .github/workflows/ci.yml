@@ -11,22 +11,31 @@ on:
     branches: [main]
   push:
     branches: [main]
+  workflow_dispatch: {}
 
-# Known anomaly (observed on run 30286448550, commit d0c36ac, PR #17):
-# a push to a non-main branch that already has an open PR against main
-# can occasionally surface on GitHub's side as an `event: push` run
-# instead of the expected `event: pull_request` (synchronize) run, with
-# 0 jobs scheduled and conclusion=failure -- despite `push.branches`
-# above correctly excluding non-main branches, and despite this exact
-# workflow file successfully producing real jobs on every other push to
-# the same branch/PR before and after. This looks like a GitHub-side
-# webhook/scheduling anomaly (the run cannot even be retried via the
-# Actions API -- "This workflow run cannot be retried" -- which is
-# itself only ever returned for a run that never got past scheduling,
-# not a normal job failure), not a defect in this file. If it recurs,
-# a fresh push is the known workaround; this comment exists so the next
-# person to see a green push-history but a red check doesn't re-diagnose
-# the same YAML from scratch.
+# Known anomaly (PR #17, observed on 2 of 3 pushes: commits d0c36ac
+# [run 30286448550] and ebab35e [run 30295068978]): a push to a
+# non-main branch that already has an open PR against main can
+# surface on GitHub's side as an `event: push` run instead of the
+# expected `event: pull_request` (synchronize) run, with 0 jobs
+# scheduled and conclusion=failure -- despite `push.branches` above
+# correctly excluding non-main branches. This is not consistently
+# reproducible (the first push on this same branch/PR, commit 18373d4,
+# triggered a normal `pull_request` run with real jobs) and looks like
+# an intermittent GitHub-side webhook race/dedup between the `push`
+# and `pull_request` events for the same commit SHA, not a defect in
+# this file -- the run cannot even be retried via the Actions API
+# ("This workflow run cannot be retried", 403), which is only ever
+# returned for a run that never got past scheduling, never a normal
+# job failure. Because a second plain push hit the same anomaly, "push
+# again and hope" is not a reliable workaround by itself -- the
+# `workflow_dispatch` trigger above exists so a check can always be
+# fired deterministically for a specific commit, independent of
+# whichever webhook race may or may not occur. If you see a run with
+# `event: push` and 0 jobs on a branch this trigger should have
+# excluded, that's this anomaly, not a new bug -- use workflow_dispatch
+# (or manually re-run via Actions -> CI -> Run workflow) instead of
+# re-diagnosing the YAML from scratch.
 
 # Pre-existing repo-wide flake8 violation count as of the M0 milestone,
 # recorded so new violations are blocked without requiring an immediate
