@@ -149,3 +149,26 @@ def is_market_intelligence_scheduler_enabled() -> bool:
 def get_market_intelligence_scan_interval() -> ScheduleInterval:
     raw = os.getenv("MARKET_INTELLIGENCE_SCAN_INTERVAL", ScheduleInterval.DAILY.value)
     return ScheduleInterval(raw)
+
+
+# --- Live Market Mode --------------------------------------------------------
+
+
+def is_live_market_mode_enabled() -> bool:
+    """Gates LiveMarketModeScheduler (see live_market_mode.py). Meant
+    as an alternative to, not additive with, the standalone
+    MARKET_INTELLIGENCE_SCHEDULER_ENABLED/INGESTION_SCHEDULER_ENABLED
+    flags -- see main.py's startup wiring, which starts Live Market
+    Mode's own internal instances of those two schedulers instead of
+    the always-on ones when this is true."""
+    return os.getenv("LIVE_MARKET_MODE_ENABLED", "false").lower() == "true"
+
+
+def get_live_market_mode_poll_interval_seconds() -> float:
+    """How often the Live Market Mode supervisor re-checks whether the
+    Tadawul session has just opened or closed, to start/stop the
+    ingestion and scan schedulers accordingly. Pure datetime
+    comparison (trading_calendar.is_market_open), no network call --
+    a short default (60s) keeps the "start scanning right after the
+    bell" latency low at negligible cost."""
+    return float(os.getenv("LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS", "60"))

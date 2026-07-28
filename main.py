@@ -120,6 +120,7 @@ outcome_evaluation_scheduler = None
 pattern_discovery_scheduler = None
 daily_reflection_scheduler = None
 daily_intelligence_aggregation_scheduler = None
+live_market_mode_scheduler = None
 
 
 class TaskRequest(BaseModel):
@@ -142,19 +143,44 @@ async def startup_event():
     """Startup event handler."""
     global kernel, container, ingestion_scheduler, market_intelligence_scheduler
     global outcome_evaluation_scheduler, pattern_discovery_scheduler, daily_reflection_scheduler
-    global daily_intelligence_aggregation_scheduler
+    global daily_intelligence_aggregation_scheduler, live_market_mode_scheduler
+
+    # Live Market Mode (LIVE_MARKET_MODE_ENABLED) supersedes the two
+    # standalone schedulers below -- it owns its own internal instances
+    # of IngestionScheduler/IntervalMarketIntelligenceScheduler and only
+    # runs them while the Tadawul market is actually open (see
+    # src.market_intelligence.live_market_mode). Checked first so the
+    # two `if` guards below skip starting a second, redundant pair of
+    # always-on schedulers when Live Market Mode already owns that job.
+    live_market_mode_enabled = False
+    try:
+        from src.market_intelligence.config import is_live_market_mode_enabled
+        from src.market_intelligence.live_market_mode import LiveMarketModeScheduler
+
+        live_market_mode_enabled = is_live_market_mode_enabled()
+        if live_market_mode_enabled:
+            live_market_mode_scheduler = LiveMarketModeScheduler()
+            live_market_mode_scheduler.start()
+            logger.info("Live Market Mode started (Tadawul-hours-gated ingestion + scanning).")
+        else:
+            logger.info("Live Market Mode disabled (set LIVE_MARKET_MODE_ENABLED=true to enable).")
+    except Exception as e:
+        logger.error(f"Error starting Live Market Mode: {e}", exc_info=True)
 
     # The ingestion scheduler needs only the DB and a market/fundamental
     # data provider -- no Redis, no runtime kernel. Started first, in its
     # own try/except, so a Redis/kernel outage (which the block below
     # depends on and can raise from) never prevents scheduled ingestion
     # from starting, and a scheduler problem never prevents the kernel
-    # from starting either.
+    # from starting either. Skipped when Live Market Mode already owns
+    # an ingestion scheduler of its own (see above).
     try:
         from src.market_data.ingestion.config import is_ingestion_scheduler_enabled
         from src.market_data.ingestion.scheduler import IngestionScheduler
 
-        if is_ingestion_scheduler_enabled():
+        if live_market_mode_enabled:
+            logger.info("Ingestion scheduler: owned by Live Market Mode, not started standalone.")
+        elif is_ingestion_scheduler_enabled():
             ingestion_scheduler = IngestionScheduler()
             ingestion_scheduler.start()
             logger.info("Ingestion scheduler started.")
@@ -169,12 +195,15 @@ async def startup_event():
     # full-market scan is real workload an operator must opt into (see
     # src.market_intelligence.config.is_market_intelligence_scheduler_enabled),
     # disabled by default, and never allowed to prevent the ingestion
-    # scheduler or the kernel from starting.
+    # scheduler or the kernel from starting. Skipped when Live Market
+    # Mode already owns a scan scheduler of its own (see above).
     try:
         from src.market_intelligence.config import is_market_intelligence_scheduler_enabled
         from src.market_intelligence.scheduler import IntervalMarketIntelligenceScheduler
 
-        if is_market_intelligence_scheduler_enabled():
+        if live_market_mode_enabled:
+            logger.info("Market intelligence scheduler: owned by Live Market Mode, not started standalone.")
+        elif is_market_intelligence_scheduler_enabled():
             market_intelligence_scheduler = IntervalMarketIntelligenceScheduler()
             market_intelligence_scheduler.start()
             logger.info("Market intelligence scheduler started.")
@@ -323,6 +352,9 @@ async def shutdown_event():
     """Shutdown event handler."""
     try:
         logger.info("Shutting down Basirah...")
+
+        if live_market_mode_scheduler is not None:
+            await live_market_mode_scheduler.stop()
 
         if ingestion_scheduler is not None:
             await ingestion_scheduler.stop()
@@ -522,6 +554,12 @@ async def ingestion_status():
 
         return {
             "scheduler_running": ingestion_scheduler is not None and ingestion_scheduler.is_running,
+            "live_market_mode_running": (
+                live_market_mode_scheduler is not None and live_market_mode_scheduler.is_running
+            ),
+            "live_market_mode_tadawul_open": (
+                live_market_mode_scheduler.is_market_currently_open if live_market_mode_scheduler is not None else None
+            ),
             "jobs": latest_runs,
         }
     except Exception as e:

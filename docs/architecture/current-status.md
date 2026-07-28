@@ -2181,6 +2181,83 @@ disclosed at the end of this section.
     numbers a real deployment would accumulate over time do not yet
     exist anywhere.
 
+## Live Market Validation Session (L1) — Blocked at the network layer, not in Basirah's code
+
+Two separate attempts (different sessions, same execution environment) to run
+Basirah's pipeline against the real SAHMK live feed both stopped at the same
+point, for the same reason, confirmed by three independent checks each time:
+a real `SahmkClient.get_quote()` call, a raw `curl` through the same proxy,
+and the proxy's own diagnostic status/README.
+
+- **Result**: `app.sahmk.sa` returns `403 Forbidden` at the sandbox's
+  outbound proxy, before SAHMK authentication is ever reached. The proxy's
+  own README classifies 403/407 as an organization egress-policy denial and
+  states explicitly not to retry or route around it. This is not a SAHMK
+  key/plan/rate-limit problem — the request never leaves the sandbox.
+- **Local DB checked too**: PostgreSQL was not running in either session
+  (started manually both times); once started and migrated to head, the
+  `stocks`/`price_bars`/`recommendation_snapshots`/`recommendation_outcomes`
+  tables were all empty — no prior session in this environment has ever
+  ingested a real company or price bar, so even a reachable SAHMK would need
+  a full ingestion pass before a scan had a symbol universe to work with.
+- **What was deliberately NOT done**: falling back to `DevMarketDataProvider`
+  (synthetic data, which `provider_factory.py` does automatically and
+  silently so the app never fails to boot) and presenting the result as a
+  live validation. No recommendations, rankings, or "historical track
+  record" rows were fabricated. Zero rows were written to any AI Evolution
+  Layer table this session.
+- **Conclusion**: Basirah's own code was never the blocker in either
+  attempt — every live-data code path (`SahmkClient`, `provider_factory`,
+  `IngestionScheduler`, `MarketScanner`, `save_symbol_records`) is real,
+  already covered by the existing test suite, and ready to run the moment
+  this sandbox's network policy allows `app.sahmk.sa` egress (a setting
+  chosen when the Claude Code environment is created, not something
+  fixable from inside the session).
+
+### Live Market Mode (built dormant, per explicit instruction, while L1 stays blocked)
+
+New `src/market_intelligence/trading_calendar.py` (pure datetime math, no
+I/O) encodes Tadawul's published regular session hours — Sunday-Thursday,
+10:00-15:00 Arabia Standard Time (UTC+3, no DST) — as `is_market_open()`,
+`seconds_until_next_open()`, `seconds_until_close()`. **Disclosed gap**: this
+does not account for Tadawul's exchange holidays (Saudi National Day, Eid,
+etc.) — no holiday calendar feed is integrated; on a holiday that falls on a
+Sunday-Thursday this will incorrectly report the market open. Closing that
+gap needs either a maintained holiday list or a live market-status read,
+neither of which exists yet.
+
+New `src/market_intelligence/live_market_mode.py::LiveMarketModeScheduler`
+is a thin supervisor, not a third scan/ingestion implementation: it owns one
+`IngestionScheduler` and one `IntervalMarketIntelligenceScheduler` (both
+already real, already independently tested) and only decides *when* to
+`start()`/`stop()` them — every dedup/idempotency/retry guarantee those two
+already provide (unique DB constraints, non-overlapping job loops,
+per-job backoff) carries over unchanged, nothing here duplicates that logic.
+A cheap (`LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS`, default 60s, no network
+I/O) tick starts both inner schedulers the moment the Tadawul session opens
+and stops them the moment it closes.
+
+Gated behind `LIVE_MARKET_MODE_ENABLED` (default off, same disabled-by-
+default posture as every scheduler in this codebase) and wired into
+`main.py` as an *alternative* to, not additive with, the standalone
+`INGESTION_SCHEDULER_ENABLED`/`MARKET_INTELLIGENCE_SCHEDULER_ENABLED`
+flags — when Live Market Mode is enabled, those two standalone startup
+blocks skip starting a second, redundant pair of always-on schedulers.
+`GET /ingestion/status` now also reports `live_market_mode_running` and
+`live_market_mode_tadawul_open`.
+
+**Honesty note, per this session's explicit instruction**: this module has
+NOT been validated against a live market open/close transition or real
+SAHMK traffic — that requires the same network access L1 has been blocked
+on twice. It is verified only against the existing automated test suite (28
+new unit tests: trading-calendar edge cases at exact open/close boundaries,
+weekend rollover, timezone conversion; and the scheduler's start/stop
+lifecycle, open/close transition, exception survival, all against fake
+start-stoppable doubles and an injected clock — no real scheduler, network,
+or database touched). It is real, tested code, not a placeholder — but "real
+and tested against synthetic doubles" is a different, weaker claim than "L1
+was validated," and this document is not claiming the latter.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.
