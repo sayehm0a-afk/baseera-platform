@@ -108,6 +108,25 @@ class RecommendationSnapshot(Base):
     engine_version = Column(String(32), nullable=False)
     calibration_version = Column(String(64), nullable=True)
 
+    # AI Evolution Layer (tracking/self-learning) fields -- all nullable
+    # because every snapshot written before this migration, and every
+    # backtest snapshot going forward, legitimately has none of them.
+    # `source` distinguishes a live scan write ("live_scan") from a
+    # backtest write ("backtest") without relying on `run_id is None`
+    # staying a reliable proxy forever. `variant` is null for an
+    # ordinary recommendation and "champion"/"challenger" only for
+    # paper-trading comparisons (see Part 8/9-10 of the AI Evolution
+    # Layer design). `agent_debate_summary` is populated only on the
+    # runs where the multi-agent panel actually detected a conflict and
+    # ran a debate -- most rows will leave it null, which is the
+    # expected, honest state, not a gap to backfill.
+    source = Column(String(32), nullable=True, index=True)
+    variant = Column(String(32), nullable=True)
+    is_paper_trade = Column(Boolean, nullable=True)
+    news_summary = Column(String(2000), nullable=True)
+    market_regime = Column(String(32), nullable=True)
+    agent_debate_summary = Column(JSON, nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

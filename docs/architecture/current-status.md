@@ -1839,6 +1839,48 @@ security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
 
+## In Progress: Basirah AI Evolution Layer (E1 of E1–E9)
+
+Full design in the approved plan (`# Basirah AI Evolution Layer —
+Technical Design`); a reuse-first system that tracks every recommendation
+to a real market outcome, computes rigorous accuracy metrics, calibrates
+confidence mathematically, discovers which signal conditions actually
+work, and improves itself only through an observe → paper-trade →
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1 is
+complete**, E2–E9 not yet started.
+
+1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
+   (`src/domain/models/recommendation_snapshot.py`), previously written
+   only by the backtesting engine, gained six new nullable columns via
+   migration `e7c1a4d92f56`: `source` (`"live_scan"` vs. backtest's
+   implicit `run_id is not None`), `variant` (champion/challenger,
+   reserved for the paper-trading phase E8), `is_paper_trade`,
+   `news_summary`, `market_regime`, and `agent_debate_summary` (the
+   latter three reserved for E5/E7 — deliberately left null until that
+   plumbing exists, not backfilled with placeholder data).
+   `MarketIntelligenceRepository.save_symbol_records()` now writes one
+   `RecommendationSnapshot` per successful live scan outcome (`run_id`
+   null, `source="live_scan"`, `is_paper_trade=False`), reusing the same
+   `InvestmentDecision` fields the existing `SymbolIntelligenceRecord`
+   write already reads — no second computation, no duplicated engine
+   call. This is the foundation every later phase (accuracy metrics,
+   calibration, pattern discovery, the intelligence dashboard) reads
+   from, and it now accumulates real data from every scheduled scan
+   instead of only from backtest runs.
+2. **Verified**: migration applies and reverses cleanly against a real
+   local PostgreSQL 16 instance (upgrade → downgrade → re-upgrade round
+   trip); 2 new + 1 extended unit test in
+   `tests/unit/market_intelligence/repositories/test_market_intelligence_repository.py`
+   cover the new write (correct field mapping, skip-on-failure/
+   skip-on-unregistered-stock, and a numpy-float-coercion regression
+   check matching the existing `SymbolIntelligenceRecord` discipline).
+3. **Not yet done (E2–E9)**: outcome evaluation against real future
+   prices, accuracy/calibration metrics, pattern discovery, the real
+   multi-agent panel, paper trading, and the staff-only intelligence
+   dashboard. `market_regime`/`news_summary`/`agent_debate_summary`
+   stay unpopulated until their respective phases land — this is an
+   honestly incomplete first slice, not a finished feature.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

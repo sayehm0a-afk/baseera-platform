@@ -13,7 +13,14 @@ from sqlalchemy.pool import StaticPool
 
 from src.analysis.recommendation.types import Recommendation
 from src.core.db.database import Base
-from src.domain.models import AlertSeverity, AlertType, MarketScanStatus, RecommendationLabel, Stock
+from src.domain.models import (
+    AlertSeverity,
+    AlertType,
+    MarketScanStatus,
+    RecommendationLabel,
+    RecommendationSnapshot,
+    Stock,
+)
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
 
@@ -141,7 +148,12 @@ def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(sess
         "confidence", "final_score", "target_price", "stop_loss", "expected_return_pct",
         "latest_price", "rsi", "adx", "bollinger_upper", "dividend_yield",
     )
+    snapshot_fields = (
+        "total_score", "confidence_score", "target_price", "stop_loss",
+        "expected_return_pct", "market_price_at_evaluation",
+    )
     snapshots = []
+    recommendation_snapshots = []
     original_add = session.add
 
     def _spy_add(obj):
@@ -152,15 +164,62 @@ def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(sess
         # that would hide the exact bug this test exists to catch.
         if type(obj).__name__ == "SymbolIntelligenceRecord":
             snapshots.append({f: type(getattr(obj, f)) for f in fields})
+        elif type(obj).__name__ == "RecommendationSnapshot":
+            recommendation_snapshots.append({f: type(getattr(obj, f)) for f in snapshot_fields})
         return original_add(obj)
 
     monkeypatch.setattr(session, "add", _spy_add)
 
     repo.save_symbol_records(session, run.id, [outcome])
 
+    assert len(recommendation_snapshots) == 1
+    for field, field_type in recommendation_snapshots[0].items():
+        assert field_type is float, f"RecommendationSnapshot.{field} was {field_type!r}, expected plain float"
+
     assert len(snapshots) == 1
     for field, field_type in snapshots[0].items():
         assert field_type is float, f"{field} was {field_type!r} at insert time, expected plain float"
+
+
+def test_save_symbol_records_also_writes_a_live_recommendation_snapshot(session, repo):
+    """E1 of the AI Evolution Layer: every successful live scan outcome
+    must also produce a RecommendationSnapshot row (run_id=None,
+    source="live_scan") so accuracy tracking has real live data to
+    evaluate later, not just backtest data."""
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    decision = make_decision(symbol="2222", recommendation=Recommendation.BUY, confidence=72.0, final_score=68.0)
+    outcome = make_outcome(symbol="2222", decision=decision, latest_price=101.5)
+
+    repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").all()
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot.run_id is None
+    assert snapshot.source == "live_scan"
+    assert snapshot.is_paper_trade is False
+    assert snapshot.variant is None
+    assert snapshot.recommendation is RecommendationLabel.BUY
+    assert float(snapshot.confidence_score) == 72.0
+    assert float(snapshot.total_score) == 68.0
+    assert float(snapshot.market_price_at_evaluation) == 101.5
+    assert snapshot.engine_version == "1.0.0"
+    assert snapshot.contributor_breakdown == [
+        {"category": "Technical Analysis", "points": 15.0, "weight": 0.25, "confidence": 90.0, "available": True, "notes": None}
+    ]
+    assert snapshot.signals == []
+    assert snapshot.reasons == ["BUY on 2222."]
+
+
+def test_save_symbol_records_snapshot_skips_failed_and_unregistered_outcomes(session, repo):
+    run = repo.create_scan_run(session, symbols_requested=2)
+    failed = make_outcome(symbol="2222", success=False, report=None, skipped_reason="insufficient_data")
+    unregistered = make_outcome(symbol="9999")  # no matching Stock row seeded
+
+    repo.save_symbol_records(session, run.id, [failed, unregistered])
+
+    assert session.query(RecommendationSnapshot).count() == 0
 
 
 def test_save_symbol_records_skips_unregistered_stock(session, repo):

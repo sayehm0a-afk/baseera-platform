@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.domain.models import (
     ChangeType as DomainChangeType,
     AlertSeverity as DomainAlertSeverity,
@@ -29,15 +30,52 @@ from src.domain.models import (
     MarketScanRun,
     MarketScanStatus,
     RecommendationLabel,
+    RecommendationSnapshot,
     SectorIntelligenceSummary,
     Stock,
     SymbolIntelligenceRecord,
 )
+from src.analysis.decision.types import DecisionFactorBreakdown
+from src.analysis.recommendation.types import Signal
 from src.market_intelligence.types import Alert, ChangeEvent, SectorSummary, SymbolScanOutcome
+
+# The source label written into RecommendationSnapshot.source for every
+# row this repository creates -- distinguishes a live scan write from a
+# backtest write (src.backtesting.engine writes "backtest" via a
+# separate call site) without relying on `run_id is None` as an
+# implicit, easy-to-break proxy.
+_LIVE_SCAN_SOURCE = "live_scan"
 
 
 def _successful(outcome: SymbolScanOutcome) -> bool:
     return outcome.success and outcome.report is not None
+
+
+def _serialize_signals(signals: List[Signal]) -> List[dict]:
+    return [
+        {
+            "name": signal.name,
+            "description": signal.description,
+            "direction": signal.direction.value,
+            "source": signal.source,
+            "impact": signal.impact,
+        }
+        for signal in signals
+    ]
+
+
+def _serialize_breakdown(breakdown: List[DecisionFactorBreakdown]) -> List[dict]:
+    return [
+        {
+            "category": item.category,
+            "points": item.points,
+            "weight": item.weight,
+            "confidence": item.confidence,
+            "available": item.available,
+            "notes": item.notes,
+        }
+        for item in breakdown
+    ]
 
 
 def _f(value: Optional[float]) -> Optional[float]:
@@ -152,6 +190,35 @@ class MarketIntelligenceRepository:
                     bearish_factors=list(outcome.report.explanation.bearish_factors),
                     evaluated_at=decision.generated_at,
                     engine_version=outcome.report.engine_version,
+                )
+            )
+            session.add(
+                RecommendationSnapshot(
+                    run_id=None,
+                    stock_id=stock_id,
+                    symbol=outcome.symbol,
+                    evaluated_at=decision.generated_at,
+                    market_price_at_evaluation=_f(outcome.latest_price),
+                    recommendation=RecommendationLabel(decision.recommendation.value),
+                    total_score=_f(decision.final_score),
+                    confidence_score=_f(decision.confidence),
+                    technical_score=_f(outcome.technical_score),
+                    fundamental_score=_f(outcome.fundamental_score),
+                    momentum_score=_f(outcome.category_score(CATEGORY_LABELS["momentum"])),
+                    volume_score=_f(outcome.category_score(CATEGORY_LABELS["volume"])),
+                    risk_score=_f(outcome.category_score(CATEGORY_LABELS["risk"])),
+                    contributor_breakdown=_serialize_breakdown(decision.breakdown),
+                    signals=_serialize_signals(decision.signals),
+                    reasons=list(decision.reasons),
+                    target_price=_f(decision.target_price),
+                    stop_loss=_f(decision.stop_loss),
+                    expected_return_pct=_f(decision.expected_return_pct),
+                    time_horizon=decision.time_horizon.value,
+                    risk_level=decision.risk_level.value,
+                    position_size=decision.position_size.value,
+                    engine_version=outcome.report.engine_version,
+                    source=_LIVE_SCAN_SOURCE,
+                    is_paper_trade=False,
                 )
             )
         session.commit()
