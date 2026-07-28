@@ -1839,15 +1839,15 @@ security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
 
-## In Progress: Basirah AI Evolution Layer (E1–E6 of E1–E9)
+## In Progress: Basirah AI Evolution Layer (E1–E7 of E1–E9)
 
 Full design in the approved plan (`# Basirah AI Evolution Layer —
 Technical Design`); a reuse-first system that tracks every recommendation
 to a real market outcome, computes rigorous accuracy metrics, calibrates
 confidence mathematically, discovers which signal conditions actually
 work, and improves itself only through an observe → paper-trade →
-human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E6 are
-complete**, E7–E9 not yet started.
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E7 are
+complete**, E8–E9 not yet started.
 
 1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
    (`src/domain/models/recommendation_snapshot.py`), previously written
@@ -2016,15 +2016,56 @@ complete**, E7–E9 not yet started.
    `DailyReflectionScheduler` (disabled by default,
    `DAILY_REFLECTION_SCHEDULER_ENABLED=false`, daily), same asyncio
    scheduler pattern as every other job in this layer.
-8. **Not yet done (E7–E9)**: the real multi-agent panel, paper
-   trading, and the staff-only intelligence dashboard.
-   `market_regime`/`news_summary`/`agent_debate_summary` on
-   `RecommendationSnapshot` stay unpopulated until their respective
-   phases land -- this is an honestly incomplete slice, not a finished
-   feature. No live outcome has yet been evaluated against real SAHMK
+8. **E7 — Real multi-agent panel.** New `src/ai_evolution/agents/`
+   package + `agent_opinions`/`debate_sessions` tables (migration
+   `a1c5f8e3b207`). Seven opinion-producing agents run once per symbol/
+   day, alongside the existing live scan (wired into
+   `MarketIntelligenceRepository.save_symbol_records`, gated behind
+   `AGENT_PANEL_ENABLED`, default off -- even the non-LLM agents write
+   real DB rows per scan). Only 2 of 7 (News, Sentiment) make a real
+   LLM call, plus the Judge on debate; Technical/Fundamental/Risk/Quant
+   wrap already-deterministic `InvestmentDecision.breakdown` categories
+   (Quant mapped to Momentum -- no separate "quant" contributor exists
+   in `AIDecisionEngine`, a disclosed mapping choice); Macro is an
+   always-`UNAVAILABLE` no-op (no real macro data source exists, same
+   honesty already used by `external_factor_contributors.py`). News/
+   Sentiment/Judge all reuse `OpenAILLMAdapter` verbatim -- the exact
+   R3 safety pattern (hard timeout, never raises, numeric-grounding
+   rejection) -- News/Sentiment reasoning over real headlines already
+   analyzed by `NewsIntelligenceService.get_symbol_sentiment()`, no new
+   news retrieval. Debate + Judge (the only LLM-cost-bearing steps)
+   trigger only when `src.ai_evolution.agents.conflict` detects
+   Technical-vs-Fundamental tension at MODERATE (>=15pt spread) or
+   HIGH (>=30pt) -- the exact thresholds `src.analysis.analyst
+   .conflict_resolver` already uses, reimplemented against
+   `InvestmentDecision.breakdown` directly since that resolver's
+   richer `Evidence`/`InterpretedSignals` objects aren't exposed back
+   to the live scan caller. Debate/voting reuse the existing
+   `DebateEngine`/`VotingSystem` bookkeeping from
+   `autonomous_intelligence_layer` unchanged -- mapped onto a single
+   BULLISH/BEARISH proposal, `APPROVED`/`REJECTED`/`TIE` -> BUY/SELL/
+   HOLD. Agents are deliberately plain classes, not
+   `src.core.base_agent.BaseAgent` subclasses -- that base class is a
+   heavyweight, tool-calling/lifecycle abstraction built for a
+   different kind of agent, and forcing simple stateless wrappers to
+   inherit it would add ceremony with no behavior; a disclosed,
+   reasoned deviation from the literal request, in the same spirit as
+   this design's other stated departures. The whole panel invocation
+   never raises (`AgentPanelOrchestrator.run_panel`'s own blanket
+   `except Exception`) -- a panel bug must never trigger
+   `MarketScanner`'s retry-on-exception path for a symbol whose real
+   decision already succeeded; `save_symbol_records` became `async`
+   to support this (its one production caller,
+   `MarketIntelligenceEngine.execute_scan`, now awaits it).
+9. **Not yet done (E8–E9)**: paper trading (champion/challenger) and
+   the staff-only intelligence dashboard. `market_regime` on
+   `RecommendationSnapshot` stays unpopulated (no phase populates it
+   yet). No live outcome has yet been evaluated against real SAHMK
    forward price data in this sandbox (no live network access here);
-   E2–E6 are verified against hand-seeded price bars, synthetic
-   outcome data, and a real PostgreSQL 16 migration round trip only.
+   E2–E7 are verified against hand-seeded price bars, synthetic
+   outcome data, a fake LLM adapter (no real OpenAI call anywhere in
+   this milestone's tests), and a real PostgreSQL 16 migration round
+   trip only.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this

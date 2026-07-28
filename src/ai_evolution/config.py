@@ -41,3 +41,22 @@ def is_daily_reflection_scheduler_enabled() -> bool:
 
 def get_daily_reflection_interval_seconds() -> int:
     return int(os.getenv("DAILY_REFLECTION_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL_SECONDS)))
+
+
+def is_agent_panel_enabled() -> bool:
+    """Gates the entire E7 agent panel, independent of whether real
+    LLM calls are also enabled (see `is_agent_panel_llm_enabled`) --
+    even the non-LLM wrapper agents write a real `agent_opinions` row
+    per scanned symbol, real DB write volume an operator should opt
+    into explicitly, the same disabled-by-default posture every
+    scheduler in this codebase already uses."""
+    return os.getenv("AGENT_PANEL_ENABLED", "false").lower() == "true"
+
+
+def is_agent_panel_llm_enabled() -> bool:
+    """True iff a real OPENAI_API_KEY is configured -- same convention
+    `src.analysis.analyst.config.is_analyst_llm_narration_enabled` and
+    `src.news_intelligence.config` already use. False is the honest
+    default: News/Sentiment/Judge report UNAVAILABLE rather than
+    fabricating an opinion."""
+    return bool(os.getenv("OPENAI_API_KEY"))

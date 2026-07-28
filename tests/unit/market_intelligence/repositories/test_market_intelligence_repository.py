@@ -106,12 +106,13 @@ def _seed_stock(session, symbol="2222"):
     return stock
 
 
-def test_save_and_read_back_symbol_records(session, repo):
+@pytest.mark.asyncio
+async def test_save_and_read_back_symbol_records(session, repo):
     _seed_stock(session, "2222")
     run = repo.create_scan_run(session, symbols_requested=1)
     outcome = make_outcome(symbol="2222", decision=make_decision(symbol="2222", recommendation=Recommendation.BUY))
 
-    repo.save_symbol_records(session, run.id, [outcome])
+    await repo.save_symbol_records(session, run.id, [outcome])
 
     records = repo.get_symbol_records_by_symbol(session, run.id)
     assert "2222" in records
@@ -119,7 +120,8 @@ def test_save_and_read_back_symbol_records(session, repo):
     assert float(records["2222"].confidence) == outcome.confidence
 
 
-def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(session, repo, monkeypatch):
+@pytest.mark.asyncio
+async def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(session, repo, monkeypatch):
     """Regression test: technical/fundamental indicator computations
     return `numpy.float64` in places (confirmed via a live run against
     real Postgres -- SQLAlchemy 2.0's insertmanyvalues path literal-
@@ -170,7 +172,7 @@ def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(sess
 
     monkeypatch.setattr(session, "add", _spy_add)
 
-    repo.save_symbol_records(session, run.id, [outcome])
+    await repo.save_symbol_records(session, run.id, [outcome])
 
     assert len(recommendation_snapshots) == 1
     for field, field_type in recommendation_snapshots[0].items():
@@ -181,7 +183,8 @@ def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(sess
         assert field_type is float, f"{field} was {field_type!r} at insert time, expected plain float"
 
 
-def test_save_symbol_records_also_writes_a_live_recommendation_snapshot(session, repo):
+@pytest.mark.asyncio
+async def test_save_symbol_records_also_writes_a_live_recommendation_snapshot(session, repo):
     """E1 of the AI Evolution Layer: every successful live scan outcome
     must also produce a RecommendationSnapshot row (run_id=None,
     source="live_scan") so accuracy tracking has real live data to
@@ -191,7 +194,7 @@ def test_save_symbol_records_also_writes_a_live_recommendation_snapshot(session,
     decision = make_decision(symbol="2222", recommendation=Recommendation.BUY, confidence=72.0, final_score=68.0)
     outcome = make_outcome(symbol="2222", decision=decision, latest_price=101.5)
 
-    repo.save_symbol_records(session, run.id, [outcome])
+    await repo.save_symbol_records(session, run.id, [outcome])
 
     snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").all()
     assert len(snapshots) == 1
@@ -212,31 +215,34 @@ def test_save_symbol_records_also_writes_a_live_recommendation_snapshot(session,
     assert snapshot.reasons == ["BUY on 2222."]
 
 
-def test_save_symbol_records_snapshot_skips_failed_and_unregistered_outcomes(session, repo):
+@pytest.mark.asyncio
+async def test_save_symbol_records_snapshot_skips_failed_and_unregistered_outcomes(session, repo):
     run = repo.create_scan_run(session, symbols_requested=2)
     failed = make_outcome(symbol="2222", success=False, report=None, skipped_reason="insufficient_data")
     unregistered = make_outcome(symbol="9999")  # no matching Stock row seeded
 
-    repo.save_symbol_records(session, run.id, [failed, unregistered])
+    await repo.save_symbol_records(session, run.id, [failed, unregistered])
 
     assert session.query(RecommendationSnapshot).count() == 0
 
 
-def test_save_symbol_records_skips_unregistered_stock(session, repo):
+@pytest.mark.asyncio
+async def test_save_symbol_records_skips_unregistered_stock(session, repo):
     run = repo.create_scan_run(session, symbols_requested=1)
     outcome = make_outcome(symbol="9999")  # no matching Stock row seeded
 
-    repo.save_symbol_records(session, run.id, [outcome])
+    await repo.save_symbol_records(session, run.id, [outcome])
 
     assert repo.get_symbol_records_by_symbol(session, run.id) == {}
 
 
-def test_save_symbol_records_skips_failed_outcomes(session, repo):
+@pytest.mark.asyncio
+async def test_save_symbol_records_skips_failed_outcomes(session, repo):
     _seed_stock(session, "2222")
     run = repo.create_scan_run(session, symbols_requested=1)
     outcome = make_outcome(symbol="2222", success=False, report=None, skipped_reason="insufficient_data")
 
-    repo.save_symbol_records(session, run.id, [outcome])
+    await repo.save_symbol_records(session, run.id, [outcome])
 
     assert repo.get_symbol_records_by_symbol(session, run.id) == {}
 

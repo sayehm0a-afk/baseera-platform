@@ -71,7 +71,7 @@ class MarketIntelligenceEngine:
 
         write_session = self._session_factory()
         try:
-            self._repository.save_symbol_records(write_session, run_id, outcomes)
+            await self._repository.save_symbol_records(write_session, run_id, outcomes)
 
             previous_run = self._repository.get_latest_successful_run(write_session, before_run_id=run_id)
             previous_sector_scores = (

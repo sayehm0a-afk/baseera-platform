@@ -20,6 +20,8 @@ from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from src.ai_evolution.agents.orchestrator import AgentPanelOrchestrator
+from src.ai_evolution.config import is_agent_panel_enabled
 from src.ai_evolution.outcome_evaluation import create_pending_outcomes
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.domain.models import (
@@ -153,7 +155,7 @@ class MarketIntelligenceRepository:
 
     # --- symbol intelligence records -----------------------------------
 
-    def save_symbol_records(self, session: Session, run_id: int, outcomes: List[SymbolScanOutcome]) -> None:
+    async def save_symbol_records(self, session: Session, run_id: int, outcomes: List[SymbolScanOutcome]) -> None:
         symbol_to_stock_id = {
             row.symbol: row.id
             for row in session.query(Stock.symbol, Stock.id).filter(Stock.symbol.in_([o.symbol for o in outcomes])).all()
@@ -225,6 +227,11 @@ class MarketIntelligenceRepository:
             # evaluation horizon) now, so OutcomeEvaluationScheduler has
             # known rows to score once real forward price data exists.
             create_pending_outcomes(session, snapshot)
+            # E7: real multi-agent panel -- opt-in (AGENT_PANEL_ENABLED),
+            # never raises (see AgentPanelOrchestrator.run_panel's own
+            # docstring), commits its own work when it runs.
+            if is_agent_panel_enabled():
+                await AgentPanelOrchestrator().run_panel(session, snapshot, decision, outcome.symbol)
         session.commit()
 
     def get_symbol_records_by_symbol(self, session: Session, run_id: int) -> Dict[str, SymbolIntelligenceRecord]:
