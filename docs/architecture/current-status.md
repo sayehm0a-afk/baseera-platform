@@ -1839,15 +1839,15 @@ security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
 
-## In Progress: Basirah AI Evolution Layer (E1–E5 of E1–E9)
+## In Progress: Basirah AI Evolution Layer (E1–E6 of E1–E9)
 
 Full design in the approved plan (`# Basirah AI Evolution Layer —
 Technical Design`); a reuse-first system that tracks every recommendation
 to a real market outcome, computes rigorous accuracy metrics, calibrates
 confidence mathematically, discovers which signal conditions actually
 work, and improves itself only through an observe → paper-trade →
-human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E5 are
-complete**, E6–E9 not yet started.
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E6 are
+complete**, E7–E9 not yet started.
 
 1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
    (`src/domain/models/recommendation_snapshot.py`), previously written
@@ -1978,16 +1978,53 @@ complete**, E6–E9 not yet started.
    applied automatically to `CalibrationEngine`'s weight proposals or
    the analyst framework's narration -- this only produces the
    evidence, wiring it in is a separate, human-reviewed step.
-7. **Not yet done (E6–E9)**: the `ReflectionEngine` bug fix and daily
-   reflection job, the real multi-agent panel, paper trading, and the
-   staff-only intelligence dashboard. `market_regime`/`news_summary`/
-   `agent_debate_summary` on `RecommendationSnapshot` stay unpopulated
-   until their respective phases land -- this is an honestly
-   incomplete slice, not a finished feature. No live outcome has yet
-   been evaluated against real SAHMK forward price data in this
-   sandbox (no live network access here); E2–E5 are verified against
-   hand-seeded price bars, synthetic outcome data, and a real
-   PostgreSQL 16 migration round trip only.
+7. **E6 — `ReflectionEngine` bug fix + daily recommendation review.**
+   Two independent fixes, both real, previously-latent problems:
+   (a) `src.core.autonomous_intelligence_layer.reflection_engine
+   .ReflectionEngine.reflect_on_memories()`/`_generate_reflection_prompt()`
+   called `MemoryStore.retrieve_memories()`/`.summarize_memories()` --
+   neither method ever existed (confirmed: `main.py`/`src/api/` never
+   import this class, and the one place that held a reference to it,
+   `SupervisorAI`, never called these methods either, so the bug was
+   never exercised in any code path -- including its own unit tests,
+   which mocked `MemoryStore` widely enough that `Mock(spec=...)`
+   silently accepted the nonexistent method names). Fixed by adding a
+   real `MemoryStore.retrieve_by_source(source, memory_type=None,
+   limit=10)` method (no by-source retrieval existed at all; `search()`
+   only matches free-text content, `retrieve()` only filters by memory
+   type) and correcting both call sites to use it plus the real
+   `summarize(entries)`; the one test file that mocked the fictional
+   API was corrected, and new tests using a real (not mocked)
+   `MemoryStore` instance were added specifically so a regression back
+   to a nonexistent method surfaces as a real `AttributeError` again.
+   (b) The actual, purpose-built deliverable: new
+   `reflection_reports` table (migration `f6c1e9a4d720`) and
+   `src.ai_evolution.daily_reflection.generate_daily_reflection()` --
+   a non-LLM, descriptive-statistics review of every
+   `RecommendationOutcome` evaluated on a given day (default:
+   yesterday UTC), flagging the most common signal among that day's
+   failed recommendations and whether confidence actually separated
+   successful from failed calls, writing plain-string
+   `key_findings`/`improvement_suggestions` -- suggestions only,
+   nothing here is applied to production automatically. This is
+   functionally independent of fix (a): the generic agent-memory
+   `ReflectionEngine` reflects on arbitrary agent goals/memories, not
+   specifically on trading outcomes, so wiring recommendation review
+   into that abstraction would have been a mismatch; a purpose-built
+   function reading `RecommendationOutcome`/`RecommendationSnapshot`
+   directly was the more honest design. New
+   `DailyReflectionScheduler` (disabled by default,
+   `DAILY_REFLECTION_SCHEDULER_ENABLED=false`, daily), same asyncio
+   scheduler pattern as every other job in this layer.
+8. **Not yet done (E7–E9)**: the real multi-agent panel, paper
+   trading, and the staff-only intelligence dashboard.
+   `market_regime`/`news_summary`/`agent_debate_summary` on
+   `RecommendationSnapshot` stay unpopulated until their respective
+   phases land -- this is an honestly incomplete slice, not a finished
+   feature. No live outcome has yet been evaluated against real SAHMK
+   forward price data in this sandbox (no live network access here);
+   E2–E6 are verified against hand-seeded price bars, synthetic
+   outcome data, and a real PostgreSQL 16 migration round trip only.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this

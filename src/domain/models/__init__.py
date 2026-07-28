@@ -21,6 +21,7 @@ from src.domain.models.confidence_calibration_model import (
     ConfidenceCalibrationMethod,
 )
 from src.domain.models.discovered_pattern import DiscoveredPattern
+from src.domain.models.reflection_report import ReflectionReport
 from src.domain.models.calibration_config import CalibrationConfig, CalibrationStatus
 from src.domain.models.market_scan_run import MarketScanRun, MarketScanStatus
 from src.domain.models.symbol_intelligence_record import SymbolIntelligenceRecord
@@ -75,6 +76,7 @@ __all__ = [
     "ConfidenceCalibrationStatus",
     "ConfidenceCalibrationMethod",
     "DiscoveredPattern",
+    "ReflectionReport",
     "CalibrationConfig",
     "CalibrationStatus",
     "MarketScanRun",

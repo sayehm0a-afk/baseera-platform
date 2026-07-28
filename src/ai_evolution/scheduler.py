@@ -20,9 +20,11 @@ from typing import Callable, Optional, Protocol, runtime_checkable
 from sqlalchemy.orm import Session
 
 from src.ai_evolution.config import (
+    get_daily_reflection_interval_seconds,
     get_outcome_evaluation_interval_seconds,
     get_pattern_discovery_interval_seconds,
 )
+from src.ai_evolution.daily_reflection import generate_daily_reflection
 from src.ai_evolution.outcome_evaluation import evaluate_due_outcomes
 from src.ai_evolution.pattern_discovery import discover_patterns
 
@@ -168,5 +170,70 @@ class PatternDiscoveryScheduler:
         try:
             patterns = await asyncio.to_thread(discover_patterns, session)
             logger.info("Pattern discovery cycle: %d patterns discovered/re-validated.", len(patterns))
+        finally:
+            session.close()
+
+
+class DailyReflectionScheduler:
+    """Daily (by default) re-run of `generate_daily_reflection()` --
+    same shape as `OutcomeEvaluationScheduler`/`PatternDiscoveryScheduler`
+    above."""
+
+    def __init__(
+        self,
+        session_factory: Optional[Callable[[], Session]] = None,
+        interval_seconds: Optional[int] = None,
+    ):
+        self._session_factory = session_factory or self._default_session_factory
+        self._interval_seconds = (
+            interval_seconds if interval_seconds is not None else get_daily_reflection_interval_seconds()
+        )
+        self._task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _default_session_factory() -> Session:
+        from src.core.db import database
+
+        return database.get_session_factory()()
+
+    @property
+    def is_running(self) -> bool:
+        return self._task is not None
+
+    def start(self) -> None:
+        if self._task is not None:
+            logger.warning("DailyReflectionScheduler.start() called while already running -- ignoring.")
+            return
+        self._task = asyncio.ensure_future(self._loop())
+        logger.info("DailyReflectionScheduler started (interval_seconds=%s).", self._interval_seconds)
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._task
+        self._task = None
+        logger.info("DailyReflectionScheduler stopped.")
+
+    async def _loop(self) -> None:
+        while True:
+            try:
+                await self._run_one_cycle()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Unexpected error generating the daily reflection report.")
+            await asyncio.sleep(self._interval_seconds)
+
+    async def _run_one_cycle(self) -> None:
+        session = self._session_factory()
+        try:
+            report = await asyncio.to_thread(generate_daily_reflection, session)
+            logger.info(
+                "Daily reflection cycle: %d recommendation(s) reviewed for %s.",
+                report.recommendations_reviewed,
+                report.review_date,
+            )
         finally:
             session.close()

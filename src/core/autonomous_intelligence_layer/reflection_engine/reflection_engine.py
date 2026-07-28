@@ -421,7 +421,7 @@ class ReflectionEngine:
         self, agent_id: str, initial_goal: str
     ) -> Optional[str]:
         logger.info(f"Agent {agent_id} reflecting on memories for goal: {initial_goal}")
-        recent_memories = self.memory_store.retrieve_memories(agent_id, limit=10)
+        recent_memories = self.memory_store.retrieve_by_source(agent_id, limit=10)
 
         if not recent_memories:
             logger.info(
@@ -526,7 +526,8 @@ class ReflectionEngine:
             )
 
     def _generate_reflection_prompt(self, agent_id: str, initial_goal: str) -> str:
-        summary = self.memory_store.summarize_memories(agent_id)
+        recent_memories = self.memory_store.retrieve_by_source(agent_id, limit=10)
+        summary = self.memory_store.summarize(recent_memories)
         prompt = (
             f"Agent {agent_id} is working on the goal: {initial_goal}. "
             f"Here is a summary of recent events and memories:\n{summary}\n\n"

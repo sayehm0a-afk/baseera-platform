@@ -55,6 +55,54 @@ class TestMemoryStore:
         retrieved_entries = memory_store.retrieve(memory_type=MemoryType.EPISODIC)
         assert len(retrieved_entries) == 0
 
+    def test_retrieve_by_source_only_returns_that_sources_entries(self, memory_store):
+        memory_store.store(content="agent_a event", memory_type=MemoryType.EPISODIC, source="agent_a")
+        memory_store.store(content="agent_b event", memory_type=MemoryType.EPISODIC, source="agent_b")
+
+        entries = memory_store.retrieve_by_source("agent_a")
+
+        assert len(entries) == 1
+        assert entries[0].content == "agent_a event"
+
+    def test_retrieve_by_source_searches_across_memory_types_by_default(self, memory_store):
+        memory_store.store(content="episodic", memory_type=MemoryType.EPISODIC, source="agent_a")
+        memory_store.store(content="reflection", memory_type=MemoryType.REFLECTION, source="agent_a")
+
+        entries = memory_store.retrieve_by_source("agent_a")
+
+        assert {e.content for e in entries} == {"episodic", "reflection"}
+
+    def test_retrieve_by_source_can_restrict_to_one_memory_type(self, memory_store):
+        memory_store.store(content="episodic", memory_type=MemoryType.EPISODIC, source="agent_a")
+        memory_store.store(content="reflection", memory_type=MemoryType.REFLECTION, source="agent_a")
+
+        entries = memory_store.retrieve_by_source("agent_a", memory_type=MemoryType.REFLECTION)
+
+        assert [e.content for e in entries] == ["reflection"]
+
+    def test_retrieve_by_source_returns_most_recent_first(self, memory_store):
+        import time
+
+        memory_store.store(content="older", memory_type=MemoryType.EPISODIC, source="agent_a")
+        time.sleep(0.01)
+        memory_store.store(content="newer", memory_type=MemoryType.EPISODIC, source="agent_a")
+
+        entries = memory_store.retrieve_by_source("agent_a")
+
+        assert [e.content for e in entries] == ["newer", "older"]
+
+    def test_retrieve_by_source_respects_limit(self, memory_store):
+        for i in range(5):
+            memory_store.store(content=f"event {i}", memory_type=MemoryType.EPISODIC, source="agent_a")
+
+        entries = memory_store.retrieve_by_source("agent_a", limit=2)
+
+        assert len(entries) == 2
+
+    def test_retrieve_by_source_empty_for_unknown_source(self, memory_store):
+        memory_store.store(content="event", memory_type=MemoryType.EPISODIC, source="agent_a")
+        assert memory_store.retrieve_by_source("nonexistent_agent") == []
+
     def test_search_memory(self, memory_store):
         memory_store.store(content="apple banana cherry", memory_type=MemoryType.SEMANTIC)
         memory_store.store(content="date elderberry fig", memory_type=MemoryType.SEMANTIC)

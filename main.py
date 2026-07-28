@@ -118,6 +118,7 @@ ingestion_scheduler = None
 market_intelligence_scheduler = None
 outcome_evaluation_scheduler = None
 pattern_discovery_scheduler = None
+daily_reflection_scheduler = None
 
 
 class TaskRequest(BaseModel):
@@ -139,7 +140,7 @@ class TaskResponse(BaseModel):
 async def startup_event():
     """Startup event handler."""
     global kernel, container, ingestion_scheduler, market_intelligence_scheduler
-    global outcome_evaluation_scheduler, pattern_discovery_scheduler
+    global outcome_evaluation_scheduler, pattern_discovery_scheduler, daily_reflection_scheduler
 
     # The ingestion scheduler needs only the DB and a market/fundamental
     # data provider -- no Redis, no runtime kernel. Started first, in its
@@ -222,6 +223,25 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Error starting pattern discovery scheduler: {e}", exc_info=True)
 
+    # AI Evolution Layer (E6): daily, non-LLM review of that day's
+    # evaluated recommendations. Same isolation, same disabled-by-default
+    # posture as the schedulers above.
+    try:
+        from src.ai_evolution.config import is_daily_reflection_scheduler_enabled
+        from src.ai_evolution.scheduler import DailyReflectionScheduler
+
+        if is_daily_reflection_scheduler_enabled():
+            daily_reflection_scheduler = DailyReflectionScheduler()
+            daily_reflection_scheduler.start()
+            logger.info("Daily reflection scheduler started.")
+        else:
+            logger.info(
+                "Daily reflection scheduler disabled "
+                "(set DAILY_REFLECTION_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting daily reflection scheduler: {e}", exc_info=True)
+
     try:
         logger.info("Starting Basirah Enterprise AI Platform...")
 
@@ -294,6 +314,9 @@ async def shutdown_event():
 
         if pattern_discovery_scheduler is not None:
             await pattern_discovery_scheduler.stop()
+
+        if daily_reflection_scheduler is not None:
+            await daily_reflection_scheduler.stop()
 
         if kernel:
             await kernel.stop()

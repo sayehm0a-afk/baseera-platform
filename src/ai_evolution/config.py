@@ -33,3 +33,11 @@ def is_pattern_discovery_scheduler_enabled() -> bool:
 
 def get_pattern_discovery_interval_seconds() -> int:
     return int(os.getenv("PATTERN_DISCOVERY_INTERVAL_SECONDS", str(_DEFAULT_WEEKLY_INTERVAL_SECONDS)))
+
+
+def is_daily_reflection_scheduler_enabled() -> bool:
+    return os.getenv("DAILY_REFLECTION_SCHEDULER_ENABLED", "false").lower() == "true"
+
+
+def get_daily_reflection_interval_seconds() -> int:
+    return int(os.getenv("DAILY_REFLECTION_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL_SECONDS)))
