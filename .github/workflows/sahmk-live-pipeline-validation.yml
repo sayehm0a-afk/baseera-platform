@@ -1,0 +1,116 @@
+name: SAHMK Live Pipeline Validation (L2)
+
+# Manually-triggered, real, unmocked end-to-end run of Basirah's full
+# production pipeline (SAHMK ingestion -> PostgreSQL -> technical/
+# fundamental analysis -> AI decision engine -> confidence ->
+# recommendation storage -> Live Market Mode) against the live SAHMK
+# API and a real, ephemeral PostgreSQL service container.
+#
+# This workflow is additive to, and does not modify,
+# sahmk-live-verification.yml (connectivity/auth/schema only) --
+# see scripts/verify_sahmk_live_pipeline.py, which calls existing,
+# unmodified production code with zero new business logic.
+#
+# Deliberately workflow_dispatch-only: makes real, metered calls
+# against a production third-party API with a real credential and
+# writes real rows to a database, so it must never run automatically.
+#
+# SECURITY: SAHMK_API_KEY is injected only as an environment variable
+# on the steps that need it, never echoed by this workflow file, and
+# scripts/verify_sahmk_live_pipeline.py redacts it from every line it
+# prints (see that script's _redact()). The sanitized summary written
+# to $GITHUB_STEP_SUMMARY never includes the key or raw API responses --
+# only parsed, structured fields (symbol, recommendation, confidence,
+# targets, etc.).
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Comma-separated Tadawul symbols to validate"
+        required: false
+        default: "2222,2010,1120,7010,1180"
+      soak_seconds:
+        description: "How long to soak-test Live Market Mode (seconds)"
+        required: false
+        default: "45"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Live pipeline validation (SAHMK -> DB -> AI -> recommendations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: basirah_l2_validation
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/basirah_l2_validation
+      SAHMK_BASE_URL: https://app.sahmk.sa/api/v1
+      LIVE_PIPELINE_SYMBOLS: ${{ github.event.inputs.symbols }}
+      LIVE_MARKET_MODE_SOAK_SECONDS: ${{ github.event.inputs.soak_seconds }}
+      LIVE_MARKET_MODE_SOAK_POLL_SECONDS: "5"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail fast if SAHMK_API_KEY secret is not configured
+        env:
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+        run: |
+          if [ -z "$SAHMK_API_KEY" ]; then
+            echo "::error::SAHMK_API_KEY repository secret is not set."
+            exit 1
+          fi
+          echo "SAHMK_API_KEY secret is present (value not shown)."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install dependencies (from this repository)
+        run: pip install -r requirements.txt
+
+      - name: Install package in editable mode
+        run: pip install -e . --no-deps
+
+      - name: Run database migrations against the ephemeral Postgres
+        run: python -m alembic upgrade head
+
+      - name: Run live pipeline validation (real, unmocked)
+        id: pipeline
+        env:
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+          MARKET_DATA_PROVIDER: sahmk
+        run: |
+          python scripts/verify_sahmk_live_pipeline.py
+
+      - name: Final summary
+        if: always()
+        run: |
+          echo "======================================================"
+          echo " SAHMK LIVE PIPELINE VALIDATION -- COMPLETE"
+          echo "======================================================"
+          echo "See the 'Summary' tab on this workflow run for the full,"
+          echo "sanitized breakdown (recommendations, integrity checks,"
+          echo "Live Market Mode soak results)."
