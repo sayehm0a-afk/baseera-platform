@@ -116,6 +116,7 @@ kernel = None
 container = None
 ingestion_scheduler = None
 market_intelligence_scheduler = None
+outcome_evaluation_scheduler = None
 
 
 class TaskRequest(BaseModel):
@@ -136,7 +137,7 @@ class TaskResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Startup event handler."""
-    global kernel, container, ingestion_scheduler, market_intelligence_scheduler
+    global kernel, container, ingestion_scheduler, market_intelligence_scheduler, outcome_evaluation_scheduler
 
     # The ingestion scheduler needs only the DB and a market/fundamental
     # data provider -- no Redis, no runtime kernel. Started first, in its
@@ -179,6 +180,26 @@ async def startup_event():
             )
     except Exception as e:
         logger.error(f"Error starting market intelligence scheduler: {e}", exc_info=True)
+
+    # AI Evolution Layer (E2): scores already-issued live recommendations
+    # against real forward price data once their horizon has elapsed.
+    # Same isolation, same disabled-by-default posture as the two
+    # schedulers above.
+    try:
+        from src.ai_evolution.config import is_outcome_evaluation_scheduler_enabled
+        from src.ai_evolution.scheduler import OutcomeEvaluationScheduler
+
+        if is_outcome_evaluation_scheduler_enabled():
+            outcome_evaluation_scheduler = OutcomeEvaluationScheduler()
+            outcome_evaluation_scheduler.start()
+            logger.info("Outcome evaluation scheduler started.")
+        else:
+            logger.info(
+                "Outcome evaluation scheduler disabled "
+                "(set OUTCOME_EVALUATION_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting outcome evaluation scheduler: {e}", exc_info=True)
 
     try:
         logger.info("Starting Basirah Enterprise AI Platform...")
@@ -246,6 +267,9 @@ async def shutdown_event():
 
         if market_intelligence_scheduler is not None:
             await market_intelligence_scheduler.stop()
+
+        if outcome_evaluation_scheduler is not None:
+            await outcome_evaluation_scheduler.stop()
 
         if kernel:
             await kernel.stop()

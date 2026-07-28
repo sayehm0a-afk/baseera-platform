@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from src.ai_evolution.outcome_evaluation import create_pending_outcomes
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.domain.models import (
     ChangeType as DomainChangeType,
@@ -192,35 +193,38 @@ class MarketIntelligenceRepository:
                     engine_version=outcome.report.engine_version,
                 )
             )
-            session.add(
-                RecommendationSnapshot(
-                    run_id=None,
-                    stock_id=stock_id,
-                    symbol=outcome.symbol,
-                    evaluated_at=decision.generated_at,
-                    market_price_at_evaluation=_f(outcome.latest_price),
-                    recommendation=RecommendationLabel(decision.recommendation.value),
-                    total_score=_f(decision.final_score),
-                    confidence_score=_f(decision.confidence),
-                    technical_score=_f(outcome.technical_score),
-                    fundamental_score=_f(outcome.fundamental_score),
-                    momentum_score=_f(outcome.category_score(CATEGORY_LABELS["momentum"])),
-                    volume_score=_f(outcome.category_score(CATEGORY_LABELS["volume"])),
-                    risk_score=_f(outcome.category_score(CATEGORY_LABELS["risk"])),
-                    contributor_breakdown=_serialize_breakdown(decision.breakdown),
-                    signals=_serialize_signals(decision.signals),
-                    reasons=list(decision.reasons),
-                    target_price=_f(decision.target_price),
-                    stop_loss=_f(decision.stop_loss),
-                    expected_return_pct=_f(decision.expected_return_pct),
-                    time_horizon=decision.time_horizon.value,
-                    risk_level=decision.risk_level.value,
-                    position_size=decision.position_size.value,
-                    engine_version=outcome.report.engine_version,
-                    source=_LIVE_SCAN_SOURCE,
-                    is_paper_trade=False,
-                )
+            snapshot = RecommendationSnapshot(
+                run_id=None,
+                stock_id=stock_id,
+                symbol=outcome.symbol,
+                evaluated_at=decision.generated_at,
+                market_price_at_evaluation=_f(outcome.latest_price),
+                recommendation=RecommendationLabel(decision.recommendation.value),
+                total_score=_f(decision.final_score),
+                confidence_score=_f(decision.confidence),
+                technical_score=_f(outcome.technical_score),
+                fundamental_score=_f(outcome.fundamental_score),
+                momentum_score=_f(outcome.category_score(CATEGORY_LABELS["momentum"])),
+                volume_score=_f(outcome.category_score(CATEGORY_LABELS["volume"])),
+                risk_score=_f(outcome.category_score(CATEGORY_LABELS["risk"])),
+                contributor_breakdown=_serialize_breakdown(decision.breakdown),
+                signals=_serialize_signals(decision.signals),
+                reasons=list(decision.reasons),
+                target_price=_f(decision.target_price),
+                stop_loss=_f(decision.stop_loss),
+                expected_return_pct=_f(decision.expected_return_pct),
+                time_horizon=decision.time_horizon.value,
+                risk_level=decision.risk_level.value,
+                position_size=decision.position_size.value,
+                engine_version=outcome.report.engine_version,
+                source=_LIVE_SCAN_SOURCE,
+                is_paper_trade=False,
             )
+            session.add(snapshot)
+            # E2: issue PENDING RecommendationOutcome rows (one per
+            # evaluation horizon) now, so OutcomeEvaluationScheduler has
+            # known rows to score once real forward price data exists.
+            create_pending_outcomes(session, snapshot)
         session.commit()
 
     def get_symbol_records_by_symbol(self, session: Session, run_id: int) -> Dict[str, SymbolIntelligenceRecord]:

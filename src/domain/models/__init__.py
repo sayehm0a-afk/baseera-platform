@@ -14,6 +14,7 @@ from src.domain.models.dividend import Dividend
 from src.domain.models.ingestion_run_log import IngestionRunLog, IngestionJobStatus
 from src.domain.models.backtest_run import BacktestRun, BacktestRunStatus, DataProvenanceMode
 from src.domain.models.recommendation_snapshot import RecommendationSnapshot, RecommendationLabel
+from src.domain.models.recommendation_outcome import RecommendationOutcome, RecommendationOutcomeStatus
 from src.domain.models.calibration_config import CalibrationConfig, CalibrationStatus
 from src.domain.models.market_scan_run import MarketScanRun, MarketScanStatus
 from src.domain.models.symbol_intelligence_record import SymbolIntelligenceRecord
@@ -62,6 +63,8 @@ __all__ = [
     "DataProvenanceMode",
     "RecommendationSnapshot",
     "RecommendationLabel",
+    "RecommendationOutcome",
+    "RecommendationOutcomeStatus",
     "CalibrationConfig",
     "CalibrationStatus",
     "MarketScanRun",

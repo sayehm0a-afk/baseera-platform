@@ -1839,15 +1839,15 @@ security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
 
-## In Progress: Basirah AI Evolution Layer (E1 of E1–E9)
+## In Progress: Basirah AI Evolution Layer (E1–E2 of E1–E9)
 
 Full design in the approved plan (`# Basirah AI Evolution Layer —
 Technical Design`); a reuse-first system that tracks every recommendation
 to a real market outcome, computes rigorous accuracy metrics, calibrates
 confidence mathematically, discovers which signal conditions actually
 work, and improves itself only through an observe → paper-trade →
-human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1 is
-complete**, E2–E9 not yet started.
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1 and
+E2 are complete**, E3–E9 not yet started.
 
 1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
    (`src/domain/models/recommendation_snapshot.py`), previously written
@@ -1874,12 +1874,40 @@ complete**, E2–E9 not yet started.
    cover the new write (correct field mapping, skip-on-failure/
    skip-on-unregistered-stock, and a numpy-float-coercion regression
    check matching the existing `SymbolIntelligenceRecord` discipline).
-3. **Not yet done (E2–E9)**: outcome evaluation against real future
-   prices, accuracy/calibration metrics, pattern discovery, the real
-   multi-agent panel, paper trading, and the staff-only intelligence
-   dashboard. `market_regime`/`news_summary`/`agent_debate_summary`
-   stay unpopulated until their respective phases land — this is an
-   honestly incomplete first slice, not a finished feature.
+3. **E2 — Outcome evaluation against real forward prices.** New
+   `src/ai_evolution/` package. `recommendation_outcomes` table
+   (migration `b8f4e6c1a930`), one row per (`RecommendationSnapshot`,
+   evaluation horizon) -- status `PENDING/SUCCESSFUL/FAILED/PARTIAL/
+   EXPIRED/CANCELLED`. `create_pending_outcomes()` issues one PENDING
+   row per horizon (1/3/7/14/30/60/90 days) at the same time a live
+   snapshot is written (wired into
+   `MarketIntelligenceRepository.save_symbol_records`, idempotent per
+   snapshot). `evaluate_due_outcomes()` scores whatever has come due
+   using the existing anti-look-ahead
+   `src.backtesting.data_access.load_forward_price_path` -- never
+   before a horizon has actually elapsed, and never invents forward
+   price data: a due row with no bars ingested yet simply stays
+   PENDING and is retried, up to `OUTCOME_EVALUATION_STALE_GRACE_DAYS`
+   (14 by default) past due before it's given up on (EXPIRED). Target/
+   stop-hit classification mirrors `src.backtesting.engine`'s existing
+   convention exactly (an intraday high/low touch, not just a close)
+   so live and backtest scoring stay consistent; a recommendation with
+   no target or stop set (e.g. HOLD) is EXPIRED, not guessed; both
+   thresholds touched in the same window (ambiguous with daily OHLC)
+   is PARTIAL, not arbitrarily resolved. `OutcomeEvaluationScheduler`
+   (disabled by default, `OUTCOME_EVALUATION_SCHEDULER_ENABLED=false`)
+   runs it daily, on the same in-process asyncio pattern every other
+   scheduler in this codebase already uses -- no Celery introduced.
+4. **Not yet done (E3–E9)**: accuracy/calibration metrics, pattern
+   discovery, the real multi-agent panel, paper trading, and the
+   staff-only intelligence dashboard. `market_regime`/`news_summary`/
+   `agent_debate_summary` on `RecommendationSnapshot` stay unpopulated
+   until their respective phases land -- this is an honestly
+   incomplete slice, not a finished feature. No live outcome has yet
+   been evaluated against real SAHMK forward price data in this
+   sandbox (no live network access here); E2 is verified against
+   hand-seeded price bars and a real PostgreSQL 16 migration round
+   trip only.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
