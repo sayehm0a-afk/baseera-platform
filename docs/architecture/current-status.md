@@ -1839,15 +1839,15 @@ security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
 
-## In Progress: Basirah AI Evolution Layer (E1–E2 of E1–E9)
+## In Progress: Basirah AI Evolution Layer (E1–E3 of E1–E9)
 
 Full design in the approved plan (`# Basirah AI Evolution Layer —
 Technical Design`); a reuse-first system that tracks every recommendation
 to a real market outcome, computes rigorous accuracy metrics, calibrates
 confidence mathematically, discovers which signal conditions actually
 work, and improves itself only through an observe → paper-trade →
-human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1 and
-E2 are complete**, E3–E9 not yet started.
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E3 are
+complete**, E4–E9 not yet started.
 
 1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
    (`src/domain/models/recommendation_snapshot.py`), previously written
@@ -1898,16 +1898,48 @@ E2 are complete**, E3–E9 not yet started.
    (disabled by default, `OUTCOME_EVALUATION_SCHEDULER_ENABLED=false`)
    runs it daily, on the same in-process asyncio pattern every other
    scheduler in this codebase already uses -- no Celery introduced.
-4. **Not yet done (E3–E9)**: accuracy/calibration metrics, pattern
-   discovery, the real multi-agent panel, paper trading, and the
-   staff-only intelligence dashboard. `market_regime`/`news_summary`/
-   `agent_debate_summary` on `RecommendationSnapshot` stay unpopulated
-   until their respective phases land -- this is an honestly
-   incomplete slice, not a finished feature. No live outcome has yet
-   been evaluated against real SAHMK forward price data in this
-   sandbox (no live network access here); E2 is verified against
-   hand-seeded price bars and a real PostgreSQL 16 migration round
-   trip only.
+4. **E3 — Confidence calibration engine.** New
+   `confidence_calibration_models` table (migration `c2a97e5d4b18`) --
+   a *different* calibration concept from the existing
+   `calibration_configs`/`CalibrationEngine` (which tunes contributor
+   WEIGHTS via same-period backtest comparison); this one tunes the
+   CONFIDENCE NUMBER ITSELF against real `RecommendationOutcome`
+   history, and deliberately mirrors `CalibrationConfig`'s exact
+   `DRAFT -> VALIDATED -> ACTIVE` lifecycle (plus
+   `REJECTED/SUPERSEDED/ROLLED_BACK`), including the same
+   application-enforced (not DB-constrained) "at most one ACTIVE row"
+   invariant. `ConfidenceCalibrationEngine.propose()` loads (raw
+   confidence, success/failure) pairs from a configurable reference
+   evaluation horizon (default 7 days; a snapshot's `PARTIAL`/
+   `EXPIRED` outcomes are excluded as ambiguous, not force-labeled),
+   requires at least 30 labeled examples (a disclosed cold-start
+   guard), and fits **Platt scaling** (logistic regression, `coef`/
+   `intercept` stored as plain JSON) below 1000 samples or
+   **isotonic regression** (fitted step-function knots stored as
+   JSON) above it -- new `scikit-learn>=1.4.0` dependency.
+   Temperature scaling from the original 3-method request was
+   deliberately not implemented: it's designed for multi-class
+   classifier logits, not a single scalar confidence paired with a
+   binary outcome, and doesn't fit this data shape. `test()` requires
+   the fit to actually reduce Expected Calibration Error (the same
+   bucket-weighted-gap formula `src.backtesting.metrics
+   .calibration_error()` already uses, reimplemented locally to
+   operate on the outcome table's already-binary label directly)
+   before a model can be activated. Like the existing
+   `CalibrationEngine`, **not wired into any live route in this
+   milestone** -- `activate()` only changes which row is marked
+   ACTIVE; a real `/decision` response is not yet passed through
+   `apply_calibration()`.
+5. **Not yet done (E4–E9)**: extended accuracy metrics (Brier score,
+   MCE, reliability diagrams), pattern discovery, the real multi-agent
+   panel, paper trading, and the staff-only intelligence dashboard.
+   `market_regime`/`news_summary`/`agent_debate_summary` on
+   `RecommendationSnapshot` stay unpopulated until their respective
+   phases land -- this is an honestly incomplete slice, not a finished
+   feature. No live outcome has yet been evaluated against real SAHMK
+   forward price data in this sandbox (no live network access here);
+   E2/E3 are verified against hand-seeded price bars, synthetic
+   outcome data, and a real PostgreSQL 16 migration round trip only.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
