@@ -92,17 +92,17 @@ def _seed_overconfident_dataset(session, stock, n=200, seed=42):
 
 class TestExpectedCalibrationError:
     def test_none_for_empty_pairs(self):
-        from src.ai_evolution.confidence_calibration import _expected_calibration_error
+        from src.ai_evolution.confidence_calibration import expected_calibration_error
 
-        assert _expected_calibration_error([]) is None
+        assert expected_calibration_error([]) is None
 
     def test_zero_for_perfectly_calibrated_pairs(self):
-        from src.ai_evolution.confidence_calibration import _expected_calibration_error
+        from src.ai_evolution.confidence_calibration import expected_calibration_error
 
         # 100% of "90-confidence" calls succeed -> mean_confidence 90%, realized 100% -- not
         # perfect, but a bucket where confidence and realized accuracy are close scores low.
         pairs = [(50.0, 1), (50.0, 0)]  # 50% confidence bucket, 50% realized accuracy -- perfect
-        assert _expected_calibration_error(pairs) == pytest.approx(0.0)
+        assert expected_calibration_error(pairs) == pytest.approx(0.0)
 
 
 class TestLoadTrainingPairsAndPropose:

@@ -55,3 +55,12 @@ class CannotModifyOwnStaffRoleError(APIError):
 
     status_code = 409
     code = "cannot_modify_own_staff_role"
+
+
+class DailyIntelligenceSnapshotNotFoundError(APIError):
+    """No `DailyIntelligenceSnapshot` row exists yet for the requested
+    (or default: most recent) date -- e.g. `DailyIntelligenceAggregationScheduler`
+    has never run, or the specific date requested was never aggregated."""
+
+    status_code = 404
+    code = "daily_intelligence_snapshot_not_found"

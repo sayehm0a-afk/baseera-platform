@@ -119,6 +119,7 @@ market_intelligence_scheduler = None
 outcome_evaluation_scheduler = None
 pattern_discovery_scheduler = None
 daily_reflection_scheduler = None
+daily_intelligence_aggregation_scheduler = None
 
 
 class TaskRequest(BaseModel):
@@ -141,6 +142,7 @@ async def startup_event():
     """Startup event handler."""
     global kernel, container, ingestion_scheduler, market_intelligence_scheduler
     global outcome_evaluation_scheduler, pattern_discovery_scheduler, daily_reflection_scheduler
+    global daily_intelligence_aggregation_scheduler
 
     # The ingestion scheduler needs only the DB and a market/fundamental
     # data provider -- no Redis, no runtime kernel. Started first, in its
@@ -242,6 +244,25 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Error starting daily reflection scheduler: {e}", exc_info=True)
 
+    # AI Evolution Layer (E9): daily pre-aggregation feeding the
+    # staff-only Intelligence Dashboard. Same isolation, same
+    # disabled-by-default posture as the schedulers above.
+    try:
+        from src.ai_evolution.config import is_daily_intelligence_aggregation_scheduler_enabled
+        from src.ai_evolution.scheduler import DailyIntelligenceAggregationScheduler
+
+        if is_daily_intelligence_aggregation_scheduler_enabled():
+            daily_intelligence_aggregation_scheduler = DailyIntelligenceAggregationScheduler()
+            daily_intelligence_aggregation_scheduler.start()
+            logger.info("Daily intelligence aggregation scheduler started.")
+        else:
+            logger.info(
+                "Daily intelligence aggregation scheduler disabled "
+                "(set DAILY_INTELLIGENCE_AGGREGATION_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting daily intelligence aggregation scheduler: {e}", exc_info=True)
+
     try:
         logger.info("Starting Basirah Enterprise AI Platform...")
 
@@ -317,6 +338,9 @@ async def shutdown_event():
 
         if daily_reflection_scheduler is not None:
             await daily_reflection_scheduler.stop()
+
+        if daily_intelligence_aggregation_scheduler is not None:
+            await daily_intelligence_aggregation_scheduler.stop()
 
         if kernel:
             await kernel.stop()

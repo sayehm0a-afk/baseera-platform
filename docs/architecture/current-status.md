@@ -1839,15 +1839,16 @@ security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
 
-## In Progress: Basirah AI Evolution Layer (E1–E8 of E1–E9)
+## Completed: Basirah AI Evolution Layer (E1–E9)
 
 Full design in the approved plan (`# Basirah AI Evolution Layer —
 Technical Design`); a reuse-first system that tracks every recommendation
 to a real market outcome, computes rigorous accuracy metrics, calibrates
 confidence mathematically, discovers which signal conditions actually
 work, and improves itself only through an observe → paper-trade →
-human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E8 are
-complete**, E9 not yet started.
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **all nine
+are complete**, with the honest gaps and unverified-in-this-sandbox items
+disclosed at the end of this section.
 
 1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
    (`src/domain/models/recommendation_snapshot.py`), previously written
@@ -2110,18 +2111,75 @@ complete**, E9 not yet started.
    comparison-query correctness) plus 4 new repository-level tests
    verifying the `PAPER_TRADING_ENABLED` gate and the champion/
    challenger pairing end to end.
-10. **Not yet done (E9)**: the staff-only intelligence dashboard.
-    `market_regime` on `RecommendationSnapshot` stays unpopulated (no
-    phase populates it yet). No live outcome has yet been evaluated
-    against real SAHMK forward price data in this sandbox (no live
-    network access here); E2–E8 are verified against hand-seeded price
-    bars, synthetic outcome data, a fake LLM adapter (no real OpenAI
-    call anywhere in this milestone's tests), and a real PostgreSQL 16
-    migration round trip only. E8's paper trading has not yet observed
-    a real challenger config in production -- no `CalibrationProposalJob`
+10. **E9 — Basirah Intelligence Dashboard + admin routes.** New
+    `daily_intelligence_snapshots` table (migration `9853a4846eab`,
+    current Alembic head) + `DailyIntelligenceSnapshot` model -- one
+    pre-aggregated row per day, so the dashboard reads a precomputed
+    row instead of live-computing aggregates on every page load, per
+    Part 12 of the design. New `src/ai_evolution/daily_intelligence_aggregation.py::aggregate_daily_intelligence()`
+    mirrors `generate_daily_reflection()`'s exact query shape and
+    idempotent upsert-by-date convention, and reuses
+    `confidence_calibration.expected_calibration_error()` verbatim for
+    the day's ECE (that helper was promoted from module-private to
+    public specifically for this reuse -- a small, disclosed
+    refactor, not a new implementation). Computes: recommendations
+    evaluated/successful/failed/partial/expired that day, win rate,
+    calibration error, sector breakdown (joins `RecommendationSnapshot.stock_id`
+    -> `Stock.sector`), and E7 agent-panel activity (how many
+    snapshots got a panel that day, how many triggered a debate,
+    and the resulting agreement rate = 1 − debate rate). Best/worst
+    `DiscoveredPattern` rows (E5, among `still_valid=True`) are
+    included by win rate, always disjoint even when the total pattern
+    count is small. `market_regime_breakdown` is deliberately *absent*
+    from the table and the dashboard -- `RecommendationSnapshot.market_regime`
+    is not populated by any phase of this milestone (a gap disclosed
+    since E1), so a regime breakdown here would have to be fabricated;
+    omitted rather than faked. New `DailyIntelligenceAggregationScheduler`
+    (same asyncio loop pattern as every other E-phase scheduler),
+    gated behind `DAILY_INTELLIGENCE_AGGREGATION_SCHEDULER_ENABLED`
+    (default off). New staff-gated (`StaffRole.ADMIN`) routes under
+    `/api/v1/admin/ai-evolution/*`: `GET /dashboard` (latest or a
+    specific date's snapshot, 404s honestly if none has been
+    aggregated yet -- never fabricates one), `GET /calibration-status`
+    (both the contributor-WEIGHT `CalibrationConfig` and the
+    confidence-probability `ConfidenceCalibrationModel` active rows
+    side by side, plus E8's latest eligible challenger version),
+    `GET /patterns` (every `DiscoveredPattern`, optional `still_valid`
+    filter), `GET /reflections` (`ReflectionReport` history, most
+    recent first), and `GET /paper-trade-comparison` (E8's
+    `compare_champion_vs_challenger()`, read-only -- calls no
+    activation path). Per Part 14 of the design's non-negotiable
+    rule, **no route or aggregation function here accepts a
+    "hide failures" parameter at all** -- `failed_count` is always
+    computed and always present in every response that reports counts,
+    structurally, not by convention. 10 new unit tests for the
+    aggregation function, 4 new scheduler tests, and 9 new integration
+    tests for the four routes (permission gating, 404 handling,
+    correct field mapping, and an explicit assertion that failed
+    counts are never suppressed).
+11. **Disclosed gaps and unverified-in-this-sandbox items across
+    E1–E9**: `market_regime` on `RecommendationSnapshot` stays
+    unpopulated (no phase populates it -- E9's dashboard omits a
+    regime breakdown for this exact reason). No live outcome has yet
+    been evaluated against real SAHMK forward price data in this
+    sandbox (no live network access here); E2–E9 are verified against
+    hand-seeded price bars, synthetic outcome data, a fake LLM adapter
+    (no real OpenAI call anywhere in this milestone's tests), and real
+    PostgreSQL 16 migration round trips for every schema change (E1,
+    E2, E3, E5, E6, E7, E9 each add a table/columns; all seven
+    migrations have been verified to upgrade and downgrade cleanly
+    against a real local Postgres 16 instance, most recently E9's
+    `9853a4846eab`). E8's paper trading has not yet observed a real
+    challenger config in production -- no `CalibrationProposalJob`
     exists yet to generate one automatically (Part 6 of the design is
-    still manual), so the champion/challenger comparison logic is
-    verified against seeded data only, not a real calibration cycle.
+    still manual), so the champion/challenger comparison logic, and
+    E9's calibration-status/paper-trade-comparison routes that read
+    it, are verified against seeded data only, not a real calibration
+    cycle. No scheduler in this layer has run unattended in a real
+    deployment (all are `*_ENABLED=false` by default and were only
+    ever started/stopped in tests); the daily/weekly aggregation
+    numbers a real deployment would accumulate over time do not yet
+    exist anywhere.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this

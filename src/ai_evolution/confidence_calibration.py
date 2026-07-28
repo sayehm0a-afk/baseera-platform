@@ -73,7 +73,7 @@ def _generate_version() -> str:
     return f"conf-cal-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
 
-def _expected_calibration_error(pairs: List[Tuple[float, int]]) -> Optional[float]:
+def expected_calibration_error(pairs: List[Tuple[float, int]]) -> Optional[float]:
     """The same bucket-count-weighted mean-absolute-gap ECE formula
     `src.backtesting.metrics.calibration_error()` already uses,
     reimplemented here to operate directly on (confidence_0_100,
@@ -202,7 +202,7 @@ class ConfidenceCalibrationEngine:
         method = ConfidenceCalibrationMethod.ISOTONIC if n > isotonic_threshold else ConfidenceCalibrationMethod.PLATT
         model_params = _fit_isotonic(pairs) if method is ConfidenceCalibrationMethod.ISOTONIC else _fit_platt(pairs)
 
-        calibration_error_before = _expected_calibration_error(pairs)
+        calibration_error_before = expected_calibration_error(pairs)
 
         row = ConfidenceCalibrationModel(
             version=_generate_version(),
@@ -219,7 +219,7 @@ class ConfidenceCalibrationEngine:
         session.flush()
 
         calibrated_pairs = [(apply_calibration(row, confidence) * 100.0, label) for confidence, label in pairs]
-        row.calibration_error_after = _expected_calibration_error(calibrated_pairs)
+        row.calibration_error_after = expected_calibration_error(calibrated_pairs)
 
         session.commit()
         return row

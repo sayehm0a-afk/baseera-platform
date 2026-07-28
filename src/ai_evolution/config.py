@@ -62,6 +62,14 @@ def is_agent_panel_llm_enabled() -> bool:
     return bool(os.getenv("OPENAI_API_KEY"))
 
 
+def is_daily_intelligence_aggregation_scheduler_enabled() -> bool:
+    return os.getenv("DAILY_INTELLIGENCE_AGGREGATION_SCHEDULER_ENABLED", "false").lower() == "true"
+
+
+def get_daily_intelligence_aggregation_interval_seconds() -> int:
+    return int(os.getenv("DAILY_INTELLIGENCE_AGGREGATION_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL_SECONDS)))
+
+
 def is_paper_trading_enabled() -> bool:
     """Gates E8's champion/challenger paper trading -- when off (the
     default), `save_symbol_records` writes only the ordinary champion

@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 import src.ai_evolution.scheduler as scheduler_module
 from src.ai_evolution.scheduler import (
+    DailyIntelligenceAggregationScheduler,
     DailyReflectionScheduler,
     IOutcomeEvaluationScheduler,
     OutcomeEvaluationScheduler,
@@ -198,6 +199,65 @@ async def test_daily_reflection_scheduler_loop_survives_an_exception(factory):
         raise RuntimeError("boom")
 
     scheduler = DailyReflectionScheduler(session_factory=factory, interval_seconds=0.01)
+    scheduler._run_one_cycle = _raising_run_one_cycle
+
+    scheduler.start()
+    await asyncio.sleep(0.05)
+    await scheduler.stop()
+
+    assert call_count["n"] >= 1
+
+
+# --- DailyIntelligenceAggregationScheduler ----------------------------------
+
+
+def test_daily_intelligence_aggregation_scheduler_is_not_running_before_start():
+    scheduler = DailyIntelligenceAggregationScheduler()
+    assert scheduler.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_daily_intelligence_aggregation_scheduler_start_and_stop_lifecycle(factory):
+    scheduler = DailyIntelligenceAggregationScheduler(session_factory=factory, interval_seconds=60)
+    scheduler.start()
+    assert scheduler.is_running is True
+
+    await scheduler.stop()
+    assert scheduler.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_daily_intelligence_aggregation_scheduler_run_one_cycle_delegates_to_aggregate(factory, monkeypatch):
+    calls = []
+
+    def _fake_aggregate(session, **kwargs):
+        calls.append(session)
+        from datetime import date
+
+        from src.domain.models import DailyIntelligenceSnapshot
+
+        return DailyIntelligenceSnapshot(
+            snapshot_date=date(2026, 1, 1), recommendations_evaluated=0, successful_count=0,
+            failed_count=0, partial_count=0, expired_count=0, agent_panel_snapshot_count=0, agent_debate_count=0,
+        )
+
+    monkeypatch.setattr(scheduler_module, "aggregate_daily_intelligence", _fake_aggregate)
+
+    scheduler = DailyIntelligenceAggregationScheduler(session_factory=factory, interval_seconds=60)
+    await scheduler._run_one_cycle()
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_intelligence_aggregation_scheduler_loop_survives_an_exception(factory):
+    call_count = {"n": 0}
+
+    async def _raising_run_one_cycle():
+        call_count["n"] += 1
+        raise RuntimeError("boom")
+
+    scheduler = DailyIntelligenceAggregationScheduler(session_factory=factory, interval_seconds=0.01)
     scheduler._run_one_cycle = _raising_run_one_cycle
 
     scheduler.start()

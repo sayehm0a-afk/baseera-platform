@@ -20,10 +20,12 @@ from typing import Callable, Optional, Protocol, runtime_checkable
 from sqlalchemy.orm import Session
 
 from src.ai_evolution.config import (
+    get_daily_intelligence_aggregation_interval_seconds,
     get_daily_reflection_interval_seconds,
     get_outcome_evaluation_interval_seconds,
     get_pattern_discovery_interval_seconds,
 )
+from src.ai_evolution.daily_intelligence_aggregation import aggregate_daily_intelligence
 from src.ai_evolution.daily_reflection import generate_daily_reflection
 from src.ai_evolution.outcome_evaluation import evaluate_due_outcomes
 from src.ai_evolution.pattern_discovery import discover_patterns
@@ -234,6 +236,72 @@ class DailyReflectionScheduler:
                 "Daily reflection cycle: %d recommendation(s) reviewed for %s.",
                 report.recommendations_reviewed,
                 report.review_date,
+            )
+        finally:
+            session.close()
+
+
+class DailyIntelligenceAggregationScheduler:
+    """Daily (by default) re-run of `aggregate_daily_intelligence()` --
+    same shape as the other schedulers above. E9 (Part 12 of the
+    design): pre-aggregates so the staff-only Intelligence Dashboard
+    reads a precomputed row instead of live-computing on every load."""
+
+    def __init__(
+        self,
+        session_factory: Optional[Callable[[], Session]] = None,
+        interval_seconds: Optional[int] = None,
+    ):
+        self._session_factory = session_factory or self._default_session_factory
+        self._interval_seconds = (
+            interval_seconds if interval_seconds is not None else get_daily_intelligence_aggregation_interval_seconds()
+        )
+        self._task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _default_session_factory() -> Session:
+        from src.core.db import database
+
+        return database.get_session_factory()()
+
+    @property
+    def is_running(self) -> bool:
+        return self._task is not None
+
+    def start(self) -> None:
+        if self._task is not None:
+            logger.warning("DailyIntelligenceAggregationScheduler.start() called while already running -- ignoring.")
+            return
+        self._task = asyncio.ensure_future(self._loop())
+        logger.info("DailyIntelligenceAggregationScheduler started (interval_seconds=%s).", self._interval_seconds)
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._task
+        self._task = None
+        logger.info("DailyIntelligenceAggregationScheduler stopped.")
+
+    async def _loop(self) -> None:
+        while True:
+            try:
+                await self._run_one_cycle()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Unexpected error aggregating daily AI Evolution Layer intelligence.")
+            await asyncio.sleep(self._interval_seconds)
+
+    async def _run_one_cycle(self) -> None:
+        session = self._session_factory()
+        try:
+            snapshot = await asyncio.to_thread(aggregate_daily_intelligence, session)
+            logger.info(
+                "Daily intelligence aggregation cycle: %d recommendation(s) aggregated for %s.",
+                snapshot.recommendations_evaluated,
+                snapshot.snapshot_date,
             )
         finally:
             session.close()
