@@ -128,6 +128,7 @@ class MarketScanner:
                 latest_price=context.latest_price,
                 technical_snapshot=context.technical_result.latest_snapshot() if context.technical_result else None,
                 fundamental_snapshot=context.fundamental_result.latest_snapshot() if context.fundamental_result else None,
+                context=context,
             )
         finally:
             session.close()

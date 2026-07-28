@@ -21,8 +21,9 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from src.ai_evolution.agents.orchestrator import AgentPanelOrchestrator
-from src.ai_evolution.config import is_agent_panel_enabled
+from src.ai_evolution.config import is_agent_panel_enabled, is_paper_trading_enabled
 from src.ai_evolution.outcome_evaluation import create_pending_outcomes
+from src.ai_evolution.paper_trading import generate_challenger_snapshot, get_latest_challenger_config
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.domain.models import (
     ChangeType as DomainChangeType,
@@ -232,6 +233,15 @@ class MarketIntelligenceRepository:
             # docstring), commits its own work when it runs.
             if is_agent_panel_enabled():
                 await AgentPanelOrchestrator().run_panel(session, snapshot, decision, outcome.symbol)
+            # E8: champion/challenger paper trading -- opt-in
+            # (PAPER_TRADING_ENABLED), reuses this same already-built
+            # AnalysisContext (no re-fetch) to score a second, VALIDATED
+            # calibration candidate, never touching the champion
+            # decision or production weights (see paper_trading.py).
+            if is_paper_trading_enabled() and outcome.context is not None:
+                challenger_config = get_latest_challenger_config(session)
+                if challenger_config is not None:
+                    generate_challenger_snapshot(session, snapshot, outcome.context, challenger_config)
         session.commit()
 
     def get_symbol_records_by_symbol(self, session: Session, run_id: int) -> Dict[str, SymbolIntelligenceRecord]:

@@ -60,3 +60,15 @@ def is_agent_panel_llm_enabled() -> bool:
     default: News/Sentiment/Judge report UNAVAILABLE rather than
     fabricating an opinion."""
     return bool(os.getenv("OPENAI_API_KEY"))
+
+
+def is_paper_trading_enabled() -> bool:
+    """Gates E8's champion/challenger paper trading -- when off (the
+    default), `save_symbol_records` writes only the ordinary champion
+    snapshot, unchanged from before E8 existed. When on, every scanned
+    symbol also gets a second, `is_paper_trade=True` challenger
+    snapshot scored against the latest VALIDATED (not yet ACTIVE)
+    `CalibrationConfig`, if one exists -- real extra DB write volume an
+    operator should opt into explicitly, same posture as every other
+    scheduler/feature in this layer."""
+    return os.getenv("PAPER_TRADING_ENABLED", "false").lower() == "true"

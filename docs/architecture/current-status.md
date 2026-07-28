@@ -1839,15 +1839,15 @@ security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
 
-## In Progress: Basirah AI Evolution Layer (E1–E7 of E1–E9)
+## In Progress: Basirah AI Evolution Layer (E1–E8 of E1–E9)
 
 Full design in the approved plan (`# Basirah AI Evolution Layer —
 Technical Design`); a reuse-first system that tracks every recommendation
 to a real market outcome, computes rigorous accuracy metrics, calibrates
 confidence mathematically, discovers which signal conditions actually
 work, and improves itself only through an observe → paper-trade →
-human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E7 are
-complete**, E8–E9 not yet started.
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E8 are
+complete**, E9 not yet started.
 
 1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
    (`src/domain/models/recommendation_snapshot.py`), previously written
@@ -2057,15 +2057,71 @@ complete**, E8–E9 not yet started.
    decision already succeeded; `save_symbol_records` became `async`
    to support this (its one production caller,
    `MarketIntelligenceEngine.execute_scan`, now awaits it).
-9. **Not yet done (E8–E9)**: paper trading (champion/challenger) and
-   the staff-only intelligence dashboard. `market_regime` on
-   `RecommendationSnapshot` stays unpopulated (no phase populates it
-   yet). No live outcome has yet been evaluated against real SAHMK
-   forward price data in this sandbox (no live network access here);
-   E2–E7 are verified against hand-seeded price bars, synthetic
-   outcome data, a fake LLM adapter (no real OpenAI call anywhere in
-   this milestone's tests), and a real PostgreSQL 16 migration round
-   trip only.
+9. **E8 — Champion/challenger paper trading.** New
+   `src/ai_evolution/paper_trading.py` -- no new table (reuses
+   `RecommendationSnapshot.variant`/`is_paper_trade`, both added by E1
+   and unused until now, plus `CalibrationConfig`/`recommendation_outcomes`
+   unchanged). A "challenger" is always the most recently VALIDATED
+   (not yet ACTIVE) `CalibrationConfig` -- a candidate that already
+   passed `CalibrationEngine`'s own validation-period backtest and is
+   waiting on a human `activate()` call; DRAFT/REJECTED/SUPERSEDED/
+   ROLLED_BACK configs are never paper-traded. `SymbolScanOutcome`
+   gained a `context: Optional[AnalysisContext]` field (not persisted,
+   in-process only) so `generate_challenger_snapshot()` can re-score
+   the *exact same* frozen `AnalysisContext` the champion decision was
+   built from -- no second data fetch -- through a second
+   `AIDecisionEngine` built via
+   `src.backtesting.calibration.parameters.build_strategy_kwargs`, the
+   identical JSON-config-to-engine logic `AIDecisionEngineStrategy`
+   already uses for backtests. The result is persisted as a second
+   `RecommendationSnapshot` (`variant="challenger"`,
+   `is_paper_trade=True`) with its own PENDING `recommendation_outcomes`
+   rows via the unchanged `create_pending_outcomes()` -- a challenger's
+   outcomes are scored by the exact same `OutcomeEvaluationScheduler`
+   as a champion's, zero duplicated evaluation logic. The champion
+   snapshot is only labelled `variant="champion"` at the moment a
+   challenger is actually generated alongside it (so the pairing stays
+   explicit); when paper trading is off or no VALIDATED config exists,
+   an ordinary live snapshot's `variant` stays `null`, unchanged from
+   before E8. Wired into `save_symbol_records()` gated behind
+   `PAPER_TRADING_ENABLED` (default off, same disabled-by-default
+   posture as every other scheduler/feature in this layer);
+   `generate_challenger_snapshot()` never raises (mirrors
+   `AgentPanelOrchestrator.run_panel`'s discipline -- a challenger bug
+   must never break the champion write it rides alongside).
+   `two_sample_significance_test()` generalizes E5's one-sample
+   proportion z-test to a genuine two-sample, pooled-variance,
+   **one-sided** proportion z-test (does the challenger's win rate
+   significantly *exceed* the champion's, not merely differ from it --
+   Part 9/10 of the design requires a significant improvement before a
+   human is even shown the activation option). `significant` requires
+   both samples to meet a minimum size (default 30, same "p-value AND
+   minimum sample" discipline as every other significance test in this
+   layer) and the challenger's observed rate to actually exceed the
+   champion's. `compare_champion_vs_challenger()` loads terminal
+   (SUCCESSFUL/FAILED) outcomes for both variants at a given horizon
+   and runs the test -- purely descriptive; no code path in this
+   module calls `CalibrationEngine.activate()`, which remains the only
+   way to promote a config to ACTIVE, unchanged and still entirely
+   human-gated. 14 new unit tests in
+   `tests/unit/ai_evolution/test_paper_trading.py` (significance-test
+   edge cases, challenger-config selection, snapshot generation
+   including a never-raises case on a malformed config, and
+   comparison-query correctness) plus 4 new repository-level tests
+   verifying the `PAPER_TRADING_ENABLED` gate and the champion/
+   challenger pairing end to end.
+10. **Not yet done (E9)**: the staff-only intelligence dashboard.
+    `market_regime` on `RecommendationSnapshot` stays unpopulated (no
+    phase populates it yet). No live outcome has yet been evaluated
+    against real SAHMK forward price data in this sandbox (no live
+    network access here); E2–E8 are verified against hand-seeded price
+    bars, synthetic outcome data, a fake LLM adapter (no real OpenAI
+    call anywhere in this milestone's tests), and a real PostgreSQL 16
+    migration round trip only. E8's paper trading has not yet observed
+    a real challenger config in production -- no `CalibrationProposalJob`
+    exists yet to generate one automatically (Part 6 of the design is
+    still manual), so the champion/challenger comparison logic is
+    verified against seeded data only, not a real calibration cycle.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this

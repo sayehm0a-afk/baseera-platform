@@ -16,7 +16,7 @@ from src.analysis.decision.types import (
     RiskLevel,
     TimeHorizon,
 )
-from src.analysis.recommendation.types import Recommendation
+from src.analysis.recommendation.types import AnalysisContext, Recommendation
 from src.market_intelligence.types import SymbolScanOutcome
 
 
@@ -72,6 +72,7 @@ def make_outcome(
     technical_snapshot: Optional[dict] = None,
     fundamental_snapshot: Optional[dict] = None,
     decision: Optional[InvestmentDecision] = None,
+    context: Optional[AnalysisContext] = None,
 ) -> SymbolScanOutcome:
     if success and report is None:
         report = make_report(symbol=symbol, decision=decision)
@@ -79,4 +80,5 @@ def make_outcome(
         symbol=symbol, sector=sector, success=success, report=report,
         skipped_reason=skipped_reason, error=error, latest_price=latest_price,
         technical_snapshot=technical_snapshot, fundamental_snapshot=fundamental_snapshot,
+        context=context,
     )

@@ -11,16 +11,19 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.analysis.recommendation.types import Recommendation
+from src.analysis.recommendation.types import AnalysisContext, Recommendation
 from src.core.db.database import Base
 from src.domain.models import (
     AlertSeverity,
     AlertType,
+    CalibrationConfig,
+    CalibrationStatus,
     MarketScanStatus,
     RecommendationLabel,
     RecommendationSnapshot,
     Stock,
 )
+from src.market_intelligence.repositories import market_intelligence_repository as repository_module
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
 
@@ -245,6 +248,81 @@ async def test_save_symbol_records_skips_failed_outcomes(session, repo):
     await repo.save_symbol_records(session, run.id, [outcome])
 
     assert repo.get_symbol_records_by_symbol(session, run.id) == {}
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_does_not_paper_trade_when_disabled(session, repo, monkeypatch):
+    """E8: PAPER_TRADING_ENABLED defaults off -- a scan must write only
+    the champion snapshot, unchanged from before E8 existed, even when
+    a VALIDATED calibration candidate exists."""
+    monkeypatch.setattr(repository_module, "is_paper_trading_enabled", lambda: False)
+    _seed_stock(session, "2222")
+    session.add(CalibrationConfig(version="v1", status=CalibrationStatus.VALIDATED, config={}))
+    session.commit()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", context=AnalysisContext(symbol="2222"))
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").all()
+    assert len(snapshots) == 1
+    assert snapshots[0].variant is None
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_paper_trades_a_challenger_when_enabled(session, repo, monkeypatch):
+    """E8: when PAPER_TRADING_ENABLED and a VALIDATED calibration
+    candidate exists, a second challenger RecommendationSnapshot is
+    written alongside the champion, scored off the exact same
+    AnalysisContext the champion decision was built from."""
+    monkeypatch.setattr(repository_module, "is_paper_trading_enabled", lambda: True)
+    _seed_stock(session, "2222")
+    session.add(CalibrationConfig(version="v1", status=CalibrationStatus.VALIDATED, config={}))
+    session.commit()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", context=AnalysisContext(symbol="2222"))
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").order_by(RecommendationSnapshot.id).all()
+    assert len(snapshots) == 2
+    champion, challenger = snapshots
+    assert champion.variant == "champion"
+    assert champion.is_paper_trade is False
+    assert challenger.variant == "challenger"
+    assert challenger.is_paper_trade is True
+    assert challenger.calibration_version == "v1"
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_paper_trading_enabled_but_no_context_skips_challenger(session, repo, monkeypatch):
+    """A scan outcome with no `context` (e.g. an older code path, or a
+    fixture that never populated one) simply gets no challenger --
+    never an error."""
+    monkeypatch.setattr(repository_module, "is_paper_trading_enabled", lambda: True)
+    _seed_stock(session, "2222")
+    session.add(CalibrationConfig(version="v1", status=CalibrationStatus.VALIDATED, config={}))
+    session.commit()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", context=None)
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    assert session.query(RecommendationSnapshot).filter_by(symbol="2222").count() == 1
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_paper_trading_enabled_but_no_validated_config_skips_challenger(session, repo, monkeypatch):
+    monkeypatch.setattr(repository_module, "is_paper_trading_enabled", lambda: True)
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", context=AnalysisContext(symbol="2222"))
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").all()
+    assert len(snapshots) == 1
+    assert snapshots[0].variant is None
 
 
 def test_save_and_read_back_sector_summaries(session, repo):

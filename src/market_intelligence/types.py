@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 from src.analysis.analyst.types import AnalystReport
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.analysis.decision.types import PositionSize, RiskLevel, TimeHorizon
-from src.analysis.recommendation.types import Recommendation
+from src.analysis.recommendation.types import AnalysisContext, Recommendation
 
 
 class RankingCategory(str, Enum):
@@ -120,6 +120,13 @@ class SymbolScanOutcome:
     technical_snapshot: Optional[Dict[str, Any]] = None
     fundamental_snapshot: Optional[Dict[str, Any]] = None
     scanned_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # E8 of the AI Evolution Layer: the exact `AnalysisContext`
+    # `build_analysis_context()` computed for this symbol, carried
+    # through so a paper-trading challenger engine can re-score it
+    # under a different calibration config without a second fetch.
+    # Not persisted anywhere -- purely an in-process handoff from
+    # `MarketScanner` to `MarketIntelligenceRepository.save_symbol_records`.
+    context: Optional[AnalysisContext] = None
 
     @property
     def recommendation(self) -> Optional[Recommendation]:
