@@ -117,6 +117,7 @@ container = None
 ingestion_scheduler = None
 market_intelligence_scheduler = None
 outcome_evaluation_scheduler = None
+pattern_discovery_scheduler = None
 
 
 class TaskRequest(BaseModel):
@@ -137,7 +138,8 @@ class TaskResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Startup event handler."""
-    global kernel, container, ingestion_scheduler, market_intelligence_scheduler, outcome_evaluation_scheduler
+    global kernel, container, ingestion_scheduler, market_intelligence_scheduler
+    global outcome_evaluation_scheduler, pattern_discovery_scheduler
 
     # The ingestion scheduler needs only the DB and a market/fundamental
     # data provider -- no Redis, no runtime kernel. Started first, in its
@@ -200,6 +202,25 @@ async def startup_event():
             )
     except Exception as e:
         logger.error(f"Error starting outcome evaluation scheduler: {e}", exc_info=True)
+
+    # AI Evolution Layer (E5): weekly re-discovery of signal conditions
+    # statistically associated with a different win rate. Same isolation,
+    # same disabled-by-default posture as the schedulers above.
+    try:
+        from src.ai_evolution.config import is_pattern_discovery_scheduler_enabled
+        from src.ai_evolution.scheduler import PatternDiscoveryScheduler
+
+        if is_pattern_discovery_scheduler_enabled():
+            pattern_discovery_scheduler = PatternDiscoveryScheduler()
+            pattern_discovery_scheduler.start()
+            logger.info("Pattern discovery scheduler started.")
+        else:
+            logger.info(
+                "Pattern discovery scheduler disabled "
+                "(set PATTERN_DISCOVERY_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting pattern discovery scheduler: {e}", exc_info=True)
 
     try:
         logger.info("Starting Basirah Enterprise AI Platform...")
@@ -270,6 +291,9 @@ async def shutdown_event():
 
         if outcome_evaluation_scheduler is not None:
             await outcome_evaluation_scheduler.stop()
+
+        if pattern_discovery_scheduler is not None:
+            await pattern_discovery_scheduler.stop()
 
         if kernel:
             await kernel.stop()

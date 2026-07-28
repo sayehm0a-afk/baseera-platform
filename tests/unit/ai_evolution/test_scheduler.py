@@ -1,6 +1,7 @@
-"""Unit tests for OutcomeEvaluationScheduler -- verifies the start/stop
-lifecycle and that one loop iteration hands off to
-evaluate_due_outcomes, without ever needing real forward price data.
+"""Unit tests for OutcomeEvaluationScheduler and PatternDiscoveryScheduler
+-- verifies the start/stop lifecycle and that one loop iteration hands
+off to the underlying job function, without ever needing real forward
+price data or real outcome history.
 """
 
 import asyncio
@@ -11,7 +12,11 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import src.ai_evolution.scheduler as scheduler_module
-from src.ai_evolution.scheduler import IOutcomeEvaluationScheduler, OutcomeEvaluationScheduler
+from src.ai_evolution.scheduler import (
+    IOutcomeEvaluationScheduler,
+    OutcomeEvaluationScheduler,
+    PatternDiscoveryScheduler,
+)
 from src.core.db.database import Base
 
 
@@ -81,6 +86,58 @@ async def test_loop_survives_an_exception_and_keeps_scheduling(factory):
         raise RuntimeError("boom")
 
     scheduler = OutcomeEvaluationScheduler(session_factory=factory, interval_seconds=0.01)
+    scheduler._run_one_cycle = _raising_run_one_cycle
+
+    scheduler.start()
+    await asyncio.sleep(0.05)
+    await scheduler.stop()
+
+    assert call_count["n"] >= 1
+
+
+# --- PatternDiscoveryScheduler --------------------------------------------
+
+
+def test_pattern_discovery_scheduler_is_not_running_before_start():
+    scheduler = PatternDiscoveryScheduler()
+    assert scheduler.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_pattern_discovery_scheduler_start_and_stop_lifecycle(factory):
+    scheduler = PatternDiscoveryScheduler(session_factory=factory, interval_seconds=60)
+    scheduler.start()
+    assert scheduler.is_running is True
+
+    await scheduler.stop()
+    assert scheduler.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_pattern_discovery_scheduler_run_one_cycle_delegates_to_discover_patterns(factory, monkeypatch):
+    calls = []
+
+    def _fake_discover(session, **kwargs):
+        calls.append(session)
+        return []
+
+    monkeypatch.setattr(scheduler_module, "discover_patterns", _fake_discover)
+
+    scheduler = PatternDiscoveryScheduler(session_factory=factory, interval_seconds=60)
+    await scheduler._run_one_cycle()
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_pattern_discovery_scheduler_loop_survives_an_exception(factory):
+    call_count = {"n": 0}
+
+    async def _raising_run_one_cycle():
+        call_count["n"] += 1
+        raise RuntimeError("boom")
+
+    scheduler = PatternDiscoveryScheduler(session_factory=factory, interval_seconds=0.01)
     scheduler._run_one_cycle = _raising_run_one_cycle
 
     scheduler.start()

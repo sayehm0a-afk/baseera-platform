@@ -1839,15 +1839,15 @@ security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
 
-## In Progress: Basirah AI Evolution Layer (E1–E4 of E1–E9)
+## In Progress: Basirah AI Evolution Layer (E1–E5 of E1–E9)
 
 Full design in the approved plan (`# Basirah AI Evolution Layer —
 Technical Design`); a reuse-first system that tracks every recommendation
 to a real market outcome, computes rigorous accuracy metrics, calibrates
 confidence mathematically, discovers which signal conditions actually
 work, and improves itself only through an observe → paper-trade →
-human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E4 are
-complete**, E5–E9 not yet started.
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E5 are
+complete**, E6–E9 not yet started.
 
 1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
    (`src/domain/models/recommendation_snapshot.py`), previously written
@@ -1953,15 +1953,41 @@ complete**, E5–E9 not yet started.
    always reports an empty `llm_assisted` group, since
    `agent_debate_summary` is never populated until E7 builds the real
    multi-agent panel.
-6. **Not yet done (E5–E9)**: pattern discovery, the real multi-agent
-   panel, paper trading, and the staff-only intelligence dashboard.
-   `market_regime`/`news_summary`/`agent_debate_summary` on
-   `RecommendationSnapshot` stay unpopulated until their respective
-   phases land -- this is an honestly incomplete slice, not a finished
-   feature. No live outcome has yet been evaluated against real SAHMK
-   forward price data in this sandbox (no live network access here);
-   E2/E3/E4 are verified against hand-seeded price bars, synthetic
-   outcome data, and a real PostgreSQL 16 migration round trip only.
+6. **E5 — Pattern discovery.** New `discovered_patterns` table
+   (migration `d3f8b21e6a45`) and `src/ai_evolution/pattern_discovery
+   .py`, generalizing `statistical_calibration.py`'s one-sample z-test
+   (there: is a contributor's mean directional P&L distinguishable
+   from zero) to a one-sample z-test **for a proportion**
+   (`proportion_significance_test()`: is a named `Signal`'s subgroup
+   win rate distinguishable from the population's baseline win rate),
+   same no-scipy `statistics.NormalDist()` technique. Deliberately
+   narrower than the original request's "RSI ranges/MACD crossings/
+   volume profiles/news sentiment/market regimes/sectors": only
+   `signal_present` conditions (testing each named `Signal` already
+   recorded on `RecommendationSnapshot.signals` at write time) are
+   tested this milestone, since range/regime/sector buckets aren't yet
+   populated as first-class live fields (`market_regime` stays null
+   until E7) -- fabricating those buckets now would mean testing
+   invented data, not real evidence. `discover_patterns()` only
+   inserts/updates `discovered_patterns` rows; a pattern that stops
+   testing significant on re-run is marked `still_valid=False`, never
+   deleted (Part 11's append-only discipline). New
+   `PatternDiscoveryScheduler` (disabled by default,
+   `PATTERN_DISCOVERY_SCHEDULER_ENABLED=false`, weekly), same asyncio
+   scheduler pattern as every other job in this layer. Like E3, never
+   applied automatically to `CalibrationEngine`'s weight proposals or
+   the analyst framework's narration -- this only produces the
+   evidence, wiring it in is a separate, human-reviewed step.
+7. **Not yet done (E6–E9)**: the `ReflectionEngine` bug fix and daily
+   reflection job, the real multi-agent panel, paper trading, and the
+   staff-only intelligence dashboard. `market_regime`/`news_summary`/
+   `agent_debate_summary` on `RecommendationSnapshot` stay unpopulated
+   until their respective phases land -- this is an honestly
+   incomplete slice, not a finished feature. No live outcome has yet
+   been evaluated against real SAHMK forward price data in this
+   sandbox (no live network access here); E2–E5 are verified against
+   hand-seeded price bars, synthetic outcome data, and a real
+   PostgreSQL 16 migration round trip only.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
