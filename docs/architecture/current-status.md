@@ -2258,6 +2258,86 @@ or database touched). It is real, tested code, not a placeholder — but "real
 and tested against synthetic doubles" is a different, weaker claim than "L1
 was validated," and this document is not claiming the latter.
 
+## Live Market Validation Session (L2) — Full pipeline verified via GitHub Actions
+
+L1 (above) established that live SAHMK access was blocked at this sandbox's
+network layer, never inside Basirah's own code, and that a GitHub-hosted
+runner has no such restriction. L2 executed the same idea end to end: not
+just connectivity, but the full production pipeline against real SAHMK data
+and a real PostgreSQL database.
+
+**Discovery**: `.github/workflows/sahmk-live-verification.yml` (built and run
+successfully in an earlier session, confirmed via `mcp__github__actions_list`
+-- 4 prior runs, all `conclusion: success`) had already live-verified
+SAHMK connectivity, authentication, and response schemas for quotes, market
+summary, company profile/directory, historical bars, and dividends -- with
+two real field-name bugs found and fixed as a result (see
+`docs/SAHMK_INTEGRATION.md`). This was discovered and reported, not
+re-derived from scratch.
+
+**New this session**: `scripts/verify_sahmk_live_pipeline.py` +
+`.github/workflows/sahmk-live-pipeline-validation.yml` (additive, does not
+modify the existing connectivity workflow) run the entire production
+pipeline -- SAHMK ingestion -> a real ephemeral PostgreSQL 16 service
+container -> the unmodified `AnalystEngine`/`AIDecisionEngine` pipeline ->
+recommendation storage -> a real-clock `LiveMarketModeScheduler` soak test --
+with a hard gate that aborts rather than silently falling back to synthetic
+data if SAHMK is unreachable even from the runner.
+
+**Operational note**: the new workflow had to be merged to `main` via a
+minimal, scoped PR (#18) before GitHub's Actions API would allow dispatching
+it -- workflow_dispatch requires a workflow to be registered from the
+default branch. A first dispatch (run `30354883364`, against `main`) failed
+immediately with `ModuleNotFoundError: No module named 'src.ai_evolution'`
+-- not a SAHMK/network problem, but `main` lacking this session's
+AI Evolution Layer/Live Market Mode work, which lives only on
+`feature/sahmk-live-verification`. Fixed by re-dispatching with
+`ref: feature/sahmk-live-verification` (the now-registered workflow can run
+any ref's full tree, not just main's) -- run `30359750520`,
+`conclusion: success`.
+
+**Confirmed live, real evidence** (run `30359750520`, symbols `2222, 2010,
+1120, 7010, 1180`):
+
+- Both market and fundamental providers resolved to `'sahmk'` (the hard gate
+  passed -- no synthetic fallback).
+- `sync_symbols`: 5/5 succeeded. `ingest_historical_ohlcv`: 5/5 succeeded,
+  295 real daily bars upserted. `ingest_dividends`: 5/5 succeeded (0 rows --
+  none in range, not an error). `ingest_fundamentals`: **0/5 succeeded** --
+  a real, honestly-surfaced failure (SAHMK's `/financials/` nested field
+  names don't match this integration's parsing for any symbol tested; see
+  `docs/SAHMK_INTEGRATION.md` Known Gap #2 -- not fixed in this session, out
+  of scope for a verification run).
+- Market scan: `MarketScanRun` `SUCCESS`, 5/5 symbols, 52.6s.
+- **5 real, genuinely differentiated recommendations**: `1120` SELL 49.0%
+  confidence, `1180` BUY 67.0%, `2010` HOLD 81.0%, `2222` HOLD 61.0%, `7010`
+  SELL 59.9% -- each with real per-symbol technical reasoning (actual MACD
+  values) and real target/stop prices. Not hardcoded, not templated.
+- Database integrity: 5 snapshots, 0 duplicates, 0 null critical fields, 0
+  orphaned FKs, 35/35 expected PENDING outcome rows (5 x 7 evaluation
+  horizons) -- PASSED.
+- Live Market Mode soak: dispatched at 15:39 Arabia Standard Time, after
+  Tadawul's real 15:00 close, so `is_market_open()` correctly read `False`
+  against the real clock and the inner schedulers correctly stayed idle for
+  the full 45s window -- 0 new snapshots, clean stop, no leaked asyncio
+  tasks. This confirms the "stays idle while closed" branch against real
+  time; the "market just opened -> auto-scans" branch still needs a run
+  dispatched during an actual Sun-Thu 10:00-15:00 AST session to observe
+  directly -- not yet done (today's real market closed while this session
+  was still building/registering the workflow).
+
+**What this does and does not establish**: this is real evidence that
+Basirah's production code -- unmodified -- can authenticate to SAHMK,
+ingest real market data into a real database, run its full technical/
+fundamental/decision/confidence pipeline, and produce and durably store
+genuinely differentiated recommendations, with verified referential and
+uniqueness integrity. It does **not** establish frontend integration (no
+UI was exercised in this GitHub Actions run -- that requires a separate,
+larger validation with a running frontend + backend + live data, not
+attempted this session), does not establish the open-market Live Market
+Mode transition (noted above), and does not establish anything about
+`/financials/`'s nested schema (confirmed broken, not fixed).
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.
