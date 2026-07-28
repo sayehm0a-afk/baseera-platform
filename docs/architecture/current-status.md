@@ -1839,15 +1839,15 @@ security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
 
-## In Progress: Basirah AI Evolution Layer (E1–E3 of E1–E9)
+## In Progress: Basirah AI Evolution Layer (E1–E4 of E1–E9)
 
 Full design in the approved plan (`# Basirah AI Evolution Layer —
 Technical Design`); a reuse-first system that tracks every recommendation
 to a real market outcome, computes rigorous accuracy metrics, calibrates
 confidence mathematically, discovers which signal conditions actually
 work, and improves itself only through an observe → paper-trade →
-human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E3 are
-complete**, E4–E9 not yet started.
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **E1–E4 are
+complete**, E5–E9 not yet started.
 
 1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
    (`src/domain/models/recommendation_snapshot.py`), previously written
@@ -1930,15 +1930,37 @@ complete**, E4–E9 not yet started.
    milestone** -- `activate()` only changes which row is marked
    ACTIVE; a real `/decision` response is not yet passed through
    `apply_calibration()`.
-5. **Not yet done (E4–E9)**: extended accuracy metrics (Brier score,
-   MCE, reliability diagrams), pattern discovery, the real multi-agent
+5. **E4 — Extended accuracy metrics.** Three new functions added to
+   the existing `src/backtesting/metrics.py` (no new module -- these
+   are general-purpose statistics that apply to both backtest and live
+   data, unlike Part 4 below): `maximum_calibration_error()` (MCE,
+   the single worst confidence bucket's gap, complementing the
+   existing count-weighted-average `calibration_error()`/ECE);
+   `reliability_diagram_data()` (a chart-ready reformat of
+   `confidence_buckets()`, no new computation); `brier_score()` (mean
+   squared error between each call's own exact stated confidence and
+   its realized binary outcome -- more granular than the 5-bucket ECE/
+   MCE since it never coarsens confidence into a bucket). All three
+   are wired into `compute_all_metrics()`/`full_report()` alongside
+   the existing metrics. A fourth new function,
+   `by_llm_reasoning_involvement()`, lives in new
+   `src/ai_evolution/accuracy_metrics.py` instead, since it reads live
+   `RecommendationSnapshot.agent_debate_summary` directly (no backtest
+   equivalent exists) rather than the backtest-only `EvaluationOutcome`
+   dataclass the metrics.py functions operate on; it splits win rate/
+   average confidence/average return between recommendations that
+   involved a real agent debate and those that didn't -- currently
+   always reports an empty `llm_assisted` group, since
+   `agent_debate_summary` is never populated until E7 builds the real
+   multi-agent panel.
+6. **Not yet done (E5–E9)**: pattern discovery, the real multi-agent
    panel, paper trading, and the staff-only intelligence dashboard.
    `market_regime`/`news_summary`/`agent_debate_summary` on
    `RecommendationSnapshot` stay unpopulated until their respective
    phases land -- this is an honestly incomplete slice, not a finished
    feature. No live outcome has yet been evaluated against real SAHMK
    forward price data in this sandbox (no live network access here);
-   E2/E3 are verified against hand-seeded price bars, synthetic
+   E2/E3/E4 are verified against hand-seeded price bars, synthetic
    outcome data, and a real PostgreSQL 16 migration round trip only.
 
 No claim in this document should be read as "production ready," "fully

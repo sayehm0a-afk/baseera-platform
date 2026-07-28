@@ -37,6 +37,14 @@ Metric definitions (also documented in docs/BACKTESTING_AND_CALIBRATION.md):
   bucket's average stated confidence and its realized direction
   accuracy, weighted by bucket size (a standard Expected Calibration
   Error, ECE).
+- maximum calibration error (MCE): the single worst bucket's
+  confidence-vs-accuracy gap, rather than ECE's count-weighted average
+  -- the complementary "how bad does it get" figure.
+- Brier score: mean squared error between each call's own exact stated
+  confidence (as a 0-1 probability) and its realized binary outcome --
+  a proper scoring rule using every call individually, not bucketed.
+- reliability diagram data: `confidence_buckets()`'s output reshaped
+  into plain 0-1-scale predicted/actual pairs for chart rendering.
 - precision / recall: standard binary-classification metrics treating
   each directional call as a prediction and the sign of the realized
   forward return as ground truth. Bullish calls (predicting an UP
@@ -287,6 +295,58 @@ def calibration_error(outcomes: List[EvaluationOutcome]) -> Optional[Dict]:
     return {"overall_error": weighted_error / total, "buckets": buckets}
 
 
+def maximum_calibration_error(outcomes: List[EvaluationOutcome]) -> Optional[float]:
+    """MCE: the single worst-calibrated confidence bucket's gap between
+    stated confidence and realized accuracy -- `calibration_error()`
+    (ECE) is the count-weighted *average* gap across all buckets, which
+    a single badly-miscalibrated-but-small bucket can hide; MCE is the
+    complementary "how bad does it get in the worst case" number, the
+    same relationship ECE/MCE have in the calibration literature."""
+    buckets = confidence_buckets(outcomes)
+    if not buckets:
+        return None
+    return max(abs(b["mean_confidence"] / 100.0 - b["realized_accuracy"]) for b in buckets)
+
+
+def reliability_diagram_data(outcomes: List[EvaluationOutcome]) -> List[Dict]:
+    """`confidence_buckets()`'s output reshaped into the plain
+    predicted-vs-actual pairs a reliability-diagram chart needs (both
+    on a 0-1 scale, plus the bucket's sample count for point sizing) --
+    no new computation, purely a presentation-layer reformat so a
+    frontend/dashboard never has to know `confidence_buckets()`'s
+    internal field names."""
+    return [
+        {
+            "confidence_range": b["confidence_range"],
+            "predicted": b["mean_confidence"] / 100.0,
+            "actual": b["realized_accuracy"],
+            "count": b["count"],
+        }
+        for b in confidence_buckets(outcomes)
+    ]
+
+
+def brier_score(outcomes: List[EvaluationOutcome]) -> Optional[float]:
+    """Mean squared error between stated confidence (as a 0-1
+    probability the call is directionally correct) and the realized
+    binary outcome (1 if the call's directional P&L was positive, 0
+    otherwise) -- the standard proper scoring rule for a probabilistic
+    forecast, lower is better, 0 is perfect. Unlike ECE/MCE (which
+    only see confidence through 5 coarse buckets), Brier score uses
+    every call's exact stated confidence, so it can move even when no
+    bucket's aggregate accuracy does."""
+    directional = [
+        o for o in outcomes
+        if (_is_bullish(o.recommendation) or _is_bearish(o.recommendation)) and o.forward_return_pct is not None
+    ]
+    if not directional:
+        return None
+    squared_errors = [
+        ((o.confidence / 100.0) - (1.0 if _directional_pnl_pct(o) > 0 else 0.0)) ** 2 for o in directional
+    ]
+    return statistics.mean(squared_errors)
+
+
 def _class_precision_recall(known: List[EvaluationOutcome], is_predicted: Callable, is_actual: Callable) -> Dict:
     predicted_positive = [o for o in known if is_predicted(o)]
     actual_positive = [o for o in known if is_actual(o)]
@@ -383,6 +443,8 @@ def compute_all_metrics(outcomes: List[EvaluationOutcome]) -> Dict:
         "sharpe_ratio": sharpe_ratio(outcomes),
         "sortino_ratio": sortino_ratio(outcomes),
         "calibration_error": calibration_error(outcomes),
+        "maximum_calibration_error": maximum_calibration_error(outcomes),
+        "brier_score": brier_score(outcomes),
         "precision_recall": precision_recall(outcomes),
         "position_sizing_quality": position_sizing_quality(outcomes),
     }
@@ -398,6 +460,7 @@ def full_report(outcomes: List[EvaluationOutcome]) -> Dict:
         "by_confidence_bucket": {
             b["confidence_range"]: b for b in confidence_buckets(outcomes)
         },
+        "reliability_diagram": reliability_diagram_data(outcomes),
         "by_risk_level": breakdown_by(outcomes, lambda o: o.risk_level),
         "by_time_horizon": breakdown_by(outcomes, lambda o: o.time_horizon),
         "by_sector": breakdown_by(outcomes, lambda o: o.sector),
