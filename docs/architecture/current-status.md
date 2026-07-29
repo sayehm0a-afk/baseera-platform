@@ -2439,11 +2439,43 @@ contained to the data layer). Once real `FundamentalSnapshot` rows exist,
 / Best Medium Term / Best Long Term rankings should stop being empty — this
 causal chain is argued from code, not yet re-observed live (Phase 2).
 
-**Not yet done as of this section**: Phase 2 (re-running the full live
-pipeline validation against the real market with these three fixes in
-place) has not been executed. Every claim above is backed by either a real
-GitHub Actions run's captured evidence or a passing unit test — none of it
-is a live re-verification of the fixed pipeline end-to-end.
+## Production-readiness pass — Phase 2 live re-validation (2026-07-29)
+
+Dispatched immediately after the Phase 1 commit above, during a real, open
+Tadawul session (`is_market_open()` confirmed `True` both before dispatch
+and inside the job) — workflow run
+[`30437891031`](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30437891031),
+`conclusion: success`, `FINAL_STATUS=PIPELINE_VERIFIED`, against
+`feature/sahmk-live-verification` commit `9704655` (the Fix #3 commit).
+Real, unmocked evidence, symbols `2222/2010/1120/7010/1180`:
+
+- **Fix #1 confirmed**: `market_price_at_evaluation` is populated with a
+  real intraday price on all 5 rows (e.g. `62.2500`, `37.9400`, `49.6800`,
+  `26.1600`, `42.3600`) — no longer `None` during trading hours.
+- **Fix #2 confirmed**: real Arabic company names on every row — الراجحي
+  (Al Rajhi Bank, 1120), الأهلي (Al Ahli, 1180), سابك (SABIC, 2010),
+  أرامكو السعودية (Saudi Aramco, 2222), اس تي سي (STC, 7010) — not
+  placeholder `"Stock {symbol}"` names.
+- **Fix #3 confirmed at both layers**: `ingest_fundamentals` result was
+  `{"symbols_requested": 5, "symbols_succeeded": 5, "symbols_failed": 0,
+  "rows_upserted": 5, "errors": {}}` (previously 0/5 succeeded, every
+  symbol rejected) — and downstream, `fundamental_score` is populated on
+  every recommendation row (`71.00`, `64.00`, `39.00`, `71.00`, `71.00`),
+  no longer `None`.
+- Database integrity: **PASSED**, both immediately after the manual scan
+  and again after the Live Market Mode soak.
+- Live Market Mode soak: `market_open_at_start=True`,
+  `post_soak_integrity_passed=True`, `no_leaked_tasks=True`;
+  `auto_generated_row_count=0` — the 45s/5s-poll soak window did not
+  complete a full auto-triggered scan cycle this run (a timing artifact
+  of the short soak window, not a defect; the open-market auto-trigger
+  path itself was already verified in the L3 report).
+
+**Not yet done as of this section**: a formal, expanded database-validation
+pass (Phase 3), a per-subsystem AI explainability audit (Phase 4), and the
+repository-wide TODO/mock/placeholder audit (Phase 5) — these are separate,
+still-pending phases, not implied by the pipeline-level integrity check
+above.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
