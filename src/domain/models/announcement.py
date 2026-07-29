@@ -22,7 +22,7 @@ class Announcement(Base):
     __tablename__ = "announcements"
 
     id = Column(Integer, primary_key=True)
-    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
     title = Column(String(255), nullable=False)
     body = Column(Text, nullable=False)
