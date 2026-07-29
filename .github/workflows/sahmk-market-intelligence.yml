@@ -1,0 +1,137 @@
+name: SAHMK Market Intelligence (Full Universe)
+
+# Manually-triggered, real, unmocked full-Saudi-market validation:
+# discovers every symbol SAHMK's own directory reports, ingests real
+# historical OHLCV/fundamentals/dividends for the entire discovered
+# universe, runs the real production scan pipeline, and dumps every
+# real per-company technical/fundamental/decision field the platform
+# computes. See scripts/verify_sahmk_market_intelligence.py for the
+# full design and docs/SAHMK_INTEGRATION.md for why this can't run
+# from inside the Claude Code sandbox (no egress to app.sahmk.sa).
+#
+# This is a heavier, longer-running, more expensive operation than the
+# 5-symbol pipeline validation workflow -- potentially ~350 real
+# symbols x ~4 real API calls each, self-throttled by the platform's
+# own SahmkRateLimiter (default 20/min) -- so the timeout is
+# deliberately generous and this workflow is never triggered
+# automatically (workflow_dispatch only, same discipline as every
+# other SAHMK-calling workflow in this repository).
+#
+# SECURITY: SAHMK_API_KEY is injected only as an environment variable
+# on the one step that runs the live script, is never echoed by this
+# workflow file, and the script never prints it (redaction discipline
+# matching every other verify_sahmk_*.py script). The full per-company
+# data dump can be large (up to ~350 companies' worth of technical/
+# fundamental detail) -- it is uploaded as a build artifact rather than
+# printed to the job log, and contains only computed analytical
+# results (prices, scores, ratios, indicator values, recommendation
+# text), never the API key or raw HTTP headers.
+
+on:
+  workflow_dispatch:
+    inputs:
+      backfill_days:
+        description: "Days of historical OHLCV to backfill per symbol"
+        required: false
+        default: "90"
+
+permissions:
+  contents: read
+
+jobs:
+  market-intelligence:
+    name: Full-universe live market intelligence scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: basirah
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail fast if SAHMK_API_KEY secret is not configured
+        env:
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+        run: |
+          if [ -z "$SAHMK_API_KEY" ]; then
+            echo "::error::SAHMK_API_KEY repository secret is not set."
+            exit 1
+          fi
+          echo "SAHMK_API_KEY secret is present (value not shown)."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install dependencies (from this repository)
+        run: pip install -r requirements.txt
+
+      - name: Install package in editable mode
+        run: pip install -e . --no-deps
+
+      - name: Targeted tests -- pure serialization/aggregation logic (local, no network)
+        run: |
+          python -m pytest tests/unit/scripts/test_sahmk_market_intelligence.py -v
+
+      - name: Run database migrations against the ephemeral Postgres
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/basirah
+        run: alembic upgrade head
+
+      - name: Run full-universe market intelligence scan (real, unmocked)
+        id: scan
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/basirah
+          MARKET_DATA_PROVIDER: sahmk
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+          INGESTION_OHLCV_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days }}
+          MARKET_INTELLIGENCE_OUTPUT_DIR: market_intelligence_output
+        run: |
+          set -o pipefail
+          python scripts/verify_sahmk_market_intelligence.py | tee /tmp/mi_output.txt
+          STATUS_LINE=$(grep '^FINAL_STATUS=' /tmp/mi_output.txt | tail -1)
+          echo "status=${STATUS_LINE#FINAL_STATUS=}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload full per-company data as a build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-intelligence-data
+          path: market_intelligence_output/market_intelligence_data.json
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Final summary
+        if: always()
+        run: |
+          echo "======================================================"
+          echo " SAHMK MARKET INTELLIGENCE -- FINAL STATUS"
+          echo "======================================================"
+          echo " ${{ steps.scan.outputs.status }}"
+          echo "======================================================"
+          echo "See the 'Summary' tab for the condensed overview, and the"
+          echo "'market-intelligence-data' artifact for the full per-company dump."
+
+      - name: Fail the job only on a genuine failure (not a partial/expected result)
+        if: steps.scan.outputs.status == 'FAILED' || steps.scan.outputs.status == 'ABORTED' || steps.scan.outputs.status == ''
+        run: |
+          echo "::error::Market intelligence scan did not complete successfully" \
+               "(got: '${{ steps.scan.outputs.status }}'). See the step logs and the" \
+               "uploaded artifact for details."
+          exit 1
