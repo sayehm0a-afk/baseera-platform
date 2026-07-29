@@ -3,6 +3,7 @@
 **Date:** 2026-07-29
 **Mandate:** Build the most intelligent stock analysis platform in the world. No shortcuts, no speed pressure, no UI work. This document is diagnostic and architectural only — **no code was written or changed to produce it.**
 **Method:** Every claim is grounded in direct inspection of this session — file paths, function names, and in several places verbatim code comments the platform's own engineers left explaining a real limitation. Where evidence is missing, this document says "NOT VERIFIED" or "ABSENT" rather than estimating. This document supersedes and sharpens `docs/ENGINEERING_MASTER_AUDIT_2026-07-29.md`'s findings specifically through the lens of *investment-decision intelligence quality* — infrastructure findings from that audit (dead multi-agent code, disabled self-improvement schedulers, single-key rate ceiling) are not repeated in full here except where they directly bear on recommendation defensibility.
+**Revision note (final architectural review):** Section 5 has been restructured and Sections 4, 6, 8, 10, and 11 extended to adopt the **Investment Thesis Engine** as Basirah's core output architecture, per a final review request. This is not an addition bolted onto the prior design — it changes what the 15-score system from the original Section 5 is *for*: those scores stop being the end-product presented to a user and become the cited, traceable evidence inside a structured thesis. The reasoning for this decision is in the new closing portion of Section 1 and fully specified in the new Section 5.2. No code was written or changed to produce this revision either.
 
 ---
 
@@ -15,6 +16,8 @@ The underlying reason is structural, not a bug: every recommendation today is th
 None of the institutions the mandate names — Renaissance, Two Sigma, Citadel, Jane Street on the quant side; Goldman/Morgan Stanley/JPMorgan on the research side; Buffett/Lynch/Dalio on the discretionary side — operate this way. Quant shops validate a signal's statistical significance and decay before trusting it. Research houses write a thesis with explicit bear-case invalidation triggers. Discretionary legends have an explicit, articulable reason a specific holding beats the next-best alternative. Basirah currently has the shape of all of this (a scoring pipeline, a ranking engine, a narrative generator) without the substance that makes any of it defensible: no comparative reasoning, no statistical validation against real outcomes yet (the loop exists, it's switched off — see prior audit), no market-index benchmark data at all (confirmed: `MarketSnapshot`, the model built to hold it, is never populated — beta is always `None` in production), no earnings-quality or cash-flow analysis, no event awareness, and 6 of 15 requested composite sub-scores below don't exist as distinct signals today.
 
 This is fixable. It is not fixable by tuning the existing formula's weights. It requires: (1) an explicit, structured explainability layer that computes *comparative* justification, not just a score; (2) closing real data gaps (index/benchmark data, cash flow statements, earnings-quality metrics) that no amount of algorithm work can substitute for; (3) an institutional-grade backtesting framework that actually runs the comparisons the mandate demands, most of which do not exist yet; and (4) eventually, a learned model — but only *after* the deterministic system can defend itself, because an unexplainable learned model would make this problem worse, not better.
+
+**Architectural decision reached in this final review: yes, Basirah should become an Investment Thesis Engine, and this should be the core organizing structure, not an optional add-on.** The reasoning: everything diagnosed above — the comparative-explanation gap, the invalidation-condition gap, the missing earnings-quality/cash-flow/benchmark data — describes symptoms of the same root design choice, which is that Basirah's output today is *a number with a paragraph attached*, not *a case*. A number-with-a-paragraph is what a screener produces (Finviz, a basic scanner). A case — why this company, why now, why it beats the alternative, what could prove it wrong, what the range of outcomes looks like, who it's for — is what an actual research desk produces, and it is a categorically different kind of artifact, not a longer version of the same one. Adopting this as the core means: the 15 scores designed in the original Section 5 do not go away — they become the *cited evidence* inside a thesis, exactly as a Goldman Sachs or Morgan Stanley note cites specific ratios and price targets while telling a structured, falsifiable story. This restructuring is detailed in Section 5.2, with four new components required to support it (Section 4.30–4.33), one of which (investor-suitability classification) is flagged as needing an explicit compliance/legal-review gate before any implementation, because it edges toward regulated suitability-determination territory rather than pure research publishing — consistent with this document's own "never hide uncertainty" standard, that risk is being surfaced now, not discovered later.
 
 ---
 
@@ -288,9 +291,83 @@ Fully redesigned in Section 6.
 - **Priority:** Critical — arguably the single highest-priority item in this whole audit.
 - **Effort:** Low-Medium, entirely dependent on data-source availability (diagnostic check needed first).
 
+### 4.30 Catalyst Detection Engine — ABSENT, required for the Investment Thesis Engine — Maturity 0%
+
+- **Strengths:** None yet — but real building blocks exist to draw on. The `RankingEngine`'s MOST_IMPROVED_TODAY/RECENTLY_UPGRADED categories (prior audit 4.10) were designed for exactly this kind of "what changed" signal and have simply never been exercised (no two consecutive scans have been run back-to-back in this engagement's evidence) — this is not a new concept for the codebase, it is an existing, unexercised one.
+- **Weaknesses:** No code anywhere distinguishes a *static* score from a *fresh trigger* — every recommendation today reads the same whether the setup formed yesterday or three months ago.
+- **Hidden risks:** Without this, "why now" (a required element of the thesis) cannot be answered honestly — a recommendation with no freshness signal is really answering "why ever," not "why now."
+- **Technical debt:** N/A (new).
+- **Missing algorithms:** A "signal freshness" diff (this scan's score vs. the immediately prior scan's, once consecutive scans exist); a technical-catalyst detector for forward-looking triggers computable from data already ingested (e.g., "price is 1.2% from a confirmed resistance breakout," "a 20/50-day MA cross is projected within N sessions at current trajectory").
+- **Missing data:** Fundamental/event catalysts (earnings date, dividend ex-date) are blocked on 4.19's earnings-calendar gap; technical catalysts are not data-blocked.
+- **Missing signals:** "Days/sessions to projected catalyst" as an explicit field.
+- **Possible false positives:** A projected technical trigger (e.g., "MA cross imminent") is an extrapolation, not a certainty — must be labeled as a projection with the assumption stated (current trend continues), never presented as a scheduled event the way an earnings date would be.
+- **Possible false negatives:** Real catalysts this platform cannot see at all (regulatory announcements, analyst actions, macro surprises) will never be flagged — an honest, permanent limitation given current data sources, not a bug to be silently fixed.
+- **How institutions solve this:** Sell-side research explicitly separates "thesis" from "catalyst" sections precisely because a good company without a near-term catalyst is a different trade than one with one imminent.
+- **How the best platforms solve it:** Finviz/Koyfin/TradingView all surface earnings-date proximity prominently; none of the platforms reviewed in Section 9 combine that with a technical-catalyst projection the way this design proposes.
+- **Recommended redesign:** Build the technical-catalyst half now (no new data required, reuses existing indicators); wire the fundamental/event half once 4.19's calendar data is confirmed available.
+- **Expected improvement:** High — directly closes the "why now" gap identified in the architectural decision above.
+- **Priority:** Critical (technical half); High (event half, data-gated)
+- **Effort:** Low (technical half); Medium (event half, gated on 4.19)
+
+### 4.31 Scenario Engine (Bull / Base / Bear Case Modeling) — ABSENT, required for the Investment Thesis Engine — Maturity 0%
+
+- **Strengths:** None yet, but the arithmetic foundation is real and already built — the DCF proposed in 4.7 and the existing target-price/expected-return computation are exactly the machinery a scenario engine needs to run three times under three different assumption sets, not new math.
+- **Weaknesses:** Today's single `target_price` is presented as if it were the only plausible outcome, with no stated alternative and no stated probability weighting — a real precision-overstatement risk the mandate explicitly warns against.
+- **Hidden risks:** If built carelessly (e.g., letting an LLM freely narrate "in the bull case, the stock could reach X"), this becomes the single highest-risk component in the entire redesign for hallucinated numbers, precisely because a scenario narrative *sounds* more authoritative than a bare score. This must be built as a **deterministic re-run of the existing scoring/valuation math under explicitly different, stated input assumptions** (e.g., Bull = above-trend growth-rate assumption fed through the same 4.7 DCF; Bear = a confirmed technical breakdown level from 4.1's support/resistance detection) — never a free-text LLM generation of a price number. The existing numeric-grounding (R3) discipline must extend to cover every number in every scenario, with zero exceptions.
+- **Technical debt:** N/A (new).
+- **Missing algorithms:** Three-scenario valuation re-run (bull/base/bear) with explicit, always-displayed assumption deltas per scenario; scenario-to-price-target mapping.
+- **Missing data:** None beyond what 4.7's DCF and 4.1's support/resistance already need.
+- **Missing signals:** Scenario-conditional expected return and risk (today's single Risk Score is scenario-blind).
+- **Possible false positives:** An overly wide bull case (unrealistic upside) or overly narrow bear case (understated downside) if assumption bounds aren't disciplined — this needs explicit, documented, defensible bounds (e.g., historical volatility-derived ranges), not arbitrary multipliers.
+- **Possible false negatives:** A bear case that fails to incorporate real known risks (e.g., an approaching earnings date from 4.30, if the event turns unfavorable) would understate real downside.
+- **How institutions solve this:** Bull/base/bear scenario modeling with explicit price targets per case is standard structure at every sell-side research note (Goldman/Morgan Stanley/JPMorgan) and every serious buy-side memo.
+- **How the best platforms solve it:** None of the retail-tier platforms in Section 9 (TradingView, Finviz, Koyfin) do this natively; Capital IQ/Bloomberg support it as an analyst-driven workflow, not an automated one — a genuine differentiation opportunity if built with the grounding discipline above, and a genuine credibility risk if built without it.
+- **Recommended redesign:** Build as a deterministic re-parameterization of already-real valuation/scoring code, with every assumption explicitly logged and displayed — never as free-form LLM narrative generation of numbers.
+- **Expected improvement:** Very high for perceived and actual research quality — this is the single most visible element of "reads like an institutional research report."
+- **Priority:** Critical
+- **Effort:** Medium-High, and the grounding discipline is non-negotiable regardless of time pressure
+
+### 4.32 Probability / Return-Distribution Engine — ABSENT, required for the Investment Thesis Engine — Maturity 0%
+
+- **Strengths:** None yet, but a statistically honest version is genuinely buildable now without waiting on any live-outcome data, because it can be derived purely from the OHLCV history Basirah already ingests.
+- **Weaknesses:** A "probability distribution" is the single most easily-abused element of this entire request if built dishonestly — a number like "68% probability of a positive return" implies a validated statistical model, and presenting one that isn't validated would be exactly the kind of exaggeration the mandate explicitly forbids.
+- **Hidden risks:** This must be built and labeled as **two distinct, never-conflated tiers**: **(a) a historical-simulation probability** — a Monte Carlo / bootstrap resampling of the stock's own real historical daily/weekly returns projected over the stated time horizon, producing a real, statistically legitimate (if backward-looking) distribution of outcomes — buildable today from existing ingested price history, no live-outcome data required; **(b) an empirically-calibrated probability** — "recommendations with this exact score profile have historically been right X% of the time" — which is **not available until the confidence-calibration loop (prior audit 4.9/4.13) has run long enough on real accumulated outcome data to mean anything**, and must never be presented before that. Tier (a) must always be clearly labeled "historical price simulation, not a validated forecast track record"; conflating it with tier (b) is the single most important thing to avoid getting wrong in this entire document.
+- **Technical debt:** N/A (new).
+- **Missing algorithms:** Bootstrap/Monte Carlo resampling of historical returns (tier a, buildable now); the empirical calibration itself is already designed (prior audit 4.9) and just needs its scheduler turned on and enough real samples to accumulate (tier b).
+- **Missing data:** None for tier (a); real accumulated `recommendation_outcomes` at sufficient sample size for tier (b) (prior audit's 30-sample Platt-scaling minimum, ideally the 1,000-sample isotonic-regression threshold for a real distribution shape, not just a point calibration).
+- **Missing signals:** Tier (a) exists nowhere today; tier (b) is designed but dormant.
+- **Possible false positives/negatives:** Tier (a) alone, if mislabeled as a forecast rather than a historical-pattern simulation, would systematically overstate confidence in a way the mandate explicitly prohibits — this is a labeling discipline, not just a technical one, and should be enforced at the API/schema level (a mandatory `distribution_type: "historical_simulation" | "calibrated_forecast"` field), not just in prose.
+- **How institutions solve this:** Quant funds distinguish backtested/simulated distributions from live-validated ones as a matter of course; presenting the former as the latter is a well-known, well-documented failure mode across the industry (backtest overfitting).
+- **How the best platforms solve it:** Genuinely, none of the retail-tier platforms in Section 9 offer this distinction cleanly — most present a single "AI confidence" number with no such disclosure. Doing this honestly, with the two-tier labeling, would be a real, differentiated strength, not mere parity.
+- **Recommended redesign:** Build tier (a) now; gate tier (b) explicitly on prior audit Section 4.13's scheduler activation and real sample accumulation; never merge the two into one displayed number.
+- **Expected improvement:** High if built honestly with the two-tier distinction; **negative** (a genuine credibility risk) if the distinction is skipped under time pressure.
+- **Priority:** Critical for tier (a); Critical-but-time-gated for tier (b) (cannot be rushed — depends on real calendar time accumulating real samples, exactly as prior audit Section 4.13 already established for confidence calibration generally)
+- **Effort:** Medium for tier (a); Low additional engineering for tier (b) beyond what prior audit 4.9/4.13 already specified, but gated on time, not effort
+
+### 4.33 Investor Suitability Classifier — ABSENT, required for the Investment Thesis Engine, flagged for compliance review before any implementation — Maturity 0%
+
+- **Strengths:** None yet.
+- **Weaknesses:** Does not exist; more importantly, **this is the one new component in this entire document that should not proceed straight to an engineering estimate.**
+- **Hidden risks:** Classifying a recommendation as "suitable for a conservative, income-focused investor" vs. "suitable for a high-risk-tolerance growth investor" moves Basirah from *publishing research* toward *making a suitability determination* — in many real-world regulatory regimes (comparable to KYC/suitability rules in investment-advisory contexts), automated suitability determinations carry real compliance obligations that are categorically different from publishing a scored, explained recommendation. This exact class of risk was already disclosed, in different words, in this platform's own AI Evolution design (prior sessions' plan: *"publishing AI accuracy/track-record numbers for a financial product likely has real regulatory/disclosure implications... a legal-review item, not an engineering decision to make unilaterally"*) — the same standard applies here, arguably more directly.
+- **Technical debt:** N/A.
+- **Missing algorithms:** A mapping from {time horizon, risk score, volatility regime, dividend profile} to a descriptive investor-archetype label — technically simple once the inputs exist (mostly Section 5.1's existing Risk/Dividend/Volatility scores).
+- **Missing data:** None technical; the missing piece is a legal/compliance determination of what this platform is and isn't allowed to say, and in what jurisdiction(s), before any label like this is ever shown to a user.
+- **Missing signals:** N/A — this is a labeling/classification layer over signals that mostly already exist elsewhere in the design.
+- **Possible false positives/negatives:** N/A — the primary risk here is regulatory/trust exposure, not statistical error.
+- **How institutions solve this:** Real broker-dealers and advisors operate under explicit, licensed suitability frameworks with compliance sign-off; research-only publishers (which Basirah more closely resembles today) typically avoid personalized suitability claims specifically to stay outside that regulatory perimeter, describing a security's own risk/return profile instead of telling a user who it is "for."
+- **How the best platforms solve it:** None of the platforms in Section 9 present per-recommendation "suitable investor" labels as a marketed feature — this is worth noting as possibly a deliberate industry-wide avoidance of exactly this risk, not an oversight Basirah would be first to fix.
+- **Recommended redesign:** **Do not implement a personalized "suitable for X investor" classifier without an explicit legal/compliance review first.** A safer, lower-risk alternative that achieves most of the same explanatory value: describe the *security's own* profile in objective terms already computed elsewhere in this design ("short-horizon, high-volatility, momentum-driven profile" — a restatement of Section 5.1's Risk/Momentum/Volatility scores) rather than telling a user who they are or should be. This reframing should be the default recommendation pending legal review, not a stopgap.
+- **Expected improvement:** Meaningful for perceived completeness of the thesis; the compliance risk of getting this wrong outweighs that benefit until reviewed.
+- **Priority:** Deferred pending legal/compliance review — do not schedule engineering effort until that review concludes.
+- **Effort:** Low (technical) / Unknown (compliance review timeline, outside engineering's control)
+
 ---
 
-## 5. The New Recommendation Engine Design
+## 5. The Recommendation & Investment Thesis Architecture
+
+### 5.1 The Scoring Layer (Evidence Inputs to the Thesis)
+
+This subsection is the original Section 5 design, unchanged in substance — it now serves as the evidence layer feeding Section 5.2's thesis, rather than being the end product shown to a user.
 
 **Design principle:** every one of the 15 required scores must be traceable to real, named inputs — never a black-box number. Where an input doesn't exist yet, the score must be marked `NOT AVAILABLE` rather than silently defaulting to neutral, so a user can never mistake "no data" for "neutral data." This is a direct response to "never hide uncertainty."
 
@@ -314,6 +391,62 @@ Fully redesigned in Section 6.
 
 **Weighting philosophy:** Do not hand-tune new weights for the newly added scores either. Every new sub-score should enter the blend at a provisional, clearly-labeled-as-unvalidated weight, and should be included in the very first real run of the (already-built, currently-unscheduled) statistical calibration job the moment enough outcome data exists to test it. Repeating the current mistake — hand-set weights presented as authoritative — with a longer list of factors would not be an improvement.
 
+### 5.2 The Investment Thesis Engine — Basirah's New Core Output Layer
+
+**This is the architectural decision reached in this final review.** Basirah should stop presenting a score-plus-paragraph and start producing a structured, falsifiable investment case — every recommendation becomes an `InvestmentThesis` object, not a `Recommendation` row with a narrative attached. The distinction matters: a score answers "how much do I like this," a thesis answers "here is the specific, checkable claim, here is what would prove it wrong, and here is the range of ways it could play out." Only the second is defensible in the sense Section 3 found lacking.
+
+**Field-by-field mapping — every element requested, honestly assessed against what exists, what's new, and what it depends on:**
+
+| Thesis element | Source | Status |
+|---|---|---|
+| Why this company? | Existing narrative generator (`narrative_builder.py`), extended with Section 5.1's new scores | Real today, needs 5.1's extensions |
+| Why now? | **New — 4.30 Catalyst Detection Engine**, using the ranking engine's already-designed-but-unexercised "what changed" categories plus new technical-catalyst projection | Needs to be built; the underlying ranking-category infrastructure already exists and has simply never been exercised |
+| Why superior to competing companies? | **New — the `ComparativeExplanationEngine`** (Section 6) | Needs to be built; zero new data required |
+| Which catalysts are expected? | **New — 4.30**, technical half buildable now, fundamental/event half gated on 4.19's earnings-calendar data | Partially buildable now |
+| Which assumptions were made? | Existing plan from Section 6, extended to cover every Scenario Engine (4.31) assumption explicitly | Design exists; must be mandatory, not optional, for every scenario |
+| Which risks exist? | Risk Score (5.1) + a structured risk-enumeration narrative synthesized from already-computed factors | Cheap synthesis of existing numbers |
+| Which events would invalidate the thesis? | **New — the `InvalidationConditionGenerator`** (Section 6) | Needs to be built; zero new data required |
+| Bull Case / Base Case / Bear Case | **New — 4.31 Scenario Engine** — three deterministic re-runs of the same real valuation/scoring math under three explicit, stated assumption sets | Needs to be built; must never be free-form LLM number generation (see 4.31's grounding requirement) |
+| Expected Return | Existing target-price/expected-return computation, reframed as the Base Case output once 4.31 exists | Real today, needs reframing |
+| Expected Risk | Risk Score (5.1) + stop-loss-derived downside estimate | Mostly real today |
+| Time Horizon | Existing `TimeHorizon` field + watchlist taxonomy (Section 6) | Real today, minor formalization needed |
+| Suitable Investor Profile | **New — 4.33 Investor Suitability Classifier — compliance-gated, do not implement without legal review** | Blocked pending compliance decision; a safer objective-profile alternative is recommended in 4.33 as the default |
+| Probability Distribution | **New — 4.32 Probability/Return-Distribution Engine — two explicitly separate tiers (historical simulation, buildable now; empirically-calibrated, gated on real accumulated outcomes)** | Tier (a) buildable now; tier (b) time-gated, not effort-gated |
+| Supporting Evidence | **New — an `EvidenceCitationLayer`** formalizing today's `contributor_breakdown` into an explicit, numbered claim-to-data-point citation list (e.g., "Claim: improving momentum — Evidence: RSI 28.4→61.2 over 10 sessions") | Needs to be built; pure synthesis of numbers already computed |
+
+**Non-negotiable safety requirement:** the existing numeric-grounding discipline (the R3 pattern already used in `openai_llm_adapter.py` — an LLM's output can never introduce a number not already present in its input context) must extend to **every number in every part of the thesis**, with zero exceptions, and especially to the Scenario Engine (4.31) and Probability Engine (4.32). A thesis-shaped narrative reads as more authoritative than a bare score, which makes it a more dangerous surface for hallucinated numbers, not a safer one. Any implementation that lets free-form LLM generation produce a bull-case price target, a catalyst date, or a probability figure without tracing it to a real computed input would be a regression from the platform's own existing safety standard, not an advance.
+
+**Illustrative structure only (not a real output — no analysis has been run to produce this):**
+
+```
+InvestmentThesis {
+  symbol, company_name, generated_at, engine_version
+  why_this_company: { narrative, evidence_citations[] }
+  why_now: { narrative, catalysts[], freshness_signal }
+  why_superior: { comparison_set[], factor_deltas[] }
+  assumptions: { dcf_growth_rate, dcf_discount_rate, scenario_assumptions[] }
+  risks: { risk_factors[], risk_score, data_sufficiency_flags[] }
+  invalidation_conditions: [ { trigger, rationale } ]
+  scenarios: {
+    bull: { assumptions[], target_price, expected_return_pct },
+    base: { assumptions[], target_price, expected_return_pct },
+    bear: { assumptions[], target_price, expected_return_pct }
+  }
+  probability_distribution: {
+    type: "historical_simulation" | "calibrated_forecast",   // never presented without this label
+    distribution: [...]
+  }
+  time_horizon: SHORT_TERM | MEDIUM_TERM | LONG_TERM
+  security_profile: { risk_level, volatility_regime, dividend_character }  // replaces "suitable investor" pending 4.33's compliance review
+  scores: { technical, fundamental, valuation, growth, quality, momentum,
+            risk, liquidity, sector, dividend, macro, news, confidence,
+            overall_score }   // from Section 5.1 -- cited as evidence, not presented standalone
+  supporting_evidence: [ { claim, data_points[] } ]
+}
+```
+
+**What this replaces vs. what it adds:** Section 5.1's 15-score architecture is not discarded — it becomes the `scores` block above, cited as evidence throughout the rest of the object, exactly as an institutional research note cites specific ratios and targets while telling a structured story. Four new components are required to complete this (4.30–4.33); three are buildable with no new data and no compliance gate (4.30's technical half, 4.31, 4.32's tier a); one (4.33) is explicitly held pending a decision outside engineering's control.
+
 ---
 
 ## 6. Explainability Framework — Answering the 9 Required Questions
@@ -332,6 +465,18 @@ For each question, what exists today vs. what must be built:
 | What investment horizon? (Swing/Position/Long-term/Dividend/Recovery/Momentum) | **Partial.** `TimeHorizon` (SHORT_TERM/MEDIUM_TERM/LONG_TERM) exists; the watchlist engine's 9 categories (MOMENTUM, SWING, INVESTMENT, DIVIDEND, RECOVERY, etc. — prior audit 4.10) already map closely to the requested taxonomy. | Mostly exists — recommend formally aligning the recommendation-level `time_horizon` field with the watchlist taxonomy so every recommendation states its horizon-archetype explicitly, not just a coarse 3-value enum. |
 
 **Design conclusion:** the two genuinely new pieces of infrastructure required — a comparative-explanation engine and an invalidation-condition generator — are both achievable **without any new data**, purely by adding new logic on top of scores the platform already computes. These should be built *before* any new data source integration, since they are the cheapest, highest-leverage fixes for the exact complaint that opened this document.
+
+**Extension for the Investment Thesis Engine (Section 5.2):** the final review added five further required elements beyond the original 9 questions. Mapped the same way:
+
+| Additional element | Exists today? | What's needed |
+|---|---|---|
+| Which catalysts are expected? | **Absent.** | New — 4.30 Catalyst Detection Engine; technical half buildable now, event half gated on earnings-calendar data (4.19). |
+| Bull Case / Base Case / Bear Case | **Absent.** | New — 4.31 Scenario Engine; must be a deterministic re-parameterization of existing valuation math, never free-form LLM number generation. |
+| Probability Distribution | **Absent.** | New — 4.32 Probability/Return-Distribution Engine; must ship as two explicitly labeled, never-conflated tiers (historical simulation vs. empirically-calibrated forecast). |
+| Suitable Investor Profile | **Absent, and should stay absent in its literal form.** | New — 4.33 Investor Suitability Classifier; **flagged for legal/compliance review before implementation**, with an objective security-profile description recommended as the safer default in the meantime. |
+| Supporting Evidence (as a formal, citable structure) | **Partial** — the data exists in `contributor_breakdown`, but not as an explicit claim-to-evidence citation list. | New — the `EvidenceCitationLayer` (Section 5.2); pure synthesis of numbers already computed. |
+
+Together with the original 9, these complete the field set specified in Section 5.2's `InvestmentThesis` structure.
 
 ---
 
@@ -371,9 +516,11 @@ For each question, what exists today vs. what must be built:
 
 Consolidated, deduplicated from Sections 4–7 (not repeated in full — cross-referenced):
 
-**Every required algorithm:** Piotroski F-Score, Beneish M-Score / accrual ratio (4.4); FCF/FCF-yield/FCF-margin (4.6); 2-stage DCF (4.7); multi-year CAGR + growth-consistency (4.8); DuPont decomposition (4.9); volatility-regime classifier (4.11); dividend payout-sustainability/streak analysis (4.3); market-wide correlation-cluster engine (4.16); comparative-explanation engine (Section 6); invalidation-condition generator (Section 6); 7 new backtesting strategy classes (Section 7).
+**Every required algorithm:** Piotroski F-Score, Beneish M-Score / accrual ratio (4.4); FCF/FCF-yield/FCF-margin (4.6); 2-stage DCF (4.7); multi-year CAGR + growth-consistency (4.8); DuPont decomposition (4.9); volatility-regime classifier (4.11); dividend payout-sustainability/streak analysis (4.3); market-wide correlation-cluster engine (4.16); comparative-explanation engine (Section 6); invalidation-condition generator (Section 6); 7 new backtesting strategy classes (Section 7); technical-catalyst projection (4.30); three-scenario deterministic valuation re-run (4.31); historical-return-simulation Monte Carlo (4.32, tier a).
 
-**Every required dataset:** TASI/market-index history (4.29 — highest priority, unlocks the most downstream items); real cash flow statements (4.6, availability unconfirmed); real macroeconomic series (oil price, SAR rates) (4.17); earnings-calendar/corporate-actions feed (4.19, availability unconfirmed); sector taxonomy (carried from prior audit).
+**Every required dataset:** TASI/market-index history (4.29 — highest priority, unlocks the most downstream items); real cash flow statements (4.6, availability unconfirmed); real macroeconomic series (oil price, SAR rates) (4.17); earnings-calendar/corporate-actions feed (4.19, availability unconfirmed, also required for 4.30's event-catalyst half); sector taxonomy (carried from prior audit).
+
+**Every requirement for the Investment Thesis Engine specifically (Section 5.2):** the `InvestmentThesis` structure itself (new, Section 5.2); the `EvidenceCitationLayer` (new, pure synthesis of existing numbers); the compliance/legal review gate on 4.33 before any suitability-classification code is written — this is a decision dependency, not an engineering one, and should not be silently bypassed by reframing the feature under a different name.
 
 **Every required AI improvement:** turn on the existing self-improvement schedulers (prior audit, unchanged top recommendation); build the eventual learned-model challenger only after the deterministic system is defensible per Section 3 (prior audit's Phase E, now explicitly sequenced *after* explainability work, not before).
 
@@ -420,30 +567,35 @@ Not calendar-paced. Ordered by which fix unlocks the most other findings, per th
 
 **Tier 1 — Unlocks everything else, buildable now, mostly no new data required:**
 1. Comparative-explanation engine + invalidation-condition generator (Section 6) — directly answers the concern that opened this document, zero new data needed.
-2. Market-index (TASI) data ingestion (4.29) — the single highest-leverage data fix, unlocking real beta, real relative strength, real backtesting comparisons, and real "beats the market" claims, none of which are possible without it.
-3. Turn on the existing self-improvement schedulers + honestly relabel confidence until it's genuinely validated (4.23, prior audit) — near-zero cost, starts the clock every later statistical claim depends on.
+2. The `InvestmentThesis` structure and `EvidenceCitationLayer` (Section 5.2) — the organizing skeleton every other thesis element attaches to; buildable now purely as synthesis of scores that already exist.
+3. Scenario Engine (4.31) and the technical half of the Catalyst Detection Engine (4.30) — both deterministic re-parameterizations of existing math, no new data, and the non-negotiable numeric-grounding discipline must be built in from the start, not retrofitted.
+4. Probability/Return-Distribution Engine, tier (a) only — historical-simulation Monte Carlo (4.32) — buildable now from existing OHLCV history, always labeled `"historical_simulation"`, never presented as a validated forecast.
+5. Market-index (TASI) data ingestion (4.29) — the single highest-leverage data fix, unlocking real beta, real relative strength, real backtesting comparisons, and real "beats the market" claims, none of which are possible without it.
+6. Turn on the existing self-improvement schedulers + honestly relabel confidence until it's genuinely validated (4.23, prior audit) — near-zero cost, starts the clock every later statistical claim depends on, including 4.32's tier (b).
+7. Route 4.33 (Investor Suitability Classifier) to legal/compliance review immediately, in parallel with all engineering work above — do not schedule any implementation of the literal feature until that review concludes; ship the objective security-profile alternative in the meantime.
 
 **Tier 2 — Data-sourcing diagnostics (must happen before committing engineering estimates):**
-4. Confirm SAHMK cash-flow-statement availability (4.6) — blocks earnings quality (4.4) and real FCF valuation (4.7) entirely if unavailable.
-5. Confirm SAHMK (or supplementary) earnings-calendar availability (4.19).
-6. Confirm sector-taxonomy fix path (prior audit) — unlocks relative strength (4.13), sector strength (4.14), and peer-relative valuation (4.7).
+8. Confirm SAHMK cash-flow-statement availability (4.6) — blocks earnings quality (4.4) and real FCF valuation (4.7) entirely if unavailable.
+9. Confirm SAHMK (or supplementary) earnings-calendar availability (4.19) — also unlocks 4.30's event-catalyst half.
+10. Confirm sector-taxonomy fix path (prior audit) — unlocks relative strength (4.13), sector strength (4.14), and peer-relative valuation (4.7).
 
 **Tier 3 — Real financial-analysis capability build-out (the "Buffett/Lynch/Goldman" layer):**
-7. Earnings-quality engine (4.4) and FCF-based ratios (4.6), once data-confirmed.
-8. Transparent-assumption DCF (4.7).
-9. Multi-year CAGR/growth-consistency (4.8) and DuPont decomposition (4.9) — both buildable from data already ingested, no new sourcing needed, so these can proceed in parallel with Tier 2's diagnostics.
-10. Dividend-safety/payout-sustainability scoring (4.3).
+11. Earnings-quality engine (4.4) and FCF-based ratios (4.6), once data-confirmed.
+12. Transparent-assumption DCF (4.7) — feeds directly into Tier 1's Scenario Engine (4.31) once it lands, sharpening the bull/base/bear price targets.
+13. Multi-year CAGR/growth-consistency (4.8) and DuPont decomposition (4.9) — both buildable from data already ingested, no new sourcing needed, so these can proceed in parallel with Tier 2's diagnostics.
+14. Dividend-safety/payout-sustainability scoring (4.3).
 
 **Tier 4 — The "Two Sigma/Renaissance/Dalio" quant-risk layer (depends on Tier 1's index data):**
-11. Real beta/VaR/CVaR (4.26).
-12. Volatility-regime classifier and confidence-dampening (4.11).
-13. Market-wide correlation-cluster engine (4.16) — notably can start immediately, in parallel with everything above, since it needs no new data.
-14. Relative strength and sector strength go live once their data prerequisites (Tier 1 item 2 + prior audit's sector fix) land (4.13, 4.14).
+15. Real beta/VaR/CVaR (4.26).
+16. Volatility-regime classifier and confidence-dampening (4.11).
+17. Market-wide correlation-cluster engine (4.16) — notably can start immediately, in parallel with everything above, since it needs no new data.
+18. Relative strength and sector strength go live once their data prerequisites (Tier 1 item 5's TASI ingestion + Tier 2 item 10's sector fix) land (4.13, 4.14).
 
 **Tier 5 — Validation, proof, and the eventual learned model:**
-15. Extend `baselines.py` with the 6-7 missing strategy classes (Section 7).
-16. Run the full institutional-grade backtesting comparison for real, report real numbers, publish honestly — including if Basirah's own AI decision engine does *not* beat a simple baseline on some metric.
-17. Only after all of the above: prototype a learned model (prior audit's Phase E) as a paper-trading challenger, evaluated by the now-real backtesting framework and the now-real statistical significance testing — never presented as production truth until it earns that status the same way any of the deterministic improvements above must.
+19. Extend `baselines.py` with the 6-7 missing strategy classes (Section 7).
+20. Run the full institutional-grade backtesting comparison for real, report real numbers, publish honestly — including if Basirah's own AI decision engine does *not* beat a simple baseline on some metric.
+21. Turn on tier (b) of the Probability/Return-Distribution Engine (4.32) once enough real accumulated outcomes exist to validate it — this is calendar-gated, not effort-gated, per Tier 1 item 6's scheduler activation.
+22. Only after all of the above: prototype a learned model (prior audit's Phase E) as a paper-trading challenger, evaluated by the now-real backtesting framework and the now-real statistical significance testing — never presented as production truth until it earns that status the same way any of the deterministic improvements above must.
 
 **What this roadmap deliberately does not include:** any UI/UX work, any new feature unrelated to recommendation defensibility, and no work on the dead multi-agent code (`autonomous_intelligence_layer`) or scale/HA infrastructure (prior audit Phase G) — both remain correctly deferred, since neither moves the needle on whether a recommendation can be trusted, which is this document's entire mandate.
 
@@ -451,6 +603,8 @@ Not calendar-paced. Ordered by which fix unlocks the most other findings, per th
 
 ## 11. Final Recommendation
 
-The platform's current failure mode is not "the technology is bad" — the retry logic, the circuit breaker, the test discipline, the numeric-grounding LLM safety pattern are all genuinely good engineering. The failure mode is **presenting a fixed-weight formula's output with more certainty than the formula itself has earned.** Symbol 1020 is not wrong to have scored well by the current formula's own math — the formula itself has never been proven right, has no comparative reasoning, has no market benchmark to be measured against, and cannot say what would prove it wrong. That is the actual, single, unifying problem this document has traced through 29 subsystems, and it is the problem Section 5's redesigned scoring, Section 6's explainability layer, and Section 7's real backtesting are built specifically to solve — in that order, because explainability and proof must come before any claim of intelligence, not after.
+The platform's current failure mode is not "the technology is bad" — the retry logic, the circuit breaker, the test discipline, the numeric-grounding LLM safety pattern are all genuinely good engineering. The failure mode is **presenting a fixed-weight formula's output with more certainty than the formula itself has earned.** Symbol 1020 is not wrong to have scored well by the current formula's own math — the formula itself has never been proven right, has no comparative reasoning, has no market benchmark to be measured against, and cannot say what would prove it wrong. That is the actual, single, unifying problem this document has traced through 33 subsystems, and it is the problem Section 5's redesigned scoring, Section 6's explainability layer, and Section 7's real backtesting are built specifically to solve — in that order, because explainability and proof must come before any claim of intelligence, not after.
 
-This document recommends proceeding with Tiers 1 through 5 as ordered above, pending approval, with no implementation started until that approval is given.
+**Final answer to the question this review asked: yes, the Investment Thesis Engine (Section 5.2) should become Basirah's core.** Not as a rebrand of the existing scoring output, and not as a decorative narrative layer wrapped around a black-box number — as a genuine restructuring where the score becomes cited evidence inside a falsifiable case, with three of its four required new components (Catalyst Detection's technical half, the Scenario Engine, and the Probability Engine's historical-simulation tier) buildable immediately with no new data, and the fourth (Investor Suitability) correctly held for a compliance decision rather than quietly built around. This is the same discipline the rest of this document has applied throughout — build what's real, label what's uncertain, and never let a more persuasive-sounding output substitute for a more defensible one. A thesis-shaped narrative is a strictly higher bar to meet honestly than a scored recommendation was, not a lower one, and every design choice in Section 5.2 was made to hold that bar, not to make the platform merely sound more sophisticated.
+
+This document recommends proceeding with Tiers 1 through 5 as ordered above (now 22 items, reflecting the added thesis-engine work), pending approval, with no implementation started until that approval is given.
