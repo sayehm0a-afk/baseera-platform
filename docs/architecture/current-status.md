@@ -2338,6 +2338,47 @@ attempted this session), does not establish the open-market Live Market
 Mode transition (noted above), and does not establish anything about
 `/financials/`'s nested schema (confirmed broken, not fixed).
 
+## Live Market Validation Session (L3) — Open-market run, full evidence-based report
+
+Full 16-objective report: `docs/SAHMK_L3_OPEN_MARKET_VALIDATION_REPORT.md`.
+Dispatched during a genuinely open Tadawul session (2026-07-29, ~10:58 AST,
+confirmed via `is_market_open()` against the real clock both before dispatch
+and inside the job) — run [`30433534477`](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30433534477),
+`conclusion: success`, against `feature/sahmk-live-verification` commit
+`4a438ca`.
+
+**Closes the one gap L2 left open**: Live Market Mode's inner ingestion and
+scan schedulers were observed starting *automatically*, with no manual
+trigger, the moment the real market read as open — and the automatically
+triggered scan produced a second, real batch of 5 recommendations
+(post-soak DB total: 10, both integrity-checked and PASSED).
+
+**Surfaces two new, real, precisely-traced gaps this exact run** (both
+disclosed, neither fixed — out of scope for a validation run):
+- `market_price_at_evaluation`/`latest_price` are `None` on every row
+  during live trading hours: `SahmkMarketDataProvider.get_stock_data()`
+  sources price from *today's completed daily bar*, which does not exist
+  yet mid-session; the already-confirmed-live `/quote/` endpoint (real
+  intraday price) is never used for this. See the L3 report's Finding A.
+- Company display names are placeholders (`"Stock {symbol}"`), not real
+  names: `SahmkMarketDataProvider` has no `get_company_profile` method, so
+  `sync_symbols()`'s enrichment branch silently never fires. See Finding B.
+
+**Frontend validation: NOT VERIFIED, confirmed structurally infeasible in
+this sandbox**, not just untried — direct TCP to PostgreSQL's default port
+(5432) is blocked at the network layer for any external host, and HTTPS to
+any non-SAHMK, non-allowlisted host (tested against two arbitrary hosts) is
+also rejected with 403 at the proxy, identically to `app.sahmk.sa`. There is
+no path from this sandbox to connect a locally-run frontend/backend to
+either the live API or a persistent external database that could hold
+CI-generated real data. Not worked around with synthetic data.
+
+**Database persistence**: verified only *within* a single workflow run (two
+full integrity passes, both PASSED, spanning the manual and the
+automatically-triggered batches). The CI database is an ephemeral service
+container, destroyed when the job ends — "records remain available after
+the workflow completes" is explicitly NOT VERIFIED, not assumed.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

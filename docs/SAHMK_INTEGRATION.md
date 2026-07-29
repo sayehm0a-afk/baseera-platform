@@ -14,7 +14,18 @@ ingestion -> a real PostgreSQL database -> the AI decision engine ->
 5 real, differentiated recommendations, all integrity-checked -- and
 surfaced one remaining real defect: `/financials/{symbol}/`'s nested
 field names don't match this integration's parsing for any of the 5
-symbols tested (not yet fixed, see Known Gap #2).
+symbols tested (not yet fixed, see Known Gap #2). That same workflow
+was then run **during an actual open Tadawul session** (2026-07-29) --
+see `docs/SAHMK_L3_OPEN_MARKET_VALIDATION_REPORT.md` for the full,
+16-objective evidence-based report. Live Market Mode was confirmed to
+autonomously activate its schedulers and generate a second, automatic
+batch of real recommendations with the market genuinely open, closing
+the one gap the market-closed run couldn't -- but that same open
+session also surfaced two new, real gaps (Known Gaps #6 and #7:
+current price/quote timestamp not populated during trading hours;
+company display names are placeholders), and confirmed frontend
+validation is not achievable from this sandbox at all (no reachable
+path to bridge CI-generated data to a locally-run frontend/backend).
 
 ## Key rotation & plan upgrade
 
@@ -310,6 +321,22 @@ from the runner -- this run passed that gate (`provider selected:
    available, not yet consumed.
 4. Full per-plan-tier rate-limit numbers for Starter -- 5 rapid calls
    showed no throttling, but the real ceiling is still unconfirmed.
-5. Live Market Mode's "market just opened -> auto-scans" transition
-   has not been observed against the real clock yet (see L2 section
-   above) -- only the "stays idle while closed" branch has.
+5. ~~Live Market Mode's "market just opened -> auto-scans" transition
+   has not been observed against the real clock yet.~~ **Resolved
+   2026-07-29**: observed and verified live during an actual open
+   Tadawul session -- see `docs/SAHMK_L3_OPEN_MARKET_VALIDATION_REPORT.md`.
+6. **New, confirmed 2026-07-29**: `SahmkMarketDataProvider.get_stock_data()`
+   sources "current price" from today's completed daily bar
+   (`/historical/`), which does not exist yet while the market is open --
+   so `market_price_at_evaluation`/`latest_price` are `None` for every
+   live scan run during trading hours. The already-confirmed-live
+   `/quote/` endpoint (real intraday price, `updated_at`, bid/ask) is not
+   used for this purpose. Not fixed -- see the L3 report for the exact
+   code path.
+7. **New, confirmed 2026-07-29**: `SahmkMarketDataProvider` has no
+   `get_company_profile` method, so `sync_symbols(discover_all=False)`'s
+   name/sector enrichment silently never fires for SAHMK -- newly
+   ingested Stock rows keep their placeholder name (`"Stock {symbol}"`)
+   instead of the real company name, even though
+   `SahmkMarketDataService.get_company_profile()` one layer down is
+   already confirmed live-working. Not fixed -- see the L3 report.
