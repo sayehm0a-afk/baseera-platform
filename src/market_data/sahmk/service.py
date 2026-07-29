@@ -40,15 +40,39 @@ FINANCIALS_CACHE_TTL_SECONDS = 3600.0
 DIVIDENDS_CACHE_TTL_SECONDS = 3600.0
 
 
-def _first_present(data: Dict[str, Any], keys: List[str]) -> Any:
+def _first_present(data, keys: List[str]) -> Any:
     """Returns the value of the first key in `keys` present (and
     non-None) in `data`, or None. Used for fields whose exact wire name
     is UNVERIFIED (see docs/SAHMK_INTEGRATION.md) -- several plausible
-    names are tried rather than assuming one."""
-    for key in keys:
-        if key in data and data[key] is not None:
-            return data[key]
+    names are tried rather than assuming one.
+
+    `data` may be a single dict, or a list of dicts to search in
+    order (first dict wins) -- get_financials() uses the list form to
+    check a per-statement dict first, falling back to the top-level
+    response, without needing a second helper."""
+    dicts = data if isinstance(data, list) else [data]
+    for d in dicts:
+        for key in keys:
+            if key in d and d[key] is not None:
+                return d[key]
     return None
+
+
+def _first_matching_statement(items: Optional[List[Dict[str, Any]]], period_type: str) -> Dict[str, Any]:
+    """Picks the entry in a /financials/ statement array (e.g.
+    `income_statements`) whose own `statement_period` matches what was
+    requested, most-recent `report_date` first per SAHMK's confirmed
+    ordering; falls back to the first entry if none match, or `{}` if
+    the array is missing/empty -- never raises, since a missing
+    statement array is a normal degraded state (see
+    SahmkFundamentalDataProvider, which decides what's actually
+    required)."""
+    if not items:
+        return {}
+    for item in items:
+        if item.get("statement_period") == period_type:
+            return item
+    return items[0]
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -246,36 +270,54 @@ class SahmkMarketDataService:
         )
 
     async def get_financials(self, symbol: str, period_type: str = "annual") -> SahmkFinancials:
-        """Parses GET /financials/{symbol}/ defensively -- field names are
-        UNVERIFIED (docs/SAHMK_INTEGRATION.md); every figure is read via
-        _first_present() rather than assumed, and `raw` always carries
-        the untouched response."""
+        """Parses GET /financials/{symbol}/.
+
+        CONFIRMED live (workflow run 30436660246, 3 real symbols): the
+        response is NOT a flat object -- figures are split across three
+        per-period statement arrays (`income_statements`,
+        `balance_sheets`, `cash_flows`), each entry carrying its own
+        `report_date`/`statement_period`, most-recent period first.
+        Also confirmed: `current_assets`, `current_liabilities`,
+        `shares_outstanding`, and `eps` are not present ANYWHERE in
+        this response, for any symbol tested -- not misnamed, genuinely
+        absent from this endpoint's data (see docs/SAHMK_INTEGRATION.md)
+        -- so those come back as `None` rather than being guessed at.
+
+        A flat top-level shape is still tried as a fallback (via
+        _first_present) in case a different symbol/tier ever returns
+        one; `raw` always carries the untouched response either way.
+        """
 
         async def _compute() -> SahmkFinancials:
             data = await self._client.get_financials(symbol, period_type=period_type)
+            income = _first_matching_statement(data.get("income_statements"), period_type)
+            balance = _first_matching_statement(data.get("balance_sheets"), period_type)
+
             return SahmkFinancials(
                 symbol=symbol,
                 period_type=period_type,
-                fiscal_period_end=_first_present(data, ["fiscal_period_end", "period_end", "date"]),
-                revenue=_optional_float(_first_present(data, ["revenue", "total_revenue"])),
-                gross_profit=_optional_float(_first_present(data, ["gross_profit"])),
-                net_income=_optional_float(_first_present(data, ["net_income", "net_profit"])),
-                total_assets=_optional_float(_first_present(data, ["total_assets"])),
-                total_liabilities=_optional_float(_first_present(data, ["total_liabilities"])),
+                fiscal_period_end=_first_present(
+                    [income, balance, data], ["report_date", "fiscal_period_end", "period_end", "date"]
+                ),
+                revenue=_optional_float(_first_present([income, data], ["total_revenue", "revenue"])),
+                gross_profit=_optional_float(_first_present([income, data], ["gross_profit"])),
+                net_income=_optional_float(_first_present([income, data], ["net_income", "net_profit"])),
+                total_assets=_optional_float(_first_present([balance, data], ["total_assets"])),
+                total_liabilities=_optional_float(_first_present([balance, data], ["total_liabilities"])),
                 total_equity=_optional_float(
-                    _first_present(data, ["total_equity", "shareholders_equity"])
+                    _first_present([balance, data], ["stockholders_equity", "total_equity", "shareholders_equity"])
                 ),
-                current_assets=_optional_float(_first_present(data, ["current_assets"])),
-                current_liabilities=_optional_float(_first_present(data, ["current_liabilities"])),
-                inventory=_optional_float(_first_present(data, ["inventory"])),
+                current_assets=_optional_float(_first_present([balance, data], ["current_assets"])),
+                current_liabilities=_optional_float(_first_present([balance, data], ["current_liabilities"])),
+                inventory=_optional_float(_first_present([balance, data], ["inventory"])),
                 cash_and_equivalents=_optional_float(
-                    _first_present(data, ["cash_and_equivalents", "cash"])
+                    _first_present([balance, data], ["cash_and_equivalents", "cash"])
                 ),
-                total_debt=_optional_float(_first_present(data, ["total_debt"])),
+                total_debt=_optional_float(_first_present([balance, data], ["total_debt"])),
                 shares_outstanding=_optional_int(
-                    _first_present(data, ["shares_outstanding", "shares"])
+                    _first_present([balance, income, data], ["shares_outstanding", "shares"])
                 ),
-                eps=_optional_float(_first_present(data, ["eps", "earnings_per_share"])),
+                eps=_optional_float(_first_present([income, data], ["eps", "earnings_per_share"])),
                 raw=data,
             )
 

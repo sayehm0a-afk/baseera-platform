@@ -46,13 +46,19 @@ class FundamentalFacts:
     total_assets: float
     total_liabilities: float
     total_equity: float
-    current_assets: float
-    current_liabilities: float
+    # Optional, not because they are unimportant, but because SAHMK's
+    # Starter-tier /financials/{symbol}/ response genuinely never
+    # includes them (confirmed live, 3 symbols -- see
+    # docs/SAHMK_INTEGRATION.md) -- every ratio that needs one of these
+    # already degrades to None rather than raising (liquidity.py,
+    # valuation.py, growth.py).
+    current_assets: Optional[float]
+    current_liabilities: Optional[float]
     inventory: Optional[float]
     cash_and_equivalents: Optional[float]
     total_debt: Optional[float]
-    shares_outstanding: int
-    eps: float
+    shares_outstanding: Optional[int]
+    eps: Optional[float]
     dividend_per_share: float
 
 

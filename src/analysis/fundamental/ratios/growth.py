@@ -29,6 +29,6 @@ def net_income_growth(
 
 
 def eps_growth(facts: FundamentalFacts, prior: Optional[FundamentalFacts]) -> Optional[float]:
-    if prior is None or prior.eps == 0:
+    if prior is None or facts.eps is None or prior.eps is None or prior.eps == 0:
         return None
     return (facts.eps - prior.eps) / prior.eps

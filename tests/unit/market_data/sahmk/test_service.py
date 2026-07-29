@@ -376,6 +376,102 @@ async def test_get_financials_is_cached_per_symbol_and_period():
     client.get_financials.assert_awaited_once()
 
 
+# The real, live-captured shape of GET /financials/{symbol}/ (workflow
+# run 30436660246, symbol 1120) -- three separate per-period statement
+# arrays, most-recent period first. current_assets/current_liabilities/
+# shares_outstanding/eps are absent everywhere in this real response,
+# confirmed for 3 real symbols, not a parsing gap.
+_REAL_FINANCIALS_RESPONSE = {
+    "symbol": "1120",
+    "statement_period": "annual",
+    "income_statements": [
+        {
+            "report_date": "2025-12-31", "statement_period": "annual", "fiscal_year": 2025,
+            "quarters_reported": 4, "is_full_year": True,
+            "total_revenue": 39093965000.0, "gross_profit": 6730335.0,
+            "operating_income": None, "net_income": 24791754000.0,
+        },
+        {
+            "report_date": "2024-12-31", "statement_period": "annual", "fiscal_year": 2024,
+            "quarters_reported": 4, "is_full_year": True,
+            "total_revenue": 52742285000.0, "gross_profit": 10989066000.0,
+            "operating_income": None, "net_income": 19722206000.0,
+        },
+    ],
+    "balance_sheets": [
+        {
+            "report_date": "2025-12-31", "statement_period": "annual", "fiscal_year": 2025,
+            "quarters_reported": 4, "is_full_year": True,
+            "total_assets": 1043268297000.0, "total_liabilities": 900355952000.0,
+            "stockholders_equity": 142912345000.0, "total_debt": 80320898000.0,
+        },
+        {
+            "report_date": "2024-12-31", "statement_period": "annual", "fiscal_year": 2024,
+            "quarters_reported": 4, "is_full_year": True,
+            "total_assets": 974386656000.0, "total_liabilities": 851247425000.0,
+            "stockholders_equity": 123139231000.0, "total_debt": 37943190000.0,
+        },
+    ],
+    "cash_flows": [
+        {
+            "report_date": "2025-12-31", "statement_period": "annual", "fiscal_year": 2025,
+            "quarters_reported": 4, "is_full_year": True,
+            "operating_cash_flow": -22373072000.0, "investing_cash_flow": -1564467000.0,
+            "financing_cash_flow": 36302349000.0, "free_cash_flow": -50224247000.0,
+        },
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_get_financials_parses_the_real_nested_statement_shape():
+    client = AsyncMock()
+    client.get_financials.return_value = _REAL_FINANCIALS_RESPONSE
+    service = _service(client)
+    financials = await service.get_financials("1120", period_type="annual")
+
+    assert financials.fiscal_period_end == "2025-12-31"
+    assert financials.revenue == 39093965000.0
+    assert financials.gross_profit == 6730335.0
+    assert financials.net_income == 24791754000.0
+    assert financials.total_assets == 1043268297000.0
+    assert financials.total_liabilities == 900355952000.0
+    assert financials.total_equity == 142912345000.0
+    assert financials.total_debt == 80320898000.0
+
+
+@pytest.mark.asyncio
+async def test_get_financials_real_response_never_has_these_fields():
+    # Genuine data-source gap, confirmed live -- not a parsing bug.
+    client = AsyncMock()
+    client.get_financials.return_value = _REAL_FINANCIALS_RESPONSE
+    service = _service(client)
+    financials = await service.get_financials("1120", period_type="annual")
+
+    assert financials.current_assets is None
+    assert financials.current_liabilities is None
+    assert financials.shares_outstanding is None
+    assert financials.eps is None
+    assert financials.inventory is None
+    assert financials.cash_and_equivalents is None
+
+
+@pytest.mark.asyncio
+async def test_get_financials_picks_statement_matching_requested_period_type():
+    client = AsyncMock()
+    client.get_financials.return_value = {
+        "income_statements": [
+            {"report_date": "2025-Q4", "statement_period": "quarterly", "total_revenue": 1.0, "net_income": 1.0},
+            {"report_date": "2025-12-31", "statement_period": "annual", "total_revenue": 999.0, "net_income": 100.0},
+        ],
+        "balance_sheets": [],
+    }
+    service = _service(client)
+    financials = await service.get_financials("1120", period_type="annual")
+    assert financials.revenue == 999.0
+    assert financials.net_income == 100.0
+
+
 # --- get_dividends / get_latest_dividend_per_share ------------------------
 
 

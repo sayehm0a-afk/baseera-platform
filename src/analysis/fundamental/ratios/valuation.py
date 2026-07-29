@@ -13,13 +13,13 @@ from src.analysis.fundamental.types import FundamentalFacts
 
 
 def price_to_earnings(facts: FundamentalFacts, price: Optional[float]) -> Optional[float]:
-    if price is None or facts.eps == 0:
+    if price is None or facts.eps is None or facts.eps == 0:
         return None
     return price / facts.eps
 
 
 def price_to_book(facts: FundamentalFacts, price: Optional[float]) -> Optional[float]:
-    if price is None or facts.shares_outstanding == 0:
+    if price is None or facts.shares_outstanding is None or facts.shares_outstanding == 0:
         return None
     book_value_per_share = facts.total_equity / facts.shares_outstanding
     if book_value_per_share == 0:
@@ -34,6 +34,6 @@ def dividend_yield(facts: FundamentalFacts, price: Optional[float]) -> Optional[
 
 
 def market_cap(facts: FundamentalFacts, price: Optional[float]) -> Optional[float]:
-    if price is None:
+    if price is None or facts.shares_outstanding is None:
         return None
     return price * facts.shares_outstanding

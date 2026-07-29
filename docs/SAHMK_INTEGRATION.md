@@ -13,19 +13,22 @@ validated live" below) then ran the entire production pipeline --
 ingestion -> a real PostgreSQL database -> the AI decision engine ->
 5 real, differentiated recommendations, all integrity-checked -- and
 surfaced one remaining real defect: `/financials/{symbol}/`'s nested
-field names don't match this integration's parsing for any of the 5
-symbols tested (not yet fixed, see Known Gap #2). That same workflow
-was then run **during an actual open Tadawul session** (2026-07-29) --
-see `docs/SAHMK_L3_OPEN_MARKET_VALIDATION_REPORT.md` for the full,
+field names didn't match this integration's parsing for any of the 5
+symbols tested. That same workflow was then run **during an actual
+open Tadawul session** (2026-07-29) -- see
+`docs/SAHMK_L3_OPEN_MARKET_VALIDATION_REPORT.md` for the full,
 16-objective evidence-based report. Live Market Mode was confirmed to
 autonomously activate its schedulers and generate a second, automatic
 batch of real recommendations with the market genuinely open, closing
 the one gap the market-closed run couldn't -- but that same open
-session also surfaced two new, real gaps (Known Gaps #6 and #7:
-current price/quote timestamp not populated during trading hours;
-company display names are placeholders), and confirmed frontend
-validation is not achievable from this sandbox at all (no reachable
-path to bridge CI-generated data to a locally-run frontend/backend).
+session also surfaced two more real gaps: current price/quote
+timestamp not populated during trading hours, and company display
+names being placeholders. **All three of these defects (Known Gaps
+#2, #6, #7) were root-caused with real evidence and fixed on
+2026-07-29** -- see the "Known gaps" section below for what changed
+and why. Frontend validation remains not achievable from this sandbox
+(no reachable path to bridge CI-generated data to a locally-run
+frontend/backend).
 
 ## Key rotation & plan upgrade
 
@@ -114,7 +117,7 @@ session for any endpoint.
 | Live quote | `GET /quote/{symbol}/` | Free | Yes (`get_quote`, `get_latest_quote`) | **Yes -- 200 OK, real price 26.56 SAR** |
 | Historical OHLCV / today's bar | `GET /historical/{symbol}/` | Starter+ | Yes (`get_historical`, `get_stock_data`, `get_daily_bar`) | **Yes -- 200 OK, 118 real daily bars, full schema confirmed** |
 | Market summary (index snapshot) | `GET /market/summary/?index=...` | Free | Yes (`get_market_summary`, `get_index_data`); also the `authenticate()`/`health_check()` probe call | **Yes -- 200 OK** |
-| Company fundamentals (financial statements) | `GET /financials/{symbol}/` | Starter+ | Yes (`get_financials`, `SahmkFundamentalDataProvider.get_fundamentals`) | **Yes -- 200 OK (top-level envelope only; nested field names still unverified, see Known gaps)** |
+| Company fundamentals (financial statements) | `GET /financials/{symbol}/` | Starter+ | Yes (`get_financials`, `SahmkFundamentalDataProvider.get_fundamentals`) | **Yes -- 200 OK, real nested shape confirmed and parsed (revenue/net_income/total_assets/total_liabilities/total_equity); current_assets/current_liabilities/shares_outstanding/eps confirmed genuinely absent, see Known gap #2** |
 | Dividends | `GET /dividends/{symbol}/` | Starter+ | Yes (`get_dividends`, folded into `get_fundamentals`'s `dividend_per_share`) | **Yes -- 200 OK** |
 | Company profile | `GET /company/{symbol}/` | Free+ | Yes (`get_company_profile`) | **Yes -- 200 OK** |
 | Corporate actions | *(no distinct endpoint documented)* | -- | Not implemented | N/A |
@@ -311,11 +314,26 @@ from the runner -- this run passed that gate (`provider selected:
 
 1. `get_events` (Pro-tier) -- plan/entitlement access not yet confirmed
    live.
-2. **Confirmed broken as of the L2 run above**: `/financials/{symbol}/`'s
+2. ~~Confirmed broken as of the L2 run above: `/financials/{symbol}/`'s
    real nested field names don't match any name `get_financials()`
-   tries -- every field, every symbol tested. The top-level envelope
-   is fine; the line-item structure inside it needs a raw-response
-   capture to diagnose and fix (not done in this validation run).
+   tries -- every field, every symbol tested.~~ **Resolved 2026-07-29**:
+   a raw-response capture (workflow run 30436660246, 3 real symbols)
+   confirmed the real shape -- three per-period statement arrays
+   (`income_statements`, `balance_sheets`, `cash_flows`), most-recent
+   first, each keyed by `total_revenue`/`gross_profit`/`net_income`
+   (income), `total_assets`/`total_liabilities`/`stockholders_equity`/
+   `total_debt` (balance), `report_date`/`statement_period` on every
+   entry. `get_financials()` now parses this shape (with a flat
+   top-level fallback kept for safety). **Also confirmed live**:
+   `current_assets`, `current_liabilities`, `shares_outstanding`, and
+   `eps` are absent from this endpoint entirely, for every symbol
+   tested -- a genuine data-source gap, not a naming mismatch.
+   `FundamentalSnapshot`'s corresponding columns are now nullable
+   (migration `a8e2f4c91d37`) and every ratio that needs one of them
+   (`current_ratio`, `quick_ratio`, `price_to_earnings`, `price_to_book`,
+   `market_cap`, `eps_growth`) degrades to `None` rather than blocking
+   ingestion, matching `FundamentalScoreContributor`'s existing
+   partial-score design.
 3. `adjusted_close` and `turnover`, present on every real historical
    bar, are not currently modeled by `SahmkHistoricalBar` -- confirmed
    available, not yet consumed.
@@ -325,18 +343,20 @@ from the runner -- this run passed that gate (`provider selected:
    has not been observed against the real clock yet.~~ **Resolved
    2026-07-29**: observed and verified live during an actual open
    Tadawul session -- see `docs/SAHMK_L3_OPEN_MARKET_VALIDATION_REPORT.md`.
-6. **New, confirmed 2026-07-29**: `SahmkMarketDataProvider.get_stock_data()`
-   sources "current price" from today's completed daily bar
-   (`/historical/`), which does not exist yet while the market is open --
-   so `market_price_at_evaluation`/`latest_price` are `None` for every
-   live scan run during trading hours. The already-confirmed-live
-   `/quote/` endpoint (real intraday price, `updated_at`, bid/ask) is not
-   used for this purpose. Not fixed -- see the L3 report for the exact
-   code path.
-7. **New, confirmed 2026-07-29**: `SahmkMarketDataProvider` has no
-   `get_company_profile` method, so `sync_symbols(discover_all=False)`'s
-   name/sector enrichment silently never fires for SAHMK -- newly
-   ingested Stock rows keep their placeholder name (`"Stock {symbol}"`)
-   instead of the real company name, even though
-   `SahmkMarketDataService.get_company_profile()` one layer down is
-   already confirmed live-working. Not fixed -- see the L3 report.
+6. ~~`SahmkMarketDataProvider.get_stock_data()` sources "current price"
+   from today's completed daily bar, which does not exist yet while the
+   market is open, so `market_price_at_evaluation`/`latest_price` were
+   `None` for every live scan during trading hours.~~ **Resolved
+   2026-07-29**: `build_analysis_context()` now sources the current
+   price from `SahmkMarketDataProvider.get_latest_quote()` (`/quote/`)
+   first, falling back to the daily bar only when a live quote is
+   unavailable; `change`/`change_percent`/`timestamp`/`source` are
+   carried in `AnalysisContext.extra["quote"]`.
+7. ~~`SahmkMarketDataProvider` has no `get_company_profile` method, so
+   `sync_symbols(discover_all=False)`'s name/sector enrichment silently
+   never fires for SAHMK.~~ **Resolved 2026-07-29**:
+   `SahmkMarketDataProvider.get_company_profile()` now wires through to
+   `SahmkMarketDataService.get_company_profile()`; `SahmkCompanyProfile`
+   also now carries `industry`/`exchange` (new nullable `Stock` columns,
+   migration `f3a9c7d21b84`), extracted with the same defensive
+   multi-key-name pattern as name/sector.

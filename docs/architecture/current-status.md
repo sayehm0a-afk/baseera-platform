@@ -2379,6 +2379,72 @@ automatically-triggered batches). The CI database is an ephemeral service
 container, destroyed when the job ends — "records remain available after
 the workflow completes" is explicitly NOT VERIFIED, not assumed.
 
+## Production-readiness pass — Phase 1 root-cause fixes (2026-07-29)
+
+Following the L3 report above, all three of its disclosed, unfixed defects
+were root-caused with real evidence and fixed (code + tests; live
+re-validation is Phase 2, not yet run as of this section):
+
+**Fix #1 — current price / live quote (was Finding A)**: `build_analysis_
+context()` (`src/analysis/context_builder.py`) now calls `market_provider.
+get_latest_quote()` (the already-confirmed-live `/quote/` endpoint)
+opportunistically via `getattr` as the primary price source, falling back
+to the existing daily-bar `get_stock_data()` close only when a live quote
+is unavailable (`DevMarketDataProvider`, or a quote-fetch failure).
+`change`/`change_percent`/`timestamp`/`source` are carried in
+`AnalysisContext.extra["quote"]` — additive, no schema migration, no new
+persisted columns, same pattern already used for news sentiment. Covered by
+3 new unit tests (live quote preferred over stale bar; falls back cleanly
+on quote failure; falls back cleanly when the provider has no quote
+support at all).
+
+**Fix #2 — company profile enrichment (was Finding B)**:
+`SahmkMarketDataProvider` gained the missing `get_company_profile()` method
+(wiring the already-live `SahmkMarketDataService.get_company_profile()`
+through), so `sync_symbols(discover_all=False)`'s existing enrichment
+branch actually fires instead of silently never running. Also added
+`industry`/`exchange` — two new nullable `Stock` columns (migration
+`f3a9c7d21b84`) — populated from `SahmkCompanyProfile` via the same
+defensive multi-key-name extraction already used for name/sector. Applied
+symmetrically to `SahmkFundamentalDataProvider.get_company_profile()` for
+consistency. Covered by new unit tests across the service, both provider
+adapters, and `sync_symbols()`.
+
+**Fix #3 — fundamental ranking pipeline (Known Gap #2)**: a real, live raw-
+response capture (new `scripts/verify_sahmk_financials_raw.py`, workflow
+run [`30436660246`](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30436660246),
+3 real symbols) confirmed SAHMK's actual `/financials/{symbol}/` shape:
+three per-period statement arrays (`income_statements`, `balance_sheets`,
+`cash_flows`), not the flat object the original parser assumed.
+`SahmkMarketDataService.get_financials()` now parses this real shape
+(revenue/gross_profit/net_income from the matching income statement;
+total_assets/total_liabilities/stockholders_equity/total_debt from the
+matching balance sheet), with the old flat-object lookup kept as a
+fallback. The same capture also confirmed `current_assets`,
+`current_liabilities`, `shares_outstanding`, and `eps` are **never present
+anywhere in this response, for any symbol tested** — a genuine data-source
+gap, not a naming mismatch. Rather than continuing to hard-block every real
+ingestion on data that structurally does not exist, `FundamentalSnapshot`'s
+corresponding columns are now nullable (migration `a8e2f4c91d37`), the
+6 ratio functions that read them
+(`current_ratio`/`quick_ratio`/`cash_ratio`/`price_to_earnings`/
+`price_to_book`/`market_cap`/`eps_growth`) now guard against `None` inputs
+instead of assuming they're always present, and `SahmkFundamentalDataProvider`
+now only requires the 5 fields SAHMK genuinely and reliably returns
+(revenue, net_income, total_assets, total_liabilities, total_equity) —
+`FundamentalScoreContributor` already computes a partial score from
+whichever ratios are available (unchanged; this is why the fix is
+contained to the data layer). Once real `FundamentalSnapshot` rows exist,
+`fundamental_score` should stop being `None` and the Strongest Fundamental
+/ Best Medium Term / Best Long Term rankings should stop being empty — this
+causal chain is argued from code, not yet re-observed live (Phase 2).
+
+**Not yet done as of this section**: Phase 2 (re-running the full live
+pipeline validation against the real market with these three fixes in
+place) has not been executed. Every claim above is backed by either a real
+GitHub Actions run's captured evidence or a passing unit test — none of it
+is a live re-verification of the fixed pipeline end-to-end.
+
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.

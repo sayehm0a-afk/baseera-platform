@@ -127,6 +127,27 @@ async def test_get_fundamentals_raises_when_fiscal_period_end_missing():
         await provider.get_fundamentals("2222")
 
 
+@pytest.mark.asyncio
+async def test_get_fundamentals_succeeds_when_current_assets_liabilities_shares_eps_are_missing():
+    # The real, live SAHMK /financials/ response (confirmed for 3
+    # symbols, workflow run 30436660246) never includes
+    # current_assets/current_liabilities/shares_outstanding/eps --
+    # this must not block ingestion of the fields SAHMK does provide.
+    provider = _provider_with_mock_service()
+    provider._service.get_financials.return_value = _complete_financials(
+        current_assets=None, current_liabilities=None, shares_outstanding=None, eps=None,
+    )
+    provider._service.get_latest_dividend_per_share.return_value = None
+
+    data = await provider.get_fundamentals("2222")
+
+    assert data["revenue"] == 100.0
+    assert data["current_assets"] is None
+    assert data["current_liabilities"] is None
+    assert data["shares_outstanding"] is None
+    assert data["eps"] is None
+
+
 # --- get_dividends() / get_company_profile() (extra, not part of interface) --
 
 
