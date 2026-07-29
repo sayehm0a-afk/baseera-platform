@@ -104,11 +104,40 @@ async def build_analysis_context(
         logger.info("Technical leg unavailable for '%s': %s", symbol, exc)
 
     market_price: Optional[float] = None
-    try:
-        quote = await market_provider.get_stock_data(symbol)
-        market_price = quote.get("close")
-    except (SahmkError, CircuitBreakerOpenError) as exc:
-        logger.info("Could not fetch a live price for '%s': %s", symbol, exc)
+    quote_extra: Dict[str, Any] = {}
+    get_latest_quote = getattr(market_provider, "get_latest_quote", None)
+    if get_latest_quote is not None:
+        # Live quote (GET /quote/{symbol}/) is the correct source for the
+        # *current* price during market hours -- unlike get_stock_data()'s
+        # completed daily bar, which does not exist yet until the session
+        # settles and is always at least one bar stale while trading is
+        # live. Not part of IMarketDataProvider (DevMarketDataProvider has
+        # no live quote to serve), so this leg is opportunistic via getattr,
+        # matching the same pattern ingest_symbols.py uses for
+        # get_company_profile/get_symbol_directory.
+        try:
+            quote = await get_latest_quote(symbol)
+            market_price = quote.get("price")
+            quote_extra = {
+                "quote": {
+                    "price": quote.get("price"),
+                    "change": quote.get("change"),
+                    "change_percent": quote.get("change_percent"),
+                    "timestamp": quote.get("timestamp"),
+                    "source": quote.get("source"),
+                }
+            }
+        except (SahmkError, CircuitBreakerOpenError) as exc:
+            logger.info("Could not fetch a live quote for '%s': %s", symbol, exc)
+
+    if market_price is None:
+        # Fallback: today's completed daily bar (or the live provider is
+        # unavailable / a dev provider with no live-quote support).
+        try:
+            bar = await market_provider.get_stock_data(symbol)
+            market_price = bar.get("close")
+        except (SahmkError, CircuitBreakerOpenError) as exc:
+            logger.info("Could not fetch a live price for '%s': %s", symbol, exc)
 
     fundamental_result = None
     snapshots = load_fundamental_snapshots(session, stock.id, period_type, limit=2)
@@ -119,7 +148,7 @@ async def build_analysis_context(
         )
 
     news_service = news_service if news_service is not None else NewsIntelligenceService()
-    extra = _news_sentiment_extra(session, symbol, news_service)
+    extra = {**quote_extra, **_news_sentiment_extra(session, symbol, news_service)}
 
     return AnalysisContext(
         symbol=symbol,

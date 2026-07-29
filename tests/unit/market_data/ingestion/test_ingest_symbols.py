@@ -59,6 +59,28 @@ async def test_refreshes_name_and_sector_via_company_profile(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_refreshes_industry_and_exchange_via_company_profile(session_factory):
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_company_profile = AsyncMock(
+        return_value={
+            "symbol": "2222", "name": "Saudi Aramco", "sector": "Energy",
+            "industry": "Oil & Gas", "exchange": "Tadawul",
+        }
+    )
+
+    result = await sync_symbols(["2222"], provider, session_factory)
+    assert result.rows_upserted == 1
+
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="2222").one()
+    assert stock.industry == "Oil & Gas"
+    assert stock.exchange == "Tadawul"
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_no_op_refresh_does_not_count_as_a_row_upserted(session_factory):
     provider = AsyncMock()
     provider.authenticate = AsyncMock(return_value=True)

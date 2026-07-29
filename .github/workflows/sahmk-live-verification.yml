@@ -69,7 +69,8 @@ jobs:
         run: |
           python -m pytest tests/unit/scripts/test_sahmk_live_diagnosis.py \
                             tests/unit/scripts/test_sahmk_endpoint_coverage.py \
-                            tests/unit/scripts/test_sahmk_historical_deep_dive.py -v
+                            tests/unit/scripts/test_sahmk_historical_deep_dive.py \
+                            tests/unit/scripts/test_sahmk_financials_raw.py -v
 
       - name: Run live SAHMK diagnostic (real, unmocked, read-only)
         id: diagnostic
@@ -99,6 +100,14 @@ jobs:
           SAHMK_BASE_URL: https://app.sahmk.sa/api/v1
         run: |
           python scripts/verify_sahmk_historical_deep_dive.py
+
+      - name: Financials raw structure dump (real, unmocked, read-only)
+        if: always() && steps.diagnostic.outcome == 'success'
+        env:
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+          SAHMK_BASE_URL: https://app.sahmk.sa/api/v1
+        run: |
+          python scripts/verify_sahmk_financials_raw.py
 
       - name: Final summary
         if: always()

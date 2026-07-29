@@ -153,13 +153,15 @@ async def test_get_dividends_maps_to_dicts():
 async def test_get_company_profile_maps_to_dict():
     provider = _provider_with_mock_service()
     provider._service.get_company_profile.return_value = SahmkCompanyProfile(
-        "2222", "Saudi Aramco", "Energy", {}
+        "2222", "Saudi Aramco", "Energy", "Oil & Gas", "Tadawul", {}
     )
     result = await provider.get_company_profile("2222")
     assert result == {
         "symbol": "2222",
         "name": "Saudi Aramco",
         "sector": "Energy",
+        "industry": "Oil & Gas",
+        "exchange": "Tadawul",
         "source": "sahmk",
         "is_synthetic": False,
     }

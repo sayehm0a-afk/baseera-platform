@@ -204,6 +204,8 @@ class SahmkMarketDataService:
                 symbol=symbol,
                 name=_first_present(data, ["name", "company_name", "name_en"]),
                 sector=_first_present(data, ["sector", "sector_name"]),
+                industry=_first_present(data, ["industry", "industry_name", "sub_sector", "subsector"]),
+                exchange=_first_present(data, ["exchange", "market", "exchange_name"]),
                 raw=data,
             )
 
@@ -232,6 +234,8 @@ class SahmkMarketDataService:
                         symbol=str(symbol),
                         name=_first_present(item, ["name", "company_name", "name_en"]),
                         sector=_first_present(item, ["sector", "sector_name"]),
+                        industry=_first_present(item, ["industry", "industry_name", "sub_sector", "subsector"]),
+                        exchange=_first_present(item, ["exchange", "market", "exchange_name"]),
                         raw=item,
                     )
                 )

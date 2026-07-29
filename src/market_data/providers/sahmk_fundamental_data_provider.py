@@ -153,6 +153,8 @@ class SahmkFundamentalDataProvider(IFundamentalDataProvider):
             "symbol": profile.symbol,
             "name": profile.name,
             "sector": profile.sector,
+            "industry": profile.industry,
+            "exchange": profile.exchange,
             "source": "sahmk",
             "is_synthetic": False,
         }

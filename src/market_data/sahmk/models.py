@@ -59,11 +59,20 @@ class SahmkEvent:
 
 @dataclass(frozen=True)
 class SahmkCompanyProfile:
-    """Company profile from GET /company/{symbol}/."""
+    """Company profile from GET /company/{symbol}/.
+
+    `industry` and `exchange` are UNVERIFIED field names (same
+    discipline as SahmkFinancials/get_company_directory): several
+    plausible keys are tried, and either can legitimately be None if
+    SAHMK's response doesn't carry that granularity for a given
+    symbol -- `raw` is kept so a caller can always inspect exactly
+    what SAHMK actually returned."""
 
     symbol: str
     name: Optional[str]
     sector: Optional[str]
+    industry: Optional[str]
+    exchange: Optional[str]
     raw: dict
 
 

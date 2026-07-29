@@ -182,14 +182,45 @@ async def test_get_latest_quote_maps_quote_to_dict():
 async def test_get_symbol_directory_maps_companies_to_dicts():
     provider = _provider_with_mock_service()
     provider._service.get_company_directory.return_value = [
-        SahmkCompanyProfile(symbol="2222", name="Saudi Aramco", sector="Energy", raw={}),
-        SahmkCompanyProfile(symbol="1120", name="Al Rajhi Bank", sector="Financials", raw={}),
+        SahmkCompanyProfile(
+            symbol="2222", name="Saudi Aramco", sector="Energy", industry="Oil & Gas", exchange="Tadawul", raw={}
+        ),
+        SahmkCompanyProfile(
+            symbol="1120", name="Al Rajhi Bank", sector="Financials", industry=None, exchange="Tadawul", raw={}
+        ),
     ]
     directory = await provider.get_symbol_directory()
     assert directory == [
-        {"symbol": "2222", "name": "Saudi Aramco", "sector": "Energy", "source": "sahmk", "is_synthetic": False},
-        {"symbol": "1120", "name": "Al Rajhi Bank", "sector": "Financials", "source": "sahmk", "is_synthetic": False},
+        {
+            "symbol": "2222", "name": "Saudi Aramco", "sector": "Energy", "industry": "Oil & Gas",
+            "exchange": "Tadawul", "source": "sahmk", "is_synthetic": False,
+        },
+        {
+            "symbol": "1120", "name": "Al Rajhi Bank", "sector": "Financials", "industry": None,
+            "exchange": "Tadawul", "source": "sahmk", "is_synthetic": False,
+        },
     ]
+
+
+# --- get_company_profile() (extra, not part of IMarketDataProvider) --------
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_maps_to_dict():
+    provider = _provider_with_mock_service()
+    provider._service.get_company_profile.return_value = SahmkCompanyProfile(
+        symbol="2222", name="Saudi Aramco", sector="Energy", industry="Oil & Gas", exchange="Tadawul", raw={}
+    )
+    profile = await provider.get_company_profile("2222")
+    assert profile == {
+        "symbol": "2222",
+        "name": "Saudi Aramco",
+        "sector": "Energy",
+        "industry": "Oil & Gas",
+        "exchange": "Tadawul",
+        "source": "sahmk",
+        "is_synthetic": False,
+    }
 
 
 # --- get_index_data() -----------------------------------------------------

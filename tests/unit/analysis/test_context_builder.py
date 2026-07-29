@@ -59,6 +59,39 @@ class _AlwaysDownProvider(IMarketDataProvider):
         pass
 
 
+class _LiveQuoteProvider(DevMarketDataProvider):
+    """Simulates SahmkMarketDataProvider's real shape: get_stock_data()
+    returns a stale completed daily bar, get_latest_quote() (not part of
+    IMarketDataProvider) returns the true live price. Used to prove
+    build_analysis_context() prefers the live quote during market hours
+    instead of the stale daily-bar close."""
+
+    async def get_stock_data(self, symbol):
+        bar = await super().get_stock_data(symbol)
+        bar["close"] = 999.99  # deliberately distinct from the live quote price below
+        return bar
+
+    async def get_latest_quote(self, symbol):
+        return {
+            "symbol": symbol,
+            "price": 42.5,
+            "change": 0.5,
+            "change_percent": 1.19,
+            "volume": 12345,
+            "timestamp": "2026-07-29T11:00:00+03:00",
+            "source": "sahmk",
+            "is_synthetic": False,
+        }
+
+
+class _QuoteFailsButBarWorksProvider(DevMarketDataProvider):
+    """get_latest_quote exists but errors (e.g. circuit breaker open) --
+    must fall back to the daily-bar close, not leave the price as None."""
+
+    async def get_latest_quote(self, symbol):
+        raise CircuitBreakerOpenError()
+
+
 @pytest.fixture
 def session():
     engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
@@ -145,6 +178,45 @@ async def test_no_news_leaves_extra_empty(session):
     stock = _make_stock(session)
     context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
     assert context.extra == {}
+
+
+@pytest.mark.asyncio
+async def test_live_quote_is_preferred_over_stale_daily_bar(session):
+    stock = _make_stock(session)
+    _add_bars(session, stock)
+
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, _LiveQuoteProvider())
+
+    assert context.latest_price == pytest.approx(42.5)
+    assert context.extra["quote"]["price"] == pytest.approx(42.5)
+    assert context.extra["quote"]["change"] == pytest.approx(0.5)
+    assert context.extra["quote"]["change_percent"] == pytest.approx(1.19)
+    assert context.extra["quote"]["timestamp"] == "2026-07-29T11:00:00+03:00"
+    assert context.extra["quote"]["source"] == "sahmk"
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_daily_bar_when_live_quote_fails(session):
+    stock = _make_stock(session)
+    _add_bars(session, stock)
+
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, _QuoteFailsButBarWorksProvider())
+
+    assert context.latest_price is not None
+    assert "quote" not in context.extra
+
+
+@pytest.mark.asyncio
+async def test_provider_without_live_quote_support_uses_daily_bar(session):
+    # DevMarketDataProvider has no get_latest_quote at all -- getattr()
+    # must return None and fall through to the existing get_stock_data path.
+    stock = _make_stock(session)
+    _add_bars(session, stock)
+
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
+
+    assert context.latest_price is not None
+    assert "quote" not in context.extra
 
 
 @pytest.mark.asyncio

@@ -232,11 +232,18 @@ async def test_get_recent_events_falls_back_to_results_key_and_title_field():
 @pytest.mark.asyncio
 async def test_get_company_profile_parses_known_field_names():
     client = AsyncMock()
-    client.get_company_profile.return_value = {"name": "Saudi Aramco", "sector": "Energy"}
+    client.get_company_profile.return_value = {
+        "name": "Saudi Aramco", "sector": "Energy", "industry": "Oil & Gas", "exchange": "Tadawul",
+    }
     service = _service(client)
     profile = await service.get_company_profile("2222")
     assert profile == SahmkCompanyProfile(
-        symbol="2222", name="Saudi Aramco", sector="Energy", raw={"name": "Saudi Aramco", "sector": "Energy"}
+        symbol="2222",
+        name="Saudi Aramco",
+        sector="Energy",
+        industry="Oil & Gas",
+        exchange="Tadawul",
+        raw={"name": "Saudi Aramco", "sector": "Energy", "industry": "Oil & Gas", "exchange": "Tadawul"},
     )
 
 
@@ -248,6 +255,8 @@ async def test_get_company_profile_tolerates_missing_fields():
     profile = await service.get_company_profile("2222")
     assert profile.name is None
     assert profile.sector is None
+    assert profile.industry is None
+    assert profile.exchange is None
 
 
 # --- get_company_directory -------------------------------------------------
