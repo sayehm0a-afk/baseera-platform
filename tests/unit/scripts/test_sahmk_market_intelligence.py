@@ -16,6 +16,8 @@ import pytest  # noqa: E402
 from scripts.verify_sahmk_market_intelligence import (  # noqa: E402
     _json_default,
     _outcome_to_dict,
+    _print_company_table,
+    _print_ranking_and_watchlist_entries,
     _ranking_lists_to_dict,
     _sector_breakdown,
     _watchlists_to_dict,
@@ -174,6 +176,44 @@ class TestRankingAndWatchlistDicts:
         assert result["MOMENTUM"] == [
             {"symbol": "2222", "sector": "Energy", "recommendation": "BUY", "confidence": 70.0, "reason": "x"}
         ]
+
+
+class TestPrintFunctionsAreLogFriendly:
+    """These exist specifically so full per-company/ranking data is
+    retrievable from job logs even when the JSON artifact's
+    blob-storage backend is unreachable -- assert they actually print
+    the real symbol-level content, not just a summary count."""
+
+    def test_print_company_table_includes_every_symbol_and_failure_reason(self, capsys):
+        succeeded = _outcome_to_dict(
+            SymbolScanOutcome(
+                symbol="2222", sector="Energy", success=True,
+                report=AnalystReport(
+                    symbol="2222", decision=_decision(), explanation=_explanation(),
+                    generated_at=datetime.now(timezone.utc), engine_version="1.0.0",
+                ),
+                latest_price=26.0,
+            ),
+            None, {"name_en": "Saudi Aramco", "name_ar": "أرامكو"},
+        )
+        failed = _outcome_to_dict(
+            SymbolScanOutcome(symbol="9999", sector=None, success=False, report=None, error="boom", skipped_reason=None),
+            None, None,
+        )
+        _print_company_table([succeeded, failed])
+        out = capsys.readouterr().out
+        assert "2222" in out
+        assert "Saudi Aramco" in out
+        assert "9999" in out
+        assert "boom" in out
+
+    def test_print_rankings_and_watchlists_includes_symbols(self, capsys):
+        rankings = {"TOP_BUY": [{"symbol": "2222", "recommendation": "BUY", "confidence": 70.0, "final_score": 65.0, "target_price": 30.0, "expected_return_pct": 5.0, "risk_level": "MEDIUM", "rank_value": 65.0}]}
+        watchlists = {"MOMENTUM": [{"symbol": "1120", "recommendation": "BUY", "confidence": 60.0, "reason": "strong trend"}]}
+        _print_ranking_and_watchlist_entries(rankings, watchlists)
+        out = capsys.readouterr().out
+        assert "TOP_BUY" in out and "2222" in out
+        assert "MOMENTUM" in out and "1120" in out and "strong trend" in out
 
 
 if __name__ == "__main__":

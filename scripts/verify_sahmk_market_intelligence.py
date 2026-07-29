@@ -303,6 +303,67 @@ def _sector_breakdown(companies: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {sector: {"count": len(symbols), "symbols": sorted(symbols)} for sector, symbols in sorted(by_sector.items())}
 
 
+def _print_company_table(company_details: List[Dict[str, Any]]) -> None:
+    """A compact, one-line-per-company table -- deliberately printed to
+    stdout (not just the JSON artifact), so this data is retrievable
+    even from an environment that can reach the job log API but not
+    the artifact's blob-storage backend (a real, encountered
+    limitation, not a hypothetical one)."""
+    _section("STEP 8b: Per-company summary table (real, this scan)")
+    header = (
+        f"{'SYMBOL':<6} {'NAME_EN':<28} {'NAME_AR':<18} {'SECTOR':<20} {'PRICE':>10} "
+        f"{'TECH':>6} {'FUND':>6} {'CONF':>6} {'REC':<11} {'TARGET':>10} {'STOP':>10} {'HORIZON':<11} {'RISK':<8}"
+    )
+    _print(header)
+    _print("-" * len(header))
+    for c in sorted(company_details, key=lambda x: x["symbol"]):
+        name_en = (c.get("name_en") or "")[:28]
+        name_ar = (c.get("name_ar") or "")[:18]
+        sector = (c.get("sector") or "")[:20]
+        price = c.get("latest_price")
+        tech = c.get("technical_score")
+        fund = c.get("fundamental_score")
+        conf = c.get("confidence")
+        rec = c.get("recommendation") or ("FAILED" if not c["success"] else "")
+        target = c.get("target_price")
+        stop = c.get("stop_loss")
+        horizon = c.get("time_horizon") or ""
+        risk = c.get("risk_level") or ""
+        _print(
+            f"{c['symbol']:<6} {name_en:<28} {name_ar:<18} {sector:<20} "
+            f"{price if price is not None else '-':>10} "
+            f"{tech if tech is not None else '-':>6} {fund if fund is not None else '-':>6} "
+            f"{conf if conf is not None else '-':>6} {rec:<11} "
+            f"{target if target is not None else '-':>10} {stop if stop is not None else '-':>10} "
+            f"{horizon:<11} {risk:<8}"
+        )
+    failed = [c for c in company_details if not c["success"]]
+    if failed:
+        _print("\nFAILED / SKIPPED SYMBOLS (exact reasons):")
+        for c in sorted(failed, key=lambda x: x["symbol"]):
+            _print(f"  {c['symbol']}: skipped_reason={c.get('skipped_reason')!r} error={c.get('error')!r}")
+
+
+def _print_ranking_and_watchlist_entries(rankings_dict: Dict[str, Any], watchlists_dict: Dict[str, Any]) -> None:
+    """Full ranked-entry symbol lists (not just counts) -- same
+    retrievability reasoning as _print_company_table."""
+    _section("STEP 7b: Full ranking list contents (real, this scan)")
+    for category, entries in rankings_dict.items():
+        _print(f"\n[{category}] ({len(entries)} entries)")
+        for e in entries:
+            _print(
+                f"  {e['symbol']:<6} rec={e.get('recommendation')} conf={e.get('confidence')} "
+                f"score={e.get('final_score')} target={e.get('target_price')} "
+                f"exp_return_pct={e.get('expected_return_pct')} risk={e.get('risk_level')} "
+                f"rank_value={e.get('rank_value')}"
+            )
+    _section("STEP 7c: Full watchlist contents (real, this scan)")
+    for category, entries in watchlists_dict.items():
+        _print(f"\n[{category}] ({len(entries)} entries)")
+        for e in entries:
+            _print(f"  {e['symbol']:<6} rec={e.get('recommendation')} conf={e.get('confidence')} reason={e.get('reason')}")
+
+
 async def main() -> int:
     database_url = os.getenv("DATABASE_URL", "")
     if not database_url or database_url.startswith("sqlite"):
@@ -415,6 +476,7 @@ async def main() -> int:
             _print(f"  ranking[{cat}]: {len(entries)} entries")
         for cat, entries in output["watchlists"].items():
             _print(f"  watchlist[{cat}]: {len(entries)} entries")
+        _print_ranking_and_watchlist_entries(output["rankings"], output["watchlists"])
 
         _section("STEP 8: Per-company detail dump")
         stock_by_symbol = {c["symbol"]: c for c in companies}
@@ -427,6 +489,7 @@ async def main() -> int:
         succeeded = [c for c in company_details if c["success"]]
         failed = [c for c in company_details if not c["success"]]
         _print(f"Scanned: {len(company_details)} | succeeded: {len(succeeded)} | failed/skipped: {len(failed)}")
+        _print_company_table(company_details)
 
         output["sector_breakdown"] = _sector_breakdown(companies)
         output["timings_seconds"] = timings
