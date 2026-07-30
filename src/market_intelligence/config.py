@@ -87,6 +87,21 @@ def get_dividend_yield_threshold() -> float:
     return float(os.getenv("MARKET_DIVIDEND_YIELD_THRESHOLD", "0.03"))
 
 
+# --- publication gate -------------------------------------------------------
+
+
+def get_min_risk_reward_ratio() -> float:
+    """Below this reward:risk ratio, a BUY/SELL is rejected outright by
+    publication_gate.py rather than merely shrunk in position size.
+    Reuses AIDecisionTuning.poor_risk_reward_threshold's existing value
+    (1.0) as the default -- the same threshold `_derive_position_size`
+    already treats as "poor" -- rather than inventing a second,
+    uncoordinated number; a ratio below 1.0 means the position risks
+    more than it can gain, which no position-size adjustment alone can
+    make an acceptable trade."""
+    return float(os.getenv("MARKET_MIN_RISK_REWARD_RATIO", "1.0"))
+
+
 # --- change detection ------------------------------------------------------
 
 

@@ -1,0 +1,109 @@
+"""Unit tests for publication_gate.py -- the missing "is this actually
+publishable" step that let symbol 1020 reach TOP_BUY #1 in the
+2026-07-30 live scan purely by having the highest final_score, despite
+a negative expected return."""
+
+from src.analysis.decision.types import EntryQuality, Recommendation
+from src.market_intelligence.publication_gate import evaluate_publication, is_publishable
+from src.market_intelligence.types import GateStatus, PublicationStatus
+from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
+
+
+def test_a_healthy_buy_is_published():
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.PUBLISHED
+    assert is_publishable(outcome)
+
+
+def test_reproduces_1020_a_buy_with_negative_expected_return_is_rejected():
+    # Symbol 1020 (BJAZ), 2026-07-30 live scan: BUY, price 11.88, target
+    # 11.86, expected_return_pct -0.16% -- ranked TOP_BUY #1 by score
+    # alone. The gate must reject this outright, regardless of score.
+    outcome = make_outcome(decision=make_decision(
+        symbol="1020", recommendation=Recommendation.BUY, final_score=70.5, confidence=63.2,
+        target_price=11.86, stop_loss=11.6, expected_return_pct=-0.16,
+    ))
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.REJECTED
+    risk_reward_gate = next(g for g in evaluation.gates if g.name == "risk_reward")
+    assert risk_reward_gate.status is GateStatus.FAIL
+    assert not is_publishable(outcome)
+
+
+def test_a_sell_with_non_negative_expected_return_is_rejected():
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.SELL, expected_return_pct=0.5))
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.REJECTED
+
+
+def test_risk_reward_below_minimum_threshold_is_rejected():
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=1.0, risk_reward_ratio=0.5))
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.REJECTED
+    risk_reward_gate = next(g for g in evaluation.gates if g.name == "risk_reward")
+    assert risk_reward_gate.status is GateStatus.FAIL
+
+
+def test_missing_risk_reward_ratio_is_not_evaluated_not_rejected():
+    # No stop distance to compute risk/reward from -- honestly
+    # NOT_EVALUATED, not silently treated as PASS or FAIL.
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=None))
+    evaluation = evaluate_publication(outcome)
+    risk_reward_gate = next(g for g in evaluation.gates if g.name == "risk_reward")
+    assert risk_reward_gate.status is GateStatus.NOT_EVALUATED
+    assert evaluation.status is PublicationStatus.PUBLISHED
+
+
+def test_poor_entry_quality_downgrades_to_watch_only_not_rejected():
+    outcome = make_outcome(decision=make_decision(
+        recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0,
+        entry_quality=EntryQuality.POOR,
+    ))
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.WATCH_ONLY
+
+
+def test_hold_is_published_without_risk_reward_or_entry_quality_gating():
+    # AIDecisionEngine always computes targets/stop/expected-return
+    # regardless of recommendation (see _compute_price_targets), so a
+    # real HOLD still carries these fields -- what must differ is that
+    # HOLD proposes no trade, so risk/reward and entry quality are
+    # never evaluated against it.
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.HOLD, expected_return_pct=-1.0, risk_reward_ratio=None))
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.PUBLISHED
+    risk_reward_gate = next(g for g in evaluation.gates if g.name == "risk_reward")
+    assert risk_reward_gate.status is GateStatus.NOT_EVALUATED
+
+
+def test_unsuccessful_outcome_is_insufficient_data():
+    outcome = make_outcome(success=False, report=None, skipped_reason="insufficient_data")
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.INSUFFICIENT_DATA
+    assert not is_publishable(outcome)
+
+
+def test_missing_price_is_rejected():
+    outcome = make_outcome(latest_price=None, decision=make_decision(recommendation=Recommendation.BUY))
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.REJECTED
+    price_gate = next(g for g in evaluation.gates if g.name == "price_validity")
+    assert price_gate.status is GateStatus.FAIL
+
+
+def test_missing_sector_is_not_evaluated_and_never_blocks_publication():
+    outcome = make_outcome(sector=None, decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
+    evaluation = evaluate_publication(outcome)
+    sector_gate = next(g for g in evaluation.gates if g.name == "sector_data")
+    assert sector_gate.status is GateStatus.NOT_EVALUATED
+    assert evaluation.status is PublicationStatus.PUBLISHED
+    assert any("sector" in d for d in evaluation.disclosures)
+
+
+def test_benchmark_data_is_always_not_evaluated_and_disclosed():
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
+    evaluation = evaluate_publication(outcome)
+    benchmark_gate = next(g for g in evaluation.gates if g.name == "benchmark_data")
+    assert benchmark_gate.status is GateStatus.NOT_EVALUATED
+    assert any("TASI" in d for d in evaluation.disclosures)

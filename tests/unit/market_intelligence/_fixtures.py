@@ -11,6 +11,7 @@ from typing import List, Optional
 from src.analysis.analyst.types import AnalystReport, Explanation
 from src.analysis.decision.types import (
     DecisionFactorBreakdown,
+    EntryQuality,
     InvestmentDecision,
     PositionSize,
     RiskLevel,
@@ -36,6 +37,8 @@ def make_decision(
     risk_level=RiskLevel.MEDIUM,
     position_size=PositionSize.STANDARD,
     breakdown: Optional[List[DecisionFactorBreakdown]] = None,
+    entry_quality: EntryQuality = EntryQuality.FAIR,
+    risk_reward_ratio: Optional[float] = None,
 ) -> InvestmentDecision:
     return InvestmentDecision(
         symbol=symbol, recommendation=recommendation, confidence=confidence, final_score=final_score,
@@ -44,6 +47,7 @@ def make_decision(
         reasons=[f"{recommendation.value} on {symbol}."],
         breakdown=breakdown if breakdown is not None else [make_breakdown()],
         signals=[], generated_at=datetime.now(timezone.utc),
+        entry_quality=entry_quality, risk_reward_ratio=risk_reward_ratio,
     )
 
 

@@ -97,6 +97,40 @@ class ScheduleInterval(str, Enum):
     WEEKLY = "WEEKLY"
 
 
+class GateStatus(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    NOT_EVALUATED = "NOT_EVALUATED"
+
+
+class PublicationStatus(str, Enum):
+    """Whether one symbol's already-computed recommendation may be
+    surfaced as a real opportunity -- see publication_gate.py. A
+    recommendation existing (`SymbolScanOutcome.report` is not None)
+    is not the same as it being *publishable*; ranking.py's "top
+    opportunity" categories must only ever contain PUBLISHED entries."""
+
+    PUBLISHED = "PUBLISHED"
+    REJECTED = "REJECTED"
+    WATCH_ONLY = "WATCH_ONLY"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+    NOT_EVALUATED = "NOT_EVALUATED"
+
+
+@dataclass(frozen=True)
+class GateResult:
+    name: str
+    status: GateStatus
+    detail: str
+
+
+@dataclass(frozen=True)
+class PublicationEvaluation:
+    status: PublicationStatus
+    gates: List[GateResult]
+    disclosures: List[str]
+
+
 @dataclass(frozen=True)
 class SymbolScanOutcome:
     """One symbol's result from one market scan.
@@ -155,6 +189,10 @@ class SymbolScanOutcome:
     @property
     def risk_level(self) -> Optional[RiskLevel]:
         return self.report.decision.risk_level if self.report else None
+
+    @property
+    def risk_reward_ratio(self) -> Optional[float]:
+        return self.report.decision.risk_reward_ratio if self.report else None
 
     @property
     def time_horizon(self) -> Optional[TimeHorizon]:
