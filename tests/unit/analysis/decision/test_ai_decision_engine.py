@@ -205,6 +205,36 @@ def test_bearish_stop_is_tightened_to_just_above_a_resistance_level_inside_the_a
     assert decision.stop_loss > 100.0
 
 
+def test_bullish_target_never_drops_below_price_when_resistance_sits_within_the_buffer():
+    # Reproduces the 2026-07-30 live scan defect (symbol 1020/BJAZ): a
+    # resistance level 0.3% above price fell inside the ATR range, and
+    # the old refinement unconditionally capped the target to
+    # nearest*(1 - _LEVEL_BUFFER_PCT) -- for a level this close to
+    # price, that buffered value landed *below* price itself, so a BUY
+    # recommendation carried a negative expected return and still got
+    # ranked TOP_BUY by score. A level too close to leave room for the
+    # buffer must be skipped, not used as the target basis.
+    technical_result = _technical_result_with_levels(atr=2.0, resistance=[100.3])
+    engine = _engine([_FakeContributor("technical", score=100.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+
+    assert decision.target_price > 100.0
+    assert decision.expected_return_pct > 0
+    assert decision.target_price_basis == "atr"
+
+
+def test_bearish_target_never_rises_above_price_when_support_sits_within_the_buffer():
+    # Mirror of the bullish case above: a support level just below
+    # price must not be used to cap a SELL's target above price.
+    technical_result = _technical_result_with_levels(atr=2.0, support=[99.7])
+    engine = _engine([_FakeContributor("technical", score=0.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0, technical_result=technical_result))
+
+    assert decision.target_price < 100.0
+    assert decision.expected_return_pct < 0
+    assert decision.target_price_basis == "atr"
+
+
 def test_no_level_inside_the_atr_range_leaves_targets_unrefined():
     technical_result = _technical_result_with_levels(atr=2.0, resistance=[500.0], support=[1.0])
     with_levels = _engine([_FakeContributor("technical", score=80.0, weight=1.0)]).decide(

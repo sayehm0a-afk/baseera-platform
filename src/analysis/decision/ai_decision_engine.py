@@ -159,6 +159,16 @@ def _refine_with_key_levels(
     stop_basis, target_basis) -- `notes` is empty and both bases are
     `"atr"` when no level fell inside the range (the pure ATR-based
     values are returned unchanged).
+
+    A level within `_LEVEL_BUFFER_PCT` of `price` is excluded from
+    target refinement entirely (root cause of the 2026-07-30 live scan
+    defect: symbol 1020 was ranked TOP_BUY with an expected return of
+    -0.16% because a resistance level 0.17% above price was capped by
+    the buffer down to *below* price -- a BUY whose own target sits
+    under its entry price. The buffer must never flip which side of
+    `price` the target lands on; a level too close to leave room for
+    the buffer is not usable as a target and the ATR-based target is
+    kept instead).
     """
     notes: List[str] = []
     stop_basis = "atr"
@@ -174,7 +184,10 @@ def _refine_with_key_levels(
             stop_basis = "support_level"
             notes.append(f"stop loss tightened to just below the nearest support at {nearest:.2f}")
 
-        candidate_resistances = [r for r in support_resistance.resistance if price < r < target_price]
+        candidate_resistances = [
+            r for r in support_resistance.resistance
+            if price < r < target_price and r * (1 - _LEVEL_BUFFER_PCT) > price
+        ]
         if candidate_resistances:
             nearest = min(candidate_resistances)
             target_price = nearest * (1 - _LEVEL_BUFFER_PCT)
@@ -188,7 +201,10 @@ def _refine_with_key_levels(
             stop_basis = "resistance_level"
             notes.append(f"stop loss tightened to just above the nearest resistance at {nearest:.2f}")
 
-        candidate_supports = [s for s in support_resistance.support if target_price < s < price]
+        candidate_supports = [
+            s for s in support_resistance.support
+            if target_price < s < price and s * (1 + _LEVEL_BUFFER_PCT) < price
+        ]
         if candidate_supports:
             nearest = max(candidate_supports)
             target_price = nearest * (1 + _LEVEL_BUFFER_PCT)
