@@ -307,6 +307,141 @@ async def test_get_company_directory_is_cached():
     client.get_companies.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_get_company_directory_no_pagination_signal_is_not_verified():
+    """A single-page response with no next/count/total field at all --
+    the previously-silent case (two real full-universe runs both
+    returned exactly 100 companies this way) -- must now be an
+    explicit, honest UNIVERSE_NOT_VERIFIED, never assumed complete."""
+    client = AsyncMock()
+    client.get_companies.return_value = {"companies": [{"symbol": "1010"}, {"symbol": "1020"}]}
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert len(directory) == 2
+    client.get_companies.assert_awaited_once()
+    diag = service.last_directory_diagnostics
+    assert diag.universe_verdict == "UNIVERSE_NOT_VERIFIED"
+    assert diag.pages_fetched == 1
+    assert diag.reported_total is None
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_follows_next_url_pagination():
+    client = AsyncMock()
+    client.get_companies.side_effect = [
+        {
+            "companies": [{"symbol": "1010"}, {"symbol": "1020"}],
+            "next": "https://app.sahmk.sa/api/v1/companies/?page=2",
+        },
+        {"companies": [{"symbol": "1030"}], "next": None},
+    ]
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert [c.symbol for c in directory] == ["1010", "1020", "1030"]
+    assert client.get_companies.await_count == 2
+    second_call_kwargs = client.get_companies.await_args_list[1].kwargs
+    assert second_call_kwargs["params"] == {"page": "2"}
+    diag = service.last_directory_diagnostics
+    assert diag.pagination_signal == "next_url"
+    assert diag.pages_fetched == 2
+    assert diag.universe_verdict == "PARTIAL_UNIVERSE_VERIFIED"
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_follows_count_total_pagination_to_full_verification():
+    client = AsyncMock()
+    client.get_companies.side_effect = [
+        {"companies": [{"symbol": "1010"}, {"symbol": "1020"}], "count": 3},
+        {"companies": [{"symbol": "1030"}], "count": 3},
+    ]
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert [c.symbol for c in directory] == ["1010", "1020", "1030"]
+    diag = service.last_directory_diagnostics
+    assert diag.pagination_signal == "count_total"
+    assert diag.reported_total == 3
+    assert diag.universe_verdict == "FULL_UNIVERSE_VERIFIED"
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_partial_when_total_never_reconciled():
+    """The server claims more records exist (count=500) but the same
+    company keeps coming back (a broken/looping page param) -- must
+    report PARTIAL, never FULL, and must stop as soon as a page adds
+    no new companies rather than looping to _MAX_DIRECTORY_PAGES."""
+    client = AsyncMock()
+    client.get_companies.return_value = {"companies": [{"symbol": "1010"}], "count": 500}
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert len(directory) == 1
+    diag = service.last_directory_diagnostics
+    assert diag.universe_verdict == "PARTIAL_UNIVERSE_VERIFIED"
+    # Page 1 fetches the only real company; page 2 (same mocked
+    # response) contributes zero *new* companies, so the loop stops
+    # there instead of continuing to _MAX_DIRECTORY_PAGES.
+    assert diag.pages_fetched == 2
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_pagination_is_bounded():
+    """A response that always claims more records than it delivers
+    (each page returns exactly one *new* company, forever) must stop
+    at _MAX_DIRECTORY_PAGES, never spin unbounded."""
+    call_count = {"n": 0}
+
+    async def _fake_get_companies(params=None):
+        call_count["n"] += 1
+        n = call_count["n"]
+        return {"companies": [{"symbol": f"S{n}"}], "count": 10_000}
+
+    client = AsyncMock()
+    client.get_companies.side_effect = _fake_get_companies
+    service = _service(client)
+    directory = await service.get_company_directory()
+    from src.market_data.sahmk import service as service_module
+
+    assert len(directory) == service_module._MAX_DIRECTORY_PAGES
+    assert call_count["n"] == service_module._MAX_DIRECTORY_PAGES
+    assert service.last_directory_diagnostics.universe_verdict == "PARTIAL_UNIVERSE_VERIFIED"
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_deduplicates_across_pages():
+    client = AsyncMock()
+    client.get_companies.side_effect = [
+        {"companies": [{"symbol": "1010"}], "next": "https://x/?page=2"},
+        {"companies": [{"symbol": "1010"}], "next": None},  # same symbol repeated
+    ]
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert [c.symbol for c in directory] == ["1010"]
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_extracts_nested_sector_object():
+    client = AsyncMock()
+    client.get_companies.return_value = {
+        "companies": [{"symbol": "2222", "sector": {"name": "Energy"}}]
+    }
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert directory[0].sector == "Energy"
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_records_diagnostics_when_sector_unresolved():
+    client = AsyncMock()
+    client.get_companies.return_value = {
+        "companies": [{"symbol": "1010", "gics_industry_group": "Banks"}]
+    }
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert directory[0].sector is None
+    diag = service.last_directory_diagnostics
+    assert diag.sector_populated_count == 0
+    assert "gics_industry_group" in diag.first_item_keys
+
+
 # --- get_financials ------------------------------------------------------
 
 

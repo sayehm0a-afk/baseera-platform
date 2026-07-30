@@ -340,10 +340,19 @@ class SahmkClient:
         validate_symbol_format(symbol)
         return await self._request(f"/dividends/{symbol}/")
 
-    async def get_companies(self) -> Dict[str, Any]:
+    async def get_companies(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """GET /companies/ -- company directory / symbol discovery
         (Free tier). Used for periodic symbol-universe sync
-        (src.market_data.ingestion.ingest_symbols); a single call, not
-        one per symbol, so discovering the full ~350-symbol Tadawul+Nomu
-        universe costs one rate-limited request, not hundreds."""
-        return await self._request("/companies/")
+        (src.market_data.ingestion.ingest_symbols).
+
+        `params` is UNVERIFIED pagination support: SAHMK's actual
+        pagination convention (if any) for this endpoint has never been
+        confirmed live (see docs/SAHMK_INTEGRATION.md) -- this sandbox's
+        network policy blocks direct calls to app.sahmk.sa, so the real
+        scheme can only be confirmed from a live run's logs, not from
+        here. Passing no params reproduces the original single-call
+        behavior exactly. SahmkMarketDataService.get_company_directory()
+        is responsible for deciding what params (if any) to send on a
+        follow-up page, based on what the first response's envelope
+        actually contains."""
+        return await self._request("/companies/", params=params)
