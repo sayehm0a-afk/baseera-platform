@@ -101,6 +101,42 @@ def test_missing_sector_is_not_evaluated_and_never_blocks_publication():
     assert any("sector" in d for d in evaluation.disclosures)
 
 
+def test_illiquid_stock_is_rejected():
+    # price=100, volume_sma_20=1000 -> average traded value ~100,000 SAR/day,
+    # well below the default 1,000,000 SAR/day minimum.
+    outcome = make_outcome(
+        latest_price=100.0, technical_snapshot={"volume_sma_20": 1000.0},
+        decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0),
+    )
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.REJECTED
+    liquidity_gate = next(g for g in evaluation.gates if g.name == "liquidity")
+    assert liquidity_gate.status is GateStatus.FAIL
+
+
+def test_liquid_stock_passes_the_liquidity_gate():
+    # price=100, volume_sma_20=50000 -> average traded value ~5,000,000 SAR/day.
+    outcome = make_outcome(
+        latest_price=100.0, technical_snapshot={"volume_sma_20": 50000.0},
+        decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0),
+    )
+    evaluation = evaluate_publication(outcome)
+    liquidity_gate = next(g for g in evaluation.gates if g.name == "liquidity")
+    assert liquidity_gate.status is GateStatus.PASS
+    assert evaluation.status is PublicationStatus.PUBLISHED
+
+
+def test_missing_volume_data_is_not_evaluated_not_rejected():
+    outcome = make_outcome(
+        latest_price=100.0, technical_snapshot=None,
+        decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0),
+    )
+    evaluation = evaluate_publication(outcome)
+    liquidity_gate = next(g for g in evaluation.gates if g.name == "liquidity")
+    assert liquidity_gate.status is GateStatus.NOT_EVALUATED
+    assert evaluation.status is PublicationStatus.PUBLISHED
+
+
 def test_benchmark_data_is_always_not_evaluated_and_disclosed():
     outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
     evaluation = evaluate_publication(outcome)

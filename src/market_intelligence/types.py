@@ -238,6 +238,23 @@ class SymbolScanOutcome:
     def dividend_yield(self) -> Optional[float]:
         return (self.fundamental_snapshot or {}).get("dividend_yield")
 
+    @property
+    def average_volume(self) -> Optional[float]:
+        """20-period average share volume, from the same volume_sma_20
+        indicator TechnicalAnalysisEngine already computes -- no new
+        calculation. None when the indicator wasn't computed (e.g.
+        insufficient history), never defaulted to 0."""
+        return (self.technical_snapshot or {}).get("volume_sma_20")
+
+    @property
+    def average_traded_value(self) -> Optional[float]:
+        """Average daily traded value (price x average volume) -- the
+        liquidity proxy publication_gate.py's liquidity gate reads.
+        None when either input is unavailable."""
+        if self.latest_price is None or self.average_volume is None:
+            return None
+        return self.latest_price * self.average_volume
+
 
 @dataclass(frozen=True)
 class MarketScanSummary:

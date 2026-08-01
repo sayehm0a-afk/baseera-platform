@@ -90,6 +90,18 @@ def get_dividend_yield_threshold() -> float:
 # --- publication gate -------------------------------------------------------
 
 
+def get_min_average_traded_value() -> float:
+    """Minimum average daily traded value (price x 20-period average
+    volume, in SAR) for a BUY/SELL to pass the liquidity gate. This is
+    a conservative placeholder, not a value empirically calibrated
+    against real Tadawul liquidity distributions -- disclosed as a
+    known limitation (see docs/basirah_intelligence_core/
+    PHASE_0_REALITY_AUDIT.md, defect #1) pending that calibration work.
+    Configurable so it can be tightened/loosened without a code change
+    once real liquidity-tier data is available."""
+    return float(os.getenv("MARKET_MIN_AVERAGE_TRADED_VALUE_SAR", "1000000"))
+
+
 def get_min_risk_reward_ratio() -> float:
     """Below this reward:risk ratio, a BUY/SELL is rejected outright by
     publication_gate.py rather than merely shrunk in position size.

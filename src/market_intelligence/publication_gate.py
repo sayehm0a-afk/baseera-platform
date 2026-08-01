@@ -33,7 +33,7 @@ from typing import List
 
 from src.analysis.decision.types import EntryQuality
 from src.analysis.recommendation.types import Recommendation
-from src.market_intelligence.config import get_min_risk_reward_ratio
+from src.market_intelligence.config import get_min_average_traded_value, get_min_risk_reward_ratio
 from src.market_intelligence.types import (
     GateResult,
     GateStatus,
@@ -81,6 +81,11 @@ def evaluate_publication(outcome: SymbolScanOutcome) -> PublicationEvaluation:
     risk_reward_gate = _risk_reward_gate(outcome, recommendation)
     gates.append(risk_reward_gate)
     if risk_reward_gate.status is GateStatus.FAIL:
+        return PublicationEvaluation(status=PublicationStatus.REJECTED, gates=gates, disclosures=disclosures)
+
+    liquidity_gate = _liquidity_gate(outcome)
+    gates.append(liquidity_gate)
+    if liquidity_gate.status is GateStatus.FAIL:
         return PublicationEvaluation(status=PublicationStatus.REJECTED, gates=gates, disclosures=disclosures)
 
     entry_quality = outcome.report.decision.entry_quality
@@ -144,6 +149,25 @@ def _risk_reward_gate(outcome: SymbolScanOutcome, recommendation: Recommendation
             detail=f"risk/reward {risk_reward_ratio:.2f} below minimum {min_ratio:.2f}",
         )
     return GateResult(name="risk_reward", status=GateStatus.PASS, detail=f"risk/reward {risk_reward_ratio:.2f}")
+
+
+def _liquidity_gate(outcome: SymbolScanOutcome) -> GateResult:
+    """A technically clean setup in a stock nobody can actually trade
+    at size is not a real opportunity -- see docs/basirah_
+    intelligence_core/PHASE_0_REALITY_AUDIT.md defect #1. Threshold is
+    a conservative placeholder (get_min_average_traded_value), not yet
+    empirically calibrated or horizon-specific; disclosed as a known
+    limitation rather than presented as validated."""
+    average_traded_value = outcome.average_traded_value
+    if average_traded_value is None:
+        return GateResult(name="liquidity", status=GateStatus.NOT_EVALUATED, detail="average volume unavailable")
+    min_value = get_min_average_traded_value()
+    if average_traded_value < min_value:
+        return GateResult(
+            name="liquidity", status=GateStatus.FAIL,
+            detail=f"average traded value ~{average_traded_value:,.0f} SAR/day below minimum {min_value:,.0f}",
+        )
+    return GateResult(name="liquidity", status=GateStatus.PASS, detail=f"average traded value ~{average_traded_value:,.0f} SAR/day")
 
 
 def _sector_data_gate(outcome: SymbolScanOutcome, disclosures: List[str]) -> GateResult:
