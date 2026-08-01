@@ -90,6 +90,16 @@ def get_dividend_yield_threshold() -> float:
 # --- publication gate -------------------------------------------------------
 
 
+def get_max_data_age_hours() -> float:
+    """Maximum age (hours, from SymbolScanOutcome.scanned_at to now) a
+    scan outcome may be and still be published. Basirah is a daily-bar
+    system with no live intraday feed (see docs/basirah_intelligence_core/
+    PHASE_0_REALITY_AUDIT.md), so 24h is a reasonable default for
+    "still represents today's/yesterday's close," not a claim of
+    real-time freshness."""
+    return float(os.getenv("MARKET_MAX_DATA_AGE_HOURS", "24"))
+
+
 def get_min_average_traded_value() -> float:
     """Minimum average daily traded value (price x 20-period average
     volume, in SAR) for a BUY/SELL to pass the liquidity gate. This is

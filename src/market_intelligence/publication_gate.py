@@ -29,11 +29,16 @@ downstream ever manufactures a sector- or benchmark-relative claim
 from these NOT_EVALUATED gates -- see PublicationEvaluation.disclosures.
 """
 
+from datetime import datetime, timezone
 from typing import List
 
 from src.analysis.decision.types import EntryQuality
 from src.analysis.recommendation.types import Recommendation
-from src.market_intelligence.config import get_min_average_traded_value, get_min_risk_reward_ratio
+from src.market_intelligence.config import (
+    get_max_data_age_hours,
+    get_min_average_traded_value,
+    get_min_risk_reward_ratio,
+)
 from src.market_intelligence.types import (
     GateResult,
     GateStatus,
@@ -60,6 +65,7 @@ def evaluate_publication(outcome: SymbolScanOutcome) -> PublicationEvaluation:
     gates: List[GateResult] = [GateResult(name="data_availability", status=GateStatus.PASS, detail="analyst report present")]
     disclosures: List[str] = []
 
+    gates.append(_freshness_gate(outcome))
     gates.append(_price_validity_gate(outcome))
     gates.append(_confidence_gate(outcome))
     gates.append(_targets_gate(outcome))
@@ -103,6 +109,26 @@ def evaluate_publication(outcome: SymbolScanOutcome) -> PublicationEvaluation:
         return PublicationEvaluation(status=PublicationStatus.WATCH_ONLY, gates=gates, disclosures=disclosures)
 
     return PublicationEvaluation(status=PublicationStatus.PUBLISHED, gates=gates, disclosures=disclosures)
+
+
+def _freshness_gate(outcome: SymbolScanOutcome) -> GateResult:
+    scanned_at = outcome.scanned_at
+    if scanned_at.tzinfo is None:
+        # Reconstructed outcomes (read_model.outcome_from_record) carry
+        # whatever a DB row returns -- SQLite drops tzinfo entirely, and
+        # this column is always written/read as UTC (see
+        # SymbolIntelligenceRecord.evaluated_at), so a naive value is
+        # treated as UTC rather than compared against an aware "now"
+        # and raising.
+        scanned_at = scanned_at.replace(tzinfo=timezone.utc)
+    age_hours = (datetime.now(timezone.utc) - scanned_at).total_seconds() / 3600.0
+    max_age = get_max_data_age_hours()
+    if age_hours > max_age:
+        return GateResult(
+            name="data_freshness", status=GateStatus.FAIL,
+            detail=f"scan is {age_hours:.1f}h old, exceeds the {max_age:.0f}h maximum",
+        )
+    return GateResult(name="data_freshness", status=GateStatus.PASS, detail=f"scan is {age_hours:.1f}h old")
 
 
 def _price_validity_gate(outcome: SymbolScanOutcome) -> GateResult:
