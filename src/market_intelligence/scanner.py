@@ -33,6 +33,7 @@ from src.market_intelligence.config import (
     get_scan_batch_size,
     get_scan_max_attempts,
     get_scan_retry_base_delay_seconds,
+    get_scan_symbol_timeout_seconds,
 )
 from src.market_intelligence.types import MarketScanSummary, SymbolScanOutcome
 
@@ -88,7 +89,7 @@ class MarketScanner:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                return await self._scan_one(symbol)
+                return await asyncio.wait_for(self._scan_one(symbol), timeout=get_scan_symbol_timeout_seconds())
             except Exception as exc:  # noqa: BLE001 -- deliberate: one symbol's failure must never abort the whole scan.
                 last_error = exc
                 if attempt >= max_attempts:

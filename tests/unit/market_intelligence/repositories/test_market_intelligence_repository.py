@@ -18,6 +18,7 @@ from src.domain.models import (
     AlertType,
     CalibrationConfig,
     CalibrationStatus,
+    MarketScanRun,
     MarketScanStatus,
     RecommendationLabel,
     RecommendationSnapshot,
@@ -79,6 +80,39 @@ def test_finish_run_without_started_at_leaves_duration_none(session, repo):
 
 def test_get_run_returns_none_for_unknown_id(session, repo):
     assert repo.get_run(session, 9999) is None
+
+
+def test_reap_stale_runs_marks_old_pending_and_running_runs_failed(session, repo):
+    from datetime import timedelta
+
+    stale_pending = repo.create_scan_run(session, symbols_requested=1)
+    stale_running = repo.create_scan_run(session, symbols_requested=1)
+    repo.mark_running(session, stale_running.id)
+    fresh_running = repo.create_scan_run(session, symbols_requested=1)
+    repo.mark_running(session, fresh_running.id)
+
+    # Backdate the two "stale" runs' created_at directly (bypassing the
+    # model's own default) to simulate a run that crashed hours ago.
+    old = datetime.now(timezone.utc) - timedelta(hours=10)
+    session.query(MarketScanRun).filter(
+        MarketScanRun.id.in_([stale_pending.id, stale_running.id])
+    ).update({"created_at": old}, synchronize_session=False)
+    session.commit()
+
+    reaped = repo.reap_stale_runs(session, max_age_hours=4)
+
+    reaped_ids = {run.id for run in reaped}
+    assert reaped_ids == {stale_pending.id, stale_running.id}
+    assert repo.get_run(session, stale_pending.id).status is MarketScanStatus.FAILED
+    assert repo.get_run(session, stale_running.id).status is MarketScanStatus.FAILED
+    assert repo.get_run(session, fresh_running.id).status is MarketScanStatus.RUNNING
+
+
+def test_reap_stale_runs_leaves_recent_runs_untouched(session, repo):
+    run = repo.create_scan_run(session, symbols_requested=1)
+    reaped = repo.reap_stale_runs(session, max_age_hours=4)
+    assert reaped == []
+    assert repo.get_run(session, run.id).status is MarketScanStatus.PENDING
 
 
 def test_get_latest_successful_run_ignores_failed_runs(session, repo):

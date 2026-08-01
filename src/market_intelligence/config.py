@@ -49,6 +49,20 @@ def get_scan_max_symbols() -> int:
     return int(os.getenv("MARKET_SCAN_MAX_SYMBOLS", "500"))
 
 
+def get_scan_symbol_timeout_seconds() -> float:
+    """Hard wall-clock ceiling on one symbol's entire _scan_one() (DB
+    query + every SAHMK call + LLM narration), independent of each
+    individual leg's own timeout -- without this, a single
+    pathologically slow symbol has no ceiling on how large a share of
+    a long full-market scan's time budget it can consume (found in the
+    pre-live-scan production audit). Default (240s) comfortably covers
+    the worst realistic case: several sequential SAHMK requests each
+    up to ~33.5s (10s request timeout x up to 3 tenacity attempts with
+    backoff) plus the analyst LLM call's own 12s ceiling
+    (ANALYST_LLM_TIMEOUT_SECONDS)."""
+    return float(os.getenv("MARKET_SCAN_SYMBOL_TIMEOUT_SECONDS", "240"))
+
+
 def is_price_history_required_for_scan() -> bool:
     """SymbolSelector skips a symbol with zero ingested PriceBar rows
     when true (the default) -- such a symbol cannot produce a
@@ -56,6 +70,17 @@ def is_price_history_required_for_scan() -> bool:
     scanning it would only ever produce a skipped/insufficient-data
     outcome."""
     return os.getenv("MARKET_SCAN_REQUIRE_PRICE_HISTORY", "true").lower() == "true"
+
+
+def get_max_scan_run_duration_hours() -> float:
+    """A PENDING/RUNNING MarketScanRun older than this is treated as
+    crashed/cancelled (its process died without ever calling
+    finish_run) and reaped -- see MarketIntelligenceRepository.
+    reap_stale_runs(). Default (4h) is set above
+    sahmk-live-pipeline-validation.yml's own 3h full_universe timeout,
+    so a legitimately still-running full-market scan is never reaped
+    out from under itself."""
+    return float(os.getenv("MARKET_MAX_SCAN_RUN_DURATION_HOURS", "4"))
 
 
 # --- rankings / watchlists ----------------------------------------------

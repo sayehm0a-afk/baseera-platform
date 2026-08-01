@@ -15,7 +15,7 @@ method) -- matches every other DB-touching module in this codebase
 (`ohlcv_loader.py`, `fundamental_loader.py`, the backtesting engine).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -147,6 +147,45 @@ class MarketIntelligenceRepository:
 
     def get_run(self, session: Session, run_id: int) -> Optional[MarketScanRun]:
         return session.query(MarketScanRun).filter_by(id=run_id).one_or_none()
+
+    def reap_stale_runs(self, session: Session, max_age_hours: float) -> List[MarketScanRun]:
+        """A run that crashed or was cancelled (e.g. a killed GitHub
+        Actions job) never reaches finish_run and stays PENDING/RUNNING
+        forever -- with nothing to distinguish it from a genuinely
+        in-progress scan, the overlap guard in POST /scan (production
+        audit finding) would otherwise block every future scan
+        permanently. Marks any such run older than max_age_hours as
+        FAILED so a new scan can proceed. Returns the runs it reaped,
+        for logging."""
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        candidates = (
+            session.query(MarketScanRun)
+            .filter(MarketScanRun.status.in_([MarketScanStatus.PENDING, MarketScanStatus.RUNNING]))
+            .all()
+        )
+        reaped = []
+        for run in candidates:
+            created_at = run.created_at
+            if created_at.tzinfo is None:
+                # SQLite does not round-trip a timezone-aware DateTime
+                # faithfully across separate queries/sessions (the same
+                # pitfall mark_running's own docstring documents) --
+                # created_at is always written as UTC, so a naive value
+                # read back is treated as UTC rather than compared
+                # against an aware "now" and raising.
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if created_at < cutoff:
+                previous_status = run.status
+                run.status = MarketScanStatus.FAILED
+                run.finished_at = datetime.now(timezone.utc)
+                run.error_summary = (
+                    f"Reaped: still {previous_status.value} after {max_age_hours:.1f}h -- "
+                    "treated as crashed/cancelled, never called finish_run."
+                )
+                reaped.append(run)
+        if reaped:
+            session.commit()
+        return reaped
 
     def get_latest_successful_run(self, session: Session, before_run_id: Optional[int] = None) -> Optional[MarketScanRun]:
         query = session.query(MarketScanRun).filter(MarketScanRun.status == MarketScanStatus.SUCCESS)

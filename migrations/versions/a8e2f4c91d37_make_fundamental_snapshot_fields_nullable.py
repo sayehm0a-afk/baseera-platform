@@ -34,17 +34,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    op.alter_column("fundamental_snapshots", "current_assets", existing_type=sa.Numeric(24, 4), nullable=True)
-    op.alter_column("fundamental_snapshots", "current_liabilities", existing_type=sa.Numeric(24, 4), nullable=True)
-    op.alter_column("fundamental_snapshots", "shares_outstanding", existing_type=sa.BigInteger(), nullable=True)
-    op.alter_column("fundamental_snapshots", "eps", existing_type=sa.Numeric(12, 4), nullable=True)
+    # batch_alter_table (not a bare op.alter_column): SQLite has no
+    # native ALTER COLUMN ... DROP NOT NULL -- raw op.alter_column
+    # emits that syntax directly and fails outright against SQLite
+    # (real production audit finding: this migration was silently
+    # broken against SQLite the whole time; only ever exercised
+    # against Postgres, where ALTER COLUMN is native, so it never
+    # surfaced). batch mode transparently falls back to SQLite's
+    # recreate-table approach there while still emitting a plain
+    # ALTER COLUMN on Postgres -- the same convention already
+    # established in c4d8e6f19a2b_add_user_deletion_fk_policies.py.
+    with op.batch_alter_table("fundamental_snapshots") as batch_op:
+        batch_op.alter_column("current_assets", existing_type=sa.Numeric(24, 4), nullable=True)
+        batch_op.alter_column("current_liabilities", existing_type=sa.Numeric(24, 4), nullable=True)
+        batch_op.alter_column("shares_outstanding", existing_type=sa.BigInteger(), nullable=True)
+        batch_op.alter_column("eps", existing_type=sa.Numeric(12, 4), nullable=True)
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.alter_column("fundamental_snapshots", "eps", existing_type=sa.Numeric(12, 4), nullable=False)
-    op.alter_column("fundamental_snapshots", "shares_outstanding", existing_type=sa.BigInteger(), nullable=False)
-    op.alter_column(
-        "fundamental_snapshots", "current_liabilities", existing_type=sa.Numeric(24, 4), nullable=False
-    )
-    op.alter_column("fundamental_snapshots", "current_assets", existing_type=sa.Numeric(24, 4), nullable=False)
+    with op.batch_alter_table("fundamental_snapshots") as batch_op:
+        batch_op.alter_column("eps", existing_type=sa.Numeric(12, 4), nullable=False)
+        batch_op.alter_column("shares_outstanding", existing_type=sa.BigInteger(), nullable=False)
+        batch_op.alter_column("current_liabilities", existing_type=sa.Numeric(24, 4), nullable=False)
+        batch_op.alter_column("current_assets", existing_type=sa.Numeric(24, 4), nullable=False)

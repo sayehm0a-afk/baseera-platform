@@ -226,11 +226,35 @@ async def test_non_json_200_response_raises_request_error():
 
 
 @pytest.mark.asyncio
-async def test_network_error_raises_request_error_without_retry():
-    client, session = _client([aiohttp.ClientConnectionError("connection refused")])
+async def test_network_error_is_retried_and_recovers_on_second_attempt():
+    # A connection failure/timeout is exactly as transient as a 5xx
+    # (found in the pre-live-scan production audit: it previously
+    # was NOT retried, unlike a 500, which meant one slow/dropped
+    # connection failed a symbol outright during a real full-market
+    # scan while an otherwise-identical 500 would recover). Must be
+    # retried the same way 5xx already is.
+    client, session = _client(
+        [aiohttp.ClientConnectionError("connection refused"), FakeResponse(200, {"index_value": 1})]
+    )
+    result = await client.get_market_summary("TASI")
+    assert result == {"index_value": 1}
+    assert len(session.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_network_error_raises_request_error_after_retries_exhausted():
+    client, session = _client([aiohttp.ClientConnectionError("connection refused")] * 3)
     with pytest.raises(SahmkRequestError):
         await client.get_market_summary("TASI")
-    assert len(session.calls) == 1  # network errors are surfaced immediately, not retried
+    assert len(session.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_timeout_error_is_retried_like_a_network_error():
+    client, session = _client([asyncio.TimeoutError(), FakeResponse(200, {"index_value": 1})])
+    result = await client.get_market_summary("TASI")
+    assert result == {"index_value": 1}
+    assert len(session.calls) == 2
 
 
 # --- retry behavior: 429 and 5xx --------------------------------------
