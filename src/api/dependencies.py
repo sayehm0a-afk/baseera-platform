@@ -16,6 +16,7 @@ from typing import Optional
 from fastapi import Cookie, Depends
 from sqlalchemy.orm import Session
 
+from src.api.exceptions import ProviderUnavailableError
 from src.auth import token_store
 from src.auth.exceptions import UnauthenticatedError
 from src.auth.jwt_service import InvalidAccessTokenError, decode_access_token
@@ -26,16 +27,34 @@ from src.market_data.fundamental_provider_factory import get_fundamental_data_pr
 from src.market_data.provider_factory import get_market_data_provider
 from src.market_data.providers.fundamental_data_provider import IFundamentalDataProvider
 from src.market_data.providers.market_data_provider import IMarketDataProvider
+from src.market_data.strict_mode import StrictRealDataUnavailableError
 
 _auth_repository = AuthRepository()
 
 
 async def get_market_provider() -> IMarketDataProvider:
-    return await get_market_data_provider()
+    # Strict real-data mode (STRICT_REAL_DATA=true) makes
+    # get_market_data_provider() raise instead of silently returning a
+    # synthetic DevMarketDataProvider -- translated here into the
+    # existing ProviderUnavailableError (503) so every route that
+    # depends on this (quote/history/stock-detail/recommendation/
+    # decision/analyst-report) fails clearly instead of either
+    # crashing unhandled or ever serving synthetic data as if real.
+    try:
+        return await get_market_data_provider()
+    except StrictRealDataUnavailableError as exc:
+        raise ProviderUnavailableError(
+            f"Real SAHMK market data is required but unavailable: {exc.reason}"
+        ) from exc
 
 
 async def get_fundamental_provider() -> IFundamentalDataProvider:
-    return await get_fundamental_data_provider()
+    try:
+        return await get_fundamental_data_provider()
+    except StrictRealDataUnavailableError as exc:
+        raise ProviderUnavailableError(
+            f"Real SAHMK fundamental data is required but unavailable: {exc.reason}"
+        ) from exc
 
 
 def get_current_user(

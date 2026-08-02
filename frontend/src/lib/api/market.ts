@@ -1,6 +1,7 @@
 import { apiFetch } from "./client";
 import type {
   AlertsResponse,
+  MarketDataHealth,
   MarketScanProgress,
   MarketScanRun,
   MarketSummary,
@@ -71,4 +72,12 @@ export function getWatchlists(
   if (runId !== undefined) search.set("run_id", String(runId));
   const query = search.toString() ? `?${search.toString()}` : "";
   return apiFetch<WatchlistsResponse>(`/api/v1/market/watchlists${query}`);
+}
+
+// Not under /api/v1/market -- GET /health/market-data (main.py), the
+// same top-level health-check family as /health/live and
+// /health/ready, so it stays reachable even when the rest of the API
+// is otherwise unavailable.
+export function getMarketDataHealth(): Promise<MarketDataHealth> {
+  return apiFetch<MarketDataHealth>("/health/market-data");
 }

@@ -27,6 +27,11 @@ class ProviderHealth(Enum):
 class IFundamentalDataProvider(ABC):
     """Interface for fundamental (financial-statement) data providers."""
 
+    # Safe default: assume synthetic unless a concrete provider
+    # overrides it to False -- see IMarketDataProvider.is_synthetic's
+    # identical rationale.
+    is_synthetic: bool = True
+
     @abstractmethod
     async def authenticate(self) -> bool:
         """Authenticate with the provider."""

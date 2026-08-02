@@ -13,7 +13,9 @@ from typing import Callable, List, Optional
 from sqlalchemy.orm import Session
 
 from src.domain.models import MarketScanStatus
+from src.market_data import config as market_data_config
 from src.market_data.providers.market_data_provider import IMarketDataProvider
+from src.market_data.strict_mode import StrictRealDataUnavailableError
 from src.market_intelligence.alert_engine import AlertEngine
 from src.market_intelligence.change_detector import ChangeDetector
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -85,6 +87,24 @@ class MarketIntelligenceEngine:
             on_symbol_complete=on_symbol_complete,
             on_retry=on_retry,
         )
+
+        # Strict real-data mode's last, defense-in-depth check before
+        # anything from this run is written: provider_factory already
+        # refuses to hand out a synthetic provider in strict mode (so
+        # this should be structurally unreachable in the normal case),
+        # but if any outcome is nonetheless marked synthetic, the
+        # *entire* run must fail -- never a partial persist, never a
+        # mixed real/synthetic batch reaching the database or a
+        # ranking/publication decision.
+        if market_data_config.is_strict_real_data_enabled():
+            synthetic_symbols = [o.symbol for o in outcomes if o.is_synthetic is True]
+            if synthetic_symbols:
+                preview = ", ".join(synthetic_symbols[:5])
+                more = f" (+{len(synthetic_symbols) - 5} more)" if len(synthetic_symbols) > 5 else ""
+                raise StrictRealDataUnavailableError(
+                    f"Strict real-data mode: {len(synthetic_symbols)} symbol(s) produced synthetic "
+                    f"data ({preview}{more}) -- refusing to persist or publish this scan run."
+                )
 
         write_session = self._session_factory()
         try:

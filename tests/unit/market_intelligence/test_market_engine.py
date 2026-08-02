@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 from src.analysis.recommendation.types import Recommendation
 from src.core.db.database import Base
 from src.domain.models import MarketScanStatus, Stock
+from src.market_data.strict_mode import StrictRealDataUnavailableError
 from src.market_intelligence.market_engine import MarketIntelligenceEngine
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
@@ -174,3 +175,85 @@ async def test_execute_scan_marks_running_before_finishing(factory):
     assert run_row.finished_at is not None
     assert run_row.started_at <= run_row.finished_at
     session.close()
+
+
+# --- strict real-data mode: mixed real/synthetic batches must fail ----
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_fails_the_whole_run_when_any_outcome_is_synthetic(factory, monkeypatch):
+    """Defense in depth: provider_factory already refuses to hand out a
+    synthetic provider under strict mode, so this should be
+    structurally unreachable in normal operation -- but if any outcome
+    is nonetheless marked synthetic, the entire run must fail and
+    nothing from it may be persisted."""
+    monkeypatch.setenv("STRICT_REAL_DATA", "true")
+    _seed_stock(factory, "2222")
+    _seed_stock(factory, "1120")
+    repo = MarketIntelligenceRepository()
+    outcomes = [
+        make_outcome(symbol="2222", decision=make_decision(symbol="2222"), is_synthetic=False, data_source="SAHMK_REAL"),
+        make_outcome(symbol="1120", decision=make_decision(symbol="1120"), is_synthetic=True, data_source="DEV_SYNTHETIC"),
+    ]
+
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner(outcomes), symbol_selector=_FakeSymbolSelector(["2222", "1120"]),
+    )
+
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=2)
+    run_id = run.id
+    session.close()
+
+    with pytest.raises(StrictRealDataUnavailableError, match="1120"):
+        await engine.execute_scan(run_id)
+
+    # Nothing from this run was persisted -- no symbol record for
+    # either the real or the synthetic outcome.
+    session = factory()
+    assert repo.get_symbol_records_by_symbol(session, run_id) == {}
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_allows_an_all_real_batch(factory, monkeypatch):
+    monkeypatch.setenv("STRICT_REAL_DATA", "true")
+    _seed_stock(factory, "2222")
+    repo = MarketIntelligenceRepository()
+    outcomes = [make_outcome(symbol="2222", decision=make_decision(symbol="2222"), is_synthetic=False, data_source="SAHMK_REAL")]
+
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner(outcomes), symbol_selector=_FakeSymbolSelector(["2222"]),
+    )
+
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    run_id = run.id
+    session.close()
+
+    result = await engine.execute_scan(run_id)
+    assert result == outcomes
+
+
+@pytest.mark.asyncio
+async def test_non_strict_mode_does_not_check_data_source_at_all(factory):
+    """Regression guard: outside strict mode, a synthetic outcome scans
+    and persists exactly as it always has."""
+    _seed_stock(factory, "2222")
+    repo = MarketIntelligenceRepository()
+    outcomes = [make_outcome(symbol="2222", decision=make_decision(symbol="2222"), is_synthetic=True, data_source="DEV_SYNTHETIC")]
+
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner(outcomes), symbol_selector=_FakeSymbolSelector(["2222"]),
+    )
+
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    run_id = run.id
+    session.close()
+
+    result = await engine.execute_scan(run_id)
+    assert result == outcomes

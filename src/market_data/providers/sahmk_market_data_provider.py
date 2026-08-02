@@ -45,6 +45,8 @@ class SahmkMarketDataProvider(IMarketDataProvider):
     (src.market_data.config) -- never a hardcoded value.
     """
 
+    is_synthetic = False
+
     def __init__(self, api_endpoint: Optional[str] = None, api_key: Optional[str] = None, **kwargs):
         self.api_endpoint = api_endpoint
         self.api_key = api_key

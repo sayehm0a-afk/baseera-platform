@@ -124,6 +124,8 @@ jobs:
         env:
           SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
           MARKET_DATA_PROVIDER: sahmk
+          STRICT_REAL_DATA: "true"
+          ALLOW_SYNTHETIC_DATA: "false"
         run: |
           python scripts/verify_sahmk_live_pipeline.py
 
@@ -133,6 +135,8 @@ jobs:
         env:
           SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
           MARKET_DATA_PROVIDER: sahmk
+          STRICT_REAL_DATA: "true"
+          ALLOW_SYNTHETIC_DATA: "false"
           INGESTION_OHLCV_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days }}
           MARKET_INTELLIGENCE_OUTPUT_DIR: market_intelligence_output
         run: |

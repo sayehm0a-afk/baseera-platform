@@ -154,6 +154,18 @@ class SymbolScanOutcome:
     technical_snapshot: Optional[Dict[str, Any]] = None
     fundamental_snapshot: Optional[Dict[str, Any]] = None
     scanned_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Whether the market/fundamental data this outcome was computed
+    # from came from a real SAHMK provider or a synthetic Dev provider
+    # -- set by MarketScanner from the provider it was actually given
+    # (IMarketDataProvider.is_synthetic), never inferred after the
+    # fact. None (the default) means "not tracked for this outcome" --
+    # every SymbolScanOutcome constructed by the real scan pipeline
+    # always sets this explicitly; only pre-existing test fixtures
+    # built before this field existed leave it None, and
+    # publication_gate's real-data-source gate treats None as
+    # NOT_EVALUATED (not a hard block), not as "confirmed real."
+    is_synthetic: Optional[bool] = None
+    data_source: Optional[str] = None
     # E8 of the AI Evolution Layer: the exact `AnalysisContext`
     # `build_analysis_context()` computed for this symbol, carried
     # through so a paper-trading challenger engine can re-score it

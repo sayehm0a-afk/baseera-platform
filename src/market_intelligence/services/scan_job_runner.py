@@ -16,8 +16,10 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from src.domain.models import MarketScanStatus, Stock
+from src.market_data import config as market_data_config
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_intelligence.market_engine import MarketIntelligenceEngine
+from src.market_intelligence.preflight import run_sahmk_preflight
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scan_progress import ScanProgressTracker
 from src.market_intelligence.symbol_selector import SymbolSelector
@@ -44,8 +46,34 @@ async def run_market_scan_job(
     retrieved" warning and leave the run stuck RUNNING/PENDING forever.
     """
     repository = MarketIntelligenceRepository()
-    engine = MarketIntelligenceEngine(session_factory, market_provider, repository=repository)
     started_at = datetime.now(timezone.utc)
+
+    # Strict real-data mode's hard pre-scan gate (Basirah production
+    # readiness mandate): a full-market scan may not even begin unless
+    # a real, authenticated SAHMK request has just succeeded. Checked
+    # first, before any progress tracking or scan work starts, so a
+    # blocked run fails immediately and visibly rather than silently
+    # falling back to whatever provider it was handed.
+    if market_data_config.is_strict_real_data_enabled():
+        preflight = await run_sahmk_preflight(session_factory)
+        if not preflight.ready:
+            logger.error(
+                "Market scan run %d blocked by strict real-data pre-flight: %s",
+                run_id, preflight.reason,
+            )
+            session = session_factory()
+            try:
+                repository.finish_run(
+                    session, run_id, MarketScanStatus.FAILED,
+                    symbols_succeeded=0, symbols_skipped=0, symbols_failed=0,
+                    started_at=started_at,
+                    error_summary=f"STRICT_REAL_DATA preflight failed: {preflight.reason}",
+                )
+            finally:
+                session.close()
+            return
+
+    engine = MarketIntelligenceEngine(session_factory, market_provider, repository=repository)
 
     # Live progress (Basirah publishing its own progress, same reasoning
     # as the CI validation script's own tracker in

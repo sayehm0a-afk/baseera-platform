@@ -28,6 +28,7 @@ loop does not re-probe connectivity on every call.
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
@@ -36,6 +37,7 @@ from src.market_data.providers.dev_market_data_provider import DevMarketDataProv
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
+from src.market_data.strict_mode import StrictRealDataUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,34 @@ _cache_lock = asyncio.Lock()
 _cached_provider: Optional[IMarketDataProvider] = None
 _cached_provider_kind: Optional[str] = None
 _cached_at: float = 0.0
+
+# In-process only (resets on restart -- disclosed, not a persisted
+# audit trail): the outcome of the most recent *actual* selection
+# attempt (i.e. excluding cache hits, which don't re-probe anything),
+# for GET /health/market-data. "SUCCESS" means a real SahmkMarketData
+# Provider was selected; "FAILED" covers every other outcome (SAHMK
+# unreachable/rejected -- whether that resulted in a synthetic
+# fallback or, under strict mode, a raised
+# StrictRealDataUnavailableError).
+_last_connectivity_status: Optional[str] = None
+_last_connectivity_at: Optional[datetime] = None
+_last_real_data_at: Optional[datetime] = None
+
+
+def get_market_data_health() -> dict:
+    """Secret-free snapshot for GET /health/market-data. Never touches
+    the network itself -- reports the outcome of whatever the most
+    recent real selection attempt (by any caller) already found."""
+    return {
+        "configured_provider": market_data_config.get_configured_provider_name(),
+        "strict_real_data": market_data_config.is_strict_real_data_enabled(),
+        "synthetic_allowed": market_data_config.is_synthetic_data_allowed(),
+        "sahmk_key_present": market_data_config.has_sahmk_credentials(),
+        "current_provider_kind": _cached_provider_kind,
+        "last_connectivity_status": _last_connectivity_status,
+        "last_connectivity_at": _last_connectivity_at.isoformat() if _last_connectivity_at else None,
+        "last_real_data_at": _last_real_data_at.isoformat() if _last_real_data_at else None,
+    }
 
 
 async def get_market_data_provider(force_refresh: bool = False) -> IMarketDataProvider:
@@ -66,6 +96,7 @@ async def get_market_data_provider(force_refresh: bool = False) -> IMarketDataPr
     a refresh boundary.
     """
     global _cached_provider, _cached_provider_kind, _cached_at
+    global _last_connectivity_status, _last_connectivity_at, _last_real_data_at
 
     async with _cache_lock:
         cache_seconds = market_data_config.get_provider_selection_cache_seconds()
@@ -79,7 +110,17 @@ async def get_market_data_provider(force_refresh: bool = False) -> IMarketDataPr
             return _cached_provider
 
         previous_provider = _cached_provider
-        provider, kind = await _select_provider()
+        try:
+            provider, kind = await _select_provider()
+        except StrictRealDataUnavailableError:
+            _last_connectivity_status = "FAILED"
+            _last_connectivity_at = datetime.now(timezone.utc)
+            raise
+
+        _last_connectivity_status = "SUCCESS" if kind == "sahmk" else "FAILED"
+        _last_connectivity_at = datetime.now(timezone.utc)
+        if kind == "sahmk":
+            _last_real_data_at = _last_connectivity_at
 
         if previous_provider is not None and previous_provider is not provider:
             await _disconnect_quietly(previous_provider)
@@ -109,8 +150,14 @@ def get_last_selected_provider_kind() -> Optional[str]:
 
 async def _select_provider() -> Tuple[IMarketDataProvider, str]:
     override = market_data_config.get_configured_provider_name()
+    strict = not market_data_config.is_synthetic_data_allowed()
 
     if override == "dev":
+        if strict:
+            raise StrictRealDataUnavailableError(
+                "STRICT_REAL_DATA is enabled but MARKET_DATA_PROVIDER=dev explicitly "
+                "requests synthetic data -- refusing to use DevMarketDataProvider."
+            )
         logger.info("MARKET_DATA_PROVIDER=dev -- using DevMarketDataProvider (synthetic data).")
         return DevMarketDataProvider(), "dev"
 
@@ -118,6 +165,8 @@ async def _select_provider() -> Tuple[IMarketDataProvider, str]:
         logger.warning("Unknown MARKET_DATA_PROVIDER=%r -- treating as 'auto'.", override)
 
     if not market_data_config.has_sahmk_credentials():
+        if strict:
+            raise StrictRealDataUnavailableError("SAHMK_API_KEY is not configured.")
         if override == "sahmk":
             logger.error(
                 "MARKET_DATA_PROVIDER=sahmk but SAHMK_API_KEY is not configured -- "
@@ -136,27 +185,33 @@ async def _select_provider() -> Tuple[IMarketDataProvider, str]:
             timeout=market_data_config.get_provider_probe_timeout_seconds(),
         )
     except asyncio.TimeoutError:
+        await provider.disconnect()
+        if strict:
+            raise StrictRealDataUnavailableError("SAHMK connectivity probe timed out.")
         logger.warning(
             "SAHMK connectivity probe timed out -- falling back to DevMarketDataProvider "
             "(synthetic data) for this process. This is expected in network-restricted "
             "environments; SAHMK is used automatically once network access is available."
         )
-        await provider.disconnect()
         return DevMarketDataProvider(), "dev"
     except (SahmkError, CircuitBreakerOpenError) as exc:
+        await provider.disconnect()
+        if strict:
+            raise StrictRealDataUnavailableError(f"SAHMK connectivity probe failed: {exc}")
         logger.warning(
             "SAHMK connectivity probe failed (%s) -- falling back to DevMarketDataProvider.",
             exc,
         )
-        await provider.disconnect()
         return DevMarketDataProvider(), "dev"
 
     if not reachable:
+        await provider.disconnect()
+        if strict:
+            raise StrictRealDataUnavailableError("SAHMK authentication check did not succeed.")
         logger.warning(
             "SAHMK authentication check did not succeed -- falling back to "
             "DevMarketDataProvider (synthetic data)."
         )
-        await provider.disconnect()
         return DevMarketDataProvider(), "dev"
 
     logger.info(
@@ -169,6 +224,10 @@ async def _select_provider() -> Tuple[IMarketDataProvider, str]:
 def reset_provider_cache() -> None:
     """Test-only: clears the cached provider selection."""
     global _cached_provider, _cached_provider_kind, _cached_at
+    global _last_connectivity_status, _last_connectivity_at, _last_real_data_at
     _cached_provider = None
     _cached_provider_kind = None
     _cached_at = 0.0
+    _last_connectivity_status = None
+    _last_connectivity_at = None
+    _last_real_data_at = None

@@ -150,6 +150,19 @@ export interface MarketScanProgress {
   completed_at: string | null;
 }
 
+export interface MarketDataHealth {
+  configured_provider: string;
+  strict_real_data: boolean;
+  synthetic_allowed: boolean;
+  sahmk_key_present: boolean;
+  current_provider_kind: string | null;
+  last_connectivity_status: string | null;
+  last_connectivity_at: string | null;
+  last_real_data_at: string | null;
+  last_scan_source: string | null;
+  can_publish_recommendations: boolean;
+}
+
 export interface ApiErrorBody {
   error: {
     code: string;

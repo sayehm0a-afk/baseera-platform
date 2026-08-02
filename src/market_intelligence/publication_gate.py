@@ -65,6 +65,13 @@ def evaluate_publication(outcome: SymbolScanOutcome) -> PublicationEvaluation:
     gates: List[GateResult] = [GateResult(name="data_availability", status=GateStatus.PASS, detail="analyst report present")]
     disclosures: List[str] = []
 
+    data_source_gate = _real_data_source_gate(outcome)
+    gates.append(data_source_gate)
+    if data_source_gate.status is GateStatus.FAIL:
+        # Hard stop, checked before every other gate: synthetic data
+        # must never reach a publication decision on any other merit.
+        return PublicationEvaluation(status=PublicationStatus.REJECTED, gates=gates, disclosures=disclosures)
+
     gates.append(_freshness_gate(outcome))
     gates.append(_price_validity_gate(outcome))
     gates.append(_confidence_gate(outcome))
@@ -109,6 +116,28 @@ def evaluate_publication(outcome: SymbolScanOutcome) -> PublicationEvaluation:
         return PublicationEvaluation(status=PublicationStatus.WATCH_ONLY, gates=gates, disclosures=disclosures)
 
     return PublicationEvaluation(status=PublicationStatus.PUBLISHED, gates=gates, disclosures=disclosures)
+
+
+def _real_data_source_gate(outcome: SymbolScanOutcome) -> GateResult:
+    """Strict real-data protection: a symbol explicitly marked
+    synthetic (`SymbolScanOutcome.is_synthetic is True`, set by
+    MarketScanner from the provider it was actually scanned with --
+    see scanner.py) can never be published, regardless of how good its
+    score otherwise looks. `None` (not `False`) means "not tracked for
+    this outcome" -- true for every SymbolScanOutcome built by tests
+    written before this field existed -- and is deliberately
+    NOT_EVALUATED rather than a hard fail, so it never silently claims
+    a record is real either; only an outcome the real scan pipeline
+    explicitly confirmed as SAHMK-sourced (`is_synthetic is False`)
+    passes."""
+    if outcome.is_synthetic is True:
+        return GateResult(
+            name="real_data_source", status=GateStatus.FAIL,
+            detail=f"synthetic data cannot be published (data_source={outcome.data_source})",
+        )
+    if outcome.is_synthetic is False:
+        return GateResult(name="real_data_source", status=GateStatus.PASS, detail=f"data_source={outcome.data_source}")
+    return GateResult(name="real_data_source", status=GateStatus.NOT_EVALUATED, detail="data source not tracked for this outcome")
 
 
 def _freshness_gate(outcome: SymbolScanOutcome) -> GateResult:

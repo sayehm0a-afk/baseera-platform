@@ -66,6 +66,33 @@ def get_sahmk_max_requests_per_minute() -> int:
     return int(os.getenv("SAHMK_MAX_REQUESTS_PER_MINUTE", "20"))
 
 
+def is_strict_real_data_enabled() -> bool:
+    """True iff STRICT_REAL_DATA=true. Strict real-data mode is
+    Basirah's production guarantee that it never analyzes or publishes
+    synthetic/development data as if it were the real Saudi market:
+    provider_factory/fundamental_provider_factory raise instead of
+    silently substituting DevMarketDataProvider/DevFundamentalDataProvider
+    whenever real SAHMK data cannot be obtained. Off by default so
+    every existing dev/CI/test flow is completely unaffected unless a
+    deployment explicitly opts in."""
+    return os.getenv("STRICT_REAL_DATA", "false").strip().lower() in ("true", "1", "yes")
+
+
+def is_synthetic_data_allowed() -> bool:
+    """False whenever synthetic (Dev-provider) data must never be used
+    -- either because ALLOW_SYNTHETIC_DATA=false is set explicitly, or
+    because STRICT_REAL_DATA=true (which implies it; strict mode is
+    the stronger, absolute switch and cannot be re-permitted by a
+    separately-set ALLOW_SYNTHETIC_DATA=true). True otherwise -- the
+    existing, unaffected default for dev/CI/test."""
+    if is_strict_real_data_enabled():
+        return False
+    raw = os.getenv("ALLOW_SYNTHETIC_DATA")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("false", "0", "no")
+
+
 def get_sahmk_max_requests_per_day() -> Optional[int]:
     """Optional calendar-day (UTC) request quota. None (the default) means
     no daily cap is enforced client-side -- SAHMK's own daily quota (if

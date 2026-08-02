@@ -458,6 +458,36 @@ async def readiness_check():
     raise HTTPException(status_code=503, detail=f"Degraded health: {health_status}")
 
 
+@app.get("/health/market-data")
+async def market_data_health():
+    """Safe operational status for the SAHMK market-data integration --
+    no secret value is ever read or returned. Reports whether Basirah
+    is currently permitted to run/publish a real market scan under
+    strict real-data mode (STRICT_REAL_DATA=true), and the most recent
+    provider-selection outcome any caller in this process has observed
+    (in-process only; resets on restart, not a persisted audit trail --
+    see src.market_data.provider_factory.get_market_data_health)."""
+    from src.market_data.provider_factory import get_market_data_health
+
+    health = get_market_data_health()
+    strict = health["strict_real_data"]
+    current_kind = health["current_provider_kind"]
+    last_scan_source = {"sahmk": "SAHMK_REAL", "dev": "DEV_SYNTHETIC"}.get(current_kind)
+
+    # Under strict mode, only ever true when the most recent real
+    # selection actually resolved to SAHMK -- never true merely because
+    # no failure has been observed yet. Non-strict deployments make no
+    # "this is real data" claim in the first place, so this field is
+    # not the relevant gate for them.
+    can_publish = (current_kind == "sahmk") if strict else True
+
+    return {
+        **health,
+        "last_scan_source": last_scan_source,
+        "can_publish_recommendations": can_publish,
+    }
+
+
 @app.get("/metrics")
 async def metrics():
     """Prometheus metrics endpoint. Must be returned as a raw

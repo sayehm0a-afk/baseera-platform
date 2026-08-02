@@ -13,6 +13,48 @@ def test_a_healthy_buy_is_published():
     outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
     evaluation = evaluate_publication(outcome)
     assert evaluation.status is PublicationStatus.PUBLISHED
+
+
+# --- strict real-data mode: synthetic data can never be published -----
+
+
+def test_synthetic_data_is_hard_rejected_regardless_of_how_good_it_looks():
+    """An otherwise-perfect BUY (strong return, healthy risk/reward)
+    must still be rejected outright if it came from a synthetic
+    provider -- no other gate's merit can override this."""
+    outcome = make_outcome(
+        decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=8.0, risk_reward_ratio=3.0),
+        is_synthetic=True, data_source="DEV_SYNTHETIC",
+    )
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.REJECTED
+    data_source_gate = next(g for g in evaluation.gates if g.name == "real_data_source")
+    assert data_source_gate.status is GateStatus.FAIL
+    assert not is_publishable(outcome)
+
+
+def test_confirmed_real_sahmk_data_passes_the_data_source_gate():
+    outcome = make_outcome(
+        decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0),
+        is_synthetic=False, data_source="SAHMK_REAL",
+    )
+    evaluation = evaluate_publication(outcome)
+    data_source_gate = next(g for g in evaluation.gates if g.name == "real_data_source")
+    assert data_source_gate.status is GateStatus.PASS
+    assert evaluation.status is PublicationStatus.PUBLISHED
+
+
+def test_untracked_data_source_is_not_evaluated_not_hard_blocked():
+    """Backward compatibility: outcomes built before is_synthetic
+    existed (is_synthetic=None, the make_outcome default) must not be
+    retroactively rejected -- NOT_EVALUATED, same convention as the
+    sector/benchmark gates."""
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
+    assert outcome.is_synthetic is None
+    evaluation = evaluate_publication(outcome)
+    data_source_gate = next(g for g in evaluation.gates if g.name == "real_data_source")
+    assert data_source_gate.status is GateStatus.NOT_EVALUATED
+    assert evaluation.status is PublicationStatus.PUBLISHED
     assert is_publishable(outcome)
 
 

@@ -77,6 +77,8 @@ def make_outcome(
     fundamental_snapshot: Optional[dict] = None,
     decision: Optional[InvestmentDecision] = None,
     context: Optional[AnalysisContext] = None,
+    is_synthetic: Optional[bool] = None,
+    data_source: Optional[str] = None,
 ) -> SymbolScanOutcome:
     if success and report is None:
         report = make_report(symbol=symbol, decision=decision)
@@ -84,5 +86,5 @@ def make_outcome(
         symbol=symbol, sector=sector, success=success, report=report,
         skipped_reason=skipped_reason, error=error, latest_price=latest_price,
         technical_snapshot=technical_snapshot, fundamental_snapshot=fundamental_snapshot,
-        context=context,
+        context=context, is_synthetic=is_synthetic, data_source=data_source,
     )

@@ -59,6 +59,8 @@ _REQUIRED_FIELDS = [
 class SahmkFundamentalDataProvider(IFundamentalDataProvider):
     """Live fundamental data provider backed by the SAHMK API."""
 
+    is_synthetic = False
+
     def __init__(self, api_endpoint: Optional[str] = None, api_key: Optional[str] = None, **kwargs):
         self._service = SahmkMarketDataService(
             client=SahmkClient(api_key=api_key, base_url=api_endpoint)

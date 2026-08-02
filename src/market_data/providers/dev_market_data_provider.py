@@ -42,6 +42,8 @@ class DevMarketDataProvider(IMarketDataProvider):
     NOT REAL MARKET DATA -- see module docstring.
     """
 
+    is_synthetic = True
+
     def __init__(self, api_endpoint: str = "dev://synthetic", api_key: str = "dev"):
         # api_endpoint/api_key accepted only to satisfy MarketDataProviderFactory's
         # common construction signature; neither is used for any real call.

@@ -156,6 +156,9 @@ class MarketScanner:
 
             report = await self._analyst_engine.analyze(context)
 
+            is_synthetic = getattr(self._market_provider, "is_synthetic", True)
+            data_source = "DEV_SYNTHETIC" if is_synthetic else "SAHMK_REAL"
+
             return SymbolScanOutcome(
                 symbol=symbol,
                 sector=stock.sector,
@@ -165,6 +168,8 @@ class MarketScanner:
                 technical_snapshot=context.technical_result.latest_snapshot() if context.technical_result else None,
                 fundamental_snapshot=context.fundamental_result.latest_snapshot() if context.fundamental_result else None,
                 context=context,
+                is_synthetic=is_synthetic,
+                data_source=data_source,
             )
         finally:
             session.close()
