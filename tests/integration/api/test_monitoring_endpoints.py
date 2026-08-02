@@ -76,11 +76,31 @@ def test_metrics_reflects_the_new_phase_10_metric_names(client):
 def test_health_ready_reports_real_database_and_redis_probes(client):
     # TestClient(main.app) is deliberately never entered as a context
     # manager (see conftest.py) so the app's startup lifecycle -- and
-    # therefore `kernel` -- never runs; this asserts on the DB/Redis
-    # probes specifically, not the overall status, which stays 503
-    # for the unrelated "kernel not initialized" reason.
+    # therefore `kernel` -- never runs. Regression guard: readiness must
+    # still report 200/healthy here, because the legacy kernel (unused
+    # by every real API route) is excluded from the pass/fail gate --
+    # only real dependencies (Postgres, Redis) determine readiness.
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "healthy"
+    assert body["details"]["database"] is True
+    assert body["details"]["redis"] is True
+    assert body["details"]["kernel"] is False
+
+
+def test_health_ready_returns_503_when_a_real_dependency_is_down(client, monkeypatch):
+    # The gate must still trip on an actual dependency outage -- proves
+    # excluding `kernel` didn't turn this into an always-200 endpoint.
+    from src.auth import token_store
+
+    def _broken_redis_client():
+        raise ConnectionError("simulated redis outage")
+
+    monkeypatch.setattr(token_store, "get_redis_client", _broken_redis_client)
+
     response = client.get("/health/ready")
     assert response.status_code == 503
     detail = response.json()["detail"]
+    assert "'redis': False" in detail
     assert "'database': True" in detail
-    assert "'redis': True" in detail

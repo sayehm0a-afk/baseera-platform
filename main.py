@@ -292,6 +292,17 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Error starting daily intelligence aggregation scheduler: {e}", exc_info=True)
 
+    # Legacy runtime kernel / worker / sample-agent bootstrap. No real
+    # route (market/stocks/portfolio/analyst/news/admin) reaches into the
+    # `kernel`/`container` globals set here -- see the standalone comment
+    # in src/api/routes/admin/system.py confirming this subsystem is
+    # orthogonal to actual request handling. It previously re-raised on
+    # any failure (e.g. Redis unreachable at boot), which would crash
+    # the entire app's startup -- taking down the real Saudi-market
+    # analysis endpoints along with it even though they never use this
+    # subsystem. Isolated in its own try/except, matching every
+    # scheduler above, so a problem here is logged loudly but never
+    # prevents the real API from serving requests.
     try:
         logger.info("Starting Basirah Enterprise AI Platform...")
 
@@ -310,7 +321,6 @@ async def startup_event():
 
         # Initialize kernel
         if not await kernel.initialize():
-            logger.error("Failed to initialize runtime kernel")
             raise RuntimeError("Failed to initialize runtime kernel")
 
         # Create and register workers
@@ -343,8 +353,11 @@ async def startup_event():
         logger.info("Basirah started successfully")
 
     except Exception as e:
-        logger.error(f"Error during startup: {e}", exc_info=True)
-        raise
+        logger.error(
+            f"Error starting legacy runtime kernel/worker subsystem (does not affect "
+            f"market/stocks/portfolio/analyst/news/admin API routes): {e}",
+            exc_info=True,
+        )
 
 
 @app.on_event("shutdown")
@@ -395,15 +408,22 @@ async def liveness_check():
 @app.get("/health/ready")
 async def readiness_check():
     """Readiness check endpoint -- a readiness probe that never touches
-    its own datastores isn't one, so this checks the in-process kernel
-    *and* issues a real `SELECT 1` against Postgres and a real `PING`
-    against Redis."""
+    its own datastores isn't one, so this checks a real `SELECT 1`
+    against Postgres and a real `PING` against Redis. The legacy
+    in-process kernel (sample-agent/worker scaffolding, unused by every
+    real market/stocks/portfolio/analyst/news/admin route -- see
+    src/api/routes/admin/system.py) is reported for visibility but
+    deliberately excluded from the pass/fail gate below: it failing to
+    initialize once at boot (e.g. a transient Redis hiccup) must never
+    permanently mark an otherwise-healthy app unready, since nothing it
+    powers is on the real request path."""
     from sqlalchemy import text
 
     from src.auth.token_store import get_redis_client
     from src.core.db.database import get_session_factory
 
     health_status = {}
+    dependency_status = {}
 
     try:
         if kernel:
@@ -419,20 +439,21 @@ async def readiness_check():
         db_session = session_factory()
         try:
             db_session.execute(text("SELECT 1"))
-            health_status["database"] = True
+            dependency_status["database"] = True
         finally:
             db_session.close()
     except Exception as e:
         logger.error(f"Readiness DB check failed: {e}")
-        health_status["database"] = False
+        dependency_status["database"] = False
 
     try:
-        health_status["redis"] = bool(get_redis_client().ping())
+        dependency_status["redis"] = bool(get_redis_client().ping())
     except Exception as e:
         logger.error(f"Readiness Redis check failed: {e}")
-        health_status["redis"] = False
+        dependency_status["redis"] = False
 
-    if all(health_status.values()):
+    health_status.update(dependency_status)
+    if all(dependency_status.values()):
         return {"status": "healthy", "details": health_status}
     raise HTTPException(status_code=503, detail=f"Degraded health: {health_status}")
 
