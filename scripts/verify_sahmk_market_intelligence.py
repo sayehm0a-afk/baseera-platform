@@ -446,7 +446,24 @@ async def main() -> int:
 
         baseline_max_id = _max_live_snapshot_id(session_factory)
         t0 = time.monotonic()
-        outcomes = await scan_engine.execute_scan(run_id, symbols=None)
+        # BUG FIXED (found during the 2026-08-02 live full-universe
+        # validation, run 30738871790): passing symbols=None here made
+        # execute_scan() ignore the 100-symbol `all_symbols` list this
+        # very run just discovered and ingested, and instead re-derive
+        # a *second, independently filtered* list via SymbolSelector
+        # (see symbol_selector.py) -- which silently drops any symbol
+        # with zero PriceBar rows, with no skipped/failed accounting
+        # anywhere. Real evidence from that run: 4 of the 100 discovered
+        # symbols (1263, 1295, 2210, 2315) vanished from every count --
+        # not ANALYZED, not INSUFFICIENT_DATA, not FAILED, simply never
+        # attempted. Passing the already-known, already-ingested
+        # all_symbols list explicitly means every discovered symbol is
+        # actually attempted by MarketScanner._scan_one, which already
+        # produces an honest INSUFFICIENT_DATA outcome (counted in
+        # symbols_skipped) for a symbol with no usable data -- silence
+        # was never a data problem, it was this call passing the wrong
+        # argument.
+        outcomes = await scan_engine.execute_scan(run_id, symbols=all_symbols)
         timings["scan_seconds"] = time.monotonic() - t0
 
         get_session = session_factory()
