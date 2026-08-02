@@ -217,6 +217,43 @@ async def test_strict_mode_fails_the_whole_run_when_any_outcome_is_synthetic(fac
 
 
 @pytest.mark.asyncio
+async def test_strict_mode_failure_finalizes_the_run_instead_of_leaving_it_stuck_running(factory, monkeypatch):
+    """Regression test: execute_scan() marks the run RUNNING before
+    this check runs. Without a matching finalize-on-failure, the
+    mixed-batch raise above left the MarketScanRun row stuck at
+    RUNNING forever -- neither scan_job_runner nor the CI validation
+    script re-enters this method to finish it. Found and fixed the
+    same day this check was added."""
+    monkeypatch.setenv("STRICT_REAL_DATA", "true")
+    _seed_stock(factory, "2222")
+    _seed_stock(factory, "1120")
+    repo = MarketIntelligenceRepository()
+    outcomes = [
+        make_outcome(symbol="2222", decision=make_decision(symbol="2222"), is_synthetic=False, data_source="SAHMK_REAL"),
+        make_outcome(symbol="1120", decision=make_decision(symbol="1120"), is_synthetic=True, data_source="DEV_SYNTHETIC"),
+    ]
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner(outcomes), symbol_selector=_FakeSymbolSelector(["2222", "1120"]),
+    )
+
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=2)
+    run_id = run.id
+    session.close()
+
+    with pytest.raises(StrictRealDataUnavailableError):
+        await engine.execute_scan(run_id)
+
+    session = factory()
+    run_row = repo.get_run(session, run_id)
+    assert run_row.status is MarketScanStatus.FAILED
+    assert "1120" in run_row.error_summary
+    assert run_row.finished_at is not None
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_strict_mode_allows_an_all_real_batch(factory, monkeypatch):
     monkeypatch.setenv("STRICT_REAL_DATA", "true")
     _seed_stock(factory, "2222")
