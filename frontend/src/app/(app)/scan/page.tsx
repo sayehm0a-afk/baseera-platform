@@ -5,6 +5,7 @@ import { CategoryTabs } from "@/components/patterns/CategoryTabs";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { InstrumentRow } from "@/components/patterns/InstrumentRow";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
+import { LiveScanPanel } from "@/components/dashboard/LiveScanPanel";
 import { RunScanButton } from "@/components/dashboard/RunScanButton";
 import { getRankings } from "@/lib/api/market";
 import { useCategoryFetch } from "@/lib/hooks/useCategoryFetch";
@@ -29,6 +30,8 @@ export default function ScanPage() {
       <h1 className="text-lg font-semibold text-bsr-text-primary">
         المسح الذكي للسوق
       </h1>
+
+      <LiveScanPanel />
 
       <CategoryTabs
         categories={RANKING_CATEGORY_ORDER}

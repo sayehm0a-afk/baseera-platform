@@ -29,6 +29,40 @@ class MarketScanRunOut(BaseModel):
     created_at: datetime
 
 
+class MarketScanProgressOut(BaseModel):
+    """Live progress for one MarketScanRun, read from MarketScanProgress
+    (src.market_intelligence.scan_progress.ScanProgressTracker writes
+    this row after every symbol). Returns 404 (via NoMarketScanDataError)
+    if no progress row exists yet for the run -- e.g. a run dispatched
+    by a code path that doesn't use a ScanProgressTracker."""
+
+    run_id: int
+    status: str
+    eligible_discovered: int
+    completed_count: int
+    remaining_count: int
+    progress_pct: float
+    success_count: int
+    failed_count: int
+    skipped_count: int
+    insufficient_data_count: int
+    published_count: int
+    rejected_count: int
+    watch_only_count: int
+    not_evaluated_count: int
+    current_symbol: Optional[str] = None
+    current_symbol_name_en: Optional[str] = None
+    current_symbol_name_ar: Optional[str] = None
+    last_completed_symbol: Optional[str] = None
+    api_calls_total: int
+    retries_total: int
+    latest_error: Optional[str] = None
+    latest_warning: Optional[str] = None
+    started_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
 class RankingEntryOut(BaseModel):
     symbol: str
     sector: Optional[str] = None

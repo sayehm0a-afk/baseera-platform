@@ -162,12 +162,28 @@ class TestRetryAndFinalize:
 
 
 class TestNeverBreaksTheRealScan:
-    def test_on_symbol_complete_swallows_internal_errors(self, factory, tmp_path):
-        """A bug in progress tracking must never propagate into the
-        real scan loop it's observing -- e.g. a None output_dir/broken
-        filesystem must not raise out of on_symbol_complete."""
+    def test_omitting_output_dir_is_a_supported_db_only_mode(self, factory):
+        """The REST-triggered scan path (src/api/routes/market.py's
+        POST /scan, via run_market_scan_job) has no GitHub Actions
+        step/filesystem output directory the way the CI validation
+        script does -- output_dir=None must be a fully supported,
+        silent no-op for file writes, not an error, so progress still
+        reaches the MarketScanProgress DB row (which the REST API's
+        GET /scan/{run_id}/progress route reads)."""
         run_id = _seed_run(factory)
-        tracker = ScanProgressTracker(factory, run_id, eligible_discovered=1, output_dir=tmp_path)
-        tracker._output_dir = None  # force _write_progress_file to fail internally
+        tracker = ScanProgressTracker(factory, run_id, eligible_discovered=1, output_dir=None)
         outcome = make_outcome(symbol="2222", decision=make_decision(symbol="2222"))
         tracker.on_symbol_complete(outcome)  # must not raise
+        row = _read_progress_row(factory, run_id)
+        assert row.completed_count == 1  # DB row still updated even with no file output
+
+    def test_on_symbol_complete_swallows_internal_errors(self, factory, tmp_path):
+        """A bug in progress tracking must never propagate into the
+        real scan loop it's observing -- e.g. a broken filesystem path
+        must not raise out of on_symbol_complete."""
+        run_id = _seed_run(factory)
+        not_a_directory = tmp_path / "this_is_a_file"
+        not_a_directory.write_text("x")
+        tracker = ScanProgressTracker(factory, run_id, eligible_discovered=1, output_dir=not_a_directory)
+        outcome = make_outcome(symbol="2222", decision=make_decision(symbol="2222"))
+        tracker.on_symbol_complete(outcome)  # must not raise despite output_dir.mkdir() failing internally

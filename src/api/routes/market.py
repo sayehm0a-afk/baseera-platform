@@ -36,6 +36,7 @@ from src.api.schemas.market_intelligence import (
     AlertsOut,
     ChangeEventOut,
     ChangesOut,
+    MarketScanProgressOut,
     MarketScanRequest,
     MarketScanRunOut,
     MarketSummaryOut,
@@ -49,7 +50,14 @@ from src.api.schemas.market_intelligence import (
     WatchlistsOut,
 )
 from src.core.db.database import get_db
-from src.domain.models import MarketChangeEvent, MarketScanRun, MarketScanStatus, SectorIntelligenceSummary, User
+from src.domain.models import (
+    MarketChangeEvent,
+    MarketScanProgress,
+    MarketScanRun,
+    MarketScanStatus,
+    SectorIntelligenceSummary,
+    User,
+)
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.market_snapshot import MarketSnapshotBuilder
@@ -209,6 +217,58 @@ def get_scan(
     _current_user: User = Depends(require_active_subscription()),
 ) -> MarketScanRunOut:
     return _to_run_out(_resolve_run(session, run_id))
+
+
+@router.get("/scan/{run_id}/progress", response_model=MarketScanProgressOut)
+def get_scan_progress(
+    run_id: int,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> MarketScanProgressOut:
+    """Live per-symbol scan progress, for a Live Scan UI to poll while
+    a scan is running -- reads MarketScanProgress, the row
+    src.market_intelligence.scan_progress.ScanProgressTracker updates
+    after every symbol (not the coarser MarketScanRun counters above,
+    which only change once, at the very end, via finish_run()).
+    404s (via NoMarketScanDataError) if run_id doesn't exist or no
+    progress row was ever created for it (e.g. a scan dispatched by a
+    code path that predates/doesn't use a tracker)."""
+    _resolve_run(session, run_id)  # 404s with the same message shape if run_id is unknown
+    progress = session.query(MarketScanProgress).filter(MarketScanProgress.run_id == run_id).one_or_none()
+    if progress is None:
+        raise NoMarketScanDataError(
+            f"No live progress recorded for run {run_id} -- this run may predate live progress tracking."
+        )
+    return MarketScanProgressOut(
+        run_id=progress.run_id,
+        status=progress.status,
+        eligible_discovered=progress.eligible_discovered,
+        completed_count=progress.completed_count,
+        remaining_count=max(0, progress.eligible_discovered - progress.completed_count),
+        progress_pct=(
+            round(100.0 * progress.completed_count / progress.eligible_discovered, 2)
+            if progress.eligible_discovered else 0.0
+        ),
+        success_count=progress.success_count,
+        failed_count=progress.failed_count,
+        skipped_count=progress.skipped_count,
+        insufficient_data_count=progress.insufficient_data_count,
+        published_count=progress.published_count,
+        rejected_count=progress.rejected_count,
+        watch_only_count=progress.watch_only_count,
+        not_evaluated_count=progress.not_evaluated_count,
+        current_symbol=progress.current_symbol,
+        current_symbol_name_en=progress.current_symbol_name_en,
+        current_symbol_name_ar=progress.current_symbol_name_ar,
+        last_completed_symbol=progress.last_completed_symbol,
+        api_calls_total=progress.api_calls_total,
+        retries_total=progress.retries_total,
+        latest_error=progress.latest_error,
+        latest_warning=progress.latest_warning,
+        started_at=progress.started_at,
+        updated_at=progress.updated_at,
+        completed_at=progress.completed_at,
+    )
 
 
 @router.get("/summary", response_model=MarketSummaryOut)

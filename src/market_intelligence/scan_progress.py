@@ -80,7 +80,7 @@ class ScanProgressTracker:
         session_factory: Callable[[], Session],
         run_id: int,
         eligible_discovered: int,
-        output_dir: Path,
+        output_dir: Optional[Path] = None,
         symbol_names: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
         workflow_run_id: Optional[str] = None,
         commit_sha: Optional[str] = None,
@@ -283,6 +283,8 @@ class ScanProgressTracker:
         }
 
     def _write_progress_file(self) -> None:
+        if self._output_dir is None:
+            return
         try:
             self._output_dir.mkdir(parents=True, exist_ok=True)
             path = self._output_dir / "live_progress.json"
