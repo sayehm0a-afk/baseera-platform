@@ -32,7 +32,9 @@ Usage:
 """
 
 import asyncio
+import csv
 import json
+import logging
 import os
 import sys
 import time
@@ -43,6 +45,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Python's default root logger level is WARNING with no handler attached
+# until something calls basicConfig() -- discovered during the
+# 2026-08-02 live full-universe validation runs, where
+# src.market_data.sahmk.service.get_company_directory()'s own
+# logger.info(...) universe-verdict/pagination diagnostic (pages
+# fetched, pagination_signal, reported_total, universe_verdict) was
+# silently dropped from every job log, while its logger.warning(...)
+# sibling (sector field unresolved) printed fine. That diagnostic is
+# exactly the evidence needed to tell a genuine ~100-company universe
+# apart from an unnoticed pagination cap, so this script must not run
+# with it suppressed.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 from sqlalchemy import create_engine, func  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
@@ -63,6 +78,7 @@ from src.market_intelligence.market_engine import MarketIntelligenceEngine  # no
 from src.market_intelligence.ranking import RankingEngine  # noqa: E402
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository  # noqa: E402
 from src.market_intelligence.trading_calendar import TADAWUL_TIMEZONE, is_market_open  # noqa: E402
+from src.market_intelligence.universe_policy import classify_universe  # noqa: E402
 from src.market_intelligence.watchlist import WatchlistEngine  # noqa: E402
 
 OUTPUT_DIR = Path(os.getenv("MARKET_INTELLIGENCE_OUTPUT_DIR", "market_intelligence_output"))
@@ -364,6 +380,115 @@ def _print_ranking_and_watchlist_entries(rankings_dict: Dict[str, Any], watchlis
             _print(f"  {e['symbol']:<6} rec={e.get('recommendation')} conf={e.get('confidence')} reason={e.get('reason')}")
 
 
+def _write_result_artifacts(output: Dict[str, Any]) -> List[str]:
+    """Task 6 of the 2026-08-02 full-market validation mandate: real,
+    downloadable result artifacts, not just the existing single JSON
+    blob. Best-effort against whatever `output` actually contains at
+    call time -- called from every exit path (success, ValidationFailure,
+    generic exception) so partial evidence is never lost to a failure
+    partway through the run. Returns the list of filenames actually
+    written."""
+    written: List[str] = []
+
+    def _write_csv(filename: str, fieldnames: List[str], rows: List[Dict[str, Any]]) -> None:
+        path = OUTPUT_DIR / filename
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: ("" if row.get(k) is None else row.get(k)) for k in fieldnames})
+        written.append(filename)
+
+    def _write_json(filename: str, data: Any) -> None:
+        path = OUTPUT_DIR / filename
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, default=_json_default, ensure_ascii=False)
+        written.append(filename)
+
+    companies: List[Dict[str, Any]] = output.get("companies") or []
+
+    if companies:
+        _write_csv(
+            "full_market_results.csv",
+            [
+                "symbol", "name_en", "name_ar", "sector", "success", "skipped_reason", "error",
+                "latest_price", "recommendation", "confidence", "target_price", "stop_loss",
+                "expected_return_pct", "risk_reward_ratio", "time_horizon", "risk_level",
+            ],
+            companies,
+        )
+        _write_json("full_market_results.json", companies)
+
+        failed_rows = [c for c in companies if not c.get("success")]
+        _write_csv(
+            "failed_symbols.csv",
+            ["symbol", "skipped_reason", "error"],
+            [
+                {
+                    "symbol": c.get("symbol"),
+                    "skipped_reason": c.get("skipped_reason"),
+                    "error": c.get("error"),
+                }
+                for c in failed_rows
+            ],
+        )
+
+    rankings = output.get("rankings") or {}
+    top_opportunities = []
+    for category in ("TOP_STRONG_BUY", "TOP_BUY"):
+        top_opportunities.extend(rankings.get(category, []))
+    _write_json("top_opportunities.json", top_opportunities)
+
+    classification = output.get("universe_classification") or {}
+    excluded_rows = [
+        {
+            "symbol": c["symbol"], "name_en": c.get("name_en"), "name_ar": c.get("name_ar"),
+            "bucket": c["bucket"], "exclusion_reason": c.get("exclusion_reason"),
+        }
+        for c in (classification.get("classifications_raw") or [])
+        if not c.get("eligible", True)
+    ]
+    _write_csv(
+        "excluded_instruments.csv", ["symbol", "name_en", "name_ar", "bucket", "exclusion_reason"], excluded_rows,
+    )
+
+    scan_summary = {
+        "run_started_at": output.get("run_started_at"),
+        "run_finished_at": output.get("run_finished_at"),
+        "final_status": output.get("final_status"),
+        "total_instruments_returned_by_sahmk": output.get("total_listed_companies_discovered"),
+        "total_eligible_companies": output.get("total_eligible_companies"),
+        "sahmk_directory_diagnostics": output.get("sahmk_directory_diagnostics"),
+        "universe_classification": classification,
+        "accounting": output.get("accounting"),
+        "timings_seconds": output.get("timings_seconds"),
+        "real_sahmk_api_calls_this_run": output.get("real_sahmk_api_calls_this_run"),
+    }
+    _write_json("scan_summary.json", scan_summary)
+
+    report_lines = [
+        "# FULL SAUDI MARKET VALIDATION REPORT",
+        "",
+        f"- Run started: {output.get('run_started_at')}",
+        f"- Run finished: {output.get('run_finished_at')}",
+        f"- Final status: {output.get('final_status')}",
+        f"- Total instruments returned by SAHMK: {output.get('total_listed_companies_discovered')}",
+        f"- Total eligible common-equity symbols: {output.get('total_eligible_companies')}",
+        f"- Universe classification bucket counts: {classification.get('bucket_counts')}",
+        f"- Accounting invariant: {output.get('accounting')}",
+        f"- Real SAHMK API calls this run: {output.get('real_sahmk_api_calls_this_run')}",
+        "",
+        "See `full_market_results.csv`/`.json`, `top_opportunities.json`, `failed_symbols.csv`, "
+        "`excluded_instruments.csv`, and `scan_summary.json` in this same artifact for full detail.",
+    ]
+    report_path = OUTPUT_DIR / "FULL_SAUDI_MARKET_VALIDATION_REPORT.md"
+    with open(report_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(report_lines) + "\n")
+    written.append("FULL_SAUDI_MARKET_VALIDATION_REPORT.md")
+
+    return written
+
+
 async def main() -> int:
     database_url = os.getenv("DATABASE_URL", "")
     if not database_url or database_url.startswith("sqlite"):
@@ -400,13 +525,76 @@ async def main() -> int:
         step_results["discovery"] = vars(discovery_result)
         _print(f"Discovery result: {vars(discovery_result)}")
 
+        # Real pagination/universe-cap evidence, read directly off the
+        # live SahmkMarketDataService instance rather than depending on
+        # the logging pipeline above -- belt-and-suspenders after the
+        # INFO-suppression gap found in the 2026-08-02 runs. `_service`
+        # is a private attribute, but this script already hard-gates on
+        # market_provider being the real SahmkMarketDataProvider (see
+        # _require_live_providers), so this is the same module
+        # boundary, not a generic-interface violation.
+        sahmk_service = getattr(market_provider, "_service", None)
+        directory_diagnostics = getattr(sahmk_service, "last_directory_diagnostics", None)
+        if directory_diagnostics is not None:
+            output["sahmk_directory_diagnostics"] = asdict(directory_diagnostics)
+            _print(f"SAHMK directory diagnostics: {asdict(directory_diagnostics)}")
+        else:
+            output["sahmk_directory_diagnostics"] = None
+            _print(
+                "WARNING: no SAHMK directory diagnostics captured -- "
+                "get_company_directory() either wasn't called or ran against a "
+                "cached result from a prior process. Universe-cap verdict is NOT VERIFIED."
+            )
+
+        # Real eligible-universe classification (Task 2 of the
+        # 2026-08-02 full-market validation mandate): every instrument
+        # SAHMK's /companies/ directory returns is classified using
+        # ONLY confirmed real fields (is_etf, market, market_segment,
+        # security_type, status -- see universe_policy.py's docstring
+        # for exactly which live runs confirmed these). Nothing is
+        # guessed: an instrument whose security_type/status/segment
+        # doesn't positively match a known marker is excluded into an
+        # UNCLASSIFIED_* bucket with the literal observed value
+        # recorded, never silently treated as eligible.
+        raw_directory: List[Any] = []
+        if sahmk_service is not None:
+            raw_directory = await sahmk_service.get_company_directory()
+        universe_classification = classify_universe(raw_directory)
+        output["universe_classification"] = {
+            "total_instruments_returned_by_sahmk": universe_classification.total_instruments,
+            "total_eligible": universe_classification.total_eligible,
+            "total_excluded": universe_classification.total_excluded,
+            "bucket_counts": universe_classification.bucket_counts,
+            "distinct_observed_values": universe_classification.distinct_observed_values,
+            "classifications_raw": [asdict(c) for c in universe_classification.classifications],
+        }
+        _print(
+            f"Universe classification: {universe_classification.total_instruments} instruments returned, "
+            f"{universe_classification.total_eligible} eligible common equities, "
+            f"buckets={universe_classification.bucket_counts}"
+        )
+        _print(f"Distinct observed field values: {universe_classification.distinct_observed_values}")
+
         companies = _all_registered_symbols(session_factory)
+        eligible_set = set(universe_classification.eligible_symbols)
+        # `companies`/`all_symbols` drives every downstream ingestion +
+        # scan step -- restricting it to the eligible set here is what
+        # makes Task 2's classification real rather than cosmetic:
+        # ETFs/REITs/sukuk/suspended/unclassified instruments are never
+        # ingested, scanned, or ranked as if they were common equities.
+        # If classification produced nothing (e.g. the directory call
+        # itself failed and raw_directory is empty), fall back to every
+        # registered symbol rather than silently scanning zero symbols.
+        if eligible_set:
+            companies = [c for c in companies if c["symbol"] in eligible_set]
         all_symbols = [c["symbol"] for c in companies]
-        output["total_listed_companies_discovered"] = len(all_symbols)
-        _print(f"Total companies registered after discovery: {len(all_symbols)}")
+        output["total_listed_companies_discovered"] = universe_classification.total_instruments
+        output["total_eligible_companies"] = len(all_symbols)
+        _print(f"Total instruments returned by SAHMK: {universe_classification.total_instruments}")
+        _print(f"Total eligible common-equity symbols proceeding to ingestion/scan: {len(all_symbols)}")
 
         if not all_symbols:
-            raise ValidationFailure("Discovery registered zero symbols -- cannot proceed.")
+            raise ValidationFailure("Discovery registered zero eligible symbols -- cannot proceed.")
 
         _section(f"STEP 3: Historical OHLCV ingestion -- {len(all_symbols)} real symbols")
         t0 = time.monotonic()
@@ -481,6 +669,50 @@ async def main() -> int:
         step_results["scan_run"] = scan_run_summary
         _print(f"MarketScanRun {run_id}: {scan_run_summary}")
 
+        # Zero-silent-loss accounting invariant (Task 3 of the
+        # 2026-08-02 full-market validation mandate): every eligible
+        # discovered symbol must land in exactly one terminal bucket.
+        # This is the same real defect class fixed in commit 25707f0
+        # (4 of 100 symbols vanished with no accounting anywhere) --
+        # this check makes a recurrence of that defect, in any form,
+        # an immediate hard failure instead of a silently-wrong count.
+        terminal_buckets: Dict[str, List[str]] = {
+            "SUCCESS": [], "FAILED": [], "SKIPPED": [], "INSUFFICIENT_DATA": [],
+        }
+        for o in outcomes:
+            if o.success:
+                terminal_buckets["SUCCESS"].append(o.symbol)
+            elif o.skipped_reason == "insufficient_data":
+                terminal_buckets["INSUFFICIENT_DATA"].append(o.symbol)
+            elif o.error is not None:
+                terminal_buckets["FAILED"].append(o.symbol)
+            else:
+                terminal_buckets["SKIPPED"].append(o.symbol)
+
+        outcome_symbols = {o.symbol for o in outcomes}
+        eligible_set_for_check = set(all_symbols)
+        missing_entirely = sorted(eligible_set_for_check - outcome_symbols)
+        terminal_total = sum(len(v) for v in terminal_buckets.values())
+        output["accounting"] = {
+            "eligible_discovered": len(all_symbols),
+            "success": len(terminal_buckets["SUCCESS"]),
+            "failed": len(terminal_buckets["FAILED"]),
+            "skipped": len(terminal_buckets["SKIPPED"]),
+            "insufficient_data": len(terminal_buckets["INSUFFICIENT_DATA"]),
+            "terminal_total": terminal_total,
+            "missing_entirely": missing_entirely,
+            "balances": terminal_total == len(all_symbols) and not missing_entirely,
+        }
+        _print(f"Accounting invariant: {output['accounting']}")
+        if missing_entirely or terminal_total != len(all_symbols):
+            raise ValidationFailure(
+                "ZERO_SILENT_LOSS_VIOLATION: eligible_discovered "
+                f"({len(all_symbols)}) != success+failed+skipped+insufficient_data "
+                f"({terminal_total}). Symbols with no terminal outcome at all: "
+                f"{missing_entirely}. This is a hard failure, not a warning -- "
+                "no symbol may disappear between discovery and the final report."
+            )
+
         scan_market_open = is_market_open(datetime.now(timezone.utc))
         output["market_open_during_scan"] = scan_market_open
 
@@ -519,6 +751,8 @@ async def main() -> int:
         with open(data_path, "w", encoding="utf-8") as fh:
             json.dump(output, fh, indent=2, default=_json_default, ensure_ascii=False)
         _print(f"\nFull data written to {data_path} ({data_path.stat().st_size} bytes)")
+        artifact_files = _write_result_artifacts(output)
+        _print(f"Result artifacts written: {artifact_files}")
 
         _section("FINAL SUMMARY")
         _print(f"Total companies discovered: {output['total_listed_companies_discovered']}")
@@ -551,6 +785,7 @@ async def main() -> int:
         data_path = OUTPUT_DIR / "market_intelligence_data.json"
         with open(data_path, "w", encoding="utf-8") as fh:
             json.dump(output, fh, indent=2, default=_json_default, ensure_ascii=False)
+        _write_result_artifacts(output)
         return 1
     except Exception as exc:  # noqa: BLE001 -- must always write whatever partial evidence exists, never crash silently
         output["final_status"] = "FAILED"
@@ -563,6 +798,7 @@ async def main() -> int:
         data_path = OUTPUT_DIR / "market_intelligence_data.json"
         with open(data_path, "w", encoding="utf-8") as fh:
             json.dump(output, fh, indent=2, default=_json_default, ensure_ascii=False)
+        _write_result_artifacts(output)
         import traceback
 
         traceback.print_exc()

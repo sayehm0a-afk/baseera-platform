@@ -146,7 +146,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: market-intelligence-data
-          path: market_intelligence_output/market_intelligence_data.json
+          # Uploads the whole output directory, not just the single JSON
+          # blob -- 2026-08-02 full-market validation mandate (Task 6)
+          # added real CSV/JSON/Markdown result artifacts
+          # (full_market_results.csv/.json, top_opportunities.json,
+          # failed_symbols.csv, excluded_instruments.csv,
+          # scan_summary.json, FULL_SAUDI_MARKET_VALIDATION_REPORT.md)
+          # written by scripts/verify_sahmk_market_intelligence.py's
+          # _write_result_artifacts(), which must all reach this
+          # artifact for downloadable per-file evidence to exist.
+          path: market_intelligence_output/
           retention-days: 14
           if-no-files-found: warn
 
