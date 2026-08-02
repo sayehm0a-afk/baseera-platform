@@ -77,6 +77,7 @@ from src.market_data.sahmk.rate_limiter import get_default_rate_limiter  # noqa:
 from src.market_intelligence.market_engine import MarketIntelligenceEngine  # noqa: E402
 from src.market_intelligence.ranking import RankingEngine  # noqa: E402
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository  # noqa: E402
+from src.market_intelligence.scan_progress import ScanProgressTracker  # noqa: E402
 from src.market_intelligence.trading_calendar import TADAWUL_TIMEZONE, is_market_open  # noqa: E402
 from src.market_intelligence.universe_policy import classify_universe  # noqa: E402
 from src.market_intelligence.watchlist import WatchlistEngine  # noqa: E402
@@ -452,6 +453,28 @@ def _write_result_artifacts(output: Dict[str, Any]) -> List[str]:
         "excluded_instruments.csv", ["symbol", "name_en", "name_ar", "bucket", "exclusion_reason"], excluded_rows,
     )
 
+    all_classified_rows = [
+        {
+            "symbol": c["symbol"], "name_en": c.get("name_en"), "name_ar": c.get("name_ar"),
+            "market": c.get("market"), "market_segment": c.get("market_segment"),
+            "security_type": c.get("security_type"), "status": c.get("status"), "is_etf": c.get("is_etf"),
+            "bucket": c["bucket"], "eligible": c.get("eligible"), "exclusion_reason": c.get("exclusion_reason"),
+        }
+        for c in (classification.get("classifications_raw") or [])
+    ]
+    _write_csv(
+        "universe_classification.csv",
+        [
+            "symbol", "name_en", "name_ar", "market", "market_segment", "security_type", "status",
+            "is_etf", "bucket", "eligible", "exclusion_reason",
+        ],
+        all_classified_rows,
+    )
+
+    live_progress_final = output.get("live_progress_final")
+    if live_progress_final:
+        _write_json("live_progress_final.json", live_progress_final)
+
     scan_summary = {
         "run_started_at": output.get("run_started_at"),
         "run_finished_at": output.get("run_finished_at"),
@@ -479,7 +502,8 @@ def _write_result_artifacts(output: Dict[str, Any]) -> List[str]:
         f"- Real SAHMK API calls this run: {output.get('real_sahmk_api_calls_this_run')}",
         "",
         "See `full_market_results.csv`/`.json`, `top_opportunities.json`, `failed_symbols.csv`, "
-        "`excluded_instruments.csv`, and `scan_summary.json` in this same artifact for full detail.",
+        "`excluded_instruments.csv`, `universe_classification.csv`, `live_progress_final.json`, "
+        "and `scan_summary.json` in this same artifact for full detail.",
     ]
     report_path = OUTPUT_DIR / "FULL_SAUDI_MARKET_VALIDATION_REPORT.md"
     with open(report_path, "w", encoding="utf-8") as fh:
@@ -503,6 +527,7 @@ async def main() -> int:
     timings: Dict[str, float] = {}
     step_results: Dict[str, Any] = {}
     call_counter = _RateLimiterCallCounter()
+    progress_tracker: Optional[ScanProgressTracker] = None
 
     output: Dict[str, Any] = {
         "run_started_at": run_started_at.isoformat(),
@@ -633,6 +658,27 @@ async def main() -> int:
             create_session.close()
 
         baseline_max_id = _max_live_snapshot_id(session_factory)
+
+        # Live progress publisher (Basirah publishing its own progress,
+        # since GitHub Actions exposes none for a running job -- its
+        # job-logs API returns HTTP 404 until the job completes,
+        # confirmed directly during this same validation effort).
+        # Updates a durable DB row, outputs/live_progress.json, and
+        # $GITHUB_STEP_SUMMARY after every symbol reaches a terminal
+        # outcome, not just once at the very end.
+        progress_tracker = ScanProgressTracker(
+            session_factory,
+            run_id,
+            eligible_discovered=len(all_symbols),
+            output_dir=OUTPUT_DIR,
+            symbol_names={c["symbol"]: {"name_en": c.get("name_en"), "name_ar": c.get("name_ar")} for c in companies},
+            workflow_run_id=os.getenv("GITHUB_RUN_ID"),
+            commit_sha=os.getenv("GITHUB_SHA"),
+            branch=os.getenv("GITHUB_REF_NAME"),
+            mode=os.getenv("SCAN_MODE", "full_universe"),
+            api_call_counter=lambda: call_counter.count,
+        )
+
         t0 = time.monotonic()
         # BUG FIXED (found during the 2026-08-02 live full-universe
         # validation, run 30738871790): passing symbols=None here made
@@ -651,8 +697,15 @@ async def main() -> int:
         # symbols_skipped) for a symbol with no usable data -- silence
         # was never a data problem, it was this call passing the wrong
         # argument.
-        outcomes = await scan_engine.execute_scan(run_id, symbols=all_symbols)
+        outcomes = await scan_engine.execute_scan(
+            run_id, symbols=all_symbols,
+            on_symbol_start=progress_tracker.on_symbol_start,
+            on_symbol_complete=progress_tracker.on_symbol_complete,
+            on_retry=progress_tracker.on_retry,
+        )
         timings["scan_seconds"] = time.monotonic() - t0
+        progress_tracker.finalize("COMPLETED")
+        output["live_progress_final"] = progress_tracker.as_dict()
 
         get_session = session_factory()
         try:
@@ -778,6 +831,8 @@ async def main() -> int:
         return 0
 
     except ValidationFailure as exc:
+        if progress_tracker is not None:
+            progress_tracker.finalize("FAILED")
         output["final_status"] = "ABORTED"
         output["abort_reason"] = str(exc)
         output["run_finished_at"] = datetime.now(timezone.utc).isoformat()
@@ -788,6 +843,8 @@ async def main() -> int:
         _write_result_artifacts(output)
         return 1
     except Exception as exc:  # noqa: BLE001 -- must always write whatever partial evidence exists, never crash silently
+        if progress_tracker is not None:
+            progress_tracker.finalize("FAILED")
         output["final_status"] = "FAILED"
         output["failure_reason"] = f"{type(exc).__name__}: {exc}"
         output["timings_seconds"] = timings

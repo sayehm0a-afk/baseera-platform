@@ -27,6 +27,7 @@ from src.domain.models.debate_session import DebateSession
 from src.domain.models.daily_intelligence_snapshot import DailyIntelligenceSnapshot
 from src.domain.models.calibration_config import CalibrationConfig, CalibrationStatus
 from src.domain.models.market_scan_run import MarketScanRun, MarketScanStatus
+from src.domain.models.market_scan_progress import MarketScanProgress
 from src.domain.models.symbol_intelligence_record import SymbolIntelligenceRecord
 from src.domain.models.sector_intelligence_summary import SectorIntelligenceSummary
 from src.domain.models.market_alert import MarketAlert, AlertType, AlertSeverity
@@ -87,6 +88,7 @@ __all__ = [
     "CalibrationConfig",
     "CalibrationStatus",
     "MarketScanRun",
+    "MarketScanProgress",
     "MarketScanStatus",
     "SymbolIntelligenceRecord",
     "SectorIntelligenceSummary",

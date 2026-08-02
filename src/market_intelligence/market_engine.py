@@ -46,7 +46,14 @@ class MarketIntelligenceEngine:
         self._change_detector = change_detector or ChangeDetector()
         self._alert_engine = alert_engine or AlertEngine()
 
-    async def execute_scan(self, run_id: int, symbols: Optional[List[str]] = None) -> List[SymbolScanOutcome]:
+    async def execute_scan(
+        self,
+        run_id: int,
+        symbols: Optional[List[str]] = None,
+        on_symbol_start: Optional[Callable[[str], None]] = None,
+        on_symbol_complete: Optional[Callable[[SymbolScanOutcome], None]] = None,
+        on_retry: Optional[Callable[[str, int, int, Exception], None]] = None,
+    ) -> List[SymbolScanOutcome]:
         """Runs scan `run_id` (already created as a PENDING
         `MarketScanRun` row by the caller -- see
         services/scan_job_runner.py) to completion: marks it RUNNING,
@@ -54,6 +61,11 @@ class MarketIntelligenceEngine:
         SUCCESS/FAILED. Returns the scan's outcomes so a caller that
         wants them immediately (e.g. a synchronous test) doesn't have
         to re-read them back from the database.
+
+        `on_symbol_start`/`on_symbol_complete`/`on_retry` are optional
+        pass-throughs to `MarketScanner.scan()` for live progress
+        reporting (see scan_progress.py) -- None by default, so every
+        existing caller is unaffected.
         """
         mark_running_session = self._session_factory()
         try:
@@ -67,7 +79,12 @@ class MarketIntelligenceEngine:
         finally:
             selection_session.close()
 
-        outcomes = await self._scanner.scan(resolved_symbols)
+        outcomes = await self._scanner.scan(
+            resolved_symbols,
+            on_symbol_start=on_symbol_start,
+            on_symbol_complete=on_symbol_complete,
+            on_retry=on_retry,
+        )
 
         write_session = self._session_factory()
         try:

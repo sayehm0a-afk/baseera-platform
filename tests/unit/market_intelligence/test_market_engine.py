@@ -39,7 +39,12 @@ class _FakeScanner:
     def __init__(self, outcomes):
         self._outcomes = outcomes
 
-    async def scan(self, symbols):
+    async def scan(self, symbols, on_symbol_start=None, on_symbol_complete=None, on_retry=None):
+        for outcome in self._outcomes:
+            if on_symbol_start is not None:
+                on_symbol_start(outcome.symbol)
+            if on_symbol_complete is not None:
+                on_symbol_complete(outcome)
         return self._outcomes
 
 
