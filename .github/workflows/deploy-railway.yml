@@ -91,6 +91,13 @@ jobs:
           echo "RAILWAY_API_TOKEN  -- vars.RAILWAY_API_TOKEN:    present=$([ -n "$FROM_VARS" ] && echo yes || echo no) length=${#FROM_VARS}"
           echo "SAHMK_API_KEY      -- secrets.SAHMK_API_KEY:     present=$([ -n "$SAHMK_FROM_SECRETS" ] && echo yes || echo no) length=${#SAHMK_FROM_SECRETS}"
           echo "SAHMK_API_KEY      -- vars.SAHMK_API_KEY:        present=$([ -n "$SAHMK_FROM_VARS" ] && echo yes || echo no) length=${#SAHMK_FROM_VARS}"
+          # A hash never reveals the token, but comparing it run-to-run
+          # proves whether a "new" secret value actually took effect --
+          # 4 consecutive real dispatches, each claimed to use a freshly
+          # generated token, have all been rejected identically by
+          # Railway, so this rules in/out "the secret store never
+          # actually updated" as a possible cause.
+          echo "RAILWAY_API_TOKEN sha256 (first 16 hex chars, value never shown): $(printf '%s' "$FROM_SECRETS" | sha256sum | cut -c1-16)"
 
       - name: Fail fast if RAILWAY_API_TOKEN is not configured
         run: |
