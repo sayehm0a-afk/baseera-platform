@@ -1,5 +1,4 @@
 import logging
-import os
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -87,22 +86,19 @@ def setup_production_dependencies() -> DependencyContainer:
         container.register_instance("db_session_factory", get_session_factory())
         container.register_service("db_session", get_session, singleton=False)
 
-        # Register message bus
+        # Register message bus. No explicit host/port/password here --
+        # that used to hardcode REDIS_HOST/REDIS_PORT (defaulting to
+        # localhost) at this call site, silently overriding
+        # RedisMessageBus's own settings.redis_dsn-based default and
+        # ignoring REDIS_URL entirely (the actual variable a managed
+        # Redis provider like Railway injects). Let the class default.
         def create_message_bus():
-            return RedisMessageBus(
-                host=os.getenv("REDIS_HOST", "localhost"),
-                port=int(os.getenv("REDIS_PORT", 6379)),
-                password=os.getenv("REDIS_PASSWORD"),
-            )
+            return RedisMessageBus()
         container.register_service("message_bus", create_message_bus, singleton=True)
 
-        # Register task queue
+        # Register task queue -- same reasoning as create_message_bus above.
         def create_task_queue():
-            return RealTaskQueue(
-                host=os.getenv("REDIS_HOST", "localhost"),
-                port=int(os.getenv("REDIS_PORT", 6379)),
-                password=os.getenv("REDIS_PASSWORD"),
-            )
+            return RealTaskQueue()
         container.register_service("task_queue", create_task_queue, singleton=True)
 
         # Register agent runtime

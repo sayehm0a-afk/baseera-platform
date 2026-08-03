@@ -1,8 +1,9 @@
 import json
 import logging
-import os
 from typing import Any, Dict, Optional
 import redis
+
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -11,15 +12,20 @@ class RealTaskQueue:
     """Production-grade task queue using Redis."""
 
     def __init__(self, host: str = None, port: int = None, db: int = 0, password: str = None):
-        """Initialize real task queue."""
-        self.host = host or os.getenv("REDIS_HOST", "localhost")
-        self.port = port or int(os.getenv("REDIS_PORT", 6379))
-        self.db = db
-        # Matches RedisMessageBus's existing password-fallback convention
-        # -- unset in every current deployment (unauthenticated local
-        # Redis), but required by any managed Redis provider (Railway,
-        # Render, Redis Cloud, ElastiCache with AUTH) in production.
-        self.password = password or os.getenv("REDIS_PASSWORD")
+        """Initialize real task queue.
+
+        Same fix and reasoning as RedisMessageBus.__init__: with no
+        explicit host/port/password, the connection string comes from
+        `settings.redis_dsn` (prefers REDIS_URL, the only variable a
+        managed Redis provider like Railway actually injects) instead
+        of independently reading REDIS_HOST/REDIS_PORT and defaulting
+        to localhost.
+        """
+        if host or port or password:
+            auth = f":{password}@" if password else ""
+            self._dsn = f"redis://{auth}{host or 'localhost'}:{port or 6379}/{db}"
+        else:
+            self._dsn = settings.redis_dsn
         self.redis_client = None
         self.queue_name = "basirah:tasks"
         self.dead_letter_queue_name = "basirah:tasks:dead_letter"
@@ -28,18 +34,15 @@ class RealTaskQueue:
     def _connect(self):
         """Establish connection to Redis."""
         try:
-            self.redis_client = redis.Redis(
-                host=self.host,
-                port=self.port,
-                db=self.db,
-                password=self.password,
+            self.redis_client = redis.Redis.from_url(
+                self._dsn,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_keepalive=True,
             )
             # Test connection
             self.redis_client.ping()
-            logger.info(f"Connected to Redis task queue at {self.host}:{self.port}")
+            logger.info("Connected to Redis task queue.")
         except Exception as e:
             logger.error(f"Failed to connect to Redis task queue: {e}")
             raise

@@ -157,6 +157,42 @@ class AlertsOut(BaseModel):
     alerts: List[AlertOut]
 
 
+class DiagnosticSampleSymbolOut(BaseModel):
+    symbol: str
+    recommendation: str
+    latest_price: Optional[float] = None
+    evaluated_at: datetime
+
+
+class DiagnosticScanOut(BaseModel):
+    """Response for POST /api/v1/admin/market-intelligence/diagnostic-scan
+    -- real evidence from one controlled SAHMK poll, never fabricated:
+    every field below is either read from provider_factory's real
+    connectivity-probe state or from rows the scan itself just wrote."""
+
+    triggered_at: datetime
+    operation_tested: str
+    sahmk_connectivity_status: str
+    sahmk_error: Optional[str] = None
+    current_provider_kind: Optional[str] = None
+    last_connectivity_status: Optional[str] = None
+    last_connectivity_at: Optional[str] = None
+    can_publish_recommendations: bool
+    strict_real_data: bool
+    synthetic_allowed: bool
+    sahmk_key_present: bool
+    run_id: Optional[int] = None
+    run_status: Optional[str] = None
+    symbols_requested: int = 0
+    symbols_succeeded: int = 0
+    symbols_failed: int = 0
+    rows_written: int = 0
+    sample_symbols: List[DiagnosticSampleSymbolOut] = Field(default_factory=list)
+    last_scan_source: Optional[str] = None
+    data_is_fresh: Optional[bool] = None
+    freshness_note: str = ""
+
+
 class MarketSummaryOut(BaseModel):
     scan_run_id: Optional[int] = None
     generated_at: datetime

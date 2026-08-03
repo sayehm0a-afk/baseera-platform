@@ -14,6 +14,7 @@ from src.api.routes.admin import (
     audit_log,
     billing,
     feature_flags,
+    market_intelligence,
     sessions,
     subscriptions,
     system,
@@ -33,3 +34,4 @@ router.include_router(analytics.router)
 router.include_router(system.router)
 router.include_router(billing.router)
 router.include_router(ai_evolution.router)
+router.include_router(market_intelligence.router)
