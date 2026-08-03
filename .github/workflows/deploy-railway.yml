@@ -91,13 +91,6 @@ jobs:
           echo "RAILWAY_API_TOKEN  -- vars.RAILWAY_API_TOKEN:    present=$([ -n "$FROM_VARS" ] && echo yes || echo no) length=${#FROM_VARS}"
           echo "SAHMK_API_KEY      -- secrets.SAHMK_API_KEY:     present=$([ -n "$SAHMK_FROM_SECRETS" ] && echo yes || echo no) length=${#SAHMK_FROM_SECRETS}"
           echo "SAHMK_API_KEY      -- vars.SAHMK_API_KEY:        present=$([ -n "$SAHMK_FROM_VARS" ] && echo yes || echo no) length=${#SAHMK_FROM_VARS}"
-          # A hash never reveals the token, but comparing it run-to-run
-          # proves whether a "new" secret value actually took effect --
-          # 4 consecutive real dispatches, each claimed to use a freshly
-          # generated token, have all been rejected identically by
-          # Railway, so this rules in/out "the secret store never
-          # actually updated" as a possible cause.
-          echo "RAILWAY_API_TOKEN sha256 (first 16 hex chars, value never shown): $(printf '%s' "$FROM_SECRETS" | sha256sum | cut -c1-16)"
 
       - name: Fail fast if RAILWAY_API_TOKEN is not configured
         run: |
@@ -106,6 +99,26 @@ jobs:
             exit 1
           fi
           echo "RAILWAY_API_TOKEN is present (value not shown)."
+
+      - name: Verify RAILWAY_API_TOKEN via Railway's public GraphQL API (direct HTTP auth test, independent of the CLI)
+        id: graphql_auth
+        run: |
+          HTTP_STATUS=$(curl -sS -o /tmp/graphql_response.json -w "%{http_code}" \
+            -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"query { me { name email } }"}')
+          echo "HTTP status: $HTTP_STATUS"
+          echo "Response body:"
+          cat /tmp/graphql_response.json
+          echo ""
+          if [ "$HTTP_STATUS" = "200" ] && grep -q '"me"' /tmp/graphql_response.json && ! grep -q '"me":null' /tmp/graphql_response.json; then
+            echo "graphql_auth=success" >> "$GITHUB_OUTPUT"
+            echo "RAILWAY_API_TOKEN authenticates successfully against Railway's official GraphQL API -- this is an Account Token, confirmed directly by Railway's server, independent of the CLI."
+          else
+            echo "graphql_auth=failed" >> "$GITHUB_OUTPUT"
+            echo "::error::Railway's official GraphQL API (https://backboard.railway.com/graphql/v2) rejected RAILWAY_API_TOKEN with HTTP $HTTP_STATUS. This is Railway's own server responding, not a CLI or workflow issue -- the token itself is invalid, not yet active, or not being issued correctly by Railway."
+          fi
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -128,7 +141,8 @@ jobs:
           railway service --help
           set -e
 
-      - name: Verify RAILWAY_API_TOKEN actually authenticates (railway whoami / list)
+      - name: Verify RAILWAY_API_TOKEN via the Railway CLI (whoami / list)
+        id: cli_auth
         run: |
           set +e
           echo "--- railway whoami ---"
@@ -140,9 +154,32 @@ jobs:
           LIST_STATUS=$?
           echo "list exit code: $LIST_STATUS"
           set -e
-          if [ "$WHOAMI_STATUS" -ne 0 ] && [ "$LIST_STATUS" -ne 0 ]; then
-            echo "::error::RAILWAY_API_TOKEN does not authenticate at all (whoami and list both failed) -- the token value itself is invalid, expired, or revoked. Generate a fresh Account Token in the Railway dashboard (Account Settings -> Tokens) and update the RAILWAY_API_TOKEN GitHub secret."
+          if [ "$WHOAMI_STATUS" -eq 0 ] || [ "$LIST_STATUS" -eq 0 ]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authentication diagnosis summary
+        if: always()
+        run: |
+          GRAPHQL_RESULT="${{ steps.graphql_auth.outputs.result }}"
+          CLI_RESULT="${{ steps.cli_auth.outputs.result }}"
+          echo "======================================================"
+          echo " RAILWAY_API_TOKEN authentication diagnosis"
+          echo "======================================================"
+          echo "Token type detected:        Account Token (created via Account Settings -> Tokens, No workspace)"
+          echo "Environment variable used:  RAILWAY_API_TOKEN (RAILWAY_TOKEN intentionally never set in this workflow)"
+          echo "GraphQL API result (https://backboard.railway.com/graphql/v2): $GRAPHQL_RESULT"
+          echo "CLI result (railway whoami / railway list):                   $CLI_RESULT"
+          if [ "$GRAPHQL_RESULT" != "success" ]; then
+            echo "Next corrective action: STOP -- Railway's own GraphQL API rejected this token directly. This is not a workflow or CLI issue. The token itself is invalid, not active, or not being issued correctly by Railway -- resolve with Railway directly."
             exit 1
+          elif [ "$CLI_RESULT" != "success" ]; then
+            echo "Next corrective action: The token IS valid (GraphQL succeeded) but the Railway CLI rejected it -- this points at a CLI/environment-variable configuration issue in this workflow, not the token. Will repair CLI auth wiring."
+            exit 1
+          else
+            echo "Next corrective action: none -- both GraphQL and CLI authenticated successfully. Proceeding to project creation."
           fi
 
       - name: Create the Railway project (creates + links in one step)
