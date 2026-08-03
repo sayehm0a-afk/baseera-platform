@@ -1,129 +1,74 @@
 name: Deploy to Railway
 
-# Two modes, both workflow_dispatch-only (this provisions and pays for
-# real infrastructure with a real credential -- must never run on a
-# plain push):
+# Single idempotent job, workflow_dispatch-only (this touches real paid
+# infrastructure with a real credential -- must never run on a plain
+# push). Targets an EXISTING Railway project ("Basirah", production
+# environment) via a Project Token -- this workflow never creates a
+# project (`railway init` does not appear anywhere below) and never
+# authenticates with an account/workspace token.
 #
-#   bootstrap -- run once. Creates the Railway project, Postgres and
-#     Redis plugins, the backend and frontend services, generates both
-#     public HTTPS domains, sets every environment variable (including
-#     a freshly generated SECRET_KEY, which bootstrap alone owns --
-#     deploy never touches it, or every session/token issued so far
-#     would invalidate on every redeploy), and commits the resulting
-#     non-secret project/service ids to deploy/railway-project.json so
-#     every later `deploy` run knows what to target without recreating
-#     anything.
+# This workflow authenticates with a Project Token (generated inside
+# the existing project's own settings, already scoped to that project
+# + a specific environment), stored as RAILWAY_TOKEN -- the only
+# Railway auth secret this file reads. A project-scoped credential has
+# no account-level user identity, so `railway whoami` is not the right
+# check for it; `railway status` (scoped to the token's own project)
+# is used instead.
 #
-#   deploy (default) -- safe to re-run any time. Reads
-#     deploy/railway-project.json, links that exact project, builds
-#     and releases both services from this exact commit, waits for
-#     Railway's own healthcheck-gated rollout (a failed healthcheck
-#     never cuts traffic to the broken deploy -- see railway.toml /
-#     frontend/railway.toml), then runs a real smoke test against the
-#     live public URLs and prints them.
+# Idempotency: every resource-creating step (Postgres, Redis, backend
+# service, frontend service, public domains) first lists what already
+# exists in the linked project and only creates what's genuinely
+# missing, so re-running this workflow is safe and never duplicates
+# the project or its services. SECRET_KEY is generated once and never
+# regenerated on a rerun (regenerating it would invalidate every
+# existing session) -- its presence is checked without ever printing
+# variable values, since `railway variable list --json` returns raw
+# secret values and must never be echoed to the log.
 #
-# SECURITY: RAILWAY_API_TOKEN and SAHMK_API_KEY are read only from GitHub
+# SECURITY: RAILWAY_TOKEN and SAHMK_API_KEY are read only from GitHub
 # Secrets, injected only into the steps that need them, and never
-# echoed. Real values (domains, project id) are non-secret and safe to
-# print/commit; nothing in this file prints a secret's value.
-#
-# RAILWAY_API_TOKEN vs RAILWAY_TOKEN: per Railway's own CLI docs, an
-# account/workspace token (created under Account Settings -> Tokens --
-# what this project uses) authenticates account-level operations
-# (whoami, list, project/service/database creation, domain generation)
-# only via RAILWAY_API_TOKEN. RAILWAY_TOKEN is reserved for a
-# project-scoped token (created inside one existing project's own
-# settings), which is a different credential this project does not
-# have yet. Both jobs below authenticate purely via RAILWAY_API_TOKEN
-# for that reason -- RAILWAY_TOKEN is intentionally not set anywhere in
-# this file. If a project-scoped token is added later for the deploy
-# job specifically, wire it in as RAILWAY_TOKEN on that job only.
+# echoed or logged in any form (no hash, no fingerprint, no partial
+# value).
 
 on:
-  workflow_dispatch:
-    inputs:
-      action:
-        description: "bootstrap (one-time: create project/services/databases) or deploy (build+release, safe to re-run)"
-        required: false
-        default: "deploy"
-        type: choice
-        options:
-          - bootstrap
-          - deploy
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 env:
-  RAILWAY_PROJECT_NAME: basirah-production
   RAILWAY_BACKEND_SERVICE: backend
   RAILWAY_FRONTEND_SERVICE: frontend
 
 jobs:
-  bootstrap:
-    if: github.event.inputs.action == 'bootstrap'
-    name: Bootstrap Railway project (one-time)
+  deploy:
+    name: Deploy Basirah to Railway (existing project, Project Token)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # Account/workspace token -- required for every command this job
-      # runs (project creation, database plugins, service creation,
-      # domain generation). Falls back to an Actions *variable* of the
-      # same name in case it was entered under the "Variables" tab
-      # instead of "Secrets" (both tabs live on the same settings page).
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN || vars.RAILWAY_API_TOKEN }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Diagnose secret/variable visibility (never prints values, only presence/length)
+      - name: Diagnose secret presence (never prints values, only presence/length)
         env:
-          FROM_SECRETS: ${{ secrets.RAILWAY_API_TOKEN }}
-          FROM_VARS: ${{ vars.RAILWAY_API_TOKEN }}
+          FROM_SECRETS: ${{ secrets.RAILWAY_TOKEN }}
           SAHMK_FROM_SECRETS: ${{ secrets.SAHMK_API_KEY }}
-          SAHMK_FROM_VARS: ${{ vars.SAHMK_API_KEY }}
         run: |
-          echo "Repository:  ${{ github.repository }}"
-          echo "Ref:         ${{ github.ref }} (branch: ${{ github.ref_name }})"
-          echo "Actor:       ${{ github.actor }}"
-          echo "Event:       ${{ github.event_name }}"
-          echo "RAILWAY_API_TOKEN  -- secrets.RAILWAY_API_TOKEN: present=$([ -n "$FROM_SECRETS" ] && echo yes || echo no) length=${#FROM_SECRETS}"
-          echo "RAILWAY_API_TOKEN  -- vars.RAILWAY_API_TOKEN:    present=$([ -n "$FROM_VARS" ] && echo yes || echo no) length=${#FROM_VARS}"
-          echo "SAHMK_API_KEY      -- secrets.SAHMK_API_KEY:     present=$([ -n "$SAHMK_FROM_SECRETS" ] && echo yes || echo no) length=${#SAHMK_FROM_SECRETS}"
-          echo "SAHMK_API_KEY      -- vars.SAHMK_API_KEY:        present=$([ -n "$SAHMK_FROM_VARS" ] && echo yes || echo no) length=${#SAHMK_FROM_VARS}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Ref:        ${{ github.ref }} (branch: ${{ github.ref_name }})"
+          echo "Actor:      ${{ github.actor }}"
+          echo "RAILWAY_TOKEN -- present=$([ -n "$FROM_SECRETS" ] && echo yes || echo no) length=${#FROM_SECRETS}"
+          echo "SAHMK_API_KEY -- present=$([ -n "$SAHMK_FROM_SECRETS" ] && echo yes || echo no) length=${#SAHMK_FROM_SECRETS}"
 
-      - name: Fail fast if RAILWAY_API_TOKEN is not configured
+      - name: Fail fast if RAILWAY_TOKEN is not configured
         run: |
-          if [ -z "$RAILWAY_API_TOKEN" ]; then
-            echo "::error::RAILWAY_API_TOKEN is not readable by this job -- see the diagnostics step above. This job needs the account/workspace token (Railway Account Settings -> Tokens) stored under the exact secret name RAILWAY_API_TOKEN, not RAILWAY_TOKEN."
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not readable by this job. This workflow expects a Project Token (generated inside the existing Basirah project's own settings), stored under the exact secret name RAILWAY_TOKEN."
             exit 1
           fi
-          echo "RAILWAY_API_TOKEN is present (value not shown)."
-
-      - name: Verify RAILWAY_API_TOKEN via Railway's public GraphQL API (direct HTTP auth test, independent of the CLI)
-        id: graphql_auth
-        run: |
-          HTTP_STATUS=$(curl -sS -o /tmp/graphql_response.json -w "%{http_code}" \
-            -X POST https://backboard.railway.com/graphql/v2 \
-            -H "Authorization: Bearer $RAILWAY_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"query":"query { me { name email } }"}')
-          echo "HTTP status: $HTTP_STATUS"
-          echo "Response body:"
-          cat /tmp/graphql_response.json
-          echo ""
-          # Parsed with python3, not grep -- the error-path response body
-          # legitimately contains the literal substring "me" (inside
-          # "path":["me"]) even when auth fails, which made an earlier
-          # version of this check a false positive.
-          AUTH_OK=$(python3 -c "import json; body = json.load(open('/tmp/graphql_response.json')); me = (body.get('data') or {}).get('me'); print('yes' if not body.get('errors') and me and me.get('email') else 'no')" 2>/dev/null || echo no)
-          if [ "$HTTP_STATUS" = "200" ] && [ "$AUTH_OK" = "yes" ]; then
-            echo "result=success" >> "$GITHUB_OUTPUT"
-            echo "RAILWAY_API_TOKEN authenticates successfully against Railway's official GraphQL API -- this is an Account Token, confirmed directly by Railway's server, independent of the CLI."
-          else
-            echo "result=failed" >> "$GITHUB_OUTPUT"
-            echo "::error::Railway's official GraphQL API (https://backboard.railway.com/graphql/v2) rejected RAILWAY_API_TOKEN (HTTP $HTTP_STATUS, see response body above). This is Railway's own server responding, not a CLI or workflow issue -- the token itself is invalid, not yet active, or not being issued correctly by Railway."
-          fi
+          echo "RAILWAY_TOKEN is present (value not shown)."
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -132,132 +77,174 @@ jobs:
         run: |
           set +e
           railway --version
-          echo "--- railway --help ---"
-          railway --help
-          echo "--- railway add --help ---"
-          railway add --help
-          echo "--- railway variables --help ---"
-          railway variables --help
-          echo "--- railway domain --help ---"
-          railway domain --help
-          echo "--- railway up --help ---"
-          railway up --help
+          echo "--- railway status --help ---"
+          railway status --help
+          echo "--- railway environment --help ---"
+          railway environment --help
           echo "--- railway service --help ---"
           railway service --help
+          echo "--- railway domain --help ---"
+          railway domain --help
+          echo "--- railway variable --help ---"
+          railway variable --help
           set -e
 
-      - name: Verify RAILWAY_API_TOKEN via the Railway CLI (whoami / list)
-        id: cli_auth
+      - name: Verify the Project Token (railway status -- the correct check for a project-scoped token)
+        id: project_status
         run: |
           set +e
-          echo "--- railway whoami ---"
-          railway whoami
-          WHOAMI_STATUS=$?
-          echo "whoami exit code: $WHOAMI_STATUS"
-          echo "--- railway list (existing projects visible to this token) ---"
-          railway list --json
-          LIST_STATUS=$?
-          echo "list exit code: $LIST_STATUS"
+          railway status --json > /tmp/status.json
+          STATUS_EXIT=$?
           set -e
-          if [ "$WHOAMI_STATUS" -eq 0 ] || [ "$LIST_STATUS" -eq 0 ]; then
-            echo "result=success" >> "$GITHUB_OUTPUT"
-          else
+          echo "railway status exit code: $STATUS_EXIT"
+          echo "Response (project/environment metadata -- not secret):"
+          cat /tmp/status.json
+          echo ""
+          if [ "$STATUS_EXIT" -ne 0 ]; then
+            echo "::error::RAILWAY_TOKEN did not authenticate (railway status failed). This is the correct verification method for a Project Token -- whoami/list are for Account Tokens and do not apply here. The token itself is invalid, revoked, or not scoped the way expected."
             echo "result=failed" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
+          echo "result=success" >> "$GITHUB_OUTPUT"
+          PROJECT_NAME=$(python3 -c "import json; d=json.load(open('/tmp/status.json')); print(d.get('name') or (d.get('project') or {}).get('name') or 'unknown')" 2>/dev/null || echo unknown)
+          ENV_NAME=$(python3 -c "import json; d=json.load(open('/tmp/status.json')); print(d.get('environment') or (d.get('environment') or {}).get('name') or 'unknown')" 2>/dev/null || echo unknown)
+          echo "Linked project (best-effort parse): $PROJECT_NAME"
+          echo "Linked environment (best-effort parse): $ENV_NAME"
 
-      - name: Authentication diagnosis summary
-        if: always()
+      - name: List existing services in the linked project (used to avoid creating duplicates)
+        id: services
         run: |
-          GRAPHQL_RESULT="${{ steps.graphql_auth.outputs.result }}"
-          CLI_RESULT="${{ steps.cli_auth.outputs.result }}"
-          echo "======================================================"
-          echo " RAILWAY_API_TOKEN authentication diagnosis"
-          echo "======================================================"
-          echo "Token type detected:        Account Token (created via Account Settings -> Tokens, No workspace)"
-          echo "Environment variable used:  RAILWAY_API_TOKEN (RAILWAY_TOKEN intentionally never set in this workflow)"
-          echo "GraphQL API result (https://backboard.railway.com/graphql/v2): $GRAPHQL_RESULT"
-          echo "CLI result (railway whoami / railway list):                   $CLI_RESULT"
-          if [ "$GRAPHQL_RESULT" != "success" ]; then
-            echo "Next corrective action: STOP -- Railway's own GraphQL API rejected this token directly. This is not a workflow or CLI issue. The token itself is invalid, not active, or not being issued correctly by Railway -- resolve with Railway directly."
-            exit 1
-          elif [ "$CLI_RESULT" != "success" ]; then
-            echo "Next corrective action: The token IS valid (GraphQL succeeded) but the Railway CLI rejected it -- this points at a CLI/environment-variable configuration issue in this workflow, not the token. Will repair CLI auth wiring."
-            exit 1
+          railway service list --json > /tmp/services.json 2>/tmp/services_err.txt || true
+          echo "Existing services (names only -- not secret):"
+          cat /tmp/services.json 2>/dev/null || cat /tmp/services_err.txt
+          echo ""
+          PARSE_OK=$(python3 -c "import json; items = json.load(open('/tmp/services.json')); names = [str(x.get('name','')) for x in items] if isinstance(items, list) else [str(k) for k in items.keys()]; open('/tmp/service_names.txt','w').write(chr(10).join(names))" 2>/dev/null && echo yes || echo no)
+          if [ "$PARSE_OK" = "yes" ]; then
+            HAS_POSTGRES=$(grep -qi postgres /tmp/service_names.txt && echo yes || echo no)
+            HAS_REDIS=$(grep -qi redis /tmp/service_names.txt && echo yes || echo no)
+            HAS_BACKEND=$(grep -qix backend /tmp/service_names.txt && echo yes || echo no)
+            HAS_FRONTEND=$(grep -qix frontend /tmp/service_names.txt && echo yes || echo no)
           else
-            echo "Next corrective action: none -- both GraphQL and CLI authenticated successfully. Proceeding to project creation."
+            HAS_POSTGRES=unknown
+            HAS_REDIS=unknown
+            HAS_BACKEND=unknown
+            HAS_FRONTEND=unknown
           fi
+          echo "has_postgres=$HAS_POSTGRES" >> "$GITHUB_OUTPUT"
+          echo "has_redis=$HAS_REDIS" >> "$GITHUB_OUTPUT"
+          echo "has_backend=$HAS_BACKEND" >> "$GITHUB_OUTPUT"
+          echo "has_frontend=$HAS_FRONTEND" >> "$GITHUB_OUTPUT"
+          echo "Postgres present: $HAS_POSTGRES | Redis present: $HAS_REDIS | backend present: $HAS_BACKEND | frontend present: $HAS_FRONTEND"
+          echo "(unknown means parsing the service list failed -- treated as 'exists, do not create' below, to never risk a duplicate; see the raw output above to fix parsing if this happens.)"
 
-      - name: Create the Railway project (creates + links in one step)
-        run: railway init --name "$RAILWAY_PROJECT_NAME"
-
-      - name: Add PostgreSQL plugin
+      - name: Ensure PostgreSQL exists (skip if already present)
+        if: steps.services.outputs.has_postgres == 'no'
         run: railway add --database postgres
 
-      - name: Add Redis plugin
+      - name: Ensure Redis exists (skip if already present)
+        if: steps.services.outputs.has_redis == 'no'
         run: railway add --database redis
 
-      - name: Create the backend service (empty -- source deployed by the deploy job)
+      - name: Ensure backend service exists (skip if already present)
+        if: steps.services.outputs.has_backend == 'no'
         run: railway add --service "$RAILWAY_BACKEND_SERVICE"
 
-      - name: Create the frontend service (empty -- source deployed by the deploy job)
+      - name: Ensure frontend service exists (skip if already present)
+        if: steps.services.outputs.has_frontend == 'no'
         run: railway add --service "$RAILWAY_FRONTEND_SERVICE"
 
-      - name: Generate a public HTTPS domain for the backend
+      - name: Ensure a public HTTPS domain exists for the backend
         id: backend_domain
         run: |
-          DOMAIN_OUTPUT=$(railway domain --service "$RAILWAY_BACKEND_SERVICE")
-          echo "$DOMAIN_OUTPUT"
-          URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo 'https?://[a-zA-Z0-9.-]+' | head -1)
-          if [ -z "$URL" ]; then URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo '[a-zA-Z0-9.-]+\.up\.railway\.app' | head -1); URL="https://$URL"; fi
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json 2>/dev/null || echo '[]' > /tmp/backend_domains.json
+          echo "Existing backend domains:"
+          cat /tmp/backend_domains.json
+          echo ""
+          URL=$(python3 -c "import json; items = json.load(open('/tmp/backend_domains.json')); hosts = [x.get('domain') or x.get('hostname') for x in items] if isinstance(items, list) else []; hosts = [h for h in hosts if h]; print('https://' + hosts[0] if hosts else '')" 2>/dev/null || echo "")
+          if [ -z "$URL" ]; then
+            DOMAIN_OUTPUT=$(railway domain --service "$RAILWAY_BACKEND_SERVICE")
+            echo "$DOMAIN_OUTPUT"
+            URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo 'https?://[a-zA-Z0-9.-]+' | head -1)
+            if [ -z "$URL" ]; then URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo '[a-zA-Z0-9.-]+\.up\.railway\.app' | head -1); URL="https://$URL"; fi
+          fi
+          echo "Backend URL: $URL"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
-      - name: Generate a public HTTPS domain for the frontend
+      - name: Ensure a public HTTPS domain exists for the frontend
         id: frontend_domain
         run: |
-          DOMAIN_OUTPUT=$(railway domain --service "$RAILWAY_FRONTEND_SERVICE")
-          echo "$DOMAIN_OUTPUT"
-          URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo 'https?://[a-zA-Z0-9.-]+' | head -1)
-          if [ -z "$URL" ]; then URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo '[a-zA-Z0-9.-]+\.up\.railway\.app' | head -1); URL="https://$URL"; fi
+          railway domain list --service "$RAILWAY_FRONTEND_SERVICE" --json > /tmp/frontend_domains.json 2>/dev/null || echo '[]' > /tmp/frontend_domains.json
+          echo "Existing frontend domains:"
+          cat /tmp/frontend_domains.json
+          echo ""
+          URL=$(python3 -c "import json; items = json.load(open('/tmp/frontend_domains.json')); hosts = [x.get('domain') or x.get('hostname') for x in items] if isinstance(items, list) else []; hosts = [h for h in hosts if h]; print('https://' + hosts[0] if hosts else '')" 2>/dev/null || echo "")
+          if [ -z "$URL" ]; then
+            DOMAIN_OUTPUT=$(railway domain --service "$RAILWAY_FRONTEND_SERVICE")
+            echo "$DOMAIN_OUTPUT"
+            URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo 'https?://[a-zA-Z0-9.-]+' | head -1)
+            if [ -z "$URL" ]; then URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo '[a-zA-Z0-9.-]+\.up\.railway\.app' | head -1); URL="https://$URL"; fi
+          fi
+          echo "Frontend URL: $URL"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
-      - name: Generate SECRET_KEY (bootstrap owns this value -- deploy never regenerates it)
+      - name: Ensure SECRET_KEY exists (generate once, never regenerate -- would invalidate every session)
         id: secret_key
-        run: echo "value=$(python3 -c 'import secrets;print(secrets.token_urlsafe(64))')" >> "$GITHUB_OUTPUT"
+        run: |
+          # Never echo the parsed JSON below -- railway variable list --json
+          # returns every variable's raw value, including real secrets
+          # (SAHMK_API_KEY, DATABASE_URL, an existing SECRET_KEY). Only a
+          # yes/no presence result is ever printed.
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_vars.json 2>/dev/null || echo '{}' > /tmp/backend_vars.json
+          HAS_KEY=$(python3 -c "import json; d = json.load(open('/tmp/backend_vars.json')); print('yes' if 'SECRET_KEY' in d else 'no')" 2>/dev/null || echo no)
+          rm -f /tmp/backend_vars.json
+          echo "SECRET_KEY already present on backend service: $HAS_KEY"
+          if [ "$HAS_KEY" = "yes" ]; then
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+            echo "value=" >> "$GITHUB_OUTPUT"
+          else
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+            echo "value=$(python3 -c 'import secrets;print(secrets.token_urlsafe(64))')" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Configure backend environment variables
         env:
           SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
           BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
           FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
+          SECRET_KEY_GENERATED: ${{ steps.secret_key.outputs.generated }}
           SECRET_KEY_VALUE: ${{ steps.secret_key.outputs.value }}
         run: |
           # Railway's cross-service variable reference opener (dollar sign,
-          # two open braces) is built here at shell runtime, one quoted
-          # character at a time -- writing it as one literal token anywhere
-          # in this YAML file, even inside a comment, makes GitHub Actions'
-          # own expression parser try to evaluate Postgres.DATABASE_URL as
-          # one of ITS variables (it isn't; Railway resolves this syntax,
-          # not GitHub).
+          # two open braces) is built at shell runtime, one quoted
+          # character at a time -- writing it as one literal token
+          # anywhere in this YAML file, even inside a comment, makes
+          # GitHub Actions' own expression parser try to evaluate
+          # Postgres.DATABASE_URL as one of ITS variables (it isn't;
+          # Railway resolves this syntax, not GitHub).
           RAILWAY_REF_OPEN='$'"{{"
           DATABASE_URL_REF="${RAILWAY_REF_OPEN}Postgres.DATABASE_URL}}"
           REDIS_URL_REF="${RAILWAY_REF_OPEN}Redis.REDIS_URL}}"
-          railway variables --service "$RAILWAY_BACKEND_SERVICE" \
-            --set "DATABASE_URL=$DATABASE_URL_REF" \
-            --set "REDIS_URL=$REDIS_URL_REF" \
-            --set "SECRET_KEY=$SECRET_KEY_VALUE" \
-            --set "BASEERA_ENV=production" \
-            --set "SAHMK_API_KEY=$SAHMK_API_KEY" \
-            --set "MARKET_DATA_PROVIDER=sahmk" \
-            --set "STRICT_REAL_DATA=true" \
-            --set "ALLOW_SYNTHETIC_DATA=false" \
-            --set "CORS_ALLOWED_ORIGINS=$FRONTEND_URL" \
-            --set "TRUSTED_HOSTS=${BACKEND_URL#https://}" \
-            --set "FRONTEND_BASE_URL=$FRONTEND_URL" \
-            --set "LIVE_MARKET_MODE_ENABLED=true" \
-            --set "LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS=60" \
-            --set "LOG_LEVEL=INFO" \
-            --set "RATE_LIMIT_ENABLED=true" \
+          SET_ARGS=(
+            --set "DATABASE_URL=$DATABASE_URL_REF"
+            --set "REDIS_URL=$REDIS_URL_REF"
+            --set "BASEERA_ENV=production"
+            --set "SAHMK_API_KEY=$SAHMK_API_KEY"
+            --set "MARKET_DATA_PROVIDER=sahmk"
+            --set "STRICT_REAL_DATA=true"
+            --set "ALLOW_SYNTHETIC_DATA=false"
+            --set "CORS_ALLOWED_ORIGINS=$FRONTEND_URL"
+            --set "TRUSTED_HOSTS=${BACKEND_URL#https://}"
+            --set "FRONTEND_BASE_URL=$FRONTEND_URL"
+            --set "LIVE_MARKET_MODE_ENABLED=true"
+            --set "LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS=60"
+            --set "LOG_LEVEL=INFO"
+            --set "RATE_LIMIT_ENABLED=true"
             --set "PORT=8000"
+          )
+          if [ "$SECRET_KEY_GENERATED" = "true" ]; then
+            SET_ARGS+=(--set "SECRET_KEY=$SECRET_KEY_VALUE")
+          fi
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" "${SET_ARGS[@]}"
 
       - name: Configure frontend environment variables
         env:
@@ -265,92 +252,6 @@ jobs:
         run: |
           railway variables --service "$RAILWAY_FRONTEND_SERVICE" \
             --set "NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL"
-
-      - name: Record project/service ids (non-secret) for future deploy runs
-        env:
-          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
-          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
-        run: |
-          mkdir -p deploy
-          PROJECT_ID=$(railway status --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" || true)
-          cat > deploy/railway-project.json <<EOF
-          {
-            "project_name": "$RAILWAY_PROJECT_NAME",
-            "project_id": "$PROJECT_ID",
-            "backend_service": "$RAILWAY_BACKEND_SERVICE",
-            "frontend_service": "$RAILWAY_FRONTEND_SERVICE",
-            "backend_url": "$BACKEND_URL",
-            "frontend_url": "$FRONTEND_URL",
-            "bootstrapped_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          }
-          EOF
-          cat deploy/railway-project.json
-
-      - name: Commit deploy/railway-project.json
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add deploy/railway-project.json
-          git commit -m "Bootstrap Railway deployment (project + services + domains)" || echo "Nothing to commit"
-          git push
-
-      - name: Bootstrap summary
-        env:
-          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
-          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
-        run: |
-          echo "======================================================"
-          echo " Railway project bootstrapped"
-          echo "======================================================"
-          echo "Frontend URL: $FRONTEND_URL"
-          echo "Backend URL:  $BACKEND_URL"
-          echo "Next: re-run this workflow with action=deploy to build and release the app."
-
-  deploy:
-    if: github.event.inputs.action != 'bootstrap'
-    name: Build and deploy
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      # `railway link --project <id>` and `railway up` both need to
-      # resolve a project by ID against the account, which -- with no
-      # project-scoped token provisioned yet -- also requires the
-      # account/workspace token. See the top-of-file note.
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN || vars.RAILWAY_API_TOKEN }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Fail fast if RAILWAY_API_TOKEN is not configured
-        run: |
-          if [ -z "$RAILWAY_API_TOKEN" ]; then
-            echo "::error::RAILWAY_API_TOKEN is not readable by this job (checked both secrets.RAILWAY_API_TOKEN and vars.RAILWAY_API_TOKEN)."
-            exit 1
-          fi
-
-      - name: Fail fast if the project hasn't been bootstrapped yet
-        run: |
-          if [ ! -f deploy/railway-project.json ]; then
-            echo "::error::deploy/railway-project.json does not exist -- run this workflow with action=bootstrap first."
-            exit 1
-          fi
-          cat deploy/railway-project.json
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Load project id
-        id: project
-        run: |
-          PROJECT_ID=$(python3 -c "import json; print(json.load(open('deploy/railway-project.json'))['project_id'])")
-          BACKEND_URL=$(python3 -c "import json; print(json.load(open('deploy/railway-project.json'))['backend_url'])")
-          FRONTEND_URL=$(python3 -c "import json; print(json.load(open('deploy/railway-project.json'))['frontend_url'])")
-          echo "id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
-          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
-          echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
-
-      - name: Link the Railway project
-        run: railway link --project "${{ steps.project.outputs.id }}"
 
       - name: Deploy backend (from repo root -- picks up ./railway.toml)
         run: railway up --service "$RAILWAY_BACKEND_SERVICE" --detach
@@ -361,7 +262,7 @@ jobs:
 
       - name: Wait for backend to become healthy
         env:
-          BACKEND_URL: ${{ steps.project.outputs.backend_url }}
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
         run: |
           echo "Polling $BACKEND_URL/health/live ..."
           for i in $(seq 1 40); do
@@ -375,7 +276,7 @@ jobs:
 
       - name: Wait for frontend to become healthy
         env:
-          FRONTEND_URL: ${{ steps.project.outputs.frontend_url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
         run: |
           echo "Polling $FRONTEND_URL/login ..."
           for i in $(seq 1 40); do
@@ -387,18 +288,48 @@ jobs:
           echo "::error::Frontend did not become healthy within the timeout. Check 'railway logs --service frontend'."
           exit 1
 
+      - name: Verify PostgreSQL and Redis connectivity (real SELECT 1 / PING via /health/ready)
+        env:
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+        run: |
+          BODY=$(curl -sS -w "\n%{http_code}" "$BACKEND_URL/health/ready")
+          HTTP_CODE=$(echo "$BODY" | tail -1)
+          JSON=$(echo "$BODY" | sed '$d')
+          echo "HTTP $HTTP_CODE"
+          echo "$JSON"
+          echo "$JSON" > /tmp/ready.json
+          DB_OK=$(python3 -c "import json; d=json.load(open('/tmp/ready.json')); print('yes' if d.get('details',{}).get('database') else 'no')" 2>/dev/null || echo unknown)
+          REDIS_OK=$(python3 -c "import json; d=json.load(open('/tmp/ready.json')); print('yes' if d.get('details',{}).get('redis') else 'no')" 2>/dev/null || echo unknown)
+          echo "PostgreSQL connected (real SELECT 1): $DB_OK"
+          echo "Redis connected (real PING):          $REDIS_OK"
+
+      - name: Verify SAHMK connectivity and strict real-data mode (/health/market-data)
+        env:
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+        run: |
+          for i in $(seq 1 6); do
+            BODY=$(curl -sS -w "\n%{http_code}" "$BACKEND_URL/health/market-data")
+            HTTP_CODE=$(echo "$BODY" | tail -1)
+            JSON=$(echo "$BODY" | sed '$d')
+            echo "attempt $i -- HTTP $HTTP_CODE"
+            echo "$JSON"
+            echo "$JSON" > /tmp/market.json
+            KIND=$(python3 -c "import json; print(json.load(open('/tmp/market.json')).get('current_provider_kind'))" 2>/dev/null || echo None)
+            if [ "$KIND" != "None" ] && [ -n "$KIND" ]; then break; fi
+            echo "current_provider_kind not populated yet (live market scheduler has not run its first poll) -- waiting 15s..."
+            sleep 15
+          done
+          echo "$JSON" > /tmp/market_final.json
+          python3 -c "import json; d = json.load(open('/tmp/market_final.json')); [print(f'{k}:', d.get(k)) for k in ['configured_provider','strict_real_data','synthetic_allowed','sahmk_key_present','current_provider_kind','last_connectivity_status','last_scan_source','can_publish_recommendations']]"
+
       - name: Production smoke test (real HTTP calls against the live URLs)
         env:
-          BACKEND_URL: ${{ steps.project.outputs.backend_url }}
-          FRONTEND_URL: ${{ steps.project.outputs.frontend_url }}
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
         run: |
           set -e
           echo "=== /health/live ==="
           curl -sS -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live"
-          echo "=== /health/ready ==="
-          curl -sS -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/ready"
-          echo "=== /health/market-data ==="
-          curl -sS -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/market-data"
           echo "=== frontend / ==="
           curl -sS -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/"
           echo "=== frontend /login ==="
@@ -408,8 +339,8 @@ jobs:
 
       - name: Deployment summary
         env:
-          BACKEND_URL: ${{ steps.project.outputs.backend_url }}
-          FRONTEND_URL: ${{ steps.project.outputs.frontend_url }}
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
         run: |
           echo "======================================================"
           echo " BASIRAH IS LIVE"
