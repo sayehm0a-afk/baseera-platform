@@ -315,7 +315,7 @@ jobs:
         run: |
           echo "Polling $BACKEND_URL/health/live ..."
           for i in $(seq 1 40); do
-            STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
             echo "attempt $i: $STATUS"
             if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
             sleep 15
@@ -329,7 +329,7 @@ jobs:
         run: |
           echo "Polling $FRONTEND_URL/login ..."
           for i in $(seq 1 40); do
-            STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "$FRONTEND_URL/login" || echo "000")
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$FRONTEND_URL/login" || echo "000")
             echo "attempt $i: $STATUS"
             if [ "$STATUS" = "200" ]; then echo "Frontend is healthy."; exit 0; fi
             sleep 15
@@ -341,7 +341,7 @@ jobs:
         env:
           BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
         run: |
-          BODY=$(curl -sS -w "\n%{http_code}" "$BACKEND_URL/health/ready")
+          BODY=$(curl -sS --connect-timeout 10 --max-time 20 -w "\n%{http_code}" "$BACKEND_URL/health/ready" || echo -e "\n000")
           HTTP_CODE=$(echo "$BODY" | tail -1)
           JSON=$(echo "$BODY" | sed '$d')
           echo "HTTP $HTTP_CODE"
@@ -357,7 +357,7 @@ jobs:
           BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
         run: |
           for i in $(seq 1 6); do
-            BODY=$(curl -sS -w "\n%{http_code}" "$BACKEND_URL/health/market-data")
+            BODY=$(curl -sS --connect-timeout 10 --max-time 20 -w "\n%{http_code}" "$BACKEND_URL/health/market-data" || echo -e "\n000")
             HTTP_CODE=$(echo "$BODY" | tail -1)
             JSON=$(echo "$BODY" | sed '$d')
             echo "attempt $i -- HTTP $HTTP_CODE"
@@ -369,7 +369,7 @@ jobs:
             sleep 15
           done
           echo "$JSON" > /tmp/market_final.json
-          python3 -c "import json; d = json.load(open('/tmp/market_final.json')); [print(f'{k}:', d.get(k)) for k in ['configured_provider','strict_real_data','synthetic_allowed','sahmk_key_present','current_provider_kind','last_connectivity_status','last_scan_source','can_publish_recommendations']]"
+          python3 -c "import json; d = json.load(open('/tmp/market_final.json')); [print(f'{k}:', d.get(k)) for k in ['configured_provider','strict_real_data','synthetic_allowed','sahmk_key_present','current_provider_kind','last_connectivity_status','last_scan_source','can_publish_recommendations']]" || echo "market-data health check: no valid JSON response received after retries"
 
       - name: Production smoke test (real HTTP calls against the live URLs)
         env:
@@ -378,13 +378,13 @@ jobs:
         run: |
           set -e
           echo "=== /health/live ==="
-          curl -sS -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live"
+          curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live"
           echo "=== frontend / ==="
-          curl -sS -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/"
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/"
           echo "=== frontend /login ==="
-          curl -sS -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/login"
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/login"
           echo "=== frontend /register ==="
-          curl -sS -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/register"
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/register"
 
       - name: Deployment summary
         env:
