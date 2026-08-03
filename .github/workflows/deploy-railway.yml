@@ -320,8 +320,16 @@ jobs:
             if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
             sleep 15
           done
-          echo "::error::Backend did not become healthy within the timeout. Railway's own healthcheck-gated rollout means the previous good deployment (if any) is still serving traffic -- check 'railway logs --service backend' for the real failure."
+          echo "::error::Backend did not become healthy within the timeout. Railway's own healthcheck-gated rollout means the previous good deployment (if any) is still serving traffic -- see the real build/deploy logs below."
           exit 1
+
+      - name: Dump backend build/deploy logs (only runs if the health wait above failed)
+        if: failure()
+        run: |
+          echo "=== Build logs (backend) ==="
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" --build 2>&1 | tail -200 || echo "(could not fetch build logs)"
+          echo "=== Deploy logs (backend) ==="
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" 2>&1 | tail -200 || echo "(could not fetch deploy logs)"
 
       - name: Wait for frontend to become healthy
         env:
@@ -334,8 +342,16 @@ jobs:
             if [ "$STATUS" = "200" ]; then echo "Frontend is healthy."; exit 0; fi
             sleep 15
           done
-          echo "::error::Frontend did not become healthy within the timeout. Check 'railway logs --service frontend'."
+          echo "::error::Frontend did not become healthy within the timeout. See the real build/deploy logs below."
           exit 1
+
+      - name: Dump frontend build/deploy logs (only runs if the health wait above failed)
+        if: failure()
+        run: |
+          echo "=== Build logs (frontend) ==="
+          railway logs --service "$RAILWAY_FRONTEND_SERVICE" --build 2>&1 | tail -200 || echo "(could not fetch build logs)"
+          echo "=== Deploy logs (frontend) ==="
+          railway logs --service "$RAILWAY_FRONTEND_SERVICE" 2>&1 | tail -200 || echo "(could not fetch deploy logs)"
 
       - name: Verify PostgreSQL and Redis connectivity (real SELECT 1 / PING via /health/ready)
         env:
