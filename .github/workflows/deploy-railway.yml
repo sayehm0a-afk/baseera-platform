@@ -366,7 +366,14 @@ jobs:
           FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
         run: |
           echo "Polling $FRONTEND_URL/login ..."
-          for i in $(seq 1 12); do
+          # Real dispatch 30856609477: 12x15s=3min wasn't enough -- zero
+          # Railway healthcheck-attempt banners appeared anywhere in the
+          # logs, meaning the Nixpacks build (npm ci + next build across
+          # a large dependency tree) was likely still running when we
+          # gave up, well before Railway's own 2min healthcheck window
+          # (frontend/railway.toml) even started. 32x15s=8min gives the
+          # build real room plus the same healthcheck buffer backend got.
+          for i in $(seq 1 32); do
             STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$FRONTEND_URL/login" || echo "000")
             echo "attempt $i: $STATUS"
             if [ "$STATUS" = "200" ]; then echo "Frontend is healthy."; exit 0; fi
