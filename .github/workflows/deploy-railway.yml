@@ -22,10 +22,22 @@ name: Deploy to Railway
 #     frontend/railway.toml), then runs a real smoke test against the
 #     live public URLs and prints them.
 #
-# SECURITY: RAILWAY_TOKEN and SAHMK_API_KEY are read only from GitHub
+# SECURITY: RAILWAY_API_TOKEN and SAHMK_API_KEY are read only from GitHub
 # Secrets, injected only into the steps that need them, and never
 # echoed. Real values (domains, project id) are non-secret and safe to
 # print/commit; nothing in this file prints a secret's value.
+#
+# RAILWAY_API_TOKEN vs RAILWAY_TOKEN: per Railway's own CLI docs, an
+# account/workspace token (created under Account Settings -> Tokens --
+# what this project uses) authenticates account-level operations
+# (whoami, list, project/service/database creation, domain generation)
+# only via RAILWAY_API_TOKEN. RAILWAY_TOKEN is reserved for a
+# project-scoped token (created inside one existing project's own
+# settings), which is a different credential this project does not
+# have yet. Both jobs below authenticate purely via RAILWAY_API_TOKEN
+# for that reason -- RAILWAY_TOKEN is intentionally not set anywhere in
+# this file. If a project-scoped token is added later for the deploy
+# job specifically, wire it in as RAILWAY_TOKEN on that job only.
 
 on:
   workflow_dispatch:
@@ -54,21 +66,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # Falls back to an Actions *variable* of the same name in case the
-      # token was entered under Settings -> Secrets and variables ->
-      # Actions -> "Variables" tab instead of "Secrets" (both tabs live on
-      # the same page and are easy to conflate). If it really is stored as
-      # a secret, this fallback is simply never used.
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN || vars.RAILWAY_TOKEN }}
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN || vars.RAILWAY_TOKEN }}
+      # Account/workspace token -- required for every command this job
+      # runs (project creation, database plugins, service creation,
+      # domain generation). Falls back to an Actions *variable* of the
+      # same name in case it was entered under the "Variables" tab
+      # instead of "Secrets" (both tabs live on the same settings page).
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN || vars.RAILWAY_API_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Diagnose secret/variable visibility (never prints values, only presence/length)
         env:
-          FROM_SECRETS: ${{ secrets.RAILWAY_TOKEN }}
-          FROM_VARS: ${{ vars.RAILWAY_TOKEN }}
+          FROM_SECRETS: ${{ secrets.RAILWAY_API_TOKEN }}
+          FROM_VARS: ${{ vars.RAILWAY_API_TOKEN }}
           SAHMK_FROM_SECRETS: ${{ secrets.SAHMK_API_KEY }}
           SAHMK_FROM_VARS: ${{ vars.SAHMK_API_KEY }}
         run: |
@@ -76,18 +87,18 @@ jobs:
           echo "Ref:         ${{ github.ref }} (branch: ${{ github.ref_name }})"
           echo "Actor:       ${{ github.actor }}"
           echo "Event:       ${{ github.event_name }}"
-          echo "RAILWAY_TOKEN  -- secrets.RAILWAY_TOKEN: present=$([ -n "$FROM_SECRETS" ] && echo yes || echo no) length=${#FROM_SECRETS}"
-          echo "RAILWAY_TOKEN  -- vars.RAILWAY_TOKEN:    present=$([ -n "$FROM_VARS" ] && echo yes || echo no) length=${#FROM_VARS}"
-          echo "SAHMK_API_KEY  -- secrets.SAHMK_API_KEY: present=$([ -n "$SAHMK_FROM_SECRETS" ] && echo yes || echo no) length=${#SAHMK_FROM_SECRETS}"
-          echo "SAHMK_API_KEY  -- vars.SAHMK_API_KEY:    present=$([ -n "$SAHMK_FROM_VARS" ] && echo yes || echo no) length=${#SAHMK_FROM_VARS}"
+          echo "RAILWAY_API_TOKEN  -- secrets.RAILWAY_API_TOKEN: present=$([ -n "$FROM_SECRETS" ] && echo yes || echo no) length=${#FROM_SECRETS}"
+          echo "RAILWAY_API_TOKEN  -- vars.RAILWAY_API_TOKEN:    present=$([ -n "$FROM_VARS" ] && echo yes || echo no) length=${#FROM_VARS}"
+          echo "SAHMK_API_KEY      -- secrets.SAHMK_API_KEY:     present=$([ -n "$SAHMK_FROM_SECRETS" ] && echo yes || echo no) length=${#SAHMK_FROM_SECRETS}"
+          echo "SAHMK_API_KEY      -- vars.SAHMK_API_KEY:        present=$([ -n "$SAHMK_FROM_VARS" ] && echo yes || echo no) length=${#SAHMK_FROM_VARS}"
 
-      - name: Fail fast if RAILWAY_TOKEN is not configured
+      - name: Fail fast if RAILWAY_API_TOKEN is not configured
         run: |
-          if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN is not readable by this job -- see the diagnostics step above for exactly what this job can see (repository secret named exactly RAILWAY_TOKEN, an Actions variable of the same name, or neither). If it was added as an Environment secret, this job must declare 'environment:' with that exact name to see it -- tell the operator the environment name so the workflow can be updated."
+          if [ -z "$RAILWAY_API_TOKEN" ]; then
+            echo "::error::RAILWAY_API_TOKEN is not readable by this job -- see the diagnostics step above. This job needs the account/workspace token (Railway Account Settings -> Tokens) stored under the exact secret name RAILWAY_API_TOKEN, not RAILWAY_TOKEN."
             exit 1
           fi
-          echo "RAILWAY_TOKEN is present (value not shown)."
+          echo "RAILWAY_API_TOKEN is present (value not shown)."
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -110,7 +121,7 @@ jobs:
           railway service --help
           set -e
 
-      - name: Verify RAILWAY_TOKEN actually authenticates (railway whoami / list)
+      - name: Verify RAILWAY_API_TOKEN actually authenticates (railway whoami / list)
         run: |
           set +e
           echo "--- railway whoami ---"
@@ -123,7 +134,7 @@ jobs:
           echo "list exit code: $LIST_STATUS"
           set -e
           if [ "$WHOAMI_STATUS" -ne 0 ] && [ "$LIST_STATUS" -ne 0 ]; then
-            echo "::error::RAILWAY_TOKEN does not authenticate at all (whoami and list both failed) -- the token value itself is invalid, expired, or revoked. Generate a fresh Account Token in the Railway dashboard (Account Settings -> Tokens) and update the RAILWAY_TOKEN GitHub secret."
+            echo "::error::RAILWAY_API_TOKEN does not authenticate at all (whoami and list both failed) -- the token value itself is invalid, expired, or revoked. Generate a fresh Account Token in the Railway dashboard (Account Settings -> Tokens) and update the RAILWAY_API_TOKEN GitHub secret."
             exit 1
           fi
 
@@ -252,16 +263,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN || vars.RAILWAY_TOKEN }}
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN || vars.RAILWAY_TOKEN }}
+      # `railway link --project <id>` and `railway up` both need to
+      # resolve a project by ID against the account, which -- with no
+      # project-scoped token provisioned yet -- also requires the
+      # account/workspace token. See the top-of-file note.
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN || vars.RAILWAY_API_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fail fast if RAILWAY_TOKEN is not configured
+      - name: Fail fast if RAILWAY_API_TOKEN is not configured
         run: |
-          if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN is not readable by this job (checked both secrets.RAILWAY_TOKEN and vars.RAILWAY_TOKEN)."
+          if [ -z "$RAILWAY_API_TOKEN" ]; then
+            echo "::error::RAILWAY_API_TOKEN is not readable by this job (checked both secrets.RAILWAY_API_TOKEN and vars.RAILWAY_API_TOKEN)."
             exit 1
           fi
 
