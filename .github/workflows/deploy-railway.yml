@@ -311,7 +311,7 @@ jobs:
           # `variables --set` never unsets keys it doesn't mention, so
           # the stale value from that earlier run has to be removed
           # explicitly.
-          railway variables --service "$RAILWAY_BACKEND_SERVICE" --unset TRUSTED_HOSTS || echo "(no TRUSTED_HOSTS to unset, or unset syntax differs -- non-fatal)"
+          railway variable delete TRUSTED_HOSTS --service "$RAILWAY_BACKEND_SERVICE" --yes || echo "(no TRUSTED_HOSTS to delete, or delete syntax differs -- non-fatal)"
           railway variable list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_vars_check.json 2>/dev/null || echo '{}' > /tmp/backend_vars_check.json
           STILL_SET=$(python3 -c "import json; d = json.load(open('/tmp/backend_vars_check.json')); print('yes' if 'TRUSTED_HOSTS' in d else 'no')" 2>/dev/null || echo unknown)
           echo "TRUSTED_HOSTS still set on backend after unset attempt: $STILL_SET"
