@@ -110,6 +110,23 @@ jobs:
           railway service --help
           set -e
 
+      - name: Verify RAILWAY_TOKEN actually authenticates (railway whoami / list)
+        run: |
+          set +e
+          echo "--- railway whoami ---"
+          railway whoami
+          WHOAMI_STATUS=$?
+          echo "whoami exit code: $WHOAMI_STATUS"
+          echo "--- railway list (existing projects visible to this token) ---"
+          railway list --json
+          LIST_STATUS=$?
+          echo "list exit code: $LIST_STATUS"
+          set -e
+          if [ "$WHOAMI_STATUS" -ne 0 ] && [ "$LIST_STATUS" -ne 0 ]; then
+            echo "::error::RAILWAY_TOKEN does not authenticate at all (whoami and list both failed) -- the token value itself is invalid, expired, or revoked. Generate a fresh Account Token in the Railway dashboard (Account Settings -> Tokens) and update the RAILWAY_TOKEN GitHub secret."
+            exit 1
+          fi
+
       - name: Create the Railway project (creates + links in one step)
         run: railway init --name "$RAILWAY_PROJECT_NAME"
 
