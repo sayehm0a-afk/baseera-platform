@@ -1,0 +1,13 @@
+# Frontend service config-as-code -- deployed by running `railway up`
+# from inside frontend/ (see ../.github/workflows/deploy-railway.yml),
+# so Railway's Nixpacks builder only ever sees this directory as its
+# build context (routes around the CLI's lack of a Root Directory flag
+# the same way the backend's ../railway.toml does).
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+healthcheckPath = "/login"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

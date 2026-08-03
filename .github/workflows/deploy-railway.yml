@@ -1,0 +1,308 @@
+name: Deploy to Railway
+
+# Two modes, both workflow_dispatch-only (this provisions and pays for
+# real infrastructure with a real credential -- must never run on a
+# plain push):
+#
+#   bootstrap -- run once. Creates the Railway project, Postgres and
+#     Redis plugins, the backend and frontend services, generates both
+#     public HTTPS domains, sets every environment variable (including
+#     a freshly generated SECRET_KEY, which bootstrap alone owns --
+#     deploy never touches it, or every session/token issued so far
+#     would invalidate on every redeploy), and commits the resulting
+#     non-secret project/service ids to deploy/railway-project.json so
+#     every later `deploy` run knows what to target without recreating
+#     anything.
+#
+#   deploy (default) -- safe to re-run any time. Reads
+#     deploy/railway-project.json, links that exact project, builds
+#     and releases both services from this exact commit, waits for
+#     Railway's own healthcheck-gated rollout (a failed healthcheck
+#     never cuts traffic to the broken deploy -- see railway.toml /
+#     frontend/railway.toml), then runs a real smoke test against the
+#     live public URLs and prints them.
+#
+# SECURITY: RAILWAY_TOKEN and SAHMK_API_KEY are read only from GitHub
+# Secrets, injected only into the steps that need them, and never
+# echoed. Real values (domains, project id) are non-secret and safe to
+# print/commit; nothing in this file prints a secret's value.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "bootstrap (one-time: create project/services/databases) or deploy (build+release, safe to re-run)"
+        required: false
+        default: "deploy"
+        type: choice
+        options:
+          - bootstrap
+          - deploy
+
+permissions:
+  contents: write
+
+env:
+  RAILWAY_PROJECT_NAME: basirah-production
+  RAILWAY_BACKEND_SERVICE: backend
+  RAILWAY_FRONTEND_SERVICE: frontend
+
+jobs:
+  bootstrap:
+    if: github.event.inputs.action == 'bootstrap'
+    name: Bootstrap Railway project (one-time)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN repository secret is not set."
+            exit 1
+          fi
+          echo "RAILWAY_TOKEN secret is present (value not shown)."
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Diagnostics -- capture real CLI command surface for this version
+        run: |
+          set +e
+          railway --version
+          echo "--- railway --help ---"
+          railway --help
+          echo "--- railway add --help ---"
+          railway add --help
+          echo "--- railway variables --help ---"
+          railway variables --help
+          echo "--- railway domain --help ---"
+          railway domain --help
+          echo "--- railway up --help ---"
+          railway up --help
+          echo "--- railway service --help ---"
+          railway service --help
+          set -e
+
+      - name: Create the Railway project (creates + links in one step)
+        run: railway init --name "$RAILWAY_PROJECT_NAME"
+
+      - name: Add PostgreSQL plugin
+        run: railway add --database postgres
+
+      - name: Add Redis plugin
+        run: railway add --database redis
+
+      - name: Create the backend service (empty -- source deployed by the deploy job)
+        run: railway add --service "$RAILWAY_BACKEND_SERVICE"
+
+      - name: Create the frontend service (empty -- source deployed by the deploy job)
+        run: railway add --service "$RAILWAY_FRONTEND_SERVICE"
+
+      - name: Generate a public HTTPS domain for the backend
+        id: backend_domain
+        run: |
+          DOMAIN_OUTPUT=$(railway domain --service "$RAILWAY_BACKEND_SERVICE")
+          echo "$DOMAIN_OUTPUT"
+          URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo 'https?://[a-zA-Z0-9.-]+' | head -1)
+          if [ -z "$URL" ]; then URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo '[a-zA-Z0-9.-]+\.up\.railway\.app' | head -1); URL="https://$URL"; fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Generate a public HTTPS domain for the frontend
+        id: frontend_domain
+        run: |
+          DOMAIN_OUTPUT=$(railway domain --service "$RAILWAY_FRONTEND_SERVICE")
+          echo "$DOMAIN_OUTPUT"
+          URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo 'https?://[a-zA-Z0-9.-]+' | head -1)
+          if [ -z "$URL" ]; then URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo '[a-zA-Z0-9.-]+\.up\.railway\.app' | head -1); URL="https://$URL"; fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SECRET_KEY (bootstrap owns this value -- deploy never regenerates it)
+        id: secret_key
+        run: echo "value=$(python3 -c 'import secrets;print(secrets.token_urlsafe(64))')" >> "$GITHUB_OUTPUT"
+
+      - name: Configure backend environment variables
+        env:
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
+          SECRET_KEY_VALUE: ${{ steps.secret_key.outputs.value }}
+        run: |
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" \
+            --set "DATABASE_URL=\${{Postgres.DATABASE_URL}}" \
+            --set "REDIS_URL=\${{Redis.REDIS_URL}}" \
+            --set "SECRET_KEY=$SECRET_KEY_VALUE" \
+            --set "BASEERA_ENV=production" \
+            --set "SAHMK_API_KEY=$SAHMK_API_KEY" \
+            --set "MARKET_DATA_PROVIDER=sahmk" \
+            --set "STRICT_REAL_DATA=true" \
+            --set "ALLOW_SYNTHETIC_DATA=false" \
+            --set "CORS_ALLOWED_ORIGINS=$FRONTEND_URL" \
+            --set "TRUSTED_HOSTS=${BACKEND_URL#https://}" \
+            --set "FRONTEND_BASE_URL=$FRONTEND_URL" \
+            --set "LIVE_MARKET_MODE_ENABLED=true" \
+            --set "LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS=60" \
+            --set "LOG_LEVEL=INFO" \
+            --set "RATE_LIMIT_ENABLED=true" \
+            --set "PORT=8000"
+
+      - name: Configure frontend environment variables
+        env:
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+        run: |
+          railway variables --service "$RAILWAY_FRONTEND_SERVICE" \
+            --set "NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL"
+
+      - name: Record project/service ids (non-secret) for future deploy runs
+        env:
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
+        run: |
+          mkdir -p deploy
+          PROJECT_ID=$(railway status --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" || true)
+          cat > deploy/railway-project.json <<EOF
+          {
+            "project_name": "$RAILWAY_PROJECT_NAME",
+            "project_id": "$PROJECT_ID",
+            "backend_service": "$RAILWAY_BACKEND_SERVICE",
+            "frontend_service": "$RAILWAY_FRONTEND_SERVICE",
+            "backend_url": "$BACKEND_URL",
+            "frontend_url": "$FRONTEND_URL",
+            "bootstrapped_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          cat deploy/railway-project.json
+
+      - name: Commit deploy/railway-project.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deploy/railway-project.json
+          git commit -m "Bootstrap Railway deployment (project + services + domains)" || echo "Nothing to commit"
+          git push
+
+      - name: Bootstrap summary
+        env:
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+        run: |
+          echo "======================================================"
+          echo " Railway project bootstrapped"
+          echo "======================================================"
+          echo "Frontend URL: $FRONTEND_URL"
+          echo "Backend URL:  $BACKEND_URL"
+          echo "Next: re-run this workflow with action=deploy to build and release the app."
+
+  deploy:
+    if: github.event.inputs.action != 'bootstrap'
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN repository secret is not set."
+            exit 1
+          fi
+
+      - name: Fail fast if the project hasn't been bootstrapped yet
+        run: |
+          if [ ! -f deploy/railway-project.json ]; then
+            echo "::error::deploy/railway-project.json does not exist -- run this workflow with action=bootstrap first."
+            exit 1
+          fi
+          cat deploy/railway-project.json
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Load project id
+        id: project
+        run: |
+          PROJECT_ID=$(python3 -c "import json; print(json.load(open('deploy/railway-project.json'))['project_id'])")
+          BACKEND_URL=$(python3 -c "import json; print(json.load(open('deploy/railway-project.json'))['backend_url'])")
+          FRONTEND_URL=$(python3 -c "import json; print(json.load(open('deploy/railway-project.json'))['frontend_url'])")
+          echo "id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Link the Railway project
+        run: railway link --project "${{ steps.project.outputs.id }}"
+
+      - name: Deploy backend (from repo root -- picks up ./railway.toml)
+        run: railway up --service "$RAILWAY_BACKEND_SERVICE" --detach
+
+      - name: Deploy frontend (from frontend/ -- picks up frontend/railway.toml)
+        working-directory: frontend
+        run: railway up --service "$RAILWAY_FRONTEND_SERVICE" --detach
+
+      - name: Wait for backend to become healthy
+        env:
+          BACKEND_URL: ${{ steps.project.outputs.backend_url }}
+        run: |
+          echo "Polling $BACKEND_URL/health/live ..."
+          for i in $(seq 1 40); do
+            STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Backend did not become healthy within the timeout. Railway's own healthcheck-gated rollout means the previous good deployment (if any) is still serving traffic -- check 'railway logs --service backend' for the real failure."
+          exit 1
+
+      - name: Wait for frontend to become healthy
+        env:
+          FRONTEND_URL: ${{ steps.project.outputs.frontend_url }}
+        run: |
+          echo "Polling $FRONTEND_URL/login ..."
+          for i in $(seq 1 40); do
+            STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "$FRONTEND_URL/login" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Frontend is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Frontend did not become healthy within the timeout. Check 'railway logs --service frontend'."
+          exit 1
+
+      - name: Production smoke test (real HTTP calls against the live URLs)
+        env:
+          BACKEND_URL: ${{ steps.project.outputs.backend_url }}
+          FRONTEND_URL: ${{ steps.project.outputs.frontend_url }}
+        run: |
+          set -e
+          echo "=== /health/live ==="
+          curl -sS -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live"
+          echo "=== /health/ready ==="
+          curl -sS -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/ready"
+          echo "=== /health/market-data ==="
+          curl -sS -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/market-data"
+          echo "=== frontend / ==="
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/"
+          echo "=== frontend /login ==="
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/login"
+          echo "=== frontend /register ==="
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/register"
+
+      - name: Deployment summary
+        env:
+          BACKEND_URL: ${{ steps.project.outputs.backend_url }}
+          FRONTEND_URL: ${{ steps.project.outputs.frontend_url }}
+        run: |
+          echo "======================================================"
+          echo " BASIRAH IS LIVE"
+          echo "======================================================"
+          echo "App URL:     $FRONTEND_URL"
+          echo "Backend API: $BACKEND_URL"
+          echo "FINAL_APP_URL=$FRONTEND_URL"
