@@ -133,11 +133,13 @@ jobs:
           FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
           SECRET_KEY_VALUE: ${{ steps.secret_key.outputs.value }}
         run: |
-          # Built at shell runtime, never as a literal "${{" in this YAML file --
-          # GitHub Actions' own expression parser would otherwise try to
-          # evaluate Postgres.DATABASE_URL as one of ITS variables (it isn't;
-          # this is Railway's own cross-service variable reference syntax,
-          # resolved by Railway, not GitHub, once set).
+          # Railway's cross-service variable reference opener (dollar sign,
+          # two open braces) is built here at shell runtime, one quoted
+          # character at a time -- writing it as one literal token anywhere
+          # in this YAML file, even inside a comment, makes GitHub Actions'
+          # own expression parser try to evaluate Postgres.DATABASE_URL as
+          # one of ITS variables (it isn't; Railway resolves this syntax,
+          # not GitHub).
           RAILWAY_REF_OPEN='$'"{{"
           DATABASE_URL_REF="${RAILWAY_REF_OPEN}Postgres.DATABASE_URL}}"
           REDIS_URL_REF="${RAILWAY_REF_OPEN}Redis.REDIS_URL}}"
