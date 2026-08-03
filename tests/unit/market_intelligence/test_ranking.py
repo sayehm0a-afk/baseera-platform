@@ -163,3 +163,25 @@ def test_all_seventeen_categories_are_always_present():
     rankings = RankingEngine().rank([make_outcome(symbol="A")])
     assert set(rankings.keys()) == set(RankingCategory)
     assert len(RankingCategory) == 17
+
+
+def test_zero_price_outcome_is_excluded_from_every_ranking_category_not_just_gated_ones():
+    # Reproduces a real 2026-08-03 full-universe scan defect: symbol
+    # 2210 had no technical leg (0 OHLCV rows) but a valid fundamental
+    # leg, so scanner.py's _scan_one() correctly marked it success=True
+    # with latest_price=0.0 -- and it reached MOST_BEARISH unfiltered,
+    # since only the publication-gated "opportunity" categories
+    # (TOP_BUY etc.) checked price validity, not _successful() itself.
+    outcomes = [
+        make_outcome(symbol="2210", latest_price=0.0, decision=make_decision(
+            symbol="2210", recommendation=Recommendation.SELL, final_score=26.0, confidence=8.2,
+            target_price=None, stop_loss=None, expected_return_pct=None,
+        )),
+        make_outcome(symbol="B", latest_price=50.0, decision=make_decision(
+            symbol="B", recommendation=Recommendation.SELL, final_score=40.0, confidence=70.0,
+        )),
+    ]
+    rankings = RankingEngine().rank(outcomes)
+    for category, ranking_list in rankings.items():
+        symbols = [e.symbol for e in ranking_list.entries]
+        assert "2210" not in symbols, f"zero-price symbol 2210 leaked into {category}"

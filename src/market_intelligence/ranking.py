@@ -60,7 +60,20 @@ class _FilterSortRule:
 
 
 def _successful(outcome: SymbolScanOutcome) -> bool:
-    return outcome.success and outcome.report is not None
+    """A symbol can be `success=True` with only a fundamental leg (no
+    technical data) -- see scanner.py's `_scan_one` -- which can leave
+    `latest_price` at 0/None. Every ranking category is price- or
+    score-derived, so such an outcome must never appear in any of
+    them, not just the publication-gated "opportunity" ones (found via
+    real full-universe evidence: symbol 2210 with latest_price=0.0 and
+    no technical leg reached MOST_BEARISH unfiltered). Same threshold
+    `publication_gate._price_validity_gate` already applies."""
+    return (
+        outcome.success
+        and outcome.report is not None
+        and outcome.latest_price is not None
+        and outcome.latest_price > 0
+    )
 
 
 _FILTER_SORT_RULES: Dict[RankingCategory, _FilterSortRule] = {

@@ -38,7 +38,16 @@ _HIGH_RISK = {RiskLevel.HIGH, RiskLevel.VERY_HIGH}
 
 
 def _successful(outcome: SymbolScanOutcome) -> bool:
-    return outcome.success and outcome.report is not None
+    """See ranking.py's `_successful` -- same real-evidence defect
+    (symbol 2210, latest_price=0.0, no technical leg) and same fix:
+    every watchlist is price- or indicator-derived, so a symbol with
+    no valid price must never appear in any of them."""
+    return (
+        outcome.success
+        and outcome.report is not None
+        and outcome.latest_price is not None
+        and outcome.latest_price > 0
+    )
 
 
 @dataclass(frozen=True)
