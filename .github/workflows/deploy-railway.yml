@@ -326,10 +326,19 @@ jobs:
       - name: Dump backend build/deploy logs (only runs if the health wait above failed)
         if: failure()
         run: |
-          echo "=== Build logs (backend) ==="
+          echo "=== Real service status + replica counts (status/crashed/exited tell us if this is an app crash or an infra scheduling failure) ==="
+          railway service list --json > /tmp/services_for_logs.json 2>/dev/null || echo '[]' > /tmp/services_for_logs.json
+          PARSED=$(python3 -c "import json; d = json.load(open('/tmp/services_for_logs.json')); items = d if isinstance(d, list) else d.get('services', d.get('edges', [])); matches = [(i.get('node', i) if isinstance(i, dict) else i) for i in items]; matches = [n for n in matches if n.get('name') == 'backend' or n.get('serviceName') == 'backend']; n = matches[0] if matches else {}; dep = n.get('latestDeployment') or {}; print('status:', n.get('status')); print('replicas:', n.get('replicas')); print('deployment_id:', dep.get('id', '')); print('deployment_status:', dep.get('status')); print('DEPLOY_ID=' + dep.get('id', ''))" || echo "DEPLOY_ID=")
+          echo "$PARSED"
+          DEPLOY_ID=$(echo "$PARSED" | grep '^DEPLOY_ID=' | cut -d= -f2)
+          echo "=== Build logs (backend, --build) ==="
           railway logs --service "$RAILWAY_BACKEND_SERVICE" --build 2>&1 | tail -200 || echo "(could not fetch build logs)"
-          echo "=== Deploy logs (backend) ==="
+          echo "=== Deploy logs (backend, default) ==="
           railway logs --service "$RAILWAY_BACKEND_SERVICE" 2>&1 | tail -200 || echo "(could not fetch deploy logs)"
+          if [ -n "$DEPLOY_ID" ]; then
+            echo "=== Deploy logs (backend, --deployment $DEPLOY_ID -- the actual container's runtime stdout/stderr) ==="
+            railway logs --deployment "$DEPLOY_ID" 2>&1 | tail -300 || echo "(could not fetch deployment-specific logs)"
+          fi
 
       - name: Wait for frontend to become healthy
         env:
@@ -348,10 +357,19 @@ jobs:
       - name: Dump frontend build/deploy logs (only runs if the health wait above failed)
         if: failure()
         run: |
-          echo "=== Build logs (frontend) ==="
+          echo "=== Real service status + replica counts ==="
+          railway service list --json > /tmp/services_for_logs_fe.json 2>/dev/null || echo '[]' > /tmp/services_for_logs_fe.json
+          PARSED=$(python3 -c "import json; d = json.load(open('/tmp/services_for_logs_fe.json')); items = d if isinstance(d, list) else d.get('services', d.get('edges', [])); matches = [(i.get('node', i) if isinstance(i, dict) else i) for i in items]; matches = [n for n in matches if n.get('name') == 'frontend' or n.get('serviceName') == 'frontend']; n = matches[0] if matches else {}; dep = n.get('latestDeployment') or {}; print('status:', n.get('status')); print('replicas:', n.get('replicas')); print('deployment_id:', dep.get('id', '')); print('deployment_status:', dep.get('status')); print('DEPLOY_ID=' + dep.get('id', ''))" || echo "DEPLOY_ID=")
+          echo "$PARSED"
+          DEPLOY_ID=$(echo "$PARSED" | grep '^DEPLOY_ID=' | cut -d= -f2)
+          echo "=== Build logs (frontend, --build) ==="
           railway logs --service "$RAILWAY_FRONTEND_SERVICE" --build 2>&1 | tail -200 || echo "(could not fetch build logs)"
-          echo "=== Deploy logs (frontend) ==="
+          echo "=== Deploy logs (frontend, default) ==="
           railway logs --service "$RAILWAY_FRONTEND_SERVICE" 2>&1 | tail -200 || echo "(could not fetch deploy logs)"
+          if [ -n "$DEPLOY_ID" ]; then
+            echo "=== Deploy logs (frontend, --deployment $DEPLOY_ID -- the actual container's runtime stdout/stderr) ==="
+            railway logs --deployment "$DEPLOY_ID" 2>&1 | tail -300 || echo "(could not fetch deployment-specific logs)"
+          fi
 
       - name: Verify PostgreSQL and Redis connectivity (real SELECT 1 / PING via /health/ready)
         env:
