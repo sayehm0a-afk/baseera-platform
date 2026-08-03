@@ -282,7 +282,6 @@ jobs:
             --set "STRICT_REAL_DATA=true"
             --set "ALLOW_SYNTHETIC_DATA=false"
             --set "CORS_ALLOWED_ORIGINS=$FRONTEND_URL"
-            --set "TRUSTED_HOSTS=${BACKEND_URL#https://}"
             --set "FRONTEND_BASE_URL=$FRONTEND_URL"
             --set "LIVE_MARKET_MODE_ENABLED=true"
             --set "LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS=60"
@@ -294,6 +293,28 @@ jobs:
             SET_ARGS+=(--set "SECRET_KEY=$SECRET_KEY_VALUE")
           fi
           railway variables --service "$RAILWAY_BACKEND_SERVICE" "${SET_ARGS[@]}"
+
+      - name: Remove stale TRUSTED_HOSTS (an earlier run set it; it caused Railway's own healthcheck prober to be rejected with 400)
+        continue-on-error: true
+        run: |
+          # Real dispatch 30855095735 got real application stdout via
+          # `railway logs --service X --deployment Y` for the first time
+          # and showed gunicorn/uvicorn workers completing startup, then
+          # Railway's healthcheck prober (100.64.0.2) receiving a 400 on
+          # every /health/live request. TrustedHostMiddleware in main.py
+          # only activates when TRUSTED_HOSTS is non-empty, and a prior
+          # run of this workflow set it to the public domain -- which
+          # doesn't match the Host header Railway's internal prober
+          # sends, so every healthcheck was rejected before ever reaching
+          # the route. This workflow no longer sets TRUSTED_HOSTS at all
+          # (Railway's edge already does domain-based routing), but a
+          # `variables --set` never unsets keys it doesn't mention, so
+          # the stale value from that earlier run has to be removed
+          # explicitly.
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" --unset TRUSTED_HOSTS || echo "(no TRUSTED_HOSTS to unset, or unset syntax differs -- non-fatal)"
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_vars_check.json 2>/dev/null || echo '{}' > /tmp/backend_vars_check.json
+          STILL_SET=$(python3 -c "import json; d = json.load(open('/tmp/backend_vars_check.json')); print('yes' if 'TRUSTED_HOSTS' in d else 'no')" 2>/dev/null || echo unknown)
+          echo "TRUSTED_HOSTS still set on backend after unset attempt: $STILL_SET"
 
       - name: Configure frontend environment variables
         env:
