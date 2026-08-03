@@ -337,7 +337,7 @@ jobs:
           railway logs --service "$RAILWAY_BACKEND_SERVICE" 2>&1 | tail -200 || echo "(could not fetch deploy logs)"
           if [ -n "$DEPLOY_ID" ]; then
             echo "=== Deploy logs (backend, --deployment $DEPLOY_ID -- the actual container's runtime stdout/stderr) ==="
-            railway logs --deployment "$DEPLOY_ID" 2>&1 | tail -300 || echo "(could not fetch deployment-specific logs)"
+            railway logs --service "$RAILWAY_BACKEND_SERVICE" --deployment "$DEPLOY_ID" 2>&1 | tail -300 || echo "(could not fetch deployment-specific logs)"
           fi
 
       - name: Wait for frontend to become healthy
@@ -368,7 +368,7 @@ jobs:
           railway logs --service "$RAILWAY_FRONTEND_SERVICE" 2>&1 | tail -200 || echo "(could not fetch deploy logs)"
           if [ -n "$DEPLOY_ID" ]; then
             echo "=== Deploy logs (frontend, --deployment $DEPLOY_ID -- the actual container's runtime stdout/stderr) ==="
-            railway logs --deployment "$DEPLOY_ID" 2>&1 | tail -300 || echo "(could not fetch deployment-specific logs)"
+            railway logs --service "$RAILWAY_FRONTEND_SERVICE" --deployment "$DEPLOY_ID" 2>&1 | tail -300 || echo "(could not fetch deployment-specific logs)"
           fi
 
       - name: Verify PostgreSQL and Redis connectivity (real SELECT 1 / PING via /health/ready)
