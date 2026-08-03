@@ -314,7 +314,7 @@ jobs:
           BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
         run: |
           echo "Polling $BACKEND_URL/health/live ..."
-          for i in $(seq 1 40); do
+          for i in $(seq 1 12); do
             STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
             echo "attempt $i: $STATUS"
             if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
@@ -345,7 +345,7 @@ jobs:
           FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
         run: |
           echo "Polling $FRONTEND_URL/login ..."
-          for i in $(seq 1 40); do
+          for i in $(seq 1 12); do
             STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$FRONTEND_URL/login" || echo "000")
             echo "attempt $i: $STATUS"
             if [ "$STATUS" = "200" ]; then echo "Frontend is healthy."; exit 0; fi
