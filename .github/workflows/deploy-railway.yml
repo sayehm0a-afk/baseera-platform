@@ -87,6 +87,8 @@ jobs:
           railway domain --help
           echo "--- railway variable --help ---"
           railway variable --help
+          echo "--- railway link --help ---"
+          railway link --help
           set -e
 
       - name: Verify the Project Token (railway status -- the correct check for a project-scoped token)
@@ -106,10 +108,24 @@ jobs:
             exit 1
           fi
           echo "result=success" >> "$GITHUB_OUTPUT"
-          PROJECT_NAME=$(python3 -c "import json; d=json.load(open('/tmp/status.json')); print(d.get('name') or (d.get('project') or {}).get('name') or 'unknown')" 2>/dev/null || echo unknown)
-          ENV_NAME=$(python3 -c "import json; d=json.load(open('/tmp/status.json')); print(d.get('environment') or (d.get('environment') or {}).get('name') or 'unknown')" 2>/dev/null || echo unknown)
-          echo "Linked project (best-effort parse): $PROJECT_NAME"
-          echo "Linked environment (best-effort parse): $ENV_NAME"
+          PROJECT_NAME=$(python3 -c "import json; d=json.load(open('/tmp/status.json')); print(d.get('name','unknown'))" 2>/dev/null || echo unknown)
+          PROJECT_ID=$(python3 -c "import json; d=json.load(open('/tmp/status.json')); print(d.get('id','unknown'))" 2>/dev/null || echo unknown)
+          ENV_NAME=$(python3 -c "import json; d=json.load(open('/tmp/status.json')); edges=d.get('environments',{}).get('edges',[]); print(edges[0].get('node',{}).get('name','unknown') if edges else 'unknown')" 2>/dev/null || echo unknown)
+          echo "Project: $PROJECT_NAME ($PROJECT_ID)"
+          echo "Environment: $ENV_NAME"
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "environment_name=$ENV_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Link the CLI's local context to the project (railway status alone does not do this -- add/up/variables/domain all require it)
+        env:
+          PROJECT_ID: ${{ steps.project_status.outputs.project_id }}
+          ENVIRONMENT_NAME: ${{ steps.project_status.outputs.environment_name }}
+        run: |
+          if [ -n "$ENVIRONMENT_NAME" ] && [ "$ENVIRONMENT_NAME" != "unknown" ]; then
+            railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_NAME"
+          else
+            railway link --project "$PROJECT_ID"
+          fi
 
       - name: List existing services in the linked project (used to avoid creating duplicates)
         id: services
