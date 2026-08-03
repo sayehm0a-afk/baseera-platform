@@ -15,11 +15,21 @@ name: Deploy to Railway
 # check for it; `railway status` (scoped to the token's own project)
 # is used instead.
 #
+# A Project Token is already pinned to its one project/environment --
+# no `railway link` call is made or needed (a real dispatch showed
+# `railway link` itself returns Unauthorized for this token type; it's
+# an account-level operation project tokens don't have access to,
+# unlike status/add/up/variables/domain, which all work directly).
+#
 # Idempotency: every resource-creating step (Postgres, Redis, backend
 # service, frontend service, public domains) first lists what already
-# exists in the linked project and only creates what's genuinely
-# missing, so re-running this workflow is safe and never duplicates
-# the project or its services. SECRET_KEY is generated once and never
+# exists in the project and only creates what's genuinely missing, so
+# re-running this workflow is safe and never duplicates the project or
+# its services. Real dispatches also showed this CLI's exit code is
+# not trustworthy for `railway add` against a Project Token (it can
+# exit 1 after actually creating the resource), so creation outcomes
+# are re-verified against real Railway state afterward, not trusted
+# from the exit code. SECRET_KEY is generated once and never
 # regenerated on a rerun (regenerating it would invalidate every
 # existing session) -- its presence is checked without ever printing
 # variable values, since `railway variable list --json` returns raw
@@ -116,17 +126,6 @@ jobs:
           echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
           echo "environment_name=$ENV_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Link the CLI's local context to the project (railway status alone does not do this -- add/up/variables/domain all require it)
-        env:
-          PROJECT_ID: ${{ steps.project_status.outputs.project_id }}
-          ENVIRONMENT_NAME: ${{ steps.project_status.outputs.environment_name }}
-        run: |
-          if [ -n "$ENVIRONMENT_NAME" ] && [ "$ENVIRONMENT_NAME" != "unknown" ]; then
-            railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_NAME"
-          else
-            railway link --project "$PROJECT_ID"
-          fi
-
       - name: List existing services in the linked project (used to avoid creating duplicates)
         id: services
         run: |
@@ -153,21 +152,55 @@ jobs:
           echo "Postgres present: $HAS_POSTGRES | Redis present: $HAS_REDIS | backend present: $HAS_BACKEND | frontend present: $HAS_FRONTEND"
           echo "(unknown means parsing the service list failed -- treated as 'exists, do not create' below, to never risk a duplicate; see the raw output above to fix parsing if this happens.)"
 
+      # continue-on-error below: a real dispatch (run 30851746138) showed
+      # `railway add --database postgres` actually create the service
+      # (confirmed via a fresh `railway status` afterward) while still
+      # exiting 1 and printing an unrelated "Project not found" message
+      # -- this CLI's exit code is not trustworthy for these commands
+      # against a Project Token. The real outcome is re-verified against
+      # actual Railway state in the "Re-check" step below instead of
+      # trusted from the exit code here.
       - name: Ensure PostgreSQL exists (skip if already present)
         if: steps.services.outputs.has_postgres == 'no'
+        continue-on-error: true
         run: railway add --database postgres
 
       - name: Ensure Redis exists (skip if already present)
         if: steps.services.outputs.has_redis == 'no'
+        continue-on-error: true
         run: railway add --database redis
 
       - name: Ensure backend service exists (skip if already present)
         if: steps.services.outputs.has_backend == 'no'
+        continue-on-error: true
         run: railway add --service "$RAILWAY_BACKEND_SERVICE"
 
       - name: Ensure frontend service exists (skip if already present)
         if: steps.services.outputs.has_frontend == 'no'
+        continue-on-error: true
         run: railway add --service "$RAILWAY_FRONTEND_SERVICE"
+
+      - name: Re-check services after creation attempts (authoritative -- exit codes above are not trusted)
+        id: services_after
+        run: |
+          railway service list --json > /tmp/services_after.json 2>/tmp/services_after_err.txt || true
+          echo "Services after creation attempts (names only -- not secret):"
+          cat /tmp/services_after.json 2>/dev/null || cat /tmp/services_after_err.txt
+          echo ""
+          python3 -c "import json; items = json.load(open('/tmp/services_after.json')); names = [str(x.get('name','')) for x in items] if isinstance(items, list) else [str(k) for k in items.keys()]; open('/tmp/service_names_after.txt','w').write(chr(10).join(names))" 2>/dev/null
+          HAS_POSTGRES=$(grep -qi postgres /tmp/service_names_after.txt 2>/dev/null && echo yes || echo no)
+          HAS_REDIS=$(grep -qi redis /tmp/service_names_after.txt 2>/dev/null && echo yes || echo no)
+          HAS_BACKEND=$(grep -qix backend /tmp/service_names_after.txt 2>/dev/null && echo yes || echo no)
+          HAS_FRONTEND=$(grep -qix frontend /tmp/service_names_after.txt 2>/dev/null && echo yes || echo no)
+          echo "Postgres present: $HAS_POSTGRES | Redis present: $HAS_REDIS | backend present: $HAS_BACKEND | frontend present: $HAS_FRONTEND"
+          FAIL=0
+          [ "$HAS_POSTGRES" = "no" ] && echo "::error::PostgreSQL still does not exist after the creation attempt." && FAIL=1
+          [ "$HAS_REDIS" = "no" ] && echo "::error::Redis still does not exist after the creation attempt." && FAIL=1
+          [ "$HAS_BACKEND" = "no" ] && echo "::error::backend service still does not exist after the creation attempt." && FAIL=1
+          [ "$HAS_FRONTEND" = "no" ] && echo "::error::frontend service still does not exist after the creation attempt." && FAIL=1
+          if [ "$FAIL" = "1" ]; then
+            exit 1
+          fi
 
       - name: Ensure a public HTTPS domain exists for the backend
         id: backend_domain
