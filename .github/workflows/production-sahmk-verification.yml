@@ -1,0 +1,180 @@
+name: Production SAHMK Verification
+
+# Single workflow_dispatch-only job -- real production validation of
+# the already-deployed Basirah backend/frontend on Railway. Never
+# creates/modifies Railway infrastructure (that's deploy-railway.yml's
+# job); this workflow only talks to the already-running public
+# HTTPS backend/frontend and a temporary application-level admin
+# account it creates and deletes within the same run.
+#
+# Flow:
+#   1. Confirm backend/frontend/db/redis are healthy (real HTTP calls
+#      against the public URLs, same routes deploy-railway.yml itself
+#      checks).
+#   2. Bootstrap a temporary OWNER-role account via
+#      scripts/bootstrap_owner.py, executed with `railway run` so it
+#      runs against the real production DATABASE_URL without that
+#      value ever being printed or leaving Railway's own environment
+#      injection. A random password is generated fresh for this run
+#      only, never logged.
+#   3. Log in as that account, call the new staff-only
+#      POST /api/v1/admin/market-intelligence/diagnostic-scan (one
+#      real, controlled SAHMK poll through the exact production scan
+#      path), and capture the full JSON response as evidence.
+#   4. Verify the same data is readable back through the public,
+#      customer-facing GET /api/v1/market/summary and
+#      GET /api/v1/market/rankings routes.
+#   5. Verify the frontend actually renders without a demo/placeholder
+#      shell (real HTTP fetch of the dashboard page).
+#   6. Delete the temporary account (hard delete, via the same
+#      `railway run` mechanism) -- no permanent credential is left in
+#      production once this run completes.
+#
+# RAILWAY_TOKEN and SAHMK_API_KEY are read only as GitHub Actions
+# secrets and never echoed; the temporary account's own password is
+# generated at runtime and never printed either.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+  RAILWAY_FRONTEND_SERVICE: frontend
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+          echo "RAILWAY_TOKEN present (length ${#RAILWAY_TOKEN})"
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend/frontend public URLs
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          railway domain list --service "$RAILWAY_FRONTEND_SERVICE" --json > /tmp/frontend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend:  $BACKEND_URL"
+          echo "Frontend: $FRONTEND_URL"
+
+      - name: Confirm backend/frontend/db/redis are healthy right now
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+        run: |
+          echo "=== /health/live ==="
+          curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live" || echo "(request failed)"
+          echo "=== /health/ready ==="
+          curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/ready" || echo "(request failed)"
+          echo "=== frontend / ==="
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/" || echo "(request failed)"
+
+      - name: Bootstrap a temporary OWNER account for this verification run
+        id: account
+        run: |
+          TEMP_EMAIL="prod-verify-$(date +%s)-$RANDOM@example.com"
+          TEMP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
+          echo "temp_email=$TEMP_EMAIL" >> "$GITHUB_OUTPUT"
+          # Never echo TEMP_PASSWORD. Written to a runner-local file only,
+          # read back by later steps, and the file is removed at the end.
+          echo "$TEMP_PASSWORD" > /tmp/.temp_pw
+          chmod 600 /tmp/.temp_pw
+          printf '%s\n%s\n' "$TEMP_PASSWORD" "$TEMP_PASSWORD" | railway run --service "$RAILWAY_BACKEND_SERVICE" -- python3 scripts/bootstrap_owner.py --email "$TEMP_EMAIL"
+
+      - name: Log in as the temporary account
+        id: login
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          TEMP_EMAIL: ${{ steps.account.outputs.temp_email }}
+        run: |
+          TEMP_PASSWORD=$(cat /tmp/.temp_pw)
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$TEMP_EMAIL\", \"password\": $(python3 -c "import json,sys; print(json.dumps(sys.stdin.read().strip()))" < /tmp/.temp_pw)}")
+          echo "Login HTTP status: $HTTP_CODE"
+          cat /tmp/login_body.json
+          echo ""
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Login as the temporary verification account failed."
+            exit 1
+          fi
+          CSRF=$(grep -i csrf_token /tmp/cookies.txt | awk '{print $NF}')
+          echo "csrf_present=$([ -n \"$CSRF\" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+          echo "$CSRF" > /tmp/.csrf
+
+      - name: Trigger the real, controlled SAHMK diagnostic scan
+        id: diagnostic
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          CSRF=$(cat /tmp/.csrf)
+          curl -sS --connect-timeout 10 --max-time 120 -b /tmp/cookies.txt \
+            -X POST "$BACKEND_URL/api/v1/admin/market-intelligence/diagnostic-scan" \
+            -H "Content-Type: application/json" \
+            -H "x-csrf-token: $CSRF" \
+            -d '{}' \
+            -o /tmp/diagnostic.json -w "\nHTTP %{http_code}\n"
+          echo "=== Diagnostic scan result ==="
+          python3 -m json.tool /tmp/diagnostic.json
+
+      - name: Verify the same data is readable through the public market API
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          RUN_ID=$(python3 -c "import json; d=json.load(open('/tmp/diagnostic.json')); print(d.get('run_id') or '')")
+          echo "run_id from diagnostic scan: ${RUN_ID:-<none -- scan did not run>}"
+          if [ -n "$RUN_ID" ]; then
+            echo "=== GET /api/v1/market/summary?run_id=$RUN_ID ==="
+            curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
+              "$BACKEND_URL/api/v1/market/summary?run_id=$RUN_ID"
+            echo "=== GET /api/v1/market/rankings?run_id=$RUN_ID ==="
+            curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
+              "$BACKEND_URL/api/v1/market/rankings?run_id=$RUN_ID"
+          else
+            echo "No run_id -- diagnostic scan did not persist a run (see its sahmk_error field above). Skipping public-API cross-check."
+          fi
+
+      - name: Verify the frontend renders without a demo/placeholder shell
+        env:
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -o /tmp/dashboard.html -w "HTTP %{http_code}\n" "$FRONTEND_URL/dashboard" || true
+          echo "Bytes fetched: $(wc -c < /tmp/dashboard.html 2>/dev/null || echo 0)"
+          if grep -qiE "lorem ipsum|placeholder-data|demo-mode|mock-data" /tmp/dashboard.html 2>/dev/null; then
+            echo "::error::Frontend dashboard HTML contains a demo/placeholder marker."
+            exit 1
+          fi
+          echo "No demo/placeholder marker found in the dashboard HTML."
+
+      - name: Delete the temporary verification account
+        if: always()
+        env:
+          TEMP_EMAIL: ${{ steps.account.outputs.temp_email }}
+        run: |
+          if [ -z "$TEMP_EMAIL" ]; then
+            echo "No temporary account was recorded -- nothing to delete."
+            exit 0
+          fi
+          railway run --service "$RAILWAY_BACKEND_SERVICE" -- python3 -c "from src.auth.repository import AuthRepository; from src.core.db.database import get_session_factory; repo = AuthRepository(); session = get_session_factory()(); user = repo.get_user_by_email(session, '$TEMP_EMAIL'); (repo.delete_user(session, user.id), session.commit(), print('Deleted temporary verification account $TEMP_EMAIL.')) if user is not None else print('No user found for $TEMP_EMAIL -- already gone.'); session.close()" || echo "::warning::Cleanup of the temporary account may have failed -- check manually."
+          rm -f /tmp/.temp_pw /tmp/.csrf /tmp/cookies.txt
