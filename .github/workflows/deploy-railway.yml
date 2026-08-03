@@ -133,9 +133,17 @@ jobs:
           FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
           SECRET_KEY_VALUE: ${{ steps.secret_key.outputs.value }}
         run: |
+          # Built at shell runtime, never as a literal "${{" in this YAML file --
+          # GitHub Actions' own expression parser would otherwise try to
+          # evaluate Postgres.DATABASE_URL as one of ITS variables (it isn't;
+          # this is Railway's own cross-service variable reference syntax,
+          # resolved by Railway, not GitHub, once set).
+          RAILWAY_REF_OPEN='$'"{{"
+          DATABASE_URL_REF="${RAILWAY_REF_OPEN}Postgres.DATABASE_URL}}"
+          REDIS_URL_REF="${RAILWAY_REF_OPEN}Redis.REDIS_URL}}"
           railway variables --service "$RAILWAY_BACKEND_SERVICE" \
-            --set "DATABASE_URL=\${{Postgres.DATABASE_URL}}" \
-            --set "REDIS_URL=\${{Redis.REDIS_URL}}" \
+            --set "DATABASE_URL=$DATABASE_URL_REF" \
+            --set "REDIS_URL=$REDIS_URL_REF" \
             --set "SECRET_KEY=$SECRET_KEY_VALUE" \
             --set "BASEERA_ENV=production" \
             --set "SAHMK_API_KEY=$SAHMK_API_KEY" \
