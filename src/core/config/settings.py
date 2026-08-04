@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     # `_reject_insecure_secret_in_production` below, which is the actual
     # enforcement point, not this field default.
     secret_key: str = Field(default=_DEV_INSECURE_SECRET_KEY, alias="SECRET_KEY")
+    # Gates POST /api/v1/bootstrap/owner (src/api/routes/bootstrap.py) --
+    # a temporary, self-disabling escape hatch for creating the very
+    # first OWNER account on a deployment with none yet, when the
+    # operator has no direct database access (see that route's
+    # docstring for the full threat model). None (the default) means
+    # the route always refuses -- there is no insecure default value
+    # here the way there deliberately is for SECRET_KEY, because unlike
+    # SECRET_KEY this feature is meant to be off unless explicitly
+    # turned on for one bootstrap operation and then unset again.
+    bootstrap_token: Optional[str] = Field(default=None, alias="BOOTSTRAP_TOKEN")
     cors_allowed_origins_raw: str = Field(default="", alias="CORS_ALLOWED_ORIGINS")
     # Host header validation (Starlette's TrustedHostMiddleware). Empty
     # (the default) means "not enforced" -- every existing deployment
