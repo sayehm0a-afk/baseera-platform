@@ -12,7 +12,6 @@
 
 # testing
 /coverage
-/browser-login-evidence
 
 # next.js
 /.next/
