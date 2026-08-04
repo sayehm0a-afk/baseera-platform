@@ -38,6 +38,14 @@ def _base_buy_inputs(**overrides) -> GateInputs:
         news_available=True,
         entry_quality=EntryQuality.GOOD,
         price_missed_entry_zone=False,
+        trend_momentum_conflict=None,
+        volume_confirms_decision=True,
+        change_percent=1.5,
+        price_limit_proximity_pct=TUNING.price_limit_proximity_pct,
+        risk_level="MEDIUM",
+        strong_buy_minimum_confidence=TUNING.strong_buy_minimum_confidence,
+        confidence_score=80.0,
+        market_context_score=70.0,
     )
     defaults.update(overrides)
     return GateInputs(**defaults)
@@ -64,7 +72,12 @@ class TestBaselineMappings:
         assert result.decision is Decision.BUY_CANDIDATE
 
     def test_strong_buy_with_everything_passing_is_strong_buy_candidate(self):
-        inputs = _base_buy_inputs(recommendation=Recommendation.STRONG_BUY)
+        # Phase 2B: STRONG_BUY_CANDIDATE additionally requires full 8/8
+        # sub-score coverage and a confidence floor -- override both
+        # beyond the module's deliberately-partial (6/8) baseline.
+        inputs = _base_buy_inputs(
+            recommendation=Recommendation.STRONG_BUY, available_sub_score_count=8, confidence_score=90.0,
+        )
         result = evaluate_decision(inputs, TUNING)
         assert result.decision is Decision.STRONG_BUY_CANDIDATE
 
@@ -193,3 +206,151 @@ class TestDisclosuresNeverBlock:
         result = evaluate_decision(inputs, TUNING)
         assert result.decision is Decision.BUY_CANDIDATE
         assert any("إخبارية" in d for d in result.disclosures)
+
+
+class TestPhase2BTrendMomentumConsistencyGate:
+    def test_conflicting_indicators_downgrades_to_watch(self):
+        inputs = _base_buy_inputs(trend_momentum_conflict="الاتجاه العام إيجابي لكن الزخم الحالي ضعيف -- إشارات متعارضة.")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+        assert any(g.name == "trend_momentum_consistency" and not g.passed for g in result.gates)
+        assert any("متعارضة" in w for w in result.warnings)
+
+    def test_no_conflict_leaves_the_buy_candidate_untouched(self):
+        inputs = _base_buy_inputs(trend_momentum_conflict=None)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        assert any(g.name == "trend_momentum_consistency" and g.passed for g in result.gates)
+
+
+class TestPhase2BVolumeQualityGate:
+    def test_volume_contradicting_the_decision_downgrades_to_watch(self):
+        inputs = _base_buy_inputs(volume_confirms_decision=False)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+        assert any(g.name == "volume_quality" and not g.passed for g in result.gates)
+
+    def test_volume_confirming_the_decision_does_not_block(self):
+        inputs = _base_buy_inputs(volume_confirms_decision=True)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_unknown_volume_confirmation_does_not_block(self):
+        """None means "no OBV history yet," not a contradiction --
+        must never be treated as a fail."""
+        inputs = _base_buy_inputs(volume_confirms_decision=None)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+
+class TestPhase2BConfidenceCalibrationGate:
+    def test_strong_buy_with_full_coverage_and_high_confidence_stays_strong(self):
+        inputs = _base_buy_inputs(
+            recommendation=Recommendation.STRONG_BUY, available_sub_score_count=8, confidence_score=90.0,
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.STRONG_BUY_CANDIDATE
+
+    def test_strong_buy_with_partial_coverage_downgrades_to_buy_candidate(self):
+        inputs = _base_buy_inputs(
+            recommendation=Recommendation.STRONG_BUY, available_sub_score_count=6, confidence_score=90.0,
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        assert any(g.name == "confidence_calibration_minimum" and not g.passed for g in result.gates)
+
+    def test_strong_buy_below_the_confidence_floor_downgrades_to_buy_candidate(self):
+        inputs = _base_buy_inputs(
+            recommendation=Recommendation.STRONG_BUY, available_sub_score_count=8, confidence_score=50.0,
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_confidence_calibration_gate_is_never_evaluated_for_a_plain_buy(self):
+        """Only STRONG_BUY_CANDIDATE is held to this stricter bar."""
+        inputs = _base_buy_inputs(recommendation=Recommendation.BUY, available_sub_score_count=1, confidence_score=10.0)
+        result = evaluate_decision(inputs, TUNING)
+        # A plain BUY with only 1/8 coverage is downgraded to WATCH by
+        # the existing multi_factor_evidence gate, never REJECT -- and
+        # never carries a confidence_calibration_minimum entry at all.
+        assert not any(g.name == "confidence_calibration_minimum" for g in result.gates)
+
+
+class TestPhase2BPriceLimitProximityGate:
+    def test_large_daily_move_is_flagged_as_a_caution_not_a_block(self):
+        inputs = _base_buy_inputs(change_percent=9.5)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "price_limit_proximity")
+        assert gate.passed is False
+        assert gate.blocking is False
+        assert any("تحرك" in w for w in result.warnings)
+
+    def test_normal_daily_move_passes_cleanly(self):
+        inputs = _base_buy_inputs(change_percent=1.2)
+        result = evaluate_decision(inputs, TUNING)
+        gate = next(g for g in result.gates if g.name == "price_limit_proximity")
+        assert gate.passed is True
+
+    def test_unknown_change_percent_passes_cleanly(self):
+        inputs = _base_buy_inputs(change_percent=None)
+        result = evaluate_decision(inputs, TUNING)
+        gate = next(g for g in result.gates if g.name == "price_limit_proximity")
+        assert gate.passed is True
+
+
+class TestPhase2BInformationalGatesAlwaysPresent:
+    def test_quote_timestamp_known_gate_present(self):
+        result = evaluate_decision(_base_buy_inputs(data_age_hours=1.0), TUNING)
+        assert any(g.name == "quote_timestamp_known" and g.passed for g in result.gates)
+
+    def test_quote_timestamp_unknown_is_reported_not_blocked(self):
+        result = evaluate_decision(_base_buy_inputs(data_age_hours=None), TUNING)
+        gate = next(g for g in result.gates if g.name == "quote_timestamp_known")
+        assert gate.passed is False
+        assert gate.blocking is False
+
+    def test_market_context_gate_present_when_score_available(self):
+        result = evaluate_decision(_base_buy_inputs(market_context_score=75.0), TUNING)
+        assert any(g.name == "market_context" for g in result.gates)
+
+    def test_stale_recommendation_gate_is_honestly_not_evaluated(self):
+        result = evaluate_decision(_base_buy_inputs(), TUNING)
+        gate = next(g for g in result.gates if g.name == "stale_recommendation")
+        assert gate.passed is True
+        assert gate.blocking is False
+        assert "غير مطبّق" in gate.detail
+
+    def test_duplicate_signal_gate_is_honestly_not_evaluated(self):
+        result = evaluate_decision(_base_buy_inputs(), TUNING)
+        gate = next(g for g in result.gates if g.name == "duplicate_suppression")
+        assert gate.passed is True
+        assert gate.blocking is False
+
+    def test_risk_warning_disclosed_for_high_risk(self):
+        result = evaluate_decision(_base_buy_inputs(risk_level="HIGH"), TUNING)
+        gate = next(g for g in result.gates if g.name == "risk_warning_disclosed")
+        assert gate.passed is True
+        assert "مرتفع" in gate.detail
+
+    def test_risk_warning_states_the_level_for_low_medium_risk(self):
+        result = evaluate_decision(_base_buy_inputs(risk_level="LOW"), TUNING)
+        gate = next(g for g in result.gates if g.name == "risk_warning_disclosed")
+        assert "LOW" in gate.detail
+
+
+class TestPhase2BStrongBuyIsStricterThanBuy:
+    """Direct regression for the Product Owner rule: a شراء قوي
+    decision must require strictly more than a plain شراء."""
+
+    def test_a_setup_good_enough_for_buy_can_fail_to_reach_strong_buy(self):
+        buy_inputs = _base_buy_inputs(
+            recommendation=Recommendation.BUY, available_sub_score_count=6, confidence_score=80.0,
+        )
+        strong_inputs = _base_buy_inputs(
+            recommendation=Recommendation.STRONG_BUY, available_sub_score_count=6, confidence_score=80.0,
+        )
+        buy_result = evaluate_decision(buy_inputs, TUNING)
+        strong_result = evaluate_decision(strong_inputs, TUNING)
+        assert buy_result.decision is Decision.BUY_CANDIDATE
+        assert strong_result.decision is Decision.BUY_CANDIDATE  # downgraded, not STRONG_BUY_CANDIDATE

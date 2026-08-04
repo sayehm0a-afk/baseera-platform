@@ -67,3 +67,19 @@ class DecisionV2Tuning:
     medium_term_max_days: int = 90
     long_term_min_days: int = 30
     long_term_max_days: int = 180
+
+    # --- Phase 2B: publication gate thresholds -------------------------
+    # A STRONG_BUY_CANDIDATE must be rare and stricter than BUY_CANDIDATE
+    # (Product Owner rule): full 8/8 sub-score coverage is required
+    # separately (gates.py), and confidence must clear this floor too --
+    # a STRONG_BUY score whose confidence caps have already knocked it
+    # below this bar is downgraded to BUY_CANDIDATE, never rejected
+    # outright (the underlying thesis can still be sound).
+    strong_buy_minimum_confidence: float = 75.0
+
+    # Tadawul's general daily price-limit band is commonly cited around
+    # +/-10%; this is a caution threshold on the real, already-fetched
+    # `change_percent` from the live quote, not a verified per-instrument
+    # limit (Basirah does not ingest per-symbol limit-band reference
+    # data) -- so this gate only ever warns, never blocks.
+    price_limit_proximity_pct: float = 9.0

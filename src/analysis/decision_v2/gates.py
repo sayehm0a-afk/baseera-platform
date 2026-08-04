@@ -1,8 +1,13 @@
-"""The 15 mandatory publication gates from the Phase 1 brief, applied
-uniformly to every single-stock decision -- not only to the market-wide
-scanner, which is what `src.market_intelligence.publication_gate`
-already does today. Several gates below reuse that module's exact
-threshold getters (`get_min_risk_reward_ratio`, `get_min_average_traded_value`,
+"""The publication gates from the Phase 1 brief (15) plus Phase 2B's
+extension (5 more, to the 20-gate list: quote-timestamp, volume-quality,
+trend-consistency/contradiction, market-context, confidence-calibration,
+price-limit-proximity, and risk-warning-disclosure -- several of these
+share one gate entry where the underlying evidence is identical, see
+each gate's own comment below), applied uniformly to every single-stock
+decision -- not only to the market-wide scanner, which is what
+`src.market_intelligence.publication_gate` already does today. Several
+gates below reuse that module's exact threshold getters
+(`get_min_risk_reward_ratio`, `get_min_average_traded_value`,
 `get_max_data_age_hours`) so a Saudi-market liquidity/freshness/reward
 policy is configured in exactly one place, not two.
 
@@ -11,6 +16,20 @@ something `engine.py` already collected from AIDecisionEngine/
 TechnicalAnalysisResult/market-status/scoring.py. Its only job is to
 turn that evidence into (a) a list of transparent PASS/FAIL/NOT_EVALUATED
 records and (b) the one `Decision` value the evidence actually supports.
+
+Two gates are honestly `NOT_EVALUATED` rather than faked: duplicate-
+signal suppression (only meaningful across a scan run's many symbols,
+not a single `decide()` call -- see `ChangeDetector`) and stale-
+recommendation detection (would require comparing against this
+symbol's *previous* stored `DecisionV2Snapshot`, a route/DB-layer
+concern this pure-function module deliberately has no access to).
+
+Per the Product Owner rule "a شراء قوي decision must be rare and
+require stricter gates than شراء": `STRONG_BUY_CANDIDATE` additionally
+requires full 8/8 sub-score coverage and a confidence floor
+(`DecisionV2Tuning.strong_buy_minimum_confidence`) -- failing either
+downgrades to `BUY_CANDIDATE`, never a rejection, since the underlying
+thesis can still be sound.
 """
 
 from dataclasses import dataclass, field
@@ -58,6 +77,16 @@ class GateInputs:
 
     entry_quality: EntryQuality
     price_missed_entry_zone: bool
+
+    # --- Phase 2B additions -------------------------------------------
+    trend_momentum_conflict: Optional[str]  # scoring.conflicting_indicators()'s Arabic note, or None
+    volume_confirms_decision: Optional[bool]
+    change_percent: Optional[float]
+    price_limit_proximity_pct: float
+    risk_level: str
+    strong_buy_minimum_confidence: float
+    confidence_score: float
+    market_context_score: Optional[float]
 
 
 @dataclass
@@ -113,6 +142,38 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     if not inputs.market_status_known:
         warnings.append("حالة السوق (مفتوح/مغلق) غير مؤكدة حاليًا.")
 
+    # Phase 2B, quote-timestamp gate: informational -- data_freshness
+    # (above) already turns a *stale* timestamp into a fail; this gate
+    # separately surfaces whether a timestamp exists at all.
+    gates.append(GateOutcome(
+        "quote_timestamp_known", inputs.data_age_hours is not None,
+        "توقيت آخر تحديث للسعر معروف." if inputs.data_age_hours is not None else "توقيت آخر تحديث للسعر غير معروف.",
+        False,
+    ))
+
+    # Phase 2B, market-context gate: informational -- market_context_score
+    # already feeds opportunity_quality_score; this gate makes that
+    # input individually visible/auditable rather than buried in the
+    # weighted blend.
+    if inputs.market_context_score is not None:
+        gates.append(GateOutcome(
+            "market_context", inputs.market_context_score >= 50.0,
+            f"سياق السوق العام: {inputs.market_context_score:.0f}/100.", False,
+        ))
+
+    # Phase 2B, price-limit-proximity gate: a caution flag only -- built
+    # from the real, already-fetched quote change_percent, not a
+    # verified per-instrument Tadawul limit band (not ingested).
+    if inputs.change_percent is not None and abs(inputs.change_percent) >= inputs.price_limit_proximity_pct:
+        gates.append(GateOutcome(
+            "price_limit_proximity", False,
+            f"تغيّر السعر اليوم {inputs.change_percent:+.1f}٪ -- قريب من نطاق التحرك اليومي المعتاد بشدة.",
+            False,
+        ))
+        warnings.append("السعر تحرك بنسبة كبيرة اليوم -- قد يقترب من حد التداول اليومي المعتاد.")
+    else:
+        gates.append(GateOutcome("price_limit_proximity", True, "لا يوجد اقتراب غير معتاد من حدود التحرك اليومي.", False))
+
     # Gate 13: fundamentals/news disclosure (never blocking) -------------------
     if not inputs.fundamentals_available:
         disclosures.append("لا تتوفر بيانات أساسية (مالية) حقيقية لهذا السهم حاليًا -- هذا التحليل فني بالدرجة الأولى.")
@@ -122,6 +183,25 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # Gate 14: duplicate suppression -- not implemented at single-stock
     # level; deduplication exists at the market-scan layer (ChangeDetector).
     gates.append(GateOutcome("duplicate_suppression", True, "غير مطبّق على مستوى تحليل السهم الفردي (متاح على مستوى المسح الشامل).", False))
+
+    # Phase 2B, stale-recommendation gate: honestly NOT_EVALUATED here --
+    # would require comparing against this symbol's previous stored
+    # DecisionV2Snapshot, a route/DB-layer concern.
+    gates.append(GateOutcome(
+        "stale_recommendation", True,
+        "غير مطبّق على مستوى هذا الاستدعاء الفردي -- يتطلب مقارنة بالتوصية السابقة المخزّنة لهذا السهم.", False,
+    ))
+
+    # Phase 2B, risk-warning-disclosure gate: guarantees an explicit,
+    # itemized risk statement always appears in the gates list itself,
+    # not only in the separate `warnings` array.
+    if inputs.risk_level in ("HIGH", "VERY_HIGH"):
+        gates.append(GateOutcome(
+            "risk_warning_disclosed", True,
+            "مستوى مخاطرة مرتفع لهذا السهم -- يُنصح بحجم مركز أصغر وإدارة مخاطر أكثر تحفظًا.", False,
+        ))
+    else:
+        gates.append(GateOutcome("risk_warning_disclosed", True, f"مستوى المخاطرة: {inputs.risk_level}.", False))
 
     # Non-actionable base recommendations map directly, but a stale/
     # missing-data condition can never let SELL-side urgency (EXIT) be
@@ -198,6 +278,33 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
     gates.append(GateOutcome("volatility_acceptable", True, "مستوى التقلب مقبول.", False))
 
+    # Phase 2B, trend-consistency / contradiction gate: reuses
+    # scoring.conflicting_indicators()'s already-computed note (the
+    # trend and momentum sub-scores clearly disagree) -- previously only
+    # capped confidence in engine.py; now also formally downgrades to
+    # WATCH, since a positive decision should not publish on the
+    # strength of a trend the momentum evidence contradicts.
+    if inputs.trend_momentum_conflict:
+        gates.append(GateOutcome("trend_momentum_consistency", False, inputs.trend_momentum_conflict, True))
+        warnings.append(inputs.trend_momentum_conflict)
+        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
+    gates.append(GateOutcome("trend_momentum_consistency", True, "الاتجاه والزخم متوافقان.", False))
+
+    # Phase 2B, volume-quality gate: downgrades to WATCH only when
+    # volume evidence actively CONTRADICTS the recommended direction
+    # (accumulation/distribution reading opposes a BUY) -- an unknown
+    # reading (None, e.g. no OBV history yet) is not treated as a
+    # contradiction.
+    if inputs.volume_confirms_decision is False:
+        gates.append(GateOutcome("volume_quality", False, "حجم التداول لا يدعم اتجاه القرار الحالي.", True))
+        warnings.append("حجم التداول الحالي لا يؤكد الاتجاه المقترح -- يفضّل انتظار تأكيد حجمي.")
+        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
+    gates.append(GateOutcome(
+        "volume_quality", True,
+        "حجم التداول يدعم اتجاه القرار." if inputs.volume_confirms_decision else "لا يوجد تأكيد أو تعارض حجمي واضح.",
+        False,
+    ))
+
     # Gate 12: confidence not based on a single indicator -----------------------
     multi_factor_ok = inputs.available_sub_score_count >= 3
     gates.append(GateOutcome(
@@ -218,6 +325,26 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
 
     strong = inputs.recommendation is Recommendation.STRONG_BUY
+
+    if strong:
+        # Phase 2B, confidence-calibration gate: a STRONG_BUY_CANDIDATE
+        # must be rare and stricter than BUY_CANDIDATE (Product Owner
+        # rule) -- full evidence coverage AND a confidence floor, or it
+        # downgrades to BUY_CANDIDATE (the thesis itself is still sound).
+        full_coverage = inputs.available_sub_score_count >= 8
+        confidence_ok = inputs.confidence_score >= inputs.strong_buy_minimum_confidence
+        gates.append(GateOutcome(
+            "confidence_calibration_minimum", full_coverage and confidence_ok,
+            (
+                f"تغطية الأدلة {inputs.available_sub_score_count}/8، الثقة {inputs.confidence_score:.0f}٪ "
+                f"(الحد الأدنى المطلوب لـ«شراء قوي»: تغطية كاملة وثقة {inputs.strong_buy_minimum_confidence:.0f}٪ فأكثر)."
+            ),
+            True,
+        ))
+        if not (full_coverage and confidence_ok):
+            warnings.append("الأدلة إيجابية لكنها لم تبلغ بعد المعايير الصارمة لتصنيف «شراء قوي».")
+            strong = False
+
     return GateEvaluation(
         Decision.STRONG_BUY_CANDIDATE if strong else Decision.BUY_CANDIDATE,
         gates, warnings, disclosures,
