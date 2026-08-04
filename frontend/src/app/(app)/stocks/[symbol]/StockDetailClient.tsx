@@ -49,6 +49,10 @@ const INDICATOR_LABELS: Record<string, string> = {
   obv: "حجم التداول المتوازن (OBV)",
   volume_sma_20: "متوسط حجم التداول (20)",
   vwap_20: "متوسط السعر المرجّح بالحجم (20)",
+  support_resistance: "مستويات الدعم والمقاومة",
+  fibonacci_retracement: "مستويات فيبوناتشي",
+  volume_profile: "توزيع حجم التداول",
+  candlestick_patterns: "أنماط الشموع اليابانية",
 };
 
 export function StockDetailClient({ symbol }: { symbol: string }) {
@@ -63,16 +67,50 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
   const analystReport = useResource(symbol, getAnalystReport);
 
   const priceLevels = useMemo<PriceLevel[]>(() => {
-    if (decision.status !== "ready") return [];
     const levels: PriceLevel[] = [];
-    if (decision.data.target_price != null) {
-      levels.push({ price: decision.data.target_price, label: "الهدف", color: "#1FA97A" });
+
+    if (decision.status === "ready") {
+      if (decision.data.target_price != null) {
+        levels.push({ price: decision.data.target_price, label: "الهدف", color: "#1FA97A" });
+      }
+      if (decision.data.stop_loss != null) {
+        levels.push({ price: decision.data.stop_loss, label: "وقف الخسارة", color: "#E5484D" });
+      }
     }
-    if (decision.data.stop_loss != null) {
-      levels.push({ price: decision.data.stop_loss, label: "وقف الخسارة", color: "#E5484D" });
+
+    if (quote.status === "ready") {
+      levels.push({ price: quote.data.close, label: "السعر المرجعي", color: "#C9A24B" });
     }
+
+    // Support/resistance -- real indicator output from
+    // src.analysis.indicators.support_resistance, already returned by
+    // GET /technical under indicators.support_resistance; only the two
+    // levels nearest the current price are drawn to keep the chart
+    // legible. Never fabricated here -- absent entirely when the
+    // indicator wasn't computed (e.g. insufficient history).
+    if (technical.status === "ready" && quote.status === "ready") {
+      const sr = technical.data.indicators["support_resistance"] as
+        | { support?: number[]; resistance?: number[] }
+        | undefined;
+      const price = quote.data.close;
+      const nearestBelow = (sr?.support ?? [])
+        .filter((p) => p < price)
+        .sort((a, b) => b - a)
+        .slice(0, 2);
+      const nearestAbove = (sr?.resistance ?? [])
+        .filter((p) => p > price)
+        .sort((a, b) => a - b)
+        .slice(0, 2);
+      nearestBelow.forEach((p, i) =>
+        levels.push({ price: p, label: i === 0 ? "دعم" : "دعم إضافي", color: "#3E8ED0" })
+      );
+      nearestAbove.forEach((p, i) =>
+        levels.push({ price: p, label: i === 0 ? "مقاومة" : "مقاومة إضافية", color: "#B98900" })
+      );
+    }
+
     return levels;
-  }, [decision]);
+  }, [decision, quote, technical]);
 
   if (stock.status === "loading" || quote.status === "loading") {
     return <LoadingScreen />;

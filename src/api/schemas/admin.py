@@ -231,3 +231,14 @@ class AdminDashboardSummaryOut(BaseModel):
     new_users_last_7d: int
     logins_last_24h: int
     locked_accounts: int
+
+    # Practical-testing additions: real state of the most recent market
+    # scan, so the owner status panel can show "last successful scan"
+    # without a second round trip.
+    last_scan_id: Optional[int] = None
+    last_scan_status: Optional[str] = None
+    last_scan_started_at: Optional[datetime] = None
+    last_scan_finished_at: Optional[datetime] = None
+    last_scan_symbols_requested: Optional[int] = None
+    last_scan_symbols_succeeded: Optional[int] = None
+    last_scan_symbols_failed: Optional[int] = None

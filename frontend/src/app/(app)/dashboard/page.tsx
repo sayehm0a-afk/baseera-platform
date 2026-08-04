@@ -202,7 +202,12 @@ export default function DashboardPage() {
                 sector={entry.sector}
                 recommendation={(entry.recommendation as RecommendationValue) ?? "HOLD"}
                 confidence={entry.confidence}
+                currentPrice={entry.current_price}
                 targetPrice={entry.target_price}
+                stopLoss={entry.stop_loss}
+                riskRewardRatio={entry.risk_reward_ratio}
+                timeHorizon={entry.time_horizon}
+                riskLevel={entry.risk_level}
                 expectedReturnPct={entry.expected_return_pct}
                 href={`/stocks/${encodeURIComponent(entry.symbol)}`}
               />

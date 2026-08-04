@@ -99,6 +99,12 @@ async def get_dashboard_summary(
         session.query(func.count(UserModel.id)).filter(UserModel.locked_until > now).scalar() or 0
     )
 
+    from src.domain.models import MarketScanRun
+
+    last_scan = (
+        session.query(MarketScanRun).order_by(MarketScanRun.created_at.desc()).first()
+    )
+
     return AdminDashboardSummaryOut(
         app_version=main.app.version,
         deployment_commit=settings.deployment_commit,
@@ -115,4 +121,11 @@ async def get_dashboard_summary(
         new_users_last_7d=new_users_last_7d,
         logins_last_24h=logins_last_24h,
         locked_accounts=locked_accounts,
+        last_scan_id=last_scan.id if last_scan else None,
+        last_scan_status=last_scan.status.value if last_scan else None,
+        last_scan_started_at=last_scan.started_at if last_scan else None,
+        last_scan_finished_at=last_scan.finished_at if last_scan else None,
+        last_scan_symbols_requested=last_scan.symbols_requested if last_scan else None,
+        last_scan_symbols_succeeded=last_scan.symbols_succeeded if last_scan else None,
+        last_scan_symbols_failed=last_scan.symbols_failed if last_scan else None,
     )

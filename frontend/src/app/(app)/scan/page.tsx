@@ -71,6 +71,7 @@ export default function ScanPage() {
                   sector={entry.sector}
                   price={entry.target_price}
                   priceKind="target"
+                  stopLoss={entry.stop_loss}
                   changePct={entry.expected_return_pct}
                   recommendation={
                     (entry.recommendation as RecommendationValue) ?? undefined

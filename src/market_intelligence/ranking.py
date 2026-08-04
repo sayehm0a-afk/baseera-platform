@@ -49,6 +49,10 @@ def _to_entry(outcome: SymbolScanOutcome, rank_value: Optional[float]) -> Rankin
         expected_return_pct=outcome.expected_return_pct,
         risk_level=outcome.risk_level.value if outcome.risk_level else None,
         rank_value=rank_value,
+        current_price=outcome.latest_price,
+        stop_loss=outcome.stop_loss,
+        risk_reward_ratio=outcome.risk_reward_ratio,
+        time_horizon=outcome.time_horizon.value if outcome.time_horizon else None,
     )
 
 

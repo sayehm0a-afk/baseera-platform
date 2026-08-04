@@ -13,6 +13,7 @@ interface InstrumentRowProps {
   /** Set to "target" when `price` is an AI-projected target rather
    * than a live quote -- never presented as a current price. */
   priceKind?: "quote" | "target";
+  stopLoss?: number | null;
   recommendation?: RecommendationValue | null;
   confidence?: number | null;
   /** Set when the underlying quote came from a synthetic/dev provider
@@ -33,6 +34,7 @@ export function InstrumentRow({
   price,
   changePct,
   priceKind = "quote",
+  stopLoss,
   recommendation,
   confidence,
   isSynthetic,
@@ -82,6 +84,11 @@ export function InstrumentRow({
               >
                 {isUp ? "+" : ""}
                 {changePct.toFixed(2)}%
+              </span>
+            ) : null}
+            {stopLoss != null ? (
+              <span className="bsr-numeric text-[10px] text-bsr-action-sell">
+                وقف: {stopLoss.toFixed(2)}
               </span>
             ) : null}
           </div>

@@ -73,6 +73,10 @@ class RankingEntryOut(BaseModel):
     expected_return_pct: Optional[float] = None
     risk_level: Optional[str] = None
     rank_value: Optional[float] = None
+    current_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    risk_reward_ratio: Optional[float] = None
+    time_horizon: Optional[str] = None
 
 
 class RankingListOut(BaseModel):
@@ -191,6 +195,25 @@ class DiagnosticScanOut(BaseModel):
     last_scan_source: Optional[str] = None
     data_is_fresh: Optional[bool] = None
     freshness_note: str = ""
+
+
+class MarketStatusOut(BaseModel):
+    """GET /api/v1/market/status -- Tadawul session state for the
+    frontend's status banner (src.market_intelligence.market_status).
+    `status` is one of OPEN/PRE_OPEN_AUCTION/CLOSING_AUCTION/CLOSED/
+    PROVIDER_UNREACHABLE (the last one overrides the calendar-derived
+    value whenever the configured market data provider's own health
+    check fails, regardless of what the calendar says)."""
+
+    status: str
+    label_ar: str
+    is_trading_day: bool
+    server_time_riyadh: datetime
+    seconds_until_next_open: float
+    seconds_until_close: Optional[float] = None
+    last_completed_session_date: Optional[str] = None
+    provider_connected: bool
+    holiday_calendar_disclosed_gap: str
 
 
 class MarketSummaryOut(BaseModel):

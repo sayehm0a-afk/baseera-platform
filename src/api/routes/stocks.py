@@ -69,6 +69,8 @@ from src.api.schemas.stocks import (
     ScoreContributionOut,
     SignalOut,
     StockOut,
+    StockSearchOut,
+    StockSearchResultOut,
     TechnicalAnalysisOut,
 )
 from src.auth.rbac import require_active_subscription
@@ -89,6 +91,45 @@ def _get_stock_or_404(session: Session, symbol: str) -> Stock:
     if stock is None:
         raise StockNotFoundError(f"No stock is registered for symbol '{symbol}'.")
     return stock
+
+
+@router.get("/search", response_model=StockSearchOut)
+def search_stocks(
+    q: str = Query(..., min_length=1, max_length=64),
+    limit: int = Query(default=20, ge=1, le=50),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> StockSearchOut:
+    """Search the registered symbol universe by Tadawul symbol, Arabic
+    company name, or English company name -- a case-insensitive
+    substring match against Stock.symbol/name_ar/name_en, the only
+    real identifiers this platform stores (no fuzzy/phonetic matching,
+    so a misspelled Arabic name may return no results rather than a
+    guessed one). Registered *before* `/{symbol}` below so "search" is
+    never swallowed as a literal symbol path parameter.
+    """
+    query = q.strip()
+    if not query:
+        return StockSearchOut(query=q, results=[])
+
+    like = f"%{query}%"
+    stocks = (
+        session.query(Stock)
+        .filter(
+            Stock.is_active.is_(True),
+            (Stock.symbol.ilike(like) | Stock.name_ar.ilike(like) | Stock.name_en.ilike(like)),
+        )
+        .order_by(Stock.symbol)
+        .limit(limit)
+        .all()
+    )
+    return StockSearchOut(
+        query=q,
+        results=[
+            StockSearchResultOut(symbol=s.symbol, name_en=s.name_en, name_ar=s.name_ar, sector=s.sector)
+            for s in stocks
+        ],
+    )
 
 
 @router.get("/{symbol}", response_model=StockOut)

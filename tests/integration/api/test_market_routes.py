@@ -320,3 +320,34 @@ def test_market_responses_never_expose_credentials(client, session_factory):
         body_text = response.text.lower()
         assert "sahmk_api_key" not in body_text
         assert "shmk_" not in body_text
+
+
+# --- practical-testing release: /market/status + enriched ranking fields ----
+
+
+def test_market_status_returns_a_real_tadawul_session_state(client, session_factory):
+    response = client.get("/api/v1/market/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] in {
+        "OPEN", "PRE_OPEN_AUCTION", "CLOSING_AUCTION", "CLOSED", "PROVIDER_UNREACHABLE",
+    }
+    assert body["label_ar"]
+    assert isinstance(body["is_trading_day"], bool)
+    assert isinstance(body["provider_connected"], bool)
+    assert body["holiday_calendar_disclosed_gap"]
+
+
+def test_ranking_entries_carry_stop_loss_and_risk_reward(client, session_factory):
+    _seed_stock_with_bars(session_factory, "2222")
+    run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    client.get(f"/api/v1/market/scan/{run_id}")
+
+    rankings = client.get("/api/v1/market/rankings").json()
+    top_buy = next(r for r in rankings["rankings"] if r["category"] == "TOP_BUY")
+    if top_buy["entries"]:
+        entry = top_buy["entries"][0]
+        assert "stop_loss" in entry
+        assert "risk_reward_ratio" in entry
+        assert "time_horizon" in entry
+        assert "current_price" in entry

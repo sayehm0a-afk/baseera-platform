@@ -306,3 +306,68 @@ def test_get_fundamentals_still_succeeds_when_live_price_is_unavailable(client, 
 def test_get_fundamentals_404_for_unknown_symbol(client, db_session):
     response = client.get("/api/v1/stocks/9999/fundamentals")
     assert response.status_code == 404
+
+
+# --- GET /api/v1/stocks/search ------------------------------------------
+
+
+def test_search_by_exact_symbol(client, db_session):
+    _make_stock(db_session)
+    response = client.get("/api/v1/stocks/search", params={"q": "2222"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["query"] == "2222"
+    assert [r["symbol"] for r in body["results"]] == ["2222"]
+
+
+def test_search_by_arabic_name_substring(client, db_session):
+    stock = _make_stock(db_session)
+    stock.name_ar = "أرامكو السعودية"
+    db_session.commit()
+
+    response = client.get("/api/v1/stocks/search", params={"q": "أرامكو"})
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert len(results) == 1
+    assert results[0]["symbol"] == "2222"
+    assert results[0]["name_ar"] == "أرامكو السعودية"
+
+
+def test_search_by_english_name_substring_case_insensitive(client, db_session):
+    _make_stock(db_session)  # name_en="Saudi Aramco"
+    response = client.get("/api/v1/stocks/search", params={"q": "aramco"})
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert len(results) == 1
+    assert results[0]["symbol"] == "2222"
+
+
+def test_search_returns_empty_results_for_no_match(client, db_session):
+    _make_stock(db_session)
+    response = client.get("/api/v1/stocks/search", params={"q": "nonexistent-xyz"})
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+
+
+def test_search_excludes_inactive_stocks(client, db_session):
+    stock = _make_stock(db_session)
+    stock.is_active = False
+    db_session.commit()
+
+    response = client.get("/api/v1/stocks/search", params={"q": "2222"})
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+
+
+def test_search_requires_a_query(client, db_session):
+    response = client.get("/api/v1/stocks/search")
+    assert response.status_code == 422
+
+
+def test_search_is_registered_before_the_symbol_wildcard_route(client, db_session):
+    # If /{symbol} ever swallowed "/search", this would try to look up
+    # a stock literally named "search" and 404 instead of returning
+    # the search envelope shape.
+    response = client.get("/api/v1/stocks/search", params={"q": "x"})
+    assert response.status_code == 200
+    assert "results" in response.json()

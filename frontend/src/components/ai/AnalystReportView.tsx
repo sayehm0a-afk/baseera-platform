@@ -7,6 +7,30 @@ import {
 import { RISK_LEVEL_LABELS } from "@/lib/portfolio-labels";
 import type { AnalystReport } from "@/lib/api/stocks-types";
 
+const ENTRY_QUALITY_LABELS: Record<string, string> = {
+  POOR: "ضعيفة",
+  FAIR: "مقبولة",
+  GOOD: "جيدة",
+  EXCELLENT: "ممتازة",
+};
+
+const BASIS_LABELS: Record<string, string> = {
+  atr: "متوسط المدى الحقيقي (ATR)",
+  support_level: "أقرب مستوى دعم",
+  resistance_level: "أقرب مستوى مقاومة",
+};
+
+/** POOR/FAIR entries read as "consider waiting for a better price,"
+ * GOOD/EXCELLENT read as "the current price is a reasonable entry" --
+ * the "enter now vs. wait for a condition" framing Section 6 of the
+ * practical-testing release asks every recommendation to answer. */
+function entryTimingAdvice(entryQuality: string): string {
+  if (entryQuality === "POOR" || entryQuality === "FAIR") {
+    return "جودة نقطة الدخول الحالية ليست الأفضل -- يُفضّل غالباً انتظار اقتراب السعر من نطاق الدخول المحدد بدلاً من الدخول عند السعر الحالي مباشرة.";
+  }
+  return "جودة نقطة الدخول الحالية جيدة نسبياً وفق البيانات المتاحة الآن، دون أن يعني ذلك ضمان تحقيق ربح.";
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 md:p-bsr-6">
@@ -80,6 +104,32 @@ export function AnalystReportView({ report }: { report: AnalystReport }) {
         <p className="text-sm leading-7 text-bsr-text-secondary">{report.investment_summary}</p>
       </Section>
 
+      <Section title="هل الدخول الآن أم الانتظار؟">
+        <div className="mb-bsr-2 flex items-center gap-bsr-2 text-sm">
+          <span className="text-bsr-text-secondary">جودة نقطة الدخول الحالية:</span>
+          <span className="font-semibold text-bsr-text-primary">
+            {ENTRY_QUALITY_LABELS[report.entry_quality] ?? report.entry_quality}
+          </span>
+          {report.risk_reward_ratio != null ? (
+            <span className="bsr-numeric text-bsr-text-secondary">
+              · العائد إلى المخاطرة 1:{report.risk_reward_ratio.toFixed(1)}
+            </span>
+          ) : null}
+        </div>
+        <p className="text-sm leading-7 text-bsr-text-secondary">
+          {entryTimingAdvice(report.entry_quality)}
+        </p>
+        {report.entry_quality_notes.length > 0 ? (
+          <ul className="mt-bsr-2 flex flex-col gap-bsr-1">
+            {report.entry_quality_notes.map((note, index) => (
+              <li key={index} className="text-sm text-bsr-text-muted">
+                • {note}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </Section>
+
       <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-2">
         <Section title="التحليل الفني">
           <p className="text-sm leading-7 text-bsr-text-secondary">{report.technical_reasoning}</p>
@@ -130,12 +180,25 @@ export function AnalystReportView({ report }: { report: AnalystReport }) {
       <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-3">
         <Section title="تفسير نسبة الثقة">
           <p className="text-sm leading-7 text-bsr-text-secondary">{report.confidence_explanation}</p>
+          {report.confidence_calibration_notes.length > 0 ? (
+            <ul className="mt-bsr-2 flex flex-col gap-bsr-1">
+              {report.confidence_calibration_notes.map((note, index) => (
+                <li key={index} className="text-xs text-bsr-text-muted">• {note}</li>
+              ))}
+            </ul>
+          ) : null}
         </Section>
         <Section title="تفسير السعر المستهدف">
           <p className="text-sm leading-7 text-bsr-text-secondary">{report.target_price_explanation}</p>
+          <p className="mt-bsr-2 text-xs text-bsr-text-muted">
+            الأساس: {BASIS_LABELS[report.target_price_basis] ?? report.target_price_basis}
+          </p>
         </Section>
         <Section title="تفسير وقف الخسارة">
           <p className="text-sm leading-7 text-bsr-text-secondary">{report.stop_loss_explanation}</p>
+          <p className="mt-bsr-2 text-xs text-bsr-text-muted">
+            الأساس: {BASIS_LABELS[report.stop_loss_basis] ?? report.stop_loss_basis}
+          </p>
         </Section>
       </div>
 
