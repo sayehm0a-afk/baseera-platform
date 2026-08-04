@@ -95,6 +95,7 @@ class DecisionEngineV2:
         # (context_builder.py's quote_extra, Phase 2A addition) -- never
         # fabricated, simply omitted (None) when no quote leg succeeded.
         current_volume = context.extra.get("quote", {}).get("volume")
+        change_percent = context.extra.get("quote", {}).get("change_percent")
         relative_volume = (
             current_volume / volume_sma_latest
             if (current_volume is not None and volume_sma_latest is not None and volume_sma_latest > 0)
@@ -174,8 +175,11 @@ class DecisionEngineV2:
             warnings.append("سيولة التداول في هذا السهم محدودة نسبيًا مقارنة بالحد الأدنى المعتمد.")
         conflict_note = scoring.conflicting_indicators(trend, momentum)
         if conflict_note:
+            # The warning itself and the WATCH-downgrade both now live
+            # in gates.py's own "trend_momentum_consistency" gate (Phase
+            # 2B) -- only the confidence cap stays here, alongside every
+            # other confidence adjustment.
             confidence = min(confidence, tuning.conflicting_indicators_confidence_cap)
-            warnings.append(conflict_note)
         if investment_decision.entry_quality is EntryQuality.POOR:
             confidence = min(confidence, tuning.near_resistance_confidence_cap)
         if missed_entry:
@@ -208,6 +212,14 @@ class DecisionEngineV2:
             ),
             entry_quality=investment_decision.entry_quality,
             price_missed_entry_zone=missed_entry,
+            trend_momentum_conflict=conflict_note,
+            volume_confirms_decision=accumulation.volume_confirms_decision,
+            change_percent=change_percent,
+            price_limit_proximity_pct=tuning.price_limit_proximity_pct,
+            risk_level=investment_decision.risk_level.value,
+            strong_buy_minimum_confidence=tuning.strong_buy_minimum_confidence,
+            confidence_score=confidence,
+            market_context_score=market_context,
         )
         evaluation = evaluate_decision(gate_inputs, tuning)
         warnings.extend(evaluation.warnings)
