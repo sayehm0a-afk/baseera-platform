@@ -206,6 +206,83 @@ export interface DecisionV2 {
 
   sub_scores: SubScoresV2;
   gates: GateOutcome[];
+
+  /** Phase 2A canonical extensions -- see DecisionResult's own
+   * docstring (src/analysis/decision_v2/types.py) for how each field
+   * is derived. */
+  is_real_data: boolean;
+  quote_timestamp: string | null;
+
+  technical_confidence: number | null;
+  momentum_confidence: number | null;
+  liquidity_confidence: number | null;
+  market_context_confidence: number | null;
+  data_quality_confidence: number | null;
+
+  trade_type:
+    | "SCALP"
+    | "INTRADAY"
+    | "SHORT_SWING_2_5_DAYS"
+    | "WEEKLY_SWING"
+    | "SWING_TRADE"
+    | "MONTHLY_INVESTMENT"
+    | "MEDIUM_TERM_INVESTMENT"
+    | "LONG_TERM_INVESTMENT"
+    | null;
+  trade_type_label_ar: string;
+  time_horizon_rationale_ar: string;
+
+  best_entry_price: number | null;
+  accumulation_zone_low: number | null;
+  accumulation_zone_high: number | null;
+  entry_quality: "POOR" | "FAIR" | "GOOD" | "EXCELLENT";
+  entry_quality_label_ar: string;
+  entry_status:
+    | "READY_NOW"
+    | "NEAR_ENTRY"
+    | "WAIT_FOR_PULLBACK"
+    | "MISSED_ENTRY"
+    | "CONDITIONAL_ON_BREAKOUT"
+    | "NOT_SUITABLE";
+  entry_status_label_ar: string;
+
+  invalidation_price: number | null;
+  risk_level: "LOW" | "MEDIUM" | "HIGH" | "VERY_HIGH";
+  risk_level_label_ar: string;
+
+  estimated_days_target_1: number | null;
+  estimated_days_target_2: number | null;
+  estimated_days_target_3: number | null;
+
+  nearest_support: number | null;
+  major_support: number | null;
+  nearest_resistance: number | null;
+  major_resistance: number | null;
+  breakout_level: number | null;
+  breakdown_level: number | null;
+  support_resistance_evidence_ar: string;
+
+  current_volume: number | null;
+  average_volume: number | null;
+  relative_volume: number | null;
+  liquidity_quality_ar: string;
+  accumulation_score: number | null;
+  accumulation_assessment_ar: string;
+  volume_confirms_decision: boolean | null;
+  abnormal_volume: boolean;
+
+  /** Every registered technical indicator's latest value, keyed by
+   * name -- the same loosely-typed shape TechnicalAnalysisOut.indicators
+   * already uses; consumers must read defensively. */
+  technical_evidence: Record<string, unknown>;
+  trend_direction_ar: string;
+  trend_strength_label_ar: string;
+
+  decision_summary_ar: string;
+  why_now_ar: string;
+  why_not_stronger_ar: string;
+  entry_confirmation_conditions_ar: string[];
+  watch_next_session_ar: string[];
 }
 
 export interface StockSearchResult {

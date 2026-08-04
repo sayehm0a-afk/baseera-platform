@@ -62,6 +62,52 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
       data_quality_score: 90,
     },
     gates: [{ name: "DATA_FRESHNESS", passed: true, detail: "بيانات حديثة", blocking: true }],
+    is_real_data: true,
+    quote_timestamp: "2026-08-04T11:55:00Z",
+    technical_confidence: 80,
+    momentum_confidence: 70,
+    liquidity_confidence: 90,
+    market_context_confidence: 60,
+    data_quality_confidence: 90,
+    trade_type: "WEEKLY_SWING",
+    trade_type_label_ar: "مضاربة أسبوعية",
+    time_horizon_rationale_ar: "زخم غير حاسم حاليًا -- الأنسب متابعة الفرصة على مدى أسبوع تداول تقريبًا.",
+    best_entry_price: 26.8,
+    accumulation_zone_low: 26.5,
+    accumulation_zone_high: 26.93,
+    entry_quality: "GOOD",
+    entry_quality_label_ar: "جيدة",
+    entry_status: "NEAR_ENTRY",
+    entry_status_label_ar: "قريب من الدخول",
+    invalidation_price: 26.46,
+    risk_level: "MEDIUM",
+    risk_level_label_ar: "متوسطة",
+    estimated_days_target_1: 5,
+    estimated_days_target_2: 9,
+    estimated_days_target_3: null,
+    nearest_support: 26.4,
+    major_support: 25.8,
+    nearest_resistance: 27.9,
+    major_resistance: 28.5,
+    breakout_level: 27.9,
+    breakdown_level: 26.4,
+    support_resistance_evidence_ar: "مستويات مكتشفة عبر تحليل القمم والقيعان السعرية.",
+    current_volume: 1_800_000,
+    average_volume: 1_500_000,
+    relative_volume: 1.2,
+    liquidity_quality_ar: "سيولة جيدة",
+    accumulation_score: 65,
+    accumulation_assessment_ar: "إشارات تجميع محتملة بناءً على اتجاه التدفق النقدي التراكمي (OBV).",
+    volume_confirms_decision: true,
+    abnormal_volume: false,
+    technical_evidence: { rsi_14: 58.2, adx_14: 24.1 },
+    trend_direction_ar: "صاعد",
+    trend_strength_label_ar: "معتدل",
+    decision_summary_ar: "مراقبة -- بثقة 66٪، مصنّف كـ«مضاربة أسبوعية».",
+    why_now_ar: "السهم يستحق المتابعة لكن الأدلة الحالية غير كافية لاتخاذ قرار دخول.",
+    why_not_stronger_ar: "لم يتحقق قرار أقوى بسبب: نسبة العائد إلى المخاطرة غير كافية.",
+    entry_confirmation_conditions_ar: ["اختراق حقيقي لمستوى 27.90 مدعوم بحجم تداول أعلى من المتوسط يعزز الفرضية."],
+    watch_next_session_ar: ["رد فعل السعر عند مستوى المقاومة القريب (27.90)."],
     ...overrides,
   };
 }
@@ -142,5 +188,42 @@ describe("ExecutiveDecisionCard", () => {
     render(<ExecutiveDecisionCard decision={buildDecision({ data_source: "SAHMK_REAL", analysis_version: "2.0.0" })} />);
     expect(screen.getByText(/SAHMK_REAL/)).toBeInTheDocument();
     expect(screen.getByText(/2\.0\.0/)).toBeInTheDocument();
+  });
+
+  it("renders the Phase 2A beginner-friendly summary and why-now sentence", () => {
+    render(
+      <ExecutiveDecisionCard
+        decision={buildDecision({
+          decision_summary_ar: "شراء -- بثقة 80٪.",
+          why_now_ar: "اتجاه صاعد قوي مدعوم بحجم تداول مرتفع.",
+        })}
+      />
+    );
+    expect(screen.getByText("شراء -- بثقة 80٪.")).toBeInTheDocument();
+    expect(screen.getByText("اتجاه صاعد قوي مدعوم بحجم تداول مرتفع.")).toBeInTheDocument();
+  });
+
+  it("renders the trade type and entry status labels", () => {
+    render(
+      <ExecutiveDecisionCard
+        decision={buildDecision({ trade_type_label_ar: "مضاربة أسبوعية", entry_status_label_ar: "قريب من الدخول" })}
+      />
+    );
+    expect(screen.getByText("مضاربة أسبوعية")).toBeInTheDocument();
+    expect(screen.getByText("قريب من الدخول")).toBeInTheDocument();
+  });
+
+  it("renders the nearest support and resistance levels when available", () => {
+    render(<ExecutiveDecisionCard decision={buildDecision({ nearest_support: 26.4, nearest_resistance: 27.9 })} />);
+    expect(screen.getByText("26.40")).toBeInTheDocument();
+    expect(screen.getByText("27.90")).toBeInTheDocument();
+  });
+
+  it("omits the support/resistance section entirely when neither level is available", () => {
+    render(
+      <ExecutiveDecisionCard decision={buildDecision({ nearest_support: null, nearest_resistance: null })} />
+    );
+    expect(screen.queryByText("أقرب دعم")).not.toBeInTheDocument();
+    expect(screen.queryByText("أقرب مقاومة")).not.toBeInTheDocument();
   });
 });

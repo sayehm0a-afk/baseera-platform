@@ -230,6 +230,65 @@ class DecisionV2Out(BaseModel):
     sub_scores: SubScoresOut
     gates: List[GateOutcomeOut]
 
+    # --- Phase 2A canonical extensions (see DecisionResult's own
+    # docstring in src/analysis/decision_v2/types.py for what each is
+    # derived from) --------------------------------------------------
+    is_real_data: bool = True
+    quote_timestamp: Optional[datetime] = None
+
+    technical_confidence: Optional[float] = None
+    momentum_confidence: Optional[float] = None
+    liquidity_confidence: Optional[float] = None
+    market_context_confidence: Optional[float] = None
+    data_quality_confidence: Optional[float] = None
+
+    trade_type: Optional[str] = None
+    trade_type_label_ar: str = "غير محدد"
+    time_horizon_rationale_ar: str = ""
+
+    best_entry_price: Optional[float] = None
+    accumulation_zone_low: Optional[float] = None
+    accumulation_zone_high: Optional[float] = None
+    entry_quality: str = "FAIR"
+    entry_quality_label_ar: str = ""
+    entry_status: str = "NOT_SUITABLE"
+    entry_status_label_ar: str = ""
+
+    invalidation_price: Optional[float] = None
+    risk_level: str = "MEDIUM"
+    risk_level_label_ar: str = ""
+
+    estimated_days_target_1: Optional[int] = None
+    estimated_days_target_2: Optional[int] = None
+    estimated_days_target_3: Optional[int] = None
+
+    nearest_support: Optional[float] = None
+    major_support: Optional[float] = None
+    nearest_resistance: Optional[float] = None
+    major_resistance: Optional[float] = None
+    breakout_level: Optional[float] = None
+    breakdown_level: Optional[float] = None
+    support_resistance_evidence_ar: str = ""
+
+    current_volume: Optional[float] = None
+    average_volume: Optional[float] = None
+    relative_volume: Optional[float] = None
+    liquidity_quality_ar: str = "غير محدد"
+    accumulation_score: Optional[float] = None
+    accumulation_assessment_ar: str = ""
+    volume_confirms_decision: Optional[bool] = None
+    abnormal_volume: bool = False
+
+    technical_evidence: Dict[str, Any] = {}
+    trend_direction_ar: str = "غير محدد"
+    trend_strength_label_ar: str = "غير محدد"
+
+    decision_summary_ar: str = ""
+    why_now_ar: str = ""
+    why_not_stronger_ar: str = ""
+    entry_confirmation_conditions_ar: List[str] = []
+    watch_next_session_ar: List[str] = []
+
 
 class AnalystReportOut(BaseModel):
     """The Autonomous AI Analyst Framework's report for one symbol --
