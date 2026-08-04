@@ -90,6 +90,19 @@ jobs:
           echo "=== frontend / ==="
           curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/" || echo "(request failed)"
 
+      # DIAGNOSTIC ONLY -- run #4 confirmed railway ssh needs a real SSH
+      # keypair registered ("No SSH keys found ... Generate one with:
+      # ssh-keygen -t ed25519"). railway ssh --help showed a `keys`
+      # subcommand ("Manage SSH keys registered with Railway") -- print its
+      # exact syntax before generating/registering a real ephemeral key,
+      # rather than guessing at a security-sensitive operation.
+      - name: DIAGNOSTIC -- railway ssh keys subcommand syntax
+        run: |
+          echo "=== railway ssh keys --help ==="
+          railway ssh keys --help 2>&1 || echo "(failed)"
+          echo "=== railway ssh keys add --help ==="
+          railway ssh keys add --help 2>&1 || echo "(failed)"
+
       # `railway run` only injects env vars into a LOCAL process -- confirmed
       # by runs #2/#3, which resolved DATABASE_URL to postgres.railway.internal
       # (Railway's private DNS) and failed to connect, since the GitHub
