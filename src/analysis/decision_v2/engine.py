@@ -11,11 +11,15 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from src.analysis.decision.types import EntryQuality, InvestmentDecision
-from src.analysis.decision_v2 import scoring, structure
+from src.analysis.decision_v2 import evidence, reasoning, scoring, structure, trade_classification
 from src.analysis.decision_v2.config import DecisionV2Tuning
 from src.analysis.decision_v2.gates import GateInputs, evaluate_decision
 from src.analysis.decision_v2.types import (
     DECISION_LABELS_AR,
+    ENTRY_STATUS_LABELS_AR,
+    ENTRY_QUALITY_LABELS_AR,
+    RISK_LEVEL_LABELS_AR,
+    TRADE_TYPE_LABELS_AR,
     DataFreshnessStatus,
     Decision,
     DecisionResult,
@@ -77,10 +81,24 @@ class DecisionEngineV2:
                 atr_pct = atr_value / price
 
         volume_sma_latest = None
-        if technical is not None and "volume_sma_20" in technical.indicators:
-            volume_sma_latest = technical.indicators["volume_sma_20"].latest()
+        adx_latest = None
+        if technical is not None:
+            if "volume_sma_20" in technical.indicators:
+                volume_sma_latest = technical.indicators["volume_sma_20"].latest()
+            if "adx_14" in technical.indicators:
+                adx_latest = technical.indicators["adx_14"].latest()
         average_traded_value = (
             price * volume_sma_latest if (price is not None and volume_sma_latest is not None) else None
+        )
+
+        # Real current-bar volume from the live quote/daily-bar payload
+        # (context_builder.py's quote_extra, Phase 2A addition) -- never
+        # fabricated, simply omitted (None) when no quote leg succeeded.
+        current_volume = context.extra.get("quote", {}).get("volume")
+        relative_volume = (
+            current_volume / volume_sma_latest
+            if (current_volume is not None and volume_sma_latest is not None and volume_sma_latest > 0)
+            else None
         )
 
         trend = scoring.trend_score(technical, price)
@@ -128,6 +146,20 @@ class DecisionEngineV2:
         )
         holding_min_days, holding_max_days, holding_label = structure.compute_holding_period(
             investment_decision.time_horizon, tuning
+        )
+
+        sr_evidence = evidence.derive_support_resistance(price, support_resistance)
+        trend_direction_ar, trend_strength_label_ar = evidence.trend_direction_and_strength_labels(
+            trend, adx_latest
+        )
+        accumulation = evidence.derive_accumulation_evidence(volume, relative_volume, direction)
+        liquidity_quality_ar = evidence.liquidity_quality_label(liquidity)
+        estimated_days = evidence.estimated_days_to_all_targets(
+            price, [investment_decision.target_price, target_2, target_3], atr_value
+        )
+
+        trade_type, time_horizon_rationale_ar = trade_classification.classify_trade_type(
+            investment_decision.time_horizon.value, holding_min_days, holding_max_days, momentum, volatility
         )
 
         confidence = investment_decision.confidence
@@ -180,6 +212,37 @@ class DecisionEngineV2:
         evaluation = evaluate_decision(gate_inputs, tuning)
         warnings.extend(evaluation.warnings)
 
+        entry_status, _entry_status_explanation = trade_classification.classify_entry_status(
+            evaluation.decision, price, entry_high, missed_entry
+        )
+        entry_status_label_ar = ENTRY_STATUS_LABELS_AR[entry_status]
+        entry_quality_value = investment_decision.entry_quality.value
+        entry_quality_label_ar = ENTRY_QUALITY_LABELS_AR.get(entry_quality_value, "")
+        risk_level_value = investment_decision.risk_level.value
+        risk_level_label_ar = RISK_LEVEL_LABELS_AR.get(risk_level_value, "")
+        trade_type_label_ar = TRADE_TYPE_LABELS_AR.get(trade_type, "غير محدد") if trade_type else "غير محدد"
+
+        best_entry_price = entry_low if direction > 0 else None
+        accumulation_zone_low = (
+            min(entry_low, sr_evidence.nearest_support)
+            if entry_low is not None and sr_evidence.nearest_support is not None
+            else entry_low
+        )
+        accumulation_zone_high = entry_high
+
+        technical_evidence = technical.latest_snapshot() if technical is not None else {}
+        technical_confidence, momentum_confidence, liquidity_confidence, market_context_confidence, data_quality_confidence = (
+            reasoning.confidence_breakdown(
+                {
+                    "trend_score": trend,
+                    "momentum_score": momentum,
+                    "liquidity_score": liquidity,
+                    "market_context_score": market_context,
+                    "data_quality_score": round(data_quality, 1),
+                }
+            )
+        )
+
         is_stale = data_age_hours is not None and data_age_hours > max_age_hours
         if is_synthetic is True:
             freshness_status = DataFreshnessStatus.UNKNOWN
@@ -208,13 +271,24 @@ class DecisionEngineV2:
             investment_decision.stop_loss, investment_decision.target_price,
         )
 
+        decision_label_ar = DECISION_LABELS_AR[evaluation.decision]
+        decision_summary_ar = reasoning.build_decision_summary(decision_label_ar, confidence, trade_type_label_ar)
+        why_now_ar = reasoning.build_why_now(evaluation.decision, positive_reasons, entry_status_label_ar)
+        why_not_stronger_ar = reasoning.build_why_not_stronger(evaluation.decision, evaluation.gates, warnings)
+        entry_confirmation_conditions_ar = reasoning.build_entry_confirmation_conditions(
+            evaluation.decision, entry_status, sr_evidence.nearest_resistance, entry_high
+        )
+        watch_next_session_ar = reasoning.build_watch_next_session(
+            sr_evidence.nearest_support, sr_evidence.nearest_resistance, relative_volume, warnings
+        )
+
         decision_result = DecisionResult(
             symbol=context.symbol,
             company_name_ar=company_name_ar,
             company_name_en=company_name_en,
             sector_ar=sector_ar,
             decision=evaluation.decision,
-            decision_label_ar=DECISION_LABELS_AR[evaluation.decision],
+            decision_label_ar=decision_label_ar,
             confidence_score=confidence,
             opportunity_quality_score=opportunity_quality,
             risk_score=risk_score,
@@ -264,6 +338,53 @@ class DecisionEngineV2:
                 data_quality_score=round(data_quality, 1),
             ),
             gates=evaluation.gates,
+            # --- Phase 2A extensions ------------------------------------
+            is_real_data=is_synthetic is False,
+            quote_timestamp=quote_timestamp,
+            technical_confidence=technical_confidence,
+            momentum_confidence=momentum_confidence,
+            liquidity_confidence=liquidity_confidence,
+            market_context_confidence=market_context_confidence,
+            data_quality_confidence=data_quality_confidence,
+            trade_type=trade_type,
+            trade_type_label_ar=trade_type_label_ar,
+            time_horizon_rationale_ar=time_horizon_rationale_ar,
+            best_entry_price=best_entry_price,
+            accumulation_zone_low=accumulation_zone_low,
+            accumulation_zone_high=accumulation_zone_high,
+            entry_quality=entry_quality_value,
+            entry_quality_label_ar=entry_quality_label_ar,
+            entry_status=entry_status,
+            entry_status_label_ar=entry_status_label_ar,
+            invalidation_price=investment_decision.stop_loss,
+            risk_level=risk_level_value,
+            risk_level_label_ar=risk_level_label_ar,
+            estimated_days_target_1=estimated_days[0],
+            estimated_days_target_2=estimated_days[1],
+            estimated_days_target_3=estimated_days[2],
+            nearest_support=sr_evidence.nearest_support,
+            major_support=sr_evidence.major_support,
+            nearest_resistance=sr_evidence.nearest_resistance,
+            major_resistance=sr_evidence.major_resistance,
+            breakout_level=sr_evidence.breakout_level,
+            breakdown_level=sr_evidence.breakdown_level,
+            support_resistance_evidence_ar=sr_evidence.evidence_ar,
+            current_volume=current_volume,
+            average_volume=volume_sma_latest,
+            relative_volume=relative_volume,
+            liquidity_quality_ar=liquidity_quality_ar,
+            accumulation_score=accumulation.accumulation_score,
+            accumulation_assessment_ar=accumulation.assessment_ar,
+            volume_confirms_decision=accumulation.volume_confirms_decision,
+            abnormal_volume=accumulation.abnormal_volume,
+            technical_evidence=technical_evidence,
+            trend_direction_ar=trend_direction_ar,
+            trend_strength_label_ar=trend_strength_label_ar,
+            decision_summary_ar=decision_summary_ar,
+            why_now_ar=why_now_ar,
+            why_not_stronger_ar=why_not_stronger_ar,
+            entry_confirmation_conditions_ar=entry_confirmation_conditions_ar,
+            watch_next_session_ar=watch_next_session_ar,
         )
         return decision_result
 

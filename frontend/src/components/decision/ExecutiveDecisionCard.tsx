@@ -54,6 +54,13 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
 
       <p className="text-[11px] leading-4 text-bsr-text-muted">{decision.confidence_disclaimer_ar}</p>
 
+      {/* Phase 2A beginner-friendly summary -- what to do, in one or
+          two direct sentences, before the detailed sections below. */}
+      <div className="flex flex-col gap-bsr-1 rounded-bsr-md bg-bsr-surface-overlay p-bsr-2">
+        <p className="text-sm font-semibold text-bsr-text-primary">{decision.decision_summary_ar}</p>
+        <p className="text-xs text-bsr-text-secondary">{decision.why_now_ar}</p>
+      </div>
+
       {/* Freshness / market status */}
       <div className="flex flex-wrap items-center gap-bsr-2 text-xs text-bsr-text-secondary">
         <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">
@@ -73,6 +80,7 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
             <p className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
               {hasEntryZone ? `${fmt(decision.entry_zone_low)} – ${fmt(decision.entry_zone_high)}` : "—"}
             </p>
+            <p className="text-[11px] text-bsr-text-secondary">{decision.entry_status_label_ar}</p>
           </div>
           <div>
             <p className="text-xs text-bsr-text-secondary">وقف الخسارة</p>
@@ -105,7 +113,11 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
       ) : null}
 
       {/* Duration / risk / quality */}
-      <div className="grid grid-cols-2 gap-bsr-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-bsr-3 sm:grid-cols-4">
+        <div>
+          <p className="text-xs text-bsr-text-secondary">نوع الصفقة</p>
+          <p className="text-sm font-semibold text-bsr-text-primary">{decision.trade_type_label_ar}</p>
+        </div>
         <div>
           <p className="text-xs text-bsr-text-secondary">المدة المتوقعة</p>
           <p className="text-sm font-semibold text-bsr-text-primary">{decision.expected_holding_period_label_ar}</p>
@@ -115,6 +127,7 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
           <p className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
             {Math.round(decision.risk_score)}/100
           </p>
+          <p className="text-[11px] text-bsr-text-secondary">{decision.risk_level_label_ar}</p>
         </div>
         <div>
           <p className="text-xs text-bsr-text-secondary">جودة الفرصة</p>
@@ -123,6 +136,30 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
           </p>
         </div>
       </div>
+
+      {/* Support / resistance / liquidity */}
+      {decision.nearest_support != null || decision.nearest_resistance != null ? (
+        <div className="grid grid-cols-2 gap-bsr-3 sm:grid-cols-4">
+          <div>
+            <p className="text-xs text-bsr-text-secondary">أقرب دعم</p>
+            <p className="bsr-numeric text-sm font-semibold text-bsr-text-primary">{fmt(decision.nearest_support)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-bsr-text-secondary">أقرب مقاومة</p>
+            <p className="bsr-numeric text-sm font-semibold text-bsr-text-primary">{fmt(decision.nearest_resistance)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-bsr-text-secondary">جودة السيولة</p>
+            <p className="text-sm font-semibold text-bsr-text-primary">{decision.liquidity_quality_ar}</p>
+          </div>
+          {decision.accumulation_assessment_ar ? (
+            <div>
+              <p className="text-xs text-bsr-text-secondary">التجميع/التوزيع</p>
+              <p className="text-[11px] text-bsr-text-secondary">{decision.accumulation_assessment_ar}</p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Reasons */}
       {decision.positive_reasons.length > 0 ? (

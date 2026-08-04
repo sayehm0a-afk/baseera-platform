@@ -142,6 +142,50 @@ def test_decision_v2_with_both_legs_available(client, db_session):
     assert rows[0].decision == body["decision"]
 
 
+_VALID_ENTRY_STATUSES = {
+    "READY_NOW", "NEAR_ENTRY", "WAIT_FOR_PULLBACK", "MISSED_ENTRY",
+    "CONDITIONAL_ON_BREAKOUT", "NOT_SUITABLE",
+}
+_VALID_TRADE_TYPES = {
+    "SCALP", "INTRADAY", "SHORT_SWING_2_5_DAYS", "WEEKLY_SWING", "SWING_TRADE",
+    "MONTHLY_INVESTMENT", "MEDIUM_TERM_INVESTMENT", "LONG_TERM_INVESTMENT",
+}
+
+
+def test_decision_v2_response_includes_the_phase_2a_canonical_fields(client, db_session):
+    """Phase 2A: the response must carry the full canonical stock-
+    intelligence output (trade type, price plan, support/resistance,
+    liquidity/accumulation, confidence breakdown, Arabic reasoning),
+    not just the Phase 1 subset."""
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert isinstance(body["is_real_data"], bool)
+    assert body["entry_status"] in _VALID_ENTRY_STATUSES
+    assert body["entry_status_label_ar"]
+    assert body["risk_level"] in {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
+    assert body["risk_level_label_ar"]
+    assert body["entry_quality"] in {"POOR", "FAIR", "GOOD", "EXCELLENT"}
+    assert body["entry_quality_label_ar"]
+    if body["trade_type"] is not None:
+        assert body["trade_type"] in _VALID_TRADE_TYPES
+        assert body["trade_type"] not in ("SCALP", "INTRADAY")
+    assert isinstance(body["technical_evidence"], dict)
+    assert len(body["technical_evidence"]) > 0
+    assert body["decision_summary_ar"]
+    assert body["why_now_ar"]
+    assert body["why_not_stronger_ar"]
+    assert isinstance(body["entry_confirmation_conditions_ar"], list)
+    assert isinstance(body["watch_next_session_ar"], list)
+    assert body["accumulation_score"] == body["sub_scores"]["volume_score"]
+    assert body["technical_confidence"] == body["sub_scores"]["trend_score"]
+
+
 def test_decision_v2_never_shows_strong_buy_without_gates_passing(client, db_session):
     """A clearly-uptrending, fully-available-data symbol may legitimately
     reach STRONG_BUY_CANDIDATE/BUY_CANDIDATE -- but only via the real gate
