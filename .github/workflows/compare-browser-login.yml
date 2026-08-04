@@ -1,0 +1,67 @@
+name: Compare Browser Login WebKit vs Chromium (temporary, evidence-only)
+
+# Read-only. Reproduces the login flow with Playwright's WebKit engine
+# (the same engine family as Safari/iOS Safari -- Playwright does not
+# ship an actual iOS Safari binary, so this is the closest available
+# reproduction, run with an iPhone device emulation profile: viewport,
+# user agent, touch) side by side with Chromium, against the real
+# production frontend/backend, to check for a browser-specific
+# incompatibility (WebKit's Intelligent Tracking Prevention is
+# historically stricter about cross-site cookies than Chromium).
+# Captures full request/response and cookie-state evidence for both.
+# No application code is touched.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+  RAILWAY_FRONTEND_SERVICE: frontend
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve frontend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_FRONTEND_SERVICE" --json > /tmp/frontend_domains.json
+          FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Frontend: $FRONTEND_URL"
+
+      - name: Install frontend dependencies + Chromium + WebKit
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium webkit
+
+      - name: Run login on both engines and compare
+        working-directory: frontend
+        env:
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+        run: node scripts/compare_browsers_login.js
+
+      - name: Upload screenshots + logs as evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-comparison-evidence
+          path: |
+            frontend/browser-comparison-evidence/*.png
+            frontend/browser-comparison-evidence/*.log
+          retention-days: 7
