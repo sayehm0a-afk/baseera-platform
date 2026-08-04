@@ -39,12 +39,26 @@ function readCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-/** Double-submit CSRF header (src/api/middleware/csrf.py): the
- * non-httpOnly `csrf_token` cookie, echoed back verbatim. Reading it on
- * every request (not just mutating ones) is harmless -- the backend
- * middleware only ever checks it on non-GET /api/v1/* calls. */
+// The API runs on a different origin than this app (see API_BASE_URL) --
+// document.cookie can only ever see cookies belonging to the current
+// page's own origin, so it never sees the (non-httpOnly) csrf_token
+// cookie the backend sets on itself. The backend echoes that same
+// value back as an X-CSRF-Token *response* header on /login, /refresh,
+// and /me (src/api/routes/auth.py) specifically so this in-memory copy
+// can be captured instead; readCookie("csrf_token") is kept as a
+// fallback purely for same-origin setups (e.g. NEXT_PUBLIC_API_BASE_URL
+// pointed at the same host during local development), where it still
+// works and this never gets populated in the first place.
+let csrfTokenFromHeader: string | null = null;
+
+/** Double-submit CSRF header (src/api/middleware/csrf.py): prefers the
+ * value captured from a prior response's X-CSRF-Token header (see
+ * csrfTokenFromHeader above), falling back to the cookie for same-origin
+ * setups. Reading it on every request (not just mutating ones) is
+ * harmless -- the backend middleware only ever checks it on non-GET
+ * /api/v1/* calls. */
 function csrfHeaders(): Record<string, string> {
-  const token = readCookie("csrf_token");
+  const token = csrfTokenFromHeader ?? readCookie("csrf_token");
   return token ? { "X-CSRF-Token": token } : {};
 }
 
@@ -92,6 +106,11 @@ export async function apiFetch<T>(
     },
     cache: "no-store",
   });
+
+  const csrfHeader = response.headers.get("x-csrf-token");
+  if (csrfHeader) {
+    csrfTokenFromHeader = csrfHeader;
+  }
 
   if (
     response.status === 401 &&

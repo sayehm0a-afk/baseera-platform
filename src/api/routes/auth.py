@@ -54,17 +54,48 @@ _ACCESS_COOKIE = "access_token"
 _REFRESH_COOKIE = "refresh_token"
 _CSRF_COOKIE = "csrf_token"
 _AUTH_COOKIE_PATH = "/api/v1/auth"
+# Same value the CSRF cookie carries -- src/api/middleware/csrf.py reads
+# this exact header name back off the request. Echoed as a response
+# header too (see _set_session_cookies) since the frontend runs on a
+# different origin than this API and can't read the cookie directly.
+_CSRF_HEADER_NAME = "X-CSRF-Token"
 
 
-def _set_session_cookies(response: Response, pair: SessionPair) -> None:
+def _cookie_samesite(secure: bool) -> str:
+    """The frontend and backend are deployed on different Railway-
+    generated subdomains under up.railway.app -- itself registered in
+    the real Public Suffix List (verified live against
+    https://publicsuffix.org/list/public_suffix_list.dat), so each
+    *.up.railway.app subdomain is its own "site" per the browser's
+    SameSite algorithm, not a shared parent domain. A SameSite=Lax
+    cookie is therefore never attached to the cross-site fetch() calls
+    the frontend's own JS makes back to this API (only same-site
+    requests and top-level cross-site navigations get it) -- the
+    session looked like it worked (login itself returns 200 and sets
+    the cookies) but every subsequent authenticated request silently
+    lost them, bouncing the user straight back to /login.
+
+    SameSite=None is required to fix this, but every modern browser
+    rejects a SameSite=None cookie outright unless Secure is also set
+    -- so this can only ever apply when `secure` is true (production,
+    HTTPS). Locally (http://localhost, non-secure) frontend and
+    backend are the same site anyway, so SameSite=Lax is kept there;
+    SameSite=None without Secure would just be silently dropped by the
+    browser and break local development for no benefit.
+    """
+    return "none" if secure else "lax"
+
+
+def _set_session_cookies(response: Response, pair: SessionPair) -> str:
     secure = settings.is_production
+    samesite = _cookie_samesite(secure)
     response.set_cookie(
         _ACCESS_COOKIE,
         pair.access_token,
         max_age=settings.access_token_expire_minutes * 60,
         httponly=True,
         secure=secure,
-        samesite="lax",
+        samesite=samesite,
         path="/",
     )
     response.set_cookie(
@@ -73,24 +104,49 @@ def _set_session_cookies(response: Response, pair: SessionPair) -> None:
         max_age=settings.refresh_token_expire_days * 24 * 60 * 60,
         httponly=True,
         secure=secure,
-        samesite="lax",
+        samesite=samesite,
         path=_AUTH_COOKIE_PATH,
     )
+    csrf_token = generate_token()
     response.set_cookie(
         _CSRF_COOKIE,
-        generate_token(),
+        csrf_token,
         max_age=settings.refresh_token_expire_days * 24 * 60 * 60,
         httponly=False,
         secure=secure,
-        samesite="lax",
+        samesite=samesite,
         path="/",
     )
+    # The csrf_token cookie above is set on this API's own host, a
+    # different origin than the frontend page (same cross-site
+    # topology as the auth cookies -- see _cookie_samesite). Unlike
+    # the httpOnly cookies, which the browser still attaches to
+    # requests automatically regardless of which page triggered them,
+    # this one has to be read by the frontend's own JS
+    # (`document.cookie`) to echo it back as the X-CSRF-Token header
+    # the CSRF double-submit check requires -- and `document.cookie`
+    # only ever exposes cookies belonging to the *current* page's own
+    # origin, never another origin's, no matter what SameSite says.
+    # Echoing the same value back as a response header (exposed
+    # cross-origin via CORSMiddleware's expose_headers, see main.py)
+    # lets the frontend capture it directly from the fetch() response
+    # instead, without weakening the check itself: the server-side
+    # comparison (still hmac.compare_digest(cookie, header) in
+    # src/api/middleware/csrf.py) is unchanged, and a forged cross-site
+    # request still has no way to obtain this value -- it can't read
+    # the frontend's in-memory copy, and a fetch of its own to this
+    # API from an unapproved origin is blocked by CORS before any
+    # response header would reach it.
+    response.headers[_CSRF_HEADER_NAME] = csrf_token
+    return csrf_token
 
 
 def _clear_session_cookies(response: Response) -> None:
-    response.delete_cookie(_ACCESS_COOKIE, path="/")
-    response.delete_cookie(_REFRESH_COOKIE, path=_AUTH_COOKIE_PATH)
-    response.delete_cookie(_CSRF_COOKIE, path="/")
+    secure = settings.is_production
+    samesite = _cookie_samesite(secure)
+    response.delete_cookie(_ACCESS_COOKIE, path="/", secure=secure, httponly=True, samesite=samesite)
+    response.delete_cookie(_REFRESH_COOKIE, path=_AUTH_COOKIE_PATH, secure=secure, httponly=True, samesite=samesite)
+    response.delete_cookie(_CSRF_COOKIE, path="/", secure=secure, httponly=False, samesite=samesite)
 
 
 def _client_ip(request: Request) -> "str | None":
@@ -197,7 +253,16 @@ def reset_password(request: Request, body: ResetPasswordRequest, session: Sessio
 
 
 @router.get("/me", response_model=UserOut)
-def get_me(current_user: User = Depends(get_current_user)) -> UserOut:
+def get_me(request: Request, response: Response, current_user: User = Depends(get_current_user)) -> UserOut:
+    # Re-surfaces the existing csrf_token cookie's value as a response
+    # header (never rotates it) so the frontend -- on a different
+    # origin, unable to read the cookie via document.cookie -- can
+    # still recover it after e.g. a page reload, without waiting for
+    # the next /login or /refresh call. See _set_session_cookies'
+    # docstring for why this hand-off exists at all.
+    existing_csrf_token = request.cookies.get(_CSRF_COOKIE)
+    if existing_csrf_token:
+        response.headers[_CSRF_HEADER_NAME] = existing_csrf_token
     return UserOut.model_validate(current_user)
 
 
