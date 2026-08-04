@@ -78,6 +78,33 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # Every unit/integration test still runs against SQLite (see each
+      # test's own fixture) -- this service exists for one specific,
+      # narrower purpose: the "Apply migrations to a real Postgres"
+      # step below. Found in the pre-live-scan production audit: the
+      # full migration chain, and known SQLite-vs-Postgres divergences
+      # (numpy.float64 literal rendering, Numeric/JSON column
+      # behavior -- see MarketIntelligenceRepository's own `_f()`
+      # helper) were previously never verified against a real Postgres
+      # engine anywhere in CI, only asserted safe by migration-file
+      # inspection and a SQLite-backed replay test. This does not make
+      # CI a full Postgres-backed test run (a larger, separate
+      # initiative); it closes the specific gap that most directly
+      # risked the live scan: a migration that applies cleanly to
+      # SQLite but fails or behaves differently against real Postgres.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: basirah_ci_migration_check
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -145,6 +172,18 @@ jobs:
 
       - name: Run test suite
         run: python -m pytest tests/ -q -rA
+
+      - name: Apply migrations to a real Postgres (real engine, not SQLite)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/basirah_ci_migration_check
+        run: python -m alembic upgrade head
+
+      - name: Downgrade and re-upgrade the full migration chain on Postgres
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/basirah_ci_migration_check
+        run: |
+          python -m alembic downgrade base
+          python -m alembic upgrade head
 
       - name: Lint (flake8, regression gate against documented baseline)
         run: |

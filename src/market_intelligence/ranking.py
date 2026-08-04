@@ -24,6 +24,7 @@ from typing import Callable, Dict, List, Optional
 from src.analysis.recommendation.types import Recommendation
 from src.market_intelligence.config import get_ranking_top_n
 from src.market_intelligence.ordinals import RISK_RANK, recommendation_rank_of_value
+from src.market_intelligence.publication_gate import is_publishable
 from src.market_intelligence.types import (
     ChangeDetectionResult,
     ChangeType,
@@ -59,20 +60,37 @@ class _FilterSortRule:
 
 
 def _successful(outcome: SymbolScanOutcome) -> bool:
-    return outcome.success and outcome.report is not None
+    """A symbol can be `success=True` with only a fundamental leg (no
+    technical data) -- see scanner.py's `_scan_one` -- which can leave
+    `latest_price` at 0/None. Every ranking category is price- or
+    score-derived, so such an outcome must never appear in any of
+    them, not just the publication-gated "opportunity" ones (found via
+    real full-universe evidence: symbol 2210 with latest_price=0.0 and
+    no technical leg reached MOST_BEARISH unfiltered). Same threshold
+    `publication_gate._price_validity_gate` already applies."""
+    return (
+        outcome.success
+        and outcome.report is not None
+        and outcome.latest_price is not None
+        and outcome.latest_price > 0
+    )
 
 
 _FILTER_SORT_RULES: Dict[RankingCategory, _FilterSortRule] = {
     RankingCategory.TOP_BUY: _FilterSortRule(
-        lambda o: _successful(o) and o.recommendation in _BUY_LIKE,
+        lambda o: _successful(o) and o.recommendation in _BUY_LIKE and is_publishable(o),
         lambda o: o.final_score, True,
     ),
     RankingCategory.TOP_STRONG_BUY: _FilterSortRule(
-        lambda o: _successful(o) and o.recommendation is Recommendation.STRONG_BUY,
+        lambda o: _successful(o) and o.recommendation is Recommendation.STRONG_BUY and is_publishable(o),
         lambda o: o.confidence, True,
     ),
     RankingCategory.TOP_LONG_TERM_INVESTMENT: _FilterSortRule(
-        lambda o: _successful(o) and o.recommendation in _BUY_LIKE and o.time_horizon is not None and o.time_horizon.value == "LONG_TERM",
+        lambda o: (
+            _successful(o) and o.recommendation in _BUY_LIKE
+            and o.time_horizon is not None and o.time_horizon.value == "LONG_TERM"
+            and is_publishable(o)
+        ),
         lambda o: o.confidence, True,
     ),
     RankingCategory.TOP_SWING_TRADE: _FilterSortRule(
@@ -80,6 +98,7 @@ _FILTER_SORT_RULES: Dict[RankingCategory, _FilterSortRule] = {
             _successful(o) and o.recommendation in _BUY_LIKE
             and o.time_horizon is not None and o.time_horizon.value == "SHORT_TERM"
             and o.expected_return_pct is not None
+            and is_publishable(o)
         ),
         lambda o: o.expected_return_pct, True,
     ),
@@ -209,14 +228,15 @@ class RankingEngine:
         candidates = set()
         for symbol in change_result.new_symbols:
             outcome = by_symbol.get(symbol)
-            if outcome is not None and _successful(outcome) and outcome.recommendation in _BUY_LIKE:
+            if outcome is not None and _successful(outcome) and outcome.recommendation in _BUY_LIKE and is_publishable(outcome):
                 candidates.add(symbol)
         for event in change_result.events:
             if event.change_type is not ChangeType.RECOMMENDATION_CHANGE:
                 continue
             new_is_buy = event.new_value in {r.value for r in _BUY_LIKE}
             previous_was_buy = event.previous_value in {r.value for r in _BUY_LIKE}
-            if new_is_buy and not previous_was_buy:
+            candidate_outcome = by_symbol.get(event.symbol)
+            if new_is_buy and not previous_was_buy and candidate_outcome is not None and is_publishable(candidate_outcome):
                 candidates.add(event.symbol)
 
         matching = [by_symbol[s] for s in candidates if s in by_symbol]

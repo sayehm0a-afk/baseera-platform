@@ -26,14 +26,26 @@ name: SAHMK Live Pipeline Validation (L2)
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "sample (5 fixed symbols, ~10 min) or full_universe (every SAHMK-discovered symbol, real API-throttled, up to ~3h)"
+        required: false
+        default: "sample"
+        type: choice
+        options:
+          - sample
+          - full_universe
       symbols:
-        description: "Comma-separated Tadawul symbols to validate"
+        description: "sample mode only: comma-separated Tadawul symbols to validate"
         required: false
         default: "2222,2010,1120,7010,1180"
       soak_seconds:
-        description: "How long to soak-test Live Market Mode (seconds)"
+        description: "sample mode only: how long to soak-test Live Market Mode (seconds)"
         required: false
         default: "45"
+      backfill_days:
+        description: "full_universe mode only: days of historical OHLCV to backfill per symbol"
+        required: false
+        default: "90"
 
 permissions:
   contents: read
@@ -42,7 +54,11 @@ jobs:
   validate:
     name: Live pipeline validation (SAHMK -> DB -> AI -> recommendations)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # full_universe mode is real-API-throttled (SahmkRateLimiter, ~20
+    # req/min, ~4 req/symbol across a potentially ~350-symbol universe)
+    # so this needs real headroom -- sample mode still finishes in
+    # minutes, well under this ceiling.
+    timeout-minutes: 180
 
     services:
       postgres:
@@ -97,20 +113,69 @@ jobs:
       - name: Run database migrations against the ephemeral Postgres
         run: python -m alembic upgrade head
 
-      - name: Run live pipeline validation (real, unmocked)
+      - name: Targeted tests -- market intelligence pure logic (local, no network)
+        if: github.event.inputs.mode == 'full_universe'
+        run: |
+          python -m pytest tests/unit/scripts/test_sahmk_market_intelligence.py -v
+
+      - name: Run live pipeline validation (real, unmocked, sample mode)
         id: pipeline
+        if: github.event.inputs.mode != 'full_universe'
         env:
           SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
           MARKET_DATA_PROVIDER: sahmk
+          STRICT_REAL_DATA: "true"
+          ALLOW_SYNTHETIC_DATA: "false"
         run: |
           python scripts/verify_sahmk_live_pipeline.py
+
+      - name: Run full-universe market intelligence scan (real, unmocked, full_universe mode)
+        id: market_intelligence
+        if: github.event.inputs.mode == 'full_universe'
+        env:
+          SAHMK_API_KEY: ${{ secrets.SAHMK_API_KEY }}
+          MARKET_DATA_PROVIDER: sahmk
+          STRICT_REAL_DATA: "true"
+          ALLOW_SYNTHETIC_DATA: "false"
+          INGESTION_OHLCV_BACKFILL_DAYS: ${{ github.event.inputs.backfill_days }}
+          MARKET_INTELLIGENCE_OUTPUT_DIR: market_intelligence_output
+        run: |
+          set -o pipefail
+          python scripts/verify_sahmk_market_intelligence.py | tee /tmp/mi_output.txt
+          STATUS_LINE=$(grep '^FINAL_STATUS=' /tmp/mi_output.txt | tail -1)
+          echo "status=${STATUS_LINE#FINAL_STATUS=}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload full per-company market intelligence data as a build artifact
+        if: always() && github.event.inputs.mode == 'full_universe'
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-intelligence-data
+          # Uploads the whole output directory, not just the single JSON
+          # blob -- 2026-08-02 full-market validation mandate (Task 6)
+          # added real CSV/JSON/Markdown result artifacts
+          # (full_market_results.csv/.json, top_opportunities.json,
+          # failed_symbols.csv, excluded_instruments.csv,
+          # scan_summary.json, FULL_SAUDI_MARKET_VALIDATION_REPORT.md)
+          # written by scripts/verify_sahmk_market_intelligence.py's
+          # _write_result_artifacts(), which must all reach this
+          # artifact for downloadable per-file evidence to exist.
+          path: market_intelligence_output/
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Final summary
         if: always()
         run: |
           echo "======================================================"
-          echo " SAHMK LIVE PIPELINE VALIDATION -- COMPLETE"
+          echo " SAHMK LIVE PIPELINE VALIDATION -- COMPLETE (mode: ${{ github.event.inputs.mode }})"
           echo "======================================================"
           echo "See the 'Summary' tab on this workflow run for the full,"
-          echo "sanitized breakdown (recommendations, integrity checks,"
-          echo "Live Market Mode soak results)."
+          echo "sanitized breakdown. full_universe mode: see the"
+          echo "'market-intelligence-data' artifact for the full per-company dump."
+
+      - name: Fail the job only on a genuine full_universe failure
+        if: github.event.inputs.mode == 'full_universe' && (steps.market_intelligence.outputs.status == 'FAILED' || steps.market_intelligence.outputs.status == 'ABORTED' || steps.market_intelligence.outputs.status == '')
+        run: |
+          echo "::error::Market intelligence scan did not complete successfully" \
+               "(got: '${{ steps.market_intelligence.outputs.status }}')."
+          exit 1

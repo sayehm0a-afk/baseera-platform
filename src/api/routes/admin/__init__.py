@@ -8,11 +8,13 @@ one capability area per the Phase 10 Admin Dashboard spec, per file.
 from fastapi import APIRouter
 
 from src.api.routes.admin import (
+    ai_evolution,
     analytics,
     announcements,
     audit_log,
     billing,
     feature_flags,
+    market_intelligence,
     sessions,
     subscriptions,
     system,
@@ -31,3 +33,5 @@ router.include_router(usage.router)
 router.include_router(analytics.router)
 router.include_router(system.router)
 router.include_router(billing.router)
+router.include_router(ai_evolution.router)
+router.include_router(market_intelligence.router)

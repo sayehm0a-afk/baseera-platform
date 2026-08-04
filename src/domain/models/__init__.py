@@ -14,8 +14,20 @@ from src.domain.models.dividend import Dividend
 from src.domain.models.ingestion_run_log import IngestionRunLog, IngestionJobStatus
 from src.domain.models.backtest_run import BacktestRun, BacktestRunStatus, DataProvenanceMode
 from src.domain.models.recommendation_snapshot import RecommendationSnapshot, RecommendationLabel
+from src.domain.models.recommendation_outcome import RecommendationOutcome, RecommendationOutcomeStatus
+from src.domain.models.confidence_calibration_model import (
+    ConfidenceCalibrationModel,
+    ConfidenceCalibrationStatus,
+    ConfidenceCalibrationMethod,
+)
+from src.domain.models.discovered_pattern import DiscoveredPattern
+from src.domain.models.reflection_report import ReflectionReport
+from src.domain.models.agent_opinion import AgentOpinion, AgentStance
+from src.domain.models.debate_session import DebateSession
+from src.domain.models.daily_intelligence_snapshot import DailyIntelligenceSnapshot
 from src.domain.models.calibration_config import CalibrationConfig, CalibrationStatus
 from src.domain.models.market_scan_run import MarketScanRun, MarketScanStatus
+from src.domain.models.market_scan_progress import MarketScanProgress
 from src.domain.models.symbol_intelligence_record import SymbolIntelligenceRecord
 from src.domain.models.sector_intelligence_summary import SectorIntelligenceSummary
 from src.domain.models.market_alert import MarketAlert, AlertType, AlertSeverity
@@ -62,9 +74,21 @@ __all__ = [
     "DataProvenanceMode",
     "RecommendationSnapshot",
     "RecommendationLabel",
+    "RecommendationOutcome",
+    "RecommendationOutcomeStatus",
+    "ConfidenceCalibrationModel",
+    "ConfidenceCalibrationStatus",
+    "ConfidenceCalibrationMethod",
+    "DiscoveredPattern",
+    "ReflectionReport",
+    "AgentOpinion",
+    "AgentStance",
+    "DebateSession",
+    "DailyIntelligenceSnapshot",
     "CalibrationConfig",
     "CalibrationStatus",
     "MarketScanRun",
+    "MarketScanProgress",
     "MarketScanStatus",
     "SymbolIntelligenceRecord",
     "SectorIntelligenceSummary",

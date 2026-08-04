@@ -28,6 +28,7 @@ from src.market_intelligence.config import (
     get_oversold_rsi_threshold,
     get_watchlist_max_size,
 )
+from src.market_intelligence.publication_gate import is_publishable
 from src.market_intelligence.types import SymbolScanOutcome, WatchlistCategory, WatchlistEntry, WatchlistResult
 
 _BUY_LIKE = {Recommendation.BUY, Recommendation.STRONG_BUY}
@@ -37,7 +38,16 @@ _HIGH_RISK = {RiskLevel.HIGH, RiskLevel.VERY_HIGH}
 
 
 def _successful(outcome: SymbolScanOutcome) -> bool:
-    return outcome.success and outcome.report is not None
+    """See ranking.py's `_successful` -- same real-evidence defect
+    (symbol 2210, latest_price=0.0, no technical leg) and same fix:
+    every watchlist is price- or indicator-derived, so a symbol with
+    no valid price must never appear in any of them."""
+    return (
+        outcome.success
+        and outcome.report is not None
+        and outcome.latest_price is not None
+        and outcome.latest_price > 0
+    )
 
 
 @dataclass(frozen=True)
@@ -63,11 +73,15 @@ def _investment_predicate(o: SymbolScanOutcome) -> bool:
         and o.recommendation in _BUY_LIKE
         and o.time_horizon is TimeHorizon.LONG_TERM
         and o.risk_level in _LOW_MEDIUM_RISK
+        and is_publishable(o)
     )
 
 
 def _swing_predicate(o: SymbolScanOutcome) -> bool:
-    return _successful(o) and o.recommendation in _BUY_LIKE and o.time_horizon is TimeHorizon.SHORT_TERM
+    return (
+        _successful(o) and o.recommendation in _BUY_LIKE and o.time_horizon is TimeHorizon.SHORT_TERM
+        and is_publishable(o)
+    )
 
 
 def _high_risk_predicate(o: SymbolScanOutcome) -> bool:
@@ -84,6 +98,7 @@ def _recovery_predicate(o: SymbolScanOutcome) -> bool:
         and o.recommendation in _BUY_LIKE
         and o.rsi is not None
         and o.rsi < get_oversold_rsi_threshold()
+        and is_publishable(o)
     )
 
 

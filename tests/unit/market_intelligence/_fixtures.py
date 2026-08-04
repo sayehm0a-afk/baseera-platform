@@ -11,12 +11,13 @@ from typing import List, Optional
 from src.analysis.analyst.types import AnalystReport, Explanation
 from src.analysis.decision.types import (
     DecisionFactorBreakdown,
+    EntryQuality,
     InvestmentDecision,
     PositionSize,
     RiskLevel,
     TimeHorizon,
 )
-from src.analysis.recommendation.types import Recommendation
+from src.analysis.recommendation.types import AnalysisContext, Recommendation
 from src.market_intelligence.types import SymbolScanOutcome
 
 
@@ -36,6 +37,8 @@ def make_decision(
     risk_level=RiskLevel.MEDIUM,
     position_size=PositionSize.STANDARD,
     breakdown: Optional[List[DecisionFactorBreakdown]] = None,
+    entry_quality: EntryQuality = EntryQuality.FAIR,
+    risk_reward_ratio: Optional[float] = None,
 ) -> InvestmentDecision:
     return InvestmentDecision(
         symbol=symbol, recommendation=recommendation, confidence=confidence, final_score=final_score,
@@ -44,6 +47,7 @@ def make_decision(
         reasons=[f"{recommendation.value} on {symbol}."],
         breakdown=breakdown if breakdown is not None else [make_breakdown()],
         signals=[], generated_at=datetime.now(timezone.utc),
+        entry_quality=entry_quality, risk_reward_ratio=risk_reward_ratio,
     )
 
 
@@ -72,6 +76,9 @@ def make_outcome(
     technical_snapshot: Optional[dict] = None,
     fundamental_snapshot: Optional[dict] = None,
     decision: Optional[InvestmentDecision] = None,
+    context: Optional[AnalysisContext] = None,
+    is_synthetic: Optional[bool] = None,
+    data_source: Optional[str] = None,
 ) -> SymbolScanOutcome:
     if success and report is None:
         report = make_report(symbol=symbol, decision=decision)
@@ -79,4 +86,5 @@ def make_outcome(
         symbol=symbol, sector=sector, success=success, report=report,
         skipped_reason=skipped_reason, error=error, latest_price=latest_price,
         technical_snapshot=technical_snapshot, fundamental_snapshot=fundamental_snapshot,
+        context=context, is_synthetic=is_synthetic, data_source=data_source,
     )

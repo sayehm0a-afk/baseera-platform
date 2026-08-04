@@ -11,19 +11,23 @@ from src.analysis.fundamental.types import FundamentalFacts
 
 
 def current_ratio(facts: FundamentalFacts) -> Optional[float]:
-    if facts.current_liabilities == 0:
+    if facts.current_assets is None or facts.current_liabilities is None or facts.current_liabilities == 0:
         return None
     return facts.current_assets / facts.current_liabilities
 
 
 def quick_ratio(facts: FundamentalFacts) -> Optional[float]:
-    if facts.current_liabilities == 0:
+    if facts.current_assets is None or facts.current_liabilities is None or facts.current_liabilities == 0:
         return None
     inventory = facts.inventory if facts.inventory is not None else 0.0
     return (facts.current_assets - inventory) / facts.current_liabilities
 
 
 def cash_ratio(facts: FundamentalFacts) -> Optional[float]:
-    if facts.current_liabilities == 0 or facts.cash_and_equivalents is None:
+    if (
+        facts.current_liabilities is None
+        or facts.current_liabilities == 0
+        or facts.cash_and_equivalents is None
+    ):
         return None
     return facts.cash_and_equivalents / facts.current_liabilities

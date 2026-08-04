@@ -188,6 +188,24 @@ async def _run_scan(symbols: List[str], market_provider, session_factory) -> int
     return run_id
 
 
+def _format_recommendation_line(row: RecommendationSnapshot) -> List[str]:
+    company_name = row.stock.name_en if row.stock is not None else None
+    lines = [
+        f"  id={row.id} {row.symbol} ({company_name}): {row.recommendation.value} "
+        f"confidence={row.confidence_score} total_score={row.total_score} "
+        f"technical_score={row.technical_score} fundamental_score={row.fundamental_score} "
+        f"target={row.target_price} stop={row.stop_loss} "
+        f"expected_return_pct={row.expected_return_pct} "
+        f"risk_level={row.risk_level} time_horizon={row.time_horizon} "
+        f"position_size={row.position_size} engine_version={row.engine_version} "
+        f"source={row.source} market_price_at_evaluation={row.market_price_at_evaluation} "
+        f"evaluated_at={row.evaluated_at.isoformat()}"
+    ]
+    if row.reasons:
+        lines.append(f"    reasons: {list(row.reasons)[:3]}")
+    return lines
+
+
 def _print_recommendations(session_factory) -> List[RecommendationSnapshot]:
     session = session_factory()
     try:
@@ -199,15 +217,8 @@ def _print_recommendations(session_factory) -> List[RecommendationSnapshot]:
         )
         _section("STEP 6: Generated recommendations (real, from live data)")
         for row in rows:
-            _print(
-                f"  {row.symbol}: {row.recommendation.value} "
-                f"confidence={row.confidence_score} total_score={row.total_score} "
-                f"target={row.target_price} stop={row.stop_loss} "
-                f"expected_return_pct={row.expected_return_pct} "
-                f"risk_level={row.risk_level} evaluated_at={row.evaluated_at.isoformat()}"
-            )
-            if row.reasons:
-                _print(f"    reasons: {list(row.reasons)[:2]}")
+            for line in _format_recommendation_line(row):
+                _print(line)
         if not rows:
             _print("  (none -- see scan result above for why)")
         return rows
@@ -291,6 +302,7 @@ async def _run_live_market_mode_soak(session_factory, market_provider_getter, so
         _print(f"seconds_until_close(): {seconds_until_close(now):.0f}")
 
     baseline_snapshot_count = _count_live_snapshots(session_factory)
+    baseline_max_id = _max_live_snapshot_id(session_factory)
     baseline_task_count = len(asyncio.all_tasks())
 
     ingestion_scheduler = IngestionScheduler(session_factory=session_factory, market_provider_getter=market_provider_getter)
@@ -315,6 +327,9 @@ async def _run_live_market_mode_soak(session_factory, market_provider_getter, so
     after_stop_task_count = len(asyncio.all_tasks())
     post_snapshot_count = _count_live_snapshots(session_factory)
 
+    auto_generated_rows = _print_new_recommendations_since(session_factory, baseline_max_id)
+    post_soak_integrity = _verify_database_integrity(session_factory, [])
+
     result = {
         "market_open_at_start": market_open_at_start,
         "observed_open_after_ticks": observed_open,
@@ -324,6 +339,8 @@ async def _run_live_market_mode_soak(session_factory, market_provider_getter, so
         "baseline_snapshot_count": baseline_snapshot_count,
         "post_soak_snapshot_count": post_snapshot_count,
         "new_snapshots_from_auto_scan": post_snapshot_count - baseline_snapshot_count,
+        "auto_generated_row_count": len(auto_generated_rows),
+        "post_soak_integrity_passed": post_soak_integrity["passed"],
         "baseline_task_count": baseline_task_count,
         "after_stop_task_count": after_stop_task_count,
         "no_leaked_tasks": after_stop_task_count <= baseline_task_count,
@@ -339,6 +356,37 @@ def _count_live_snapshots(session_factory) -> int:
         return session.query(func.count(RecommendationSnapshot.id)).filter(
             RecommendationSnapshot.source == "live_scan"
         ).scalar()
+    finally:
+        session.close()
+
+
+def _max_live_snapshot_id(session_factory) -> int:
+    session = session_factory()
+    try:
+        max_id = session.query(func.max(RecommendationSnapshot.id)).filter(
+            RecommendationSnapshot.source == "live_scan"
+        ).scalar()
+        return max_id or 0
+    finally:
+        session.close()
+
+
+def _print_new_recommendations_since(session_factory, since_id: int) -> List[RecommendationSnapshot]:
+    session = session_factory()
+    try:
+        rows = (
+            session.query(RecommendationSnapshot)
+            .filter(RecommendationSnapshot.source == "live_scan", RecommendationSnapshot.id > since_id)
+            .order_by(RecommendationSnapshot.id)
+            .all()
+        )
+        _section("STEP 9b: Recommendations generated automatically by Live Market Mode")
+        for row in rows:
+            for line in _format_recommendation_line(row):
+                _print(line)
+        if not rows:
+            _print("  (none -- the auto scheduler did not produce new rows within the soak window)")
+        return rows
     finally:
         session.close()
 
@@ -386,11 +434,15 @@ async def main() -> int:
         )
 
         _section("FINAL STATUS")
-        core_ok = len(recommendations) > 0 and integrity["passed"]
+        total_recommendations = soak_result["post_soak_snapshot_count"]
+        core_ok = len(recommendations) > 0 and integrity["passed"] and soak_result["post_soak_integrity_passed"]
         _print(f"Symbols requested: {symbols}")
         _print(f"Symbols registered: {registered_symbols}")
-        _print(f"Recommendations generated: {len(recommendations)}")
-        _print(f"Database integrity: {'PASSED' if integrity['passed'] else 'FAILED'}")
+        _print(f"Recommendations generated (manual scan): {len(recommendations)}")
+        _print(f"Recommendations generated (auto scan during soak): {soak_result['auto_generated_row_count']}")
+        _print(f"Total recommendations this run: {total_recommendations}")
+        _print(f"Database integrity (post-manual-scan): {'PASSED' if integrity['passed'] else 'FAILED'}")
+        _print(f"Database integrity (post-soak, full set): {'PASSED' if soak_result['post_soak_integrity_passed'] else 'FAILED'}")
         _print(f"Live Market Mode soak: market_open_at_start={soak_result['market_open_at_start']}")
         status = "PIPELINE_VERIFIED" if core_ok else "PIPELINE_FAILED"
         _print(f"FINAL_STATUS={status}")
@@ -400,8 +452,12 @@ async def main() -> int:
             f"fundamental={get_last_selected_fundamental_provider_kind()})",
             f"- Symbols requested: `{symbols}`",
             f"- Symbols registered: `{registered_symbols}`",
-            f"- Recommendations generated: **{len(recommendations)}**",
-            f"- Database integrity: **{'PASSED' if integrity['passed'] else 'FAILED'}** ({integrity})",
+            f"- Recommendations generated (manual scan): **{len(recommendations)}**",
+            f"- Recommendations generated (auto scan during soak): **{soak_result['auto_generated_row_count']}**",
+            f"- Total recommendations this run: **{total_recommendations}**",
+            f"- Database integrity (post-manual-scan): **{'PASSED' if integrity['passed'] else 'FAILED'}** ({integrity})",
+            f"- Database integrity (post-soak, full set): "
+            f"**{'PASSED' if soak_result['post_soak_integrity_passed'] else 'FAILED'}**",
             f"- Live Market Mode soak: market_open_at_start=**{soak_result['market_open_at_start']}**, "
             f"observed_open_after_ticks={soak_result['observed_open_after_ticks']}, "
             f"new_snapshots_from_auto_scan={soak_result['new_snapshots_from_auto_scan']}, "

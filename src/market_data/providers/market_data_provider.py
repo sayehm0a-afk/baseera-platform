@@ -42,6 +42,14 @@ class ProviderHealth(Enum):
 class IMarketDataProvider(ABC):
     """Interface for market data providers."""
 
+    # True unless a concrete provider overrides it to False -- the safe
+    # default is "assume synthetic" so an unrecognized provider
+    # implementation is never mistaken for a real one (see
+    # src.market_intelligence.publication_gate's real-data-source gate,
+    # which reads this off the provider a symbol was actually scanned
+    # with).
+    is_synthetic: bool = True
+
     @abstractmethod
     async def authenticate(self) -> bool:
         """Authenticate with the provider."""

@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 from src.analysis.analyst.types import AnalystReport
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.analysis.decision.types import PositionSize, RiskLevel, TimeHorizon
-from src.analysis.recommendation.types import Recommendation
+from src.analysis.recommendation.types import AnalysisContext, Recommendation
 
 
 class RankingCategory(str, Enum):
@@ -97,6 +97,40 @@ class ScheduleInterval(str, Enum):
     WEEKLY = "WEEKLY"
 
 
+class GateStatus(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    NOT_EVALUATED = "NOT_EVALUATED"
+
+
+class PublicationStatus(str, Enum):
+    """Whether one symbol's already-computed recommendation may be
+    surfaced as a real opportunity -- see publication_gate.py. A
+    recommendation existing (`SymbolScanOutcome.report` is not None)
+    is not the same as it being *publishable*; ranking.py's "top
+    opportunity" categories must only ever contain PUBLISHED entries."""
+
+    PUBLISHED = "PUBLISHED"
+    REJECTED = "REJECTED"
+    WATCH_ONLY = "WATCH_ONLY"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+    NOT_EVALUATED = "NOT_EVALUATED"
+
+
+@dataclass(frozen=True)
+class GateResult:
+    name: str
+    status: GateStatus
+    detail: str
+
+
+@dataclass(frozen=True)
+class PublicationEvaluation:
+    status: PublicationStatus
+    gates: List[GateResult]
+    disclosures: List[str]
+
+
 @dataclass(frozen=True)
 class SymbolScanOutcome:
     """One symbol's result from one market scan.
@@ -120,6 +154,25 @@ class SymbolScanOutcome:
     technical_snapshot: Optional[Dict[str, Any]] = None
     fundamental_snapshot: Optional[Dict[str, Any]] = None
     scanned_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Whether the market/fundamental data this outcome was computed
+    # from came from a real SAHMK provider or a synthetic Dev provider
+    # -- set by MarketScanner from the provider it was actually given
+    # (IMarketDataProvider.is_synthetic), never inferred after the
+    # fact. None (the default) means "not tracked for this outcome" --
+    # every SymbolScanOutcome constructed by the real scan pipeline
+    # always sets this explicitly; only pre-existing test fixtures
+    # built before this field existed leave it None, and
+    # publication_gate's real-data-source gate treats None as
+    # NOT_EVALUATED (not a hard block), not as "confirmed real."
+    is_synthetic: Optional[bool] = None
+    data_source: Optional[str] = None
+    # E8 of the AI Evolution Layer: the exact `AnalysisContext`
+    # `build_analysis_context()` computed for this symbol, carried
+    # through so a paper-trading challenger engine can re-score it
+    # under a different calibration config without a second fetch.
+    # Not persisted anywhere -- purely an in-process handoff from
+    # `MarketScanner` to `MarketIntelligenceRepository.save_symbol_records`.
+    context: Optional[AnalysisContext] = None
 
     @property
     def recommendation(self) -> Optional[Recommendation]:
@@ -148,6 +201,10 @@ class SymbolScanOutcome:
     @property
     def risk_level(self) -> Optional[RiskLevel]:
         return self.report.decision.risk_level if self.report else None
+
+    @property
+    def risk_reward_ratio(self) -> Optional[float]:
+        return self.report.decision.risk_reward_ratio if self.report else None
 
     @property
     def time_horizon(self) -> Optional[TimeHorizon]:
@@ -192,6 +249,23 @@ class SymbolScanOutcome:
     @property
     def dividend_yield(self) -> Optional[float]:
         return (self.fundamental_snapshot or {}).get("dividend_yield")
+
+    @property
+    def average_volume(self) -> Optional[float]:
+        """20-period average share volume, from the same volume_sma_20
+        indicator TechnicalAnalysisEngine already computes -- no new
+        calculation. None when the indicator wasn't computed (e.g.
+        insufficient history), never defaulted to 0."""
+        return (self.technical_snapshot or {}).get("volume_sma_20")
+
+    @property
+    def average_traded_value(self) -> Optional[float]:
+        """Average daily traded value (price x average volume) -- the
+        liquidity proxy publication_gate.py's liquidity gate reads.
+        None when either input is unavailable."""
+        if self.latest_price is None or self.average_volume is None:
+            return None
+        return self.latest_price * self.average_volume
 
 
 @dataclass(frozen=True)

@@ -49,6 +49,20 @@ def get_scan_max_symbols() -> int:
     return int(os.getenv("MARKET_SCAN_MAX_SYMBOLS", "500"))
 
 
+def get_scan_symbol_timeout_seconds() -> float:
+    """Hard wall-clock ceiling on one symbol's entire _scan_one() (DB
+    query + every SAHMK call + LLM narration), independent of each
+    individual leg's own timeout -- without this, a single
+    pathologically slow symbol has no ceiling on how large a share of
+    a long full-market scan's time budget it can consume (found in the
+    pre-live-scan production audit). Default (240s) comfortably covers
+    the worst realistic case: several sequential SAHMK requests each
+    up to ~33.5s (10s request timeout x up to 3 tenacity attempts with
+    backoff) plus the analyst LLM call's own 12s ceiling
+    (ANALYST_LLM_TIMEOUT_SECONDS)."""
+    return float(os.getenv("MARKET_SCAN_SYMBOL_TIMEOUT_SECONDS", "240"))
+
+
 def is_price_history_required_for_scan() -> bool:
     """SymbolSelector skips a symbol with zero ingested PriceBar rows
     when true (the default) -- such a symbol cannot produce a
@@ -56,6 +70,17 @@ def is_price_history_required_for_scan() -> bool:
     scanning it would only ever produce a skipped/insufficient-data
     outcome."""
     return os.getenv("MARKET_SCAN_REQUIRE_PRICE_HISTORY", "true").lower() == "true"
+
+
+def get_max_scan_run_duration_hours() -> float:
+    """A PENDING/RUNNING MarketScanRun older than this is treated as
+    crashed/cancelled (its process died without ever calling
+    finish_run) and reaped -- see MarketIntelligenceRepository.
+    reap_stale_runs(). Default (4h) is set above
+    sahmk-live-pipeline-validation.yml's own 3h full_universe timeout,
+    so a legitimately still-running full-market scan is never reaped
+    out from under itself."""
+    return float(os.getenv("MARKET_MAX_SCAN_RUN_DURATION_HOURS", "4"))
 
 
 # --- rankings / watchlists ----------------------------------------------
@@ -85,6 +110,43 @@ def get_dividend_yield_threshold() -> float:
     """Fractional, not percent -- 0.03 == 3% -- matching
     FundamentalAnalysisResult.dividend_yield's own units."""
     return float(os.getenv("MARKET_DIVIDEND_YIELD_THRESHOLD", "0.03"))
+
+
+# --- publication gate -------------------------------------------------------
+
+
+def get_max_data_age_hours() -> float:
+    """Maximum age (hours, from SymbolScanOutcome.scanned_at to now) a
+    scan outcome may be and still be published. Basirah is a daily-bar
+    system with no live intraday feed (see docs/basirah_intelligence_core/
+    PHASE_0_REALITY_AUDIT.md), so 24h is a reasonable default for
+    "still represents today's/yesterday's close," not a claim of
+    real-time freshness."""
+    return float(os.getenv("MARKET_MAX_DATA_AGE_HOURS", "24"))
+
+
+def get_min_average_traded_value() -> float:
+    """Minimum average daily traded value (price x 20-period average
+    volume, in SAR) for a BUY/SELL to pass the liquidity gate. This is
+    a conservative placeholder, not a value empirically calibrated
+    against real Tadawul liquidity distributions -- disclosed as a
+    known limitation (see docs/basirah_intelligence_core/
+    PHASE_0_REALITY_AUDIT.md, defect #1) pending that calibration work.
+    Configurable so it can be tightened/loosened without a code change
+    once real liquidity-tier data is available."""
+    return float(os.getenv("MARKET_MIN_AVERAGE_TRADED_VALUE_SAR", "1000000"))
+
+
+def get_min_risk_reward_ratio() -> float:
+    """Below this reward:risk ratio, a BUY/SELL is rejected outright by
+    publication_gate.py rather than merely shrunk in position size.
+    Reuses AIDecisionTuning.poor_risk_reward_threshold's existing value
+    (1.0) as the default -- the same threshold `_derive_position_size`
+    already treats as "poor" -- rather than inventing a second,
+    uncoordinated number; a ratio below 1.0 means the position risks
+    more than it can gain, which no position-size adjustment alone can
+    make an acceptable trade."""
+    return float(os.getenv("MARKET_MIN_RISK_REWARD_RATIO", "1.0"))
 
 
 # --- change detection ------------------------------------------------------
@@ -149,3 +211,26 @@ def is_market_intelligence_scheduler_enabled() -> bool:
 def get_market_intelligence_scan_interval() -> ScheduleInterval:
     raw = os.getenv("MARKET_INTELLIGENCE_SCAN_INTERVAL", ScheduleInterval.DAILY.value)
     return ScheduleInterval(raw)
+
+
+# --- Live Market Mode --------------------------------------------------------
+
+
+def is_live_market_mode_enabled() -> bool:
+    """Gates LiveMarketModeScheduler (see live_market_mode.py). Meant
+    as an alternative to, not additive with, the standalone
+    MARKET_INTELLIGENCE_SCHEDULER_ENABLED/INGESTION_SCHEDULER_ENABLED
+    flags -- see main.py's startup wiring, which starts Live Market
+    Mode's own internal instances of those two schedulers instead of
+    the always-on ones when this is true."""
+    return os.getenv("LIVE_MARKET_MODE_ENABLED", "false").lower() == "true"
+
+
+def get_live_market_mode_poll_interval_seconds() -> float:
+    """How often the Live Market Mode supervisor re-checks whether the
+    Tadawul session has just opened or closed, to start/stop the
+    ingestion and scan schedulers accordingly. Pure datetime
+    comparison (trading_calendar.is_market_open), no network call --
+    a short default (60s) keeps the "start scanning right after the
+    bell" latency low at negligible cost."""
+    return float(os.getenv("LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS", "60"))

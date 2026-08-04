@@ -1,0 +1,209 @@
+"""Integration tests for POST /api/v1/admin/market-intelligence/diagnostic-scan.
+
+Covers: staff-only gating, the "no publish without a real SAHMK
+connectivity result" safety rule, secret redaction, and the happy path
+actually running run_market_scan_job and persisting real
+SymbolIntelligenceRecord rows.
+
+Same double-monkeypatch as test_market_routes.py/test_backtests_routes.py:
+the route handler uses Depends(get_db) (overridable normally), but
+run_market_scan_job gets its session factory via a *local* `from
+src.core.db.database import get_session_factory` call inside the route
+-- so database.get_session_factory itself must be monkeypatched too.
+"""
+
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+import main
+from src.api.dependencies import get_current_user, get_market_provider
+from src.core.db import database
+from src.core.db.database import Base, get_db
+from src.domain.models import PriceBar, StaffRole, Stock, Timeframe, User
+from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+
+
+@pytest.fixture
+def session_factory(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(database, "get_session_factory", lambda: factory)
+
+    def _override_get_db():
+        db = factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    main.app.dependency_overrides[get_db] = _override_get_db
+    main.app.dependency_overrides[get_market_provider] = lambda: DevMarketDataProvider()
+    yield factory
+    Base.metadata.drop_all(bind=engine)
+    main.app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client(session_factory):
+    yield TestClient(main.app)
+
+
+@pytest.fixture
+def as_staff():
+    staff_user = User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ADMIN)
+    main.app.dependency_overrides[get_current_user] = lambda: staff_user
+    yield staff_user
+
+
+def _seed_stock_with_bars(session_factory, symbol, sector="Energy", count=80, price_step=0.08):
+    session = session_factory()
+    stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector=sector)
+    session.add(stock)
+    session.commit()
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    price = 30.0
+    for i in range(count):
+        price += price_step
+        session.add(
+            PriceBar(
+                stock_id=stock.id, timeframe=Timeframe.ONE_DAY, timestamp=base + timedelta(days=i),
+                open=Decimal(str(price)), high=Decimal(str(price + 0.5)), low=Decimal(str(price - 0.5)),
+                close=Decimal(str(price)), volume=1000 + i,
+            )
+        )
+    session.commit()
+    session.close()
+
+
+def test_non_staff_user_gets_403(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+
+    response = client.post("/api/v1/admin/market-intelligence/diagnostic-scan", json={})
+
+    assert response.status_code == 403
+
+
+def test_no_scan_runs_when_sahmk_is_not_the_selected_provider(client, session_factory, as_staff, monkeypatch):
+    """The core safety rule: if the real connectivity probe did not
+    select SAHMK (e.g. unreachable, or STRICT_REAL_DATA blocked it),
+    the route must never run a scan or write a recommendation row."""
+    from src.market_data import provider_factory
+
+    async def _fake_get_provider(force_refresh=False):
+        return object()
+
+    def _fake_health():
+        return {
+            "configured_provider": "sahmk",
+            "strict_real_data": True,
+            "synthetic_allowed": False,
+            "sahmk_key_present": False,
+            "current_provider_kind": None,
+            "last_connectivity_status": "FAILED",
+            "last_connectivity_at": None,
+            "last_real_data_at": None,
+        }
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_health)
+
+    response = client.post("/api/v1/admin/market-intelligence/diagnostic-scan", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_provider_kind"] is None
+    assert body["run_id"] is None
+    assert body["rows_written"] == 0
+    assert body["can_publish_recommendations"] is False
+    assert body["sahmk_key_present"] is False
+
+
+def test_happy_path_runs_the_real_scan_path_and_persists_rows(client, session_factory, as_staff, monkeypatch):
+    """When the real provider selection resolves to "sahmk", the route
+    must run the exact same run_market_scan_job/execute_scan path the
+    scheduler uses and report real, persisted evidence back."""
+    from src.market_data import provider_factory
+
+    _seed_stock_with_bars(session_factory, "2222")
+
+    fake_provider = DevMarketDataProvider()
+
+    async def _fake_get_provider(force_refresh=False):
+        return fake_provider
+
+    def _fake_health():
+        return {
+            "configured_provider": "sahmk",
+            "strict_real_data": False,
+            "synthetic_allowed": True,
+            "sahmk_key_present": True,
+            "current_provider_kind": "sahmk",
+            "last_connectivity_status": "SUCCESS",
+            "last_connectivity_at": datetime.now(timezone.utc).isoformat(),
+            "last_real_data_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_health)
+
+    response = client.post(
+        "/api/v1/admin/market-intelligence/diagnostic-scan", json={"symbols": ["2222"]}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] is not None
+    assert body["run_status"] == "SUCCESS"
+    assert body["symbols_requested"] == 1
+    assert body["symbols_succeeded"] == 1
+    assert body["rows_written"] == 1
+    assert body["sample_symbols"][0]["symbol"] == "2222"
+    assert body["last_scan_source"] == "SAHMK_REAL"
+    assert body["can_publish_recommendations"] is True
+    assert body["data_is_fresh"] is True
+
+
+def test_secret_never_appears_in_the_response(client, session_factory, as_staff, monkeypatch):
+    """Even when a real SAHMK error message could plausibly contain
+    request context, the response body must never contain the raw
+    SAHMK_API_KEY value."""
+    from src.market_data import provider_factory
+
+    secret_value = "sk_live_super_secret_sahmk_key_00000000000000000000000000"
+    monkeypatch.setenv("SAHMK_API_KEY", secret_value)
+
+    async def _raise(force_refresh=False):
+        # Deliberately embeds the *full* secret value, as if some deep
+        # exception message leaked it -- proves the route's own scrub
+        # step catches it, not just that this particular test's fake
+        # message happened to omit it.
+        raise RuntimeError(f"connection failed, Authorization: Bearer {secret_value}")
+
+    def _fake_health():
+        return {
+            "configured_provider": "sahmk",
+            "strict_real_data": False,
+            "synthetic_allowed": True,
+            "sahmk_key_present": True,
+            "current_provider_kind": None,
+            "last_connectivity_status": "FAILED",
+            "last_connectivity_at": None,
+            "last_real_data_at": None,
+        }
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _raise)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_health)
+
+    response = client.post("/api/v1/admin/market-intelligence/diagnostic-scan", json={})
+
+    assert response.status_code == 200
+    assert secret_value not in response.text
+    assert "***" in response.json()["sahmk_error"]

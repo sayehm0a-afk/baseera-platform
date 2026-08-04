@@ -25,7 +25,17 @@ import main
 from src.api.dependencies import get_current_user, get_market_provider
 from src.core.db import database
 from src.core.db.database import Base, get_db
-from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, StaffRole, Stock, Timeframe, User
+from src.domain.models import (
+    FundamentalSnapshot,
+    MarketScanRun,
+    MarketScanStatus,
+    PeriodType,
+    PriceBar,
+    StaffRole,
+    Stock,
+    Timeframe,
+    User,
+)
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 
 
@@ -118,6 +128,32 @@ def test_create_scan_returns_pending_then_background_task_completes_it(client, s
     assert body["symbols_succeeded"] == 1
 
 
+def test_scan_progress_reflects_the_completed_background_scan(client, session_factory):
+    """GET /scan/{run_id}/progress -- new route reading MarketScanProgress,
+    written by run_market_scan_job's own ScanProgressTracker (not just
+    MarketScanRun's once-at-the-end counters)."""
+    _seed_stock_with_bars(session_factory, "2222")
+
+    response = client.post("/api/v1/market/scan", json={"symbols": ["2222"]})
+    assert response.status_code == 200
+    run_id = response.json()["id"]
+
+    progress_response = client.get(f"/api/v1/market/scan/{run_id}/progress")
+    assert progress_response.status_code == 200
+    body = progress_response.json()
+    assert body["run_id"] == run_id
+    assert body["status"] == "COMPLETED"
+    assert body["eligible_discovered"] == 1
+    assert body["completed_count"] == 1
+    assert body["success_count"] == 1
+    assert body["progress_pct"] == 100.0
+
+
+def test_scan_progress_404_for_unknown_run(client, session_factory):
+    response = client.get("/api/v1/market/scan/999999/progress")
+    assert response.status_code == 404
+
+
 def test_create_scan_with_explicit_symbols(client, session_factory):
     _seed_stock_with_bars(session_factory, "2222")
     _seed_stock_with_bars(session_factory, "1010", sector="Banks")
@@ -130,6 +166,23 @@ def test_create_scan_with_explicit_symbols(client, session_factory):
     run_id = body["id"]
     status_response = client.get(f"/api/v1/market/scan/{run_id}")
     assert status_response.json()["symbols_succeeded"] == 1
+
+
+def test_create_scan_rejects_an_overlapping_pending_or_running_scan(client, session_factory):
+    # Production audit finding: two concurrent scans would double real
+    # SAHMK request volume and race on the same DB rows. Seeds a
+    # RUNNING MarketScanRun directly (bypassing the route, which would
+    # otherwise complete synchronously in TestClient before a second
+    # request could ever observe it as in-flight) to prove the guard
+    # itself, not just the ordinary sequential-scan happy path.
+    session = session_factory()
+    session.add(MarketScanRun(status=MarketScanStatus.RUNNING, symbols_requested=1))
+    session.commit()
+    session.close()
+
+    response = client.post("/api/v1/market/scan", json={})
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "duplicate_market_scan"
 
 
 def test_get_scan_404_for_unknown_run(client, session_factory):

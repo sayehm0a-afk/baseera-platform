@@ -1,8 +1,29 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState, type FormEvent } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 
 /** The one shared top app bar every authenticated screen reuses
- * (UI Spec Global Invariants §0). */
+ * (UI Spec Global Invariants §0).
+ *
+ * Search navigates to /stocks/{symbol} (GET /api/v1/stocks/{symbol}
+ * is a real, existing route -- src/api/routes/stocks.py:94). There is
+ * no real backend endpoint yet to search by Arabic/English company
+ * name (only exact-symbol lookup exists), so this deliberately does
+ * NOT pretend to support name search with client-side guessing --
+ * only a real ticker symbol navigates anywhere. */
 export function TopBar() {
+  const router = useRouter();
+  const [query, setQuery] = useState("");
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const symbol = query.trim();
+    if (!symbol) return;
+    router.push(`/stocks/${encodeURIComponent(symbol)}`);
+  }
+
   return (
     <header className="flex h-16 shrink-0 items-center gap-bsr-4 border-b border-bsr-border-subtle bg-bsr-surface-base px-bsr-4 md:px-bsr-6">
       <div className="flex items-center gap-bsr-2">
@@ -11,16 +32,18 @@ export function TopBar() {
         <span className="text-lg font-semibold text-bsr-teal-500">AI</span>
       </div>
 
-      <div className="hidden flex-1 items-center md:flex">
+      <form onSubmit={handleSubmit} className="hidden flex-1 items-center md:flex">
         <label className="relative w-full max-w-md">
-          <span className="sr-only">ابحث عن سهم أو مؤشر</span>
+          <span className="sr-only">ابحث برمز السهم</span>
           <input
             type="search"
-            placeholder="ابحث عن سهم أو مؤشر..."
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="ابحث برمز السهم (مثال: 2222)..."
             className="w-full rounded-bsr-full border border-bsr-border-subtle bg-bsr-surface-raised px-bsr-4 py-bsr-2 text-sm text-bsr-text-primary placeholder:text-bsr-text-muted focus:border-bsr-gold-500 focus:outline-none"
           />
         </label>
-      </div>
+      </form>
 
       <div className="ms-auto flex items-center gap-bsr-3">
         <button

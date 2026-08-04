@@ -66,10 +66,17 @@ def _seed_market_scan(session, symbols_and_recommendations):
         stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector="Energy")
         session.add(stock)
         session.commit()
+        # Realistic price/target/stop so a BUY/STRONG_BUY fixture carries
+        # a defensible trade setup (positive expected return, risk/reward
+        # >= 1.0) -- publication_gate.py rejects a "recommendation" with no
+        # priced target/stop the same way it would reject a real one, so
+        # these values matter to whether the fixture is a real opportunity.
         session.add(
             SymbolIntelligenceRecord(
                 scan_run_id=run.id, stock_id=stock.id, symbol=symbol, sector="Energy",
                 recommendation=RecommendationLabel(recommendation), confidence=Decimal("80.0"), final_score=Decimal("75.0"),
+                latest_price=Decimal("100.0"), target_price=Decimal("110.0"), stop_loss=Decimal("95.0"),
+                expected_return_pct=Decimal("10.0"),
                 evaluated_at=datetime.now(timezone.utc), engine_version="1.0.0",
             )
         )

@@ -20,6 +20,28 @@ def test_top_buy_includes_buy_and_strong_buy_sorted_by_final_score():
     assert [e.symbol for e in entries] == ["B", "A"]
 
 
+def test_top_buy_excludes_a_high_score_buy_with_negative_expected_return():
+    # Reproduces the 2026-07-30 live scan defect: symbol 1020 (BJAZ)
+    # had the highest final_score (70.5) of any BUY but a negative
+    # expected return (-0.16%) -- it still reached TOP_BUY #1 because
+    # ranking sorted purely by score with no publication gate. A BUY
+    # whose own target sits below its entry price must never appear in
+    # TOP_BUY, regardless of how high its score is.
+    outcomes = [
+        make_outcome(symbol="1020", decision=make_decision(
+            symbol="1020", recommendation=Recommendation.BUY, final_score=70.5, confidence=63.2,
+            target_price=11.86, stop_loss=11.6, expected_return_pct=-0.16,
+        )),
+        make_outcome(symbol="1140", decision=make_decision(
+            symbol="1140", recommendation=Recommendation.BUY, final_score=68.4,
+            target_price=24.58, stop_loss=23.68, expected_return_pct=2.23, risk_reward_ratio=2.0,
+        )),
+    ]
+    rankings = RankingEngine().rank(outcomes)
+    entries = rankings[RankingCategory.TOP_BUY].entries
+    assert [e.symbol for e in entries] == ["1140"]
+
+
 def test_top_strong_buy_only_includes_strong_buy():
     outcomes = [
         make_outcome(symbol="A", decision=make_decision(symbol="A", recommendation=Recommendation.BUY, confidence=90.0)),
@@ -141,3 +163,25 @@ def test_all_seventeen_categories_are_always_present():
     rankings = RankingEngine().rank([make_outcome(symbol="A")])
     assert set(rankings.keys()) == set(RankingCategory)
     assert len(RankingCategory) == 17
+
+
+def test_zero_price_outcome_is_excluded_from_every_ranking_category_not_just_gated_ones():
+    # Reproduces a real 2026-08-03 full-universe scan defect: symbol
+    # 2210 had no technical leg (0 OHLCV rows) but a valid fundamental
+    # leg, so scanner.py's _scan_one() correctly marked it success=True
+    # with latest_price=0.0 -- and it reached MOST_BEARISH unfiltered,
+    # since only the publication-gated "opportunity" categories
+    # (TOP_BUY etc.) checked price validity, not _successful() itself.
+    outcomes = [
+        make_outcome(symbol="2210", latest_price=0.0, decision=make_decision(
+            symbol="2210", recommendation=Recommendation.SELL, final_score=26.0, confidence=8.2,
+            target_price=None, stop_loss=None, expected_return_pct=None,
+        )),
+        make_outcome(symbol="B", latest_price=50.0, decision=make_decision(
+            symbol="B", recommendation=Recommendation.SELL, final_score=40.0, confidence=70.0,
+        )),
+    ]
+    rankings = RankingEngine().rank(outcomes)
+    for category, ranking_list in rankings.items():
+        symbols = [e.symbol for e in ranking_list.entries]
+        assert "2210" not in symbols, f"zero-price symbol 2210 leaked into {category}"

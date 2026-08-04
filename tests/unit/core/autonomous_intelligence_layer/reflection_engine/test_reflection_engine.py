@@ -17,9 +17,8 @@ class TestReflectionEngine:
     @pytest.fixture
     def mock_memory_store(self):
         mock = Mock(spec=MemoryStore)
-        mock.retrieve_memories = Mock(return_value=[])
-        mock.add_memory = Mock()
-        mock.summarize_memories = Mock(return_value="Mocked summary")
+        mock.retrieve_by_source = Mock(return_value=[])
+        mock.summarize = Mock(return_value="Mocked summary")
         return mock
 
     @pytest.fixture
@@ -46,12 +45,17 @@ class TestReflectionEngine:
 
     @pytest.mark.asyncio
     async def test_reflect_on_memories(self, reflection_engine, mock_llm_client, mock_memory_store):
-        mock_memory_store.retrieve_memories.return_value = [
+        mock_memory_store.retrieve_by_source.return_value = [
             Mock(content="memory 1", memory_type=MemoryType.EPISODIC),
             Mock(content="memory 2", memory_type=MemoryType.EPISODIC)
         ]
         reflection_text = await reflection_engine.reflect_on_memories("test_agent", "initial_goal")
         assert reflection_text == "Mocked reflection output"
+        # Called twice: once by reflect_on_memories itself to check for any
+        # memories, once again inside _generate_reflection_prompt to build
+        # the summary -- both real calls, not the fictional pre-fix methods.
+        mock_memory_store.retrieve_by_source.assert_called_with("test_agent", limit=10)
+        assert mock_memory_store.retrieve_by_source.call_count == 2
         mock_llm_client.generate_text.assert_called_once()
         mock_memory_store.store.assert_called_once_with(
             content="Mocked reflection output",
@@ -62,7 +66,7 @@ class TestReflectionEngine:
 
     @pytest.mark.asyncio
     async def test_reflect_on_memories_no_memories(self, reflection_engine, mock_llm_client, mock_memory_store):
-        mock_memory_store.retrieve_memories.return_value = []
+        mock_memory_store.retrieve_by_source.return_value = []
         reflection_text = await reflection_engine.reflect_on_memories("test_agent", "initial_goal")
         assert reflection_text is None
         mock_llm_client.generate_text.assert_not_called()
@@ -103,7 +107,7 @@ class TestReflectionEngine:
 
     @pytest.mark.asyncio
     async def test_perform_reflection_cycle(self, reflection_engine, mock_llm_client, mock_memory_store, mock_knowledge_graph):
-        mock_memory_store.retrieve_memories.return_value = [
+        mock_memory_store.retrieve_by_source.return_value = [
             Mock(content="memory 1", memory_type=MemoryType.EPISODIC),
             Mock(content="memory 2", memory_type=MemoryType.EPISODIC)
         ]
@@ -120,7 +124,7 @@ class TestReflectionEngine:
 
     @pytest.mark.asyncio
     async def test_perform_reflection_cycle_no_reflection_data(self, reflection_engine, mock_llm_client, mock_memory_store, mock_knowledge_graph):
-        mock_memory_store.retrieve_memories.return_value = [
+        mock_memory_store.retrieve_by_source.return_value = [
             Mock(content="memory 1", memory_type=MemoryType.EPISODIC)
         ]
         mock_llm_client.generate_text.side_effect = [
@@ -135,7 +139,7 @@ class TestReflectionEngine:
 
     @pytest.mark.asyncio
     async def test_perform_reflection_cycle_no_memories(self, reflection_engine, mock_llm_client, mock_memory_store, mock_knowledge_graph):
-        mock_memory_store.retrieve_memories.return_value = []
+        mock_memory_store.retrieve_by_source.return_value = []
         await reflection_engine.perform_reflection_cycle("test_agent", "initial_goal")
         mock_llm_client.generate_text.assert_not_called()
         mock_memory_store.store.assert_not_called()
@@ -144,7 +148,7 @@ class TestReflectionEngine:
 
     @pytest.mark.asyncio
     async def test_generate_reflection_prompt(self, reflection_engine, mock_memory_store):
-        mock_memory_store.summarize_memories.return_value = "Summary of recent events."
+        mock_memory_store.summarize.return_value = "Summary of recent events."
         prompt = reflection_engine._generate_reflection_prompt("test_agent", "initial_goal")
         assert "Summary of recent events." in prompt
         assert "test_agent" in prompt
@@ -427,4 +431,87 @@ class TestReflectionEngine:
     async def test_process_reflection_output_relationship_type_not_in_enum(self, reflection_engine, mock_knowledge_graph):
         reflection_output = '{"entities": [], "relationships": [{"relationship_id": "rel1", "source_entity_id": "ent1", "target_entity_id": "ent2", "relationship_type": "NON_EXISTENT"}]}'
         await reflection_engine._process_reflection_output(reflection_output)
+        mock_knowledge_graph.add_relationship.assert_not_called()
+
+
+class TestReflectionEngineAgainstARealMemoryStore:
+    """E6 regression coverage: the fixture-based tests above mock
+    `MemoryStore` entirely, which would happily accept calls to
+    methods that don't exist on the real class (the exact bug this
+    milestone fixes -- `retrieve_memories`/`summarize_memories` were
+    never real methods). These tests use a real `MemoryStore()`
+    instance so a regression back to a nonexistent method surfaces as
+    a real `AttributeError`, not a silently-passing mock."""
+
+    @pytest.fixture
+    def mock_llm_client(self):
+        mock = Mock(spec=BaseLLMClient)
+        mock.generate_text = AsyncMock(return_value="Mocked reflection output")
+        return mock
+
+    @pytest.fixture
+    def mock_knowledge_graph(self):
+        mock = Mock(spec=KnowledgeGraph)
+        mock.query_entity = Mock(return_value=None)
+        mock.add_entity = Mock()
+        mock.add_relationship = Mock()
+        return mock
+
+    @pytest.fixture
+    def reflection_engine(self, mock_llm_client, mock_knowledge_graph):
+        return ReflectionEngine(
+            llm_client=mock_llm_client,
+            memory_store=MemoryStore(),
+            knowledge_graph=mock_knowledge_graph,
+        )
+
+    @pytest.mark.asyncio
+    async def test_reflect_on_memories_finds_only_this_agents_prior_memories(self, reflection_engine):
+        reflection_engine.memory_store.store(
+            content="agent_a saw a bullish RSI crossover", memory_type=MemoryType.EPISODIC, source="agent_a",
+        )
+        reflection_engine.memory_store.store(
+            content="agent_b saw a bearish MACD cross", memory_type=MemoryType.EPISODIC, source="agent_b",
+        )
+
+        result = await reflection_engine.reflect_on_memories("agent_a", "evaluate RSI reliability")
+
+        assert result == "Mocked reflection output"
+        # A reflection memory was recorded for agent_a specifically.
+        agent_a_memories = reflection_engine.memory_store.retrieve_by_source("agent_a")
+        assert any(m.memory_type is MemoryType.REFLECTION for m in agent_a_memories)
+
+    @pytest.mark.asyncio
+    async def test_reflect_on_memories_returns_none_when_agent_has_no_memories(self, reflection_engine, mock_llm_client):
+        result = await reflection_engine.reflect_on_memories("brand_new_agent", "goal")
+        assert result is None
+        mock_llm_client.generate_text.assert_not_called()
+
+    def test_generate_reflection_prompt_summarizes_only_this_agents_memories(self, reflection_engine):
+        reflection_engine.memory_store.store(
+            content="unique content for agent_x", memory_type=MemoryType.EPISODIC, source="agent_x",
+        )
+        reflection_engine.memory_store.store(
+            content="unrelated content for agent_y", memory_type=MemoryType.EPISODIC, source="agent_y",
+        )
+
+        prompt = reflection_engine._generate_reflection_prompt("agent_x", "goal")
+
+        assert "unique content for agent_x" in prompt
+        assert "unrelated content for agent_y" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_perform_reflection_cycle_runs_end_to_end_against_a_real_memory_store(
+        self, reflection_engine, mock_llm_client, mock_knowledge_graph,
+    ):
+        reflection_engine.memory_store.store(
+            content="agent_z's recommendation missed its target", memory_type=MemoryType.EPISODIC, source="agent_z",
+        )
+        mock_llm_client.generate_text.return_value = (
+            '{"entities": [{"entity_id": "ent1", "name": "Entity 1", "entity_type": "CONCEPT"}], "relationships": []}'
+        )
+
+        await reflection_engine.perform_reflection_cycle("agent_z", "review missed target")
+
+        mock_knowledge_graph.add_entity.assert_called_once()
         mock_knowledge_graph.add_relationship.assert_not_called()

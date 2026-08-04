@@ -1,9 +1,9 @@
 import json
 import logging
-import os
 from typing import Any, Callable, Dict, List, Optional
 from redis import Redis
-from redis.connection import ConnectionPool
+
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -12,11 +12,24 @@ class RedisMessageBus:
     """Production-grade message bus using Redis."""
 
     def __init__(self, host: str = None, port: int = None, db: int = 0, password: str = None):
-        """Initialize Redis message bus."""
-        self.host = host or os.getenv("REDIS_HOST", "localhost")
-        self.port = port or int(os.getenv("REDIS_PORT", 6379))
-        self.db = db
-        self.password = password or os.getenv("REDIS_PASSWORD")
+        """Initialize Redis message bus.
+
+        With no explicit host/port/password (the production path), the
+        connection string is built from `settings.redis_dsn` -- the one
+        place "prefer REDIS_URL, else assemble from host/port/password"
+        is decided (see Settings.redis_dsn) -- instead of independently
+        reading REDIS_HOST/REDIS_PORT via os.getenv and silently
+        defaulting to localhost, which never picks up a managed Redis
+        provider's REDIS_URL (the bug that made this bus fail to
+        connect on Railway, where only REDIS_URL is injected).
+        Explicit host/port/password (e.g. from a test) still take
+        priority when given.
+        """
+        if host or port or password:
+            auth = f":{password}@" if password else ""
+            self._dsn = f"redis://{auth}{host or 'localhost'}:{port or 6379}/{db}"
+        else:
+            self._dsn = settings.redis_dsn
         self.connection_pool = None
         self.redis_client = None
         self.subscribers: Dict[str, List[Callable]] = {}
@@ -25,20 +38,17 @@ class RedisMessageBus:
     def _connect(self):
         """Establish connection to Redis."""
         try:
-            self.connection_pool = ConnectionPool(
-                host=self.host,
-                port=self.port,
-                db=self.db,
-                password=self.password,
+            self.redis_client = Redis.from_url(
+                self._dsn,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_keepalive=True,
                 health_check_interval=30,
             )
-            self.redis_client = Redis(connection_pool=self.connection_pool)
+            self.connection_pool = self.redis_client.connection_pool
             # Test connection
             self.redis_client.ping()
-            logger.info(f"Connected to Redis at {self.host}:{self.port}")
+            logger.info("Connected to Redis message bus.")
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {e}")
             raise

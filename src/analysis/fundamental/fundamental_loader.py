@@ -24,15 +24,17 @@ def _to_facts(snapshot: FundamentalSnapshot) -> FundamentalFacts:
         total_assets=float(snapshot.total_assets),
         total_liabilities=float(snapshot.total_liabilities),
         total_equity=float(snapshot.total_equity),
-        current_assets=float(snapshot.current_assets),
-        current_liabilities=float(snapshot.current_liabilities),
+        current_assets=float(snapshot.current_assets) if snapshot.current_assets is not None else None,
+        current_liabilities=(
+            float(snapshot.current_liabilities) if snapshot.current_liabilities is not None else None
+        ),
         inventory=float(snapshot.inventory) if snapshot.inventory is not None else None,
         cash_and_equivalents=(
             float(snapshot.cash_and_equivalents) if snapshot.cash_and_equivalents is not None else None
         ),
         total_debt=float(snapshot.total_debt) if snapshot.total_debt is not None else None,
-        shares_outstanding=int(snapshot.shares_outstanding),
-        eps=float(snapshot.eps),
+        shares_outstanding=int(snapshot.shares_outstanding) if snapshot.shares_outstanding is not None else None,
+        eps=float(snapshot.eps) if snapshot.eps is not None else None,
         dividend_per_share=float(snapshot.dividend_per_share),
     )
 

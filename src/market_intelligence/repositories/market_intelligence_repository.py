@@ -15,11 +15,16 @@ method) -- matches every other DB-touching module in this codebase
 (`ohlcv_loader.py`, `fundamental_loader.py`, the backtesting engine).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from src.ai_evolution.agents.orchestrator import AgentPanelOrchestrator
+from src.ai_evolution.config import is_agent_panel_enabled, is_paper_trading_enabled
+from src.ai_evolution.outcome_evaluation import create_pending_outcomes
+from src.ai_evolution.paper_trading import generate_challenger_snapshot, get_latest_challenger_config
+from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.domain.models import (
     ChangeType as DomainChangeType,
     AlertSeverity as DomainAlertSeverity,
@@ -29,15 +34,52 @@ from src.domain.models import (
     MarketScanRun,
     MarketScanStatus,
     RecommendationLabel,
+    RecommendationSnapshot,
     SectorIntelligenceSummary,
     Stock,
     SymbolIntelligenceRecord,
 )
+from src.analysis.decision.types import DecisionFactorBreakdown
+from src.analysis.recommendation.types import Signal
 from src.market_intelligence.types import Alert, ChangeEvent, SectorSummary, SymbolScanOutcome
+
+# The source label written into RecommendationSnapshot.source for every
+# row this repository creates -- distinguishes a live scan write from a
+# backtest write (src.backtesting.engine writes "backtest" via a
+# separate call site) without relying on `run_id is None` as an
+# implicit, easy-to-break proxy.
+_LIVE_SCAN_SOURCE = "live_scan"
 
 
 def _successful(outcome: SymbolScanOutcome) -> bool:
     return outcome.success and outcome.report is not None
+
+
+def _serialize_signals(signals: List[Signal]) -> List[dict]:
+    return [
+        {
+            "name": signal.name,
+            "description": signal.description,
+            "direction": signal.direction.value,
+            "source": signal.source,
+            "impact": signal.impact,
+        }
+        for signal in signals
+    ]
+
+
+def _serialize_breakdown(breakdown: List[DecisionFactorBreakdown]) -> List[dict]:
+    return [
+        {
+            "category": item.category,
+            "points": item.points,
+            "weight": item.weight,
+            "confidence": item.confidence,
+            "available": item.available,
+            "notes": item.notes,
+        }
+        for item in breakdown
+    ]
 
 
 def _f(value: Optional[float]) -> Optional[float]:
@@ -106,6 +148,45 @@ class MarketIntelligenceRepository:
     def get_run(self, session: Session, run_id: int) -> Optional[MarketScanRun]:
         return session.query(MarketScanRun).filter_by(id=run_id).one_or_none()
 
+    def reap_stale_runs(self, session: Session, max_age_hours: float) -> List[MarketScanRun]:
+        """A run that crashed or was cancelled (e.g. a killed GitHub
+        Actions job) never reaches finish_run and stays PENDING/RUNNING
+        forever -- with nothing to distinguish it from a genuinely
+        in-progress scan, the overlap guard in POST /scan (production
+        audit finding) would otherwise block every future scan
+        permanently. Marks any such run older than max_age_hours as
+        FAILED so a new scan can proceed. Returns the runs it reaped,
+        for logging."""
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        candidates = (
+            session.query(MarketScanRun)
+            .filter(MarketScanRun.status.in_([MarketScanStatus.PENDING, MarketScanStatus.RUNNING]))
+            .all()
+        )
+        reaped = []
+        for run in candidates:
+            created_at = run.created_at
+            if created_at.tzinfo is None:
+                # SQLite does not round-trip a timezone-aware DateTime
+                # faithfully across separate queries/sessions (the same
+                # pitfall mark_running's own docstring documents) --
+                # created_at is always written as UTC, so a naive value
+                # read back is treated as UTC rather than compared
+                # against an aware "now" and raising.
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if created_at < cutoff:
+                previous_status = run.status
+                run.status = MarketScanStatus.FAILED
+                run.finished_at = datetime.now(timezone.utc)
+                run.error_summary = (
+                    f"Reaped: still {previous_status.value} after {max_age_hours:.1f}h -- "
+                    "treated as crashed/cancelled, never called finish_run."
+                )
+                reaped.append(run)
+        if reaped:
+            session.commit()
+        return reaped
+
     def get_latest_successful_run(self, session: Session, before_run_id: Optional[int] = None) -> Optional[MarketScanRun]:
         query = session.query(MarketScanRun).filter(MarketScanRun.status == MarketScanStatus.SUCCESS)
         if before_run_id is not None:
@@ -114,7 +195,7 @@ class MarketIntelligenceRepository:
 
     # --- symbol intelligence records -----------------------------------
 
-    def save_symbol_records(self, session: Session, run_id: int, outcomes: List[SymbolScanOutcome]) -> None:
+    async def save_symbol_records(self, session: Session, run_id: int, outcomes: List[SymbolScanOutcome]) -> None:
         symbol_to_stock_id = {
             row.symbol: row.id
             for row in session.query(Stock.symbol, Stock.id).filter(Stock.symbol.in_([o.symbol for o in outcomes])).all()
@@ -154,6 +235,52 @@ class MarketIntelligenceRepository:
                     engine_version=outcome.report.engine_version,
                 )
             )
+            snapshot = RecommendationSnapshot(
+                run_id=None,
+                stock_id=stock_id,
+                symbol=outcome.symbol,
+                evaluated_at=decision.generated_at,
+                market_price_at_evaluation=_f(outcome.latest_price),
+                recommendation=RecommendationLabel(decision.recommendation.value),
+                total_score=_f(decision.final_score),
+                confidence_score=_f(decision.confidence),
+                technical_score=_f(outcome.technical_score),
+                fundamental_score=_f(outcome.fundamental_score),
+                momentum_score=_f(outcome.category_score(CATEGORY_LABELS["momentum"])),
+                volume_score=_f(outcome.category_score(CATEGORY_LABELS["volume"])),
+                risk_score=_f(outcome.category_score(CATEGORY_LABELS["risk"])),
+                contributor_breakdown=_serialize_breakdown(decision.breakdown),
+                signals=_serialize_signals(decision.signals),
+                reasons=list(decision.reasons),
+                target_price=_f(decision.target_price),
+                stop_loss=_f(decision.stop_loss),
+                expected_return_pct=_f(decision.expected_return_pct),
+                time_horizon=decision.time_horizon.value,
+                risk_level=decision.risk_level.value,
+                position_size=decision.position_size.value,
+                engine_version=outcome.report.engine_version,
+                source=_LIVE_SCAN_SOURCE,
+                is_paper_trade=False,
+            )
+            session.add(snapshot)
+            # E2: issue PENDING RecommendationOutcome rows (one per
+            # evaluation horizon) now, so OutcomeEvaluationScheduler has
+            # known rows to score once real forward price data exists.
+            create_pending_outcomes(session, snapshot)
+            # E7: real multi-agent panel -- opt-in (AGENT_PANEL_ENABLED),
+            # never raises (see AgentPanelOrchestrator.run_panel's own
+            # docstring), commits its own work when it runs.
+            if is_agent_panel_enabled():
+                await AgentPanelOrchestrator().run_panel(session, snapshot, decision, outcome.symbol)
+            # E8: champion/challenger paper trading -- opt-in
+            # (PAPER_TRADING_ENABLED), reuses this same already-built
+            # AnalysisContext (no re-fetch) to score a second, VALIDATED
+            # calibration candidate, never touching the champion
+            # decision or production weights (see paper_trading.py).
+            if is_paper_trading_enabled() and outcome.context is not None:
+                challenger_config = get_latest_challenger_config(session)
+                if challenger_config is not None:
+                    generate_challenger_snapshot(session, snapshot, outcome.context, challenger_config)
         session.commit()
 
     def get_symbol_records_by_symbol(self, session: Session, run_id: int) -> Dict[str, SymbolIntelligenceRecord]:

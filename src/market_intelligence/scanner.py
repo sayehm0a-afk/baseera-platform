@@ -33,6 +33,7 @@ from src.market_intelligence.config import (
     get_scan_batch_size,
     get_scan_max_attempts,
     get_scan_retry_base_delay_seconds,
+    get_scan_symbol_timeout_seconds,
 )
 from src.market_intelligence.types import MarketScanSummary, SymbolScanOutcome
 
@@ -52,9 +53,28 @@ class MarketScanner:
         self._analyst_engine = analyst_engine or AnalystEngine()
         self._period_type = period_type
 
-    async def scan(self, symbols: List[str]) -> List[SymbolScanOutcome]:
+    async def scan(
+        self,
+        symbols: List[str],
+        on_symbol_start: Optional[Callable[[str], None]] = None,
+        on_symbol_complete: Optional[Callable[[SymbolScanOutcome], None]] = None,
+        on_retry: Optional[Callable[[str, int, int, Exception], None]] = None,
+    ) -> List[SymbolScanOutcome]:
+        """Optional progress hooks (all None by default, so every
+        existing caller is unaffected): `on_symbol_start(symbol)` fires
+        immediately before a symbol's real work begins,
+        `on_symbol_complete(outcome)` fires the instant its terminal
+        outcome exists, `on_retry(symbol, attempt, max_attempts, exc)`
+        fires on each retry. These are the real hook points a live
+        progress tracker (see scan_progress.py) needs -- added because
+        GitHub Actions exposes no per-symbol progress while a job is
+        in_progress (confirmed: the job-logs API 404s until the job
+        completes), so Basirah must publish its own."""
         semaphore = asyncio.Semaphore(max(1, get_scan_batch_size()))
-        tasks = [self._scan_one_bounded(symbol, semaphore) for symbol in symbols]
+        tasks = [
+            self._scan_one_bounded(symbol, semaphore, on_symbol_start, on_symbol_complete, on_retry)
+            for symbol in symbols
+        ]
         return list(await asyncio.gather(*tasks))
 
     @staticmethod
@@ -73,11 +93,25 @@ class MarketScanner:
             duration_seconds=(finished_at - started_at).total_seconds(),
         )
 
-    async def _scan_one_bounded(self, symbol: str, semaphore: asyncio.Semaphore) -> SymbolScanOutcome:
+    async def _scan_one_bounded(
+        self,
+        symbol: str,
+        semaphore: asyncio.Semaphore,
+        on_symbol_start: Optional[Callable[[str], None]],
+        on_symbol_complete: Optional[Callable[[SymbolScanOutcome], None]],
+        on_retry: Optional[Callable[[str, int, int, Exception], None]],
+    ) -> SymbolScanOutcome:
         async with semaphore:
-            return await self._scan_one_with_retry(symbol)
+            if on_symbol_start is not None:
+                on_symbol_start(symbol)
+            outcome = await self._scan_one_with_retry(symbol, on_retry)
+            if on_symbol_complete is not None:
+                on_symbol_complete(outcome)
+            return outcome
 
-    async def _scan_one_with_retry(self, symbol: str) -> SymbolScanOutcome:
+    async def _scan_one_with_retry(
+        self, symbol: str, on_retry: Optional[Callable[[str, int, int, Exception], None]] = None
+    ) -> SymbolScanOutcome:
         """Retries only real, unexpected failures -- a symbol correctly
         identified as having insufficient data is not an error and is
         never retried (retrying would only waste time; more attempts
@@ -88,7 +122,7 @@ class MarketScanner:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                return await self._scan_one(symbol)
+                return await asyncio.wait_for(self._scan_one(symbol), timeout=get_scan_symbol_timeout_seconds())
             except Exception as exc:  # noqa: BLE001 -- deliberate: one symbol's failure must never abort the whole scan.
                 last_error = exc
                 if attempt >= max_attempts:
@@ -98,6 +132,8 @@ class MarketScanner:
                     "Market scan for '%s' attempt %d/%d failed (retrying in %.1fs): %s",
                     symbol, attempt, max_attempts, delay, exc,
                 )
+                if on_retry is not None:
+                    on_retry(symbol, attempt, max_attempts, exc)
                 await asyncio.sleep(delay)
 
         logger.error("Market scan for '%s' failed after %d attempt(s): %s", symbol, max_attempts, last_error, exc_info=True)
@@ -120,6 +156,9 @@ class MarketScanner:
 
             report = await self._analyst_engine.analyze(context)
 
+            is_synthetic = getattr(self._market_provider, "is_synthetic", True)
+            data_source = "DEV_SYNTHETIC" if is_synthetic else "SAHMK_REAL"
+
             return SymbolScanOutcome(
                 symbol=symbol,
                 sector=stock.sector,
@@ -128,6 +167,9 @@ class MarketScanner:
                 latest_price=context.latest_price,
                 technical_snapshot=context.technical_result.latest_snapshot() if context.technical_result else None,
                 fundamental_snapshot=context.fundamental_result.latest_snapshot() if context.fundamental_result else None,
+                context=context,
+                is_synthetic=is_synthetic,
+                data_source=data_source,
             )
         finally:
             session.close()

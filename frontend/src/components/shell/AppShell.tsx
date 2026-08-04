@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { TopBar } from "./TopBar";
 import { SideNav } from "./SideNav";
 import { MobileTabBar } from "./MobileTabBar";
+import { RealDataStatusBanner } from "./RealDataStatusBanner";
 
 interface AppShellProps {
   children: ReactNode;
@@ -15,6 +16,7 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div className="flex h-dvh flex-col">
       <TopBar />
+      <RealDataStatusBanner />
       <div className="flex min-h-0 flex-1">
         <SideNav />
         <main className="min-w-0 flex-1 overflow-y-auto p-bsr-4 md:p-bsr-6">

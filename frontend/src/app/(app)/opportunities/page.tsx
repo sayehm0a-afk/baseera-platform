@@ -1,6 +1,10 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { AiSignalCard } from "@/components/patterns/AiSignalCard";
+import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { RunScanButton } from "@/components/dashboard/RunScanButton";
 import { ApiError } from "@/lib/api/client";
 import { getRankings } from "@/lib/api/market";
@@ -8,40 +12,90 @@ import { RANKING_CATEGORY_LABELS } from "@/lib/market-intelligence-labels";
 import type { RankingEntry } from "@/lib/api/types";
 import type { RecommendationValue } from "@/components/badges/RecommendationBadge";
 
+// All real backend ranking categories (src.market_intelligence.types.
+// RankingCategory) worth a section on this page -- 8 of the 17 that
+// exist; the rest (RECENTLY_UPGRADED/DOWNGRADED, MOST_IMPROVED/
+// DETERIORATED_TODAY, REMOVED_OPPORTUNITIES, TOP_LONG_TERM_INVESTMENT,
+// TOP_SWING_TRADE, HIGHEST_RISK, HIGHEST_CONFIDENCE) are already
+// browsable via the Scan screen's full category-tab list
+// (RANKING_CATEGORY_ORDER). Momentum/Dividend/Oversold/Overbought
+// watchlist categories are on the separate Watchlist screen
+// (WatchlistCategory, a different real backend source).
 const OPPORTUNITY_SECTIONS = [
   "TOP_STRONG_BUY",
   "TOP_BUY",
   "NEW_OPPORTUNITIES",
   "HIGHEST_EXPECTED_RETURN",
+  "TOP_DIVIDEND_STOCKS",
+  "LOWEST_RISK",
+  "MOST_BULLISH",
+  "MOST_BEARISH",
 ];
 
-async function loadOpportunities(): Promise<
-  | { available: true; sections: { category: string; entries: RankingEntry[] }[] }
-  | { available: false }
-> {
-  try {
-    const results = await Promise.all(
-      OPPORTUNITY_SECTIONS.map((category) => getRankings(category))
-    );
-    return {
-      available: true,
-      sections: OPPORTUNITY_SECTIONS.map((category, index) => ({
-        category,
-        entries: results[index].rankings[0]?.entries ?? [],
-      })),
-    };
-  } catch (error) {
-    if (error instanceof ApiError && error.code === "no_market_scan_data") {
-      return { available: false };
+type OpportunitiesData =
+  | { status: "loading" }
+  | { status: "unavailable" }
+  | { status: "error" }
+  | { status: "ready"; sections: { category: string; entries: RankingEntry[] }[] };
+
+// Client Component: same reason as /dashboard -- apiFetch depends on
+// the browser's httpOnly session cookie, which a Next.js Server
+// Component fetch never receives (confirmed via a real 401
+// "No access token was presented" when this page was still a Server
+// Component and was tested end-to-end with a real login).
+function useOpportunitiesData(): OpportunitiesData {
+  const [data, setData] = useState<OpportunitiesData>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const results = await Promise.all(
+          OPPORTUNITY_SECTIONS.map((category) => getRankings(category))
+        );
+        if (cancelled) return;
+        setData({
+          status: "ready",
+          sections: OPPORTUNITY_SECTIONS.map((category, index) => ({
+            category,
+            entries: results[index].rankings[0]?.entries ?? [],
+          })),
+        });
+      } catch (error) {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.code === "no_market_scan_data") {
+          setData({ status: "unavailable" });
+        } else {
+          setData({ status: "error" });
+        }
+      }
     }
-    throw error;
-  }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return data;
 }
 
-export default async function OpportunitiesPage() {
-  const data = await loadOpportunities();
+export default function OpportunitiesPage() {
+  const data = useOpportunitiesData();
 
-  if (!data.available) {
+  if (data.status === "loading") {
+    return <LoadingScreen />;
+  }
+
+  if (data.status === "error") {
+    return (
+      <EmptyState
+        title="تعذّر تحميل الفرص الاستثمارية"
+        description="تأكد من اتصال الخادم وحاول مرة أخرى."
+      />
+    );
+  }
+
+  if (data.status === "unavailable") {
     return (
       <EmptyState
         title="لا توجد بيانات مسح للسوق بعد"
@@ -78,7 +132,7 @@ export default async function OpportunitiesPage() {
                   confidence={entry.confidence}
                   targetPrice={entry.target_price}
                   expectedReturnPct={entry.expected_return_pct}
-                  href={`/ai?symbol=${encodeURIComponent(entry.symbol)}`}
+                  href={`/stocks/${encodeURIComponent(entry.symbol)}`}
                 />
               ))}
             </div>

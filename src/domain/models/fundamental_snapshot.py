@@ -58,13 +58,20 @@ class FundamentalSnapshot(Base):
     total_assets = Column(Numeric(24, 4), nullable=False)
     total_liabilities = Column(Numeric(24, 4), nullable=False)
     total_equity = Column(Numeric(24, 4), nullable=False)
-    current_assets = Column(Numeric(24, 4), nullable=False)
-    current_liabilities = Column(Numeric(24, 4), nullable=False)
+    # current_assets/current_liabilities/shares_outstanding/eps are
+    # nullable: SAHMK's Starter-tier /financials/{symbol}/ response
+    # (confirmed live for 3 real symbols -- see
+    # docs/SAHMK_INTEGRATION.md) never includes them at all, on any
+    # symbol, in any statement -- this is a genuine data-source gap,
+    # not a parsing bug, so it must be representable rather than
+    # blocking every real ingestion.
+    current_assets = Column(Numeric(24, 4), nullable=True)
+    current_liabilities = Column(Numeric(24, 4), nullable=True)
     inventory = Column(Numeric(24, 4), nullable=True)
     cash_and_equivalents = Column(Numeric(24, 4), nullable=True)
     total_debt = Column(Numeric(24, 4), nullable=True)
-    shares_outstanding = Column(BigInteger, nullable=False)
-    eps = Column(Numeric(12, 4), nullable=False)
+    shares_outstanding = Column(BigInteger, nullable=True)
+    eps = Column(Numeric(12, 4), nullable=True)
     dividend_per_share = Column(Numeric(12, 4), nullable=False, default=0, server_default="0")
 
     # Provenance -- same labeling discipline as DevMarketDataProvider

@@ -43,7 +43,7 @@ export default async function ReportsPage() {
             {topSymbols.entries.map((entry) => (
               <a
                 key={entry.symbol}
-                href={`/ai?symbol=${encodeURIComponent(entry.symbol)}`}
+                href={`/stocks/${encodeURIComponent(entry.symbol)}`}
                 className="bsr-numeric rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-overlay px-bsr-3 py-bsr-2 text-center text-bsr-text-primary hover:border-bsr-gold-500/40"
               >
                 {entry.symbol}

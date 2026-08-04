@@ -30,10 +30,39 @@ def test_production_with_dev_secret_raises(monkeypatch):
 def test_production_with_real_secret_succeeds(monkeypatch):
     monkeypatch.setenv("BASEERA_ENV", "production")
     monkeypatch.setenv("SECRET_KEY", "a-real-unique-production-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://real_user:real_pass@prod-db.example.com:5432/basirah_prod")
 
     settings = Settings(_env_file=None)
     assert settings.is_production is True
     assert settings.secret_key == "a-real-unique-production-secret"
+
+
+def test_production_with_default_database_url_raises(monkeypatch):
+    monkeypatch.setenv("BASEERA_ENV", "production")
+    monkeypatch.setenv("SECRET_KEY", "a-real-unique-production-secret")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(Exception):
+        Settings(_env_file=None)
+
+
+def test_production_with_real_database_url_succeeds(monkeypatch):
+    monkeypatch.setenv("BASEERA_ENV", "production")
+    monkeypatch.setenv("SECRET_KEY", "a-real-unique-production-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://real_user:real_pass@prod-db.example.com:5432/basirah_prod")
+
+    settings = Settings(_env_file=None)
+    assert settings.is_production is True
+    assert settings.database_url == "postgresql://real_user:real_pass@prod-db.example.com:5432/basirah_prod"
+
+
+def test_development_with_default_database_url_succeeds(monkeypatch):
+    monkeypatch.delenv("BASEERA_ENV", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    settings = Settings(_env_file=None)
+    assert settings.is_production is False
+    assert settings.database_url == "postgresql://postgres:postgres@localhost:5432/basirah"
 
 
 def test_invalid_environment_value_rejected(monkeypatch):

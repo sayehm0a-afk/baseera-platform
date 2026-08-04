@@ -1,0 +1,20 @@
+# Backend service config-as-code. Deployed by running `railway up` from
+# the repository root (see .github/workflows/deploy-railway.yml) --
+# Railway's CLI has no flag to set a monorepo service's Root Directory
+# (dashboard/GraphQL-API only), so each service's config lives next to
+# the directory it's deployed from instead: this file for the backend
+# (repo root), frontend/railway.toml for the frontend.
+#
+# Database migrations are NOT a preDeployCommand here -- they already
+# run unconditionally before gunicorn starts, in docker-entrypoint.sh
+# (Alembic's advisory lock makes this safe even if Railway ever starts
+# more than one instance concurrently).
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health/live"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

@@ -12,8 +12,10 @@ changes once the day has closed, so historical bars get a long one.
 """
 
 import logging
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, urlparse
 
 from src.market_data.caching.ttl_cache import TTLCache
 from src.market_data.sahmk.client import SahmkClient
@@ -39,16 +41,107 @@ COMPANY_DIRECTORY_CACHE_TTL_SECONDS = 86400.0  # the symbol universe rarely chan
 FINANCIALS_CACHE_TTL_SECONDS = 3600.0
 DIVIDENDS_CACHE_TTL_SECONDS = 3600.0
 
+# Bounds how many /companies/ pages get_company_directory() will ever
+# follow, regardless of what a `count`/`total` field claims -- a
+# misread or malicious total must never turn into an unbounded loop.
+# 50 pages is generous headroom over any plausible page size for a
+# market with a low-hundreds to low-thousands total listing count.
+_MAX_DIRECTORY_PAGES = 50
 
-def _first_present(data: Dict[str, Any], keys: List[str]) -> Any:
+# Field names tried, in order, when looking for a company's sector in
+# a /companies/ directory entry -- UNVERIFIED, see get_company_directory's
+# docstring. Includes both flat-string and Arabic-labeled candidates;
+# a nested {"sector": {"name": ...}}-shaped value is handled separately
+# by _extract_sector(), since _first_present() only reads flat values.
+_SECTOR_KEY_CANDIDATES = [
+    "sector", "sector_name", "sectorName", "gics_sector", "sector_ar", "sector_en",
+]
+
+
+def _extract_sector(item: Dict[str, Any]) -> Optional[str]:
+    """Tries every flat sector key candidate, then falls back to a
+    nested {"sector": {"name" | "name_en" | "sector_name": ...}} shape,
+    a common pattern for APIs that model sector as an object rather
+    than a bare string. Returns None (never guesses) if nothing
+    matches either shape."""
+    flat = _first_present(item, _SECTOR_KEY_CANDIDATES)
+    if isinstance(flat, str):
+        return flat
+    nested = item.get("sector")
+    if isinstance(nested, dict):
+        return _first_present(nested, ["name", "name_en", "sector_name", "title"])
+    return None
+
+
+@dataclass
+class _DirectoryDiagnostics:
+    """Real, evidence-based record of what the last get_company_directory()
+    call actually observed -- read by callers (e.g. the market-intelligence
+    scan script) that need to report a genuine universe verdict rather
+    than assuming 'however many came back is the whole market'."""
+
+    pages_fetched: int
+    total_fetched: int
+    pagination_signal: Optional[str]
+    reported_total: Optional[int]
+    universe_verdict: str
+    first_page_keys: List[str] = field(default_factory=list)
+    first_item_keys: List[str] = field(default_factory=list)
+    sector_populated_count: int = 0
+
+
+def _classify_universe(
+    pagination_signal: Optional[str], reported_total: Optional[int], fetched: int
+) -> str:
+    """FULL_UNIVERSE_VERIFIED requires an actual reconciliation: a
+    reported total existed AND every record it claimed was fetched.
+    PARTIAL_UNIVERSE_VERIFIED covers every other case where at least
+    some real evidence of scope exists (a total was reported but not
+    fully reconciled, or pagination was followed at all).
+    UNIVERSE_NOT_VERIFIED is the honest default when the response
+    carried no signal whatsoever about whether more data exists beyond
+    what a single call happened to return -- this was every prior run's
+    silent, unstated case before this fix."""
+    if reported_total is not None and fetched >= reported_total > 0:
+        return "FULL_UNIVERSE_VERIFIED"
+    if reported_total is not None or pagination_signal is not None:
+        return "PARTIAL_UNIVERSE_VERIFIED"
+    return "UNIVERSE_NOT_VERIFIED"
+
+
+def _first_present(data, keys: List[str]) -> Any:
     """Returns the value of the first key in `keys` present (and
     non-None) in `data`, or None. Used for fields whose exact wire name
     is UNVERIFIED (see docs/SAHMK_INTEGRATION.md) -- several plausible
-    names are tried rather than assuming one."""
-    for key in keys:
-        if key in data and data[key] is not None:
-            return data[key]
+    names are tried rather than assuming one.
+
+    `data` may be a single dict, or a list of dicts to search in
+    order (first dict wins) -- get_financials() uses the list form to
+    check a per-statement dict first, falling back to the top-level
+    response, without needing a second helper."""
+    dicts = data if isinstance(data, list) else [data]
+    for d in dicts:
+        for key in keys:
+            if key in d and d[key] is not None:
+                return d[key]
     return None
+
+
+def _first_matching_statement(items: Optional[List[Dict[str, Any]]], period_type: str) -> Dict[str, Any]:
+    """Picks the entry in a /financials/ statement array (e.g.
+    `income_statements`) whose own `statement_period` matches what was
+    requested, most-recent `report_date` first per SAHMK's confirmed
+    ordering; falls back to the first entry if none match, or `{}` if
+    the array is missing/empty -- never raises, since a missing
+    statement array is a normal degraded state (see
+    SahmkFundamentalDataProvider, which decides what's actually
+    required)."""
+    if not items:
+        return {}
+    for item in items:
+        if item.get("statement_period") == period_type:
+            return item
+    return items[0]
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -83,6 +176,9 @@ class SahmkMarketDataService:
     def __init__(self, client: Optional[SahmkClient] = None, cache: Optional[TTLCache] = None):
         self._client = client or SahmkClient()
         self._cache = cache if cache is not None else TTLCache()
+        # Populated by get_company_directory() -- None until that method
+        # has actually run at least once. See _DirectoryDiagnostics.
+        self.last_directory_diagnostics: Optional[_DirectoryDiagnostics] = None
 
     @property
     def has_credentials(self) -> bool:
@@ -109,7 +205,7 @@ class SahmkMarketDataService:
                 change=_optional_float(data.get("change")),
                 change_percent=_optional_float(data.get("change_percent")),
                 volume=_optional_int(data.get("volume")),
-                timestamp=_parse_timestamp(data.get("timestamp")) or datetime.now(timezone.utc),
+                timestamp=_parse_timestamp(data.get("updated_at")) or datetime.now(timezone.utc),
             )
 
         return await self._cache.get_or_compute(
@@ -127,11 +223,11 @@ class SahmkMarketDataService:
             data = await self._client.get_historical(
                 symbol, interval=interval, date_from=date_from, date_to=date_to
             )
-            bars = data.get("bars", [])
+            bars = data.get("data", [])
             result: List[SahmkHistoricalBar] = []
             for bar in bars:
                 _require_fields(
-                    bar, ["open", "high", "low", "close", "volume", "timestamp"], "historical bar"
+                    bar, ["open", "high", "low", "close", "volume", "date"], "historical bar"
                 )
                 result.append(
                     SahmkHistoricalBar(
@@ -141,7 +237,7 @@ class SahmkMarketDataService:
                         low=float(bar["low"]),
                         close=float(bar["close"]),
                         volume=int(bar["volume"]),
-                        timestamp=_parse_timestamp(bar["timestamp"]),
+                        timestamp=_parse_timestamp(bar["date"]),
                     )
                 )
             return result
@@ -204,6 +300,8 @@ class SahmkMarketDataService:
                 symbol=symbol,
                 name=_first_present(data, ["name", "company_name", "name_en"]),
                 sector=_first_present(data, ["sector", "sector_name"]),
+                industry=_first_present(data, ["industry", "industry_name", "sub_sector", "subsector"]),
+                exchange=_first_present(data, ["exchange", "market", "exchange_name"]),
                 raw=data,
             )
 
@@ -213,27 +311,126 @@ class SahmkMarketDataService:
 
     async def get_company_directory(self) -> List[SahmkCompanyProfile]:
         """The full Tadawul+Nomu symbol directory from GET /companies/.
-        Field names are UNVERIFIED (same discipline as get_financials):
-        several plausible keys are tried per field, and each item's
-        `symbol` is required -- an entry with no symbol at all can't be
-        used to register a Stock row, so it's skipped rather than
-        guessed."""
+
+        Field names, and whether this endpoint paginates at all, are
+        UNVERIFIED -- no live confirmation exists (see
+        docs/SAHMK_INTEGRATION.md). Two prior full-universe runs both
+        returned exactly 100 companies via a single, unparameterized
+        call, which is consistent with either a true 100-company
+        universe or an unnoticed page-size cap; nothing in the response
+        was ever inspected for pagination metadata before this fix.
+
+        This method now follows pagination defensively across the
+        conventions real REST APIs commonly use (a `next` URL, or a
+        `count`/`total` field paired with `page`/`offset`+`limit`
+        params), bounded to `_MAX_DIRECTORY_PAGES` iterations so a
+        misread signal can never spin forever. If no pagination signal
+        is present at all, behavior is unchanged: one call, whatever it
+        returns is the universe. Either way, the outcome is recorded in
+        `self.last_directory_diagnostics` (see `_DirectoryDiagnostics`)
+        with an explicit universe verdict -- FULL_UNIVERSE_VERIFIED is
+        only ever set when a reported total was actually reconciled
+        against what was fetched, never assumed."""
 
         async def _compute() -> List[SahmkCompanyProfile]:
-            data = await self._client.get_companies()
-            items = data.get("companies", data.get("results", []))
             result: List[SahmkCompanyProfile] = []
-            for item in items:
-                symbol = _first_present(item, ["symbol", "ticker"])
-                if symbol is None:
-                    continue
-                result.append(
-                    SahmkCompanyProfile(
-                        symbol=str(symbol),
-                        name=_first_present(item, ["name", "company_name", "name_en"]),
-                        sector=_first_present(item, ["sector", "sector_name"]),
-                        raw=item,
+            seen_symbols: set = set()
+            page_params: Optional[Dict[str, Any]] = None
+            pages_fetched = 0
+            reported_total: Optional[int] = None
+            pagination_signal: Optional[str] = None
+            first_page_keys: List[str] = []
+            first_item_keys: List[str] = []
+
+            while pages_fetched < _MAX_DIRECTORY_PAGES:
+                data = await self._client.get_companies(params=page_params)
+                pages_fetched += 1
+                if pages_fetched == 1 and isinstance(data, dict):
+                    first_page_keys = sorted(data.keys())
+
+                items = data.get("companies", data.get("results", data.get("data", [])))
+                if not isinstance(items, list):
+                    items = []
+                if pages_fetched == 1 and items and isinstance(items[0], dict):
+                    first_item_keys = sorted(items[0].keys())
+
+                new_this_page = 0
+                for item in items:
+                    symbol = _first_present(item, ["symbol", "ticker"])
+                    if symbol is None:
+                        continue
+                    symbol = str(symbol)
+                    if symbol in seen_symbols:
+                        continue
+                    seen_symbols.add(symbol)
+                    new_this_page += 1
+                    result.append(
+                        SahmkCompanyProfile(
+                            symbol=symbol,
+                            name=_first_present(item, ["name", "company_name", "name_en"]),
+                            sector=_extract_sector(item),
+                            industry=_first_present(
+                                item, ["industry", "industry_name", "sub_sector", "subsector"]
+                            ),
+                            exchange=_first_present(item, ["exchange", "market", "exchange_name"]),
+                            raw=item,
+                        )
                     )
+
+                reported_total = _first_present(
+                    data, ["count", "total", "total_count", "totalCount", "total_results"]
+                ) or reported_total
+
+                next_url = data.get("next") if isinstance(data, dict) else None
+                if next_url:
+                    pagination_signal = "next_url"
+                    parsed = urlparse(str(next_url))
+                    page_params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+                    if not page_params:
+                        # A `next` value with no parseable query string can't
+                        # be followed via the params-only client method --
+                        # stop rather than guess at a raw-URL fetch.
+                        break
+                    continue
+
+                if reported_total is not None and len(result) < int(reported_total) and new_this_page > 0:
+                    pagination_signal = pagination_signal or "count_total"
+                    page_params = {"page": pages_fetched + 1}
+                    continue
+
+                break
+
+            verdict = _classify_universe(
+                pagination_signal=pagination_signal,
+                reported_total=int(reported_total) if reported_total is not None else None,
+                fetched=len(result),
+            )
+            sector_populated = sum(1 for c in result if c.sector)
+            diagnostics = _DirectoryDiagnostics(
+                pages_fetched=pages_fetched,
+                total_fetched=len(result),
+                pagination_signal=pagination_signal,
+                reported_total=int(reported_total) if reported_total is not None else None,
+                universe_verdict=verdict,
+                first_page_keys=first_page_keys,
+                first_item_keys=first_item_keys,
+                sector_populated_count=sector_populated,
+            )
+            self.last_directory_diagnostics = diagnostics
+            logger.info(
+                "SAHMK company directory: %d page(s), %d unique companies, "
+                "pagination_signal=%s, reported_total=%s, universe_verdict=%s, "
+                "sector_populated=%d/%d, first_page_keys=%s, first_item_keys=%s",
+                pages_fetched, len(result), pagination_signal, reported_total, verdict,
+                sector_populated, len(result), first_page_keys, first_item_keys,
+            )
+            if result and sector_populated == 0:
+                logger.warning(
+                    "SAHMK company directory: sector field unresolved for all %d companies -- "
+                    "raw first item's top-level keys were %s. None of the tried sector key "
+                    "names (%s) matched; sector-dependent analysis will be NOT_EVALUATED "
+                    "until the real field name is confirmed from this log line.",
+                    len(result), first_item_keys, _SECTOR_KEY_CANDIDATES,
                 )
             return result
 
@@ -242,36 +439,54 @@ class SahmkMarketDataService:
         )
 
     async def get_financials(self, symbol: str, period_type: str = "annual") -> SahmkFinancials:
-        """Parses GET /financials/{symbol}/ defensively -- field names are
-        UNVERIFIED (docs/SAHMK_INTEGRATION.md); every figure is read via
-        _first_present() rather than assumed, and `raw` always carries
-        the untouched response."""
+        """Parses GET /financials/{symbol}/.
+
+        CONFIRMED live (workflow run 30436660246, 3 real symbols): the
+        response is NOT a flat object -- figures are split across three
+        per-period statement arrays (`income_statements`,
+        `balance_sheets`, `cash_flows`), each entry carrying its own
+        `report_date`/`statement_period`, most-recent period first.
+        Also confirmed: `current_assets`, `current_liabilities`,
+        `shares_outstanding`, and `eps` are not present ANYWHERE in
+        this response, for any symbol tested -- not misnamed, genuinely
+        absent from this endpoint's data (see docs/SAHMK_INTEGRATION.md)
+        -- so those come back as `None` rather than being guessed at.
+
+        A flat top-level shape is still tried as a fallback (via
+        _first_present) in case a different symbol/tier ever returns
+        one; `raw` always carries the untouched response either way.
+        """
 
         async def _compute() -> SahmkFinancials:
             data = await self._client.get_financials(symbol, period_type=period_type)
+            income = _first_matching_statement(data.get("income_statements"), period_type)
+            balance = _first_matching_statement(data.get("balance_sheets"), period_type)
+
             return SahmkFinancials(
                 symbol=symbol,
                 period_type=period_type,
-                fiscal_period_end=_first_present(data, ["fiscal_period_end", "period_end", "date"]),
-                revenue=_optional_float(_first_present(data, ["revenue", "total_revenue"])),
-                gross_profit=_optional_float(_first_present(data, ["gross_profit"])),
-                net_income=_optional_float(_first_present(data, ["net_income", "net_profit"])),
-                total_assets=_optional_float(_first_present(data, ["total_assets"])),
-                total_liabilities=_optional_float(_first_present(data, ["total_liabilities"])),
+                fiscal_period_end=_first_present(
+                    [income, balance, data], ["report_date", "fiscal_period_end", "period_end", "date"]
+                ),
+                revenue=_optional_float(_first_present([income, data], ["total_revenue", "revenue"])),
+                gross_profit=_optional_float(_first_present([income, data], ["gross_profit"])),
+                net_income=_optional_float(_first_present([income, data], ["net_income", "net_profit"])),
+                total_assets=_optional_float(_first_present([balance, data], ["total_assets"])),
+                total_liabilities=_optional_float(_first_present([balance, data], ["total_liabilities"])),
                 total_equity=_optional_float(
-                    _first_present(data, ["total_equity", "shareholders_equity"])
+                    _first_present([balance, data], ["stockholders_equity", "total_equity", "shareholders_equity"])
                 ),
-                current_assets=_optional_float(_first_present(data, ["current_assets"])),
-                current_liabilities=_optional_float(_first_present(data, ["current_liabilities"])),
-                inventory=_optional_float(_first_present(data, ["inventory"])),
+                current_assets=_optional_float(_first_present([balance, data], ["current_assets"])),
+                current_liabilities=_optional_float(_first_present([balance, data], ["current_liabilities"])),
+                inventory=_optional_float(_first_present([balance, data], ["inventory"])),
                 cash_and_equivalents=_optional_float(
-                    _first_present(data, ["cash_and_equivalents", "cash"])
+                    _first_present([balance, data], ["cash_and_equivalents", "cash"])
                 ),
-                total_debt=_optional_float(_first_present(data, ["total_debt"])),
+                total_debt=_optional_float(_first_present([balance, data], ["total_debt"])),
                 shares_outstanding=_optional_int(
-                    _first_present(data, ["shares_outstanding", "shares"])
+                    _first_present([balance, income, data], ["shares_outstanding", "shares"])
                 ),
-                eps=_optional_float(_first_present(data, ["eps", "earnings_per_share"])),
+                eps=_optional_float(_first_present([income, data], ["eps", "earnings_per_share"])),
                 raw=data,
             )
 

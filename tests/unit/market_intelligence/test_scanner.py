@@ -142,6 +142,32 @@ async def test_scan_records_failure_after_exhausting_retries(factory, monkeypatc
     assert "permanent failure" in outcomes[0].error
 
 
+@pytest.mark.asyncio
+async def test_a_hung_symbol_is_bounded_by_the_per_symbol_timeout(factory, monkeypatch):
+    # Production audit finding: with no per-symbol wall-clock ceiling,
+    # a single pathologically slow symbol (network stall, hung
+    # connection) could consume an unbounded share of a long
+    # full-market scan. Proves _scan_one_with_retry doesn't just wait
+    # forever -- it gives up per the configured timeout, retries per
+    # the existing retry policy, and eventually reports a real failure.
+    import asyncio
+
+    monkeypatch.setenv("MARKET_SCAN_SYMBOL_TIMEOUT_SECONDS", "0.05")
+    monkeypatch.setenv("MARKET_SCAN_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("MARKET_SCAN_RETRY_BASE_DELAY_SECONDS", "0.001")
+    scanner = MarketScanner(session_factory=factory, market_provider=DevMarketDataProvider())
+
+    async def _hangs_forever(symbol):
+        await asyncio.sleep(10)
+
+    scanner._scan_one = _hangs_forever
+
+    outcomes = await asyncio.wait_for(scanner.scan(["2222"]), timeout=5.0)
+
+    assert outcomes[0].success is False
+    assert outcomes[0].error is not None
+
+
 def test_summarize_counts_success_skip_and_failure():
     from tests.unit.market_intelligence._fixtures import make_outcome
 

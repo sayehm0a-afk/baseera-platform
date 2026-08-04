@@ -1,11 +1,13 @@
 import { apiFetch } from "./client";
 import type {
   AnalystReport,
+  FundamentalAnalysis,
   History,
   InvestmentDecision,
   Quote,
   Recommendation,
   Stock,
+  TechnicalAnalysis,
 } from "./stocks-types";
 
 /** Every function here is a direct, unmodified call to an existing
@@ -20,16 +22,31 @@ export function getQuote(symbol: string): Promise<Quote> {
   return apiFetch<Quote>(`/api/v1/stocks/${encodeURIComponent(symbol)}/quote`);
 }
 
+/** `start`/`end` are the route's real query params (ISO-8601
+ * datetimes) -- both optional; omitting both returns all ingested
+ * history, which is what the stock-detail chart wants by default. */
 export function getHistory(
   symbol: string,
-  params?: { timeframe?: string; limit?: number }
+  params?: { start?: string; end?: string }
 ): Promise<History> {
   const search = new URLSearchParams();
-  if (params?.timeframe) search.set("timeframe", params.timeframe);
-  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.start) search.set("start", params.start);
+  if (params?.end) search.set("end", params.end);
   const query = search.toString() ? `?${search.toString()}` : "";
   return apiFetch<History>(
     `/api/v1/stocks/${encodeURIComponent(symbol)}/history${query}`
+  );
+}
+
+export function getTechnicalAnalysis(symbol: string): Promise<TechnicalAnalysis> {
+  return apiFetch<TechnicalAnalysis>(
+    `/api/v1/stocks/${encodeURIComponent(symbol)}/technical`
+  );
+}
+
+export function getFundamentalAnalysis(symbol: string): Promise<FundamentalAnalysis> {
+  return apiFetch<FundamentalAnalysis>(
+    `/api/v1/stocks/${encodeURIComponent(symbol)}/fundamentals`
   );
 }
 

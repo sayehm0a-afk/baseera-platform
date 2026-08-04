@@ -1298,8 +1298,19 @@ purely heuristic, never measured against real replayed history.
 ## Completed: Autonomous AI Analyst Framework
 
 Full detail in `docs/AUTONOMOUS_AI_ANALYST_FRAMEWORK.md`; summary here.
-**Not an LLM integration** — no code in this codebase connects to
-OpenAI, the Claude API, Gemini, or any other external AI model.
+**Update (CTO review, Phase R3):** the claim below that "no code in
+this codebase connects to OpenAI... or any other external AI model"
+was true when originally written and is **no longer accurate** — a
+real, concrete `OpenAILLMAdapter` now exists
+(`src/analysis/analyst/openai_llm_adapter.py`) and is wired into the
+live `/analyst-report` route via `get_analyst_engine()`
+(`src/analysis/analyst/analyst_engine_factory.py`), activated **only**
+when `OPENAI_API_KEY` is configured. In every environment without that
+key (which includes this repository's own test/CI environment), the
+behavior described in points 3-4 below is still exactly correct —
+100% deterministic, zero network calls. See the new "LLM-Grounded
+Narration" section immediately below for what changed and how it
+stays safe.
 
 1. **`src/analysis/analyst/`** (new package) — twelve modules
    (`AnalystEngine`, `ReasoningPipeline`, `EvidenceCollector`,
@@ -1321,18 +1332,17 @@ OpenAI, the Claude API, Gemini, or any other external AI model.
    `SignalInterpreter` doesn't redefine the same source-to-label
    mapping. No other pre-existing engine, contributor, route, or schema
    was modified.
-3. **`LLMAdapter` is an abstract interface only** — `ReasoningPipeline`
-   accepts an optional adapter; when none is supplied (the only
-   configuration `AnalystEngine()`'s default construction ever uses),
-   every section is produced by the deterministic pipeline, no network
-   call occurs. The only implementation in this codebase is
-   `NullLLMAdapter`, a no-op test double that echoes its prompt back,
-   used solely to prove the extension point's wiring
-   (`test_reasoning_pipeline.py`) without connecting to any real
-   provider. If an adapter were ever injected, only three sections
-   (technical/fundamental/risk reasoning) would be offered to it for
+3. **`LLMAdapter` is an interface `ReasoningPipeline` accepts
+   optionally** — when none is supplied, every section is produced by
+   the deterministic pipeline, no network call occurs.
+   `NullLLMAdapter` is a no-op test double that echoes its prompt
+   back, used solely to prove the extension point's wiring
+   (`test_reasoning_pipeline.py`). Only three sections (technical/
+   fundamental/risk reasoning) are ever offered to an adapter for
    rephrasing, always grounded in the already-computed deterministic
-   baseline, which is kept whenever the adapter's result is empty.
+   baseline, which is kept whenever the adapter's result is empty. See
+   "LLM-Grounded Narration" below for the real, production-eligible
+   adapter added in Phase R3.
 4. **REST API** (`src/api/routes/stocks.py`) — `GET
    /api/v1/stocks/{symbol}/analyst-report`, reusing
    `_build_analysis_context()` unchanged (the same helper
@@ -1352,11 +1362,83 @@ OpenAI, the Claude API, Gemini, or any other external AI model.
    correctly calls and falls back around an injected `LLMAdapter`.
    **1617 tests pass, 12 skipped, repo-wide** (up from 1531).
    `flake8 src/ tests/ main.py` is clean at 0 violations.
-7. **Disclosed limitations** — no real LLM integration exists or is
+7. **Disclosed limitations (as of the original Analyst Framework
+   milestone, before Phase R3)** — no real LLM integration exists or is
    called; prose is template-based (a fixed set of named templates),
    not free-form generation; `join_factors()` lowercases only the
    joined clause's first character, not each factor, which can read
    slightly awkwardly when a factor begins with an acronym;
+
+### LLM-Grounded Narration (Phase R3, added after the milestone above)
+
+The CTO engineering review identified this as the platform's biggest
+gap between its "AI-powered" positioning and what the code actually
+did: the one real, working `OpenAILLMClient`
+(`src/core/llm_abstraction/`, already in production use by News
+Intelligence) was never connected to the Analyst Framework's own,
+purpose-built `LLMAdapter` extension point. This phase activates it,
+without touching any of the already-tested files above.
+
+1. **`src/analysis/analyst/openai_llm_adapter.py`** (new) — the first
+   concrete, network-calling `LLMAdapter` in this codebase. Wraps
+   `OpenAILLMClient` and adds three safety properties none of the
+   underlying pieces had on their own:
+   - **Never raises.** Every failure (timeout, provider error,
+     malformed response) is caught and converted to an empty-text
+     result, which `ReasoningPipeline._narrate()`'s existing,
+     already-tested fallback (`return result.text if result.text else
+     baseline_text`) turns back into the deterministic baseline — a
+     stock page can never break because an LLM call failed.
+   - **Hard timeout independent of the client's own retry count**
+     (`ANALYST_LLM_TIMEOUT_SECONDS`, default 12s, via `asyncio.wait_for`)
+     — bounds total wall-clock time even if the client's internal
+     retry/backoff would otherwise take longer.
+   - **Grounding check (`_is_grounded`)** — every numeric token in the
+     model's rephrased text must already appear in the prompt (which
+     contains the deterministic baseline it was told to rephrase, per
+     the existing `PromptTemplateManager.build_prompt` instruction
+     "do not invent any figures... only rephrase"). A completion that
+     introduces a new number is treated as a hallucination and
+     discarded, falling back to the baseline — never surfaced to a
+     user. This is a structural guarantee on top of an architectural
+     one: the LLM is only ever asked to rephrase prose, never to
+     produce a recommendation, score, target price, or stop loss —
+     every number in an `AnalystReport` still comes from
+     `AIDecisionEngine`, unconditionally, whether or not narration used
+     a real model.
+2. **`src/analysis/analyst/config.py`** (new) — `ANALYST_LLM_MODEL`
+   (default `gpt-4o-mini`, mirrors `NEWS_LLM_MODEL`'s own pattern),
+   `ANALYST_LLM_TIMEOUT_SECONDS` (default 12), and
+   `is_analyst_llm_narration_enabled()` (`bool(OPENAI_API_KEY)`).
+3. **`src/analysis/analyst/analyst_engine_factory.py`** (new) —
+   `get_analyst_engine(session)`, the one place production code
+   decides: constructs `OpenAILLMAdapter` only when
+   `is_analyst_llm_narration_enabled()` is true, else passes
+   `llm_adapter=None` — identical behavior to before this phase in
+   every environment without a configured key.
+4. **`src/api/routes/stocks.py`**'s `/analyst-report` route now calls
+   `get_analyst_engine(session)` instead of constructing
+   `AnalystEngine()` directly, and threads `requesting_user_id` through
+   (previously discarded) so real `AIRequest` audit rows record who
+   triggered a narration call.
+5. **Tests** — 20 new unit tests (`test_openai_llm_adapter.py`,
+   `test_analyst_engine_factory.py`, `test_config.py`), all against a
+   fake client (no real OpenAI call anywhere in the suite, same
+   technique `tests/unit/news_intelligence/test_analyzer.py` already
+   uses), covering: success path, exception → empty-text fallback,
+   timeout → empty-text fallback, ungrounded-number rejection, empty
+   response, and the enabled/disabled factory switch. All 8 pre-existing
+   `/analyst-report` integration tests pass unchanged.
+6. **Not done in this phase** (explicitly out of scope, matching the
+   review's own Priority 2 framing — this was an activation, not a
+   rebuild): no real OpenAI call was made anywhere in this session (no
+   `OPENAI_API_KEY` configured in this environment, same posture News
+   Intelligence has always had here); `AIRequest` traceability records
+   model/latency/status/user but not prompt version or token usage yet;
+   the grounding check is a blunt numeric-substring guard, not a full
+   schema validator (the LLM never produces structured/JSON output
+   today — only rephrased prose — so a JSON schema would have nothing
+   to validate against).
    `ConflictResolver`'s tension level is anchored specifically to the
    Technical-vs-Fundamental point spread, not a general N-way conflict
    metric; the "reference price" cited in target price/stop loss
@@ -1756,6 +1838,644 @@ but are out of that milestone's scope — flagged for the P13.14 full
 security sweep. No live SAHMK/OpenAI network access exists in this
 sandbox for any of P13.1–P13.6; nothing in these milestones claims live
 market-data validation.
+
+## Completed: Basirah AI Evolution Layer (E1–E9)
+
+Full design in the approved plan (`# Basirah AI Evolution Layer —
+Technical Design`); a reuse-first system that tracks every recommendation
+to a real market outcome, computes rigorous accuracy metrics, calibrates
+confidence mathematically, discovers which signal conditions actually
+work, and improves itself only through an observe → paper-trade →
+human-gated-deploy pipeline. Nine incremental phases (E1–E9); **all nine
+are complete**, with the honest gaps and unverified-in-this-sandbox items
+disclosed at the end of this section.
+
+1. **E1 — Live recommendation tracking.** `RecommendationSnapshot`
+   (`src/domain/models/recommendation_snapshot.py`), previously written
+   only by the backtesting engine, gained six new nullable columns via
+   migration `e7c1a4d92f56`: `source` (`"live_scan"` vs. backtest's
+   implicit `run_id is not None`), `variant` (champion/challenger,
+   reserved for the paper-trading phase E8), `is_paper_trade`,
+   `news_summary`, `market_regime`, and `agent_debate_summary` (the
+   latter three reserved for E5/E7 — deliberately left null until that
+   plumbing exists, not backfilled with placeholder data).
+   `MarketIntelligenceRepository.save_symbol_records()` now writes one
+   `RecommendationSnapshot` per successful live scan outcome (`run_id`
+   null, `source="live_scan"`, `is_paper_trade=False`), reusing the same
+   `InvestmentDecision` fields the existing `SymbolIntelligenceRecord`
+   write already reads — no second computation, no duplicated engine
+   call. This is the foundation every later phase (accuracy metrics,
+   calibration, pattern discovery, the intelligence dashboard) reads
+   from, and it now accumulates real data from every scheduled scan
+   instead of only from backtest runs.
+2. **Verified**: migration applies and reverses cleanly against a real
+   local PostgreSQL 16 instance (upgrade → downgrade → re-upgrade round
+   trip); 2 new + 1 extended unit test in
+   `tests/unit/market_intelligence/repositories/test_market_intelligence_repository.py`
+   cover the new write (correct field mapping, skip-on-failure/
+   skip-on-unregistered-stock, and a numpy-float-coercion regression
+   check matching the existing `SymbolIntelligenceRecord` discipline).
+3. **E2 — Outcome evaluation against real forward prices.** New
+   `src/ai_evolution/` package. `recommendation_outcomes` table
+   (migration `b8f4e6c1a930`), one row per (`RecommendationSnapshot`,
+   evaluation horizon) -- status `PENDING/SUCCESSFUL/FAILED/PARTIAL/
+   EXPIRED/CANCELLED`. `create_pending_outcomes()` issues one PENDING
+   row per horizon (1/3/7/14/30/60/90 days) at the same time a live
+   snapshot is written (wired into
+   `MarketIntelligenceRepository.save_symbol_records`, idempotent per
+   snapshot). `evaluate_due_outcomes()` scores whatever has come due
+   using the existing anti-look-ahead
+   `src.backtesting.data_access.load_forward_price_path` -- never
+   before a horizon has actually elapsed, and never invents forward
+   price data: a due row with no bars ingested yet simply stays
+   PENDING and is retried, up to `OUTCOME_EVALUATION_STALE_GRACE_DAYS`
+   (14 by default) past due before it's given up on (EXPIRED). Target/
+   stop-hit classification mirrors `src.backtesting.engine`'s existing
+   convention exactly (an intraday high/low touch, not just a close)
+   so live and backtest scoring stay consistent; a recommendation with
+   no target or stop set (e.g. HOLD) is EXPIRED, not guessed; both
+   thresholds touched in the same window (ambiguous with daily OHLC)
+   is PARTIAL, not arbitrarily resolved. `OutcomeEvaluationScheduler`
+   (disabled by default, `OUTCOME_EVALUATION_SCHEDULER_ENABLED=false`)
+   runs it daily, on the same in-process asyncio pattern every other
+   scheduler in this codebase already uses -- no Celery introduced.
+4. **E3 — Confidence calibration engine.** New
+   `confidence_calibration_models` table (migration `c2a97e5d4b18`) --
+   a *different* calibration concept from the existing
+   `calibration_configs`/`CalibrationEngine` (which tunes contributor
+   WEIGHTS via same-period backtest comparison); this one tunes the
+   CONFIDENCE NUMBER ITSELF against real `RecommendationOutcome`
+   history, and deliberately mirrors `CalibrationConfig`'s exact
+   `DRAFT -> VALIDATED -> ACTIVE` lifecycle (plus
+   `REJECTED/SUPERSEDED/ROLLED_BACK`), including the same
+   application-enforced (not DB-constrained) "at most one ACTIVE row"
+   invariant. `ConfidenceCalibrationEngine.propose()` loads (raw
+   confidence, success/failure) pairs from a configurable reference
+   evaluation horizon (default 7 days; a snapshot's `PARTIAL`/
+   `EXPIRED` outcomes are excluded as ambiguous, not force-labeled),
+   requires at least 30 labeled examples (a disclosed cold-start
+   guard), and fits **Platt scaling** (logistic regression, `coef`/
+   `intercept` stored as plain JSON) below 1000 samples or
+   **isotonic regression** (fitted step-function knots stored as
+   JSON) above it -- new `scikit-learn>=1.4.0` dependency.
+   Temperature scaling from the original 3-method request was
+   deliberately not implemented: it's designed for multi-class
+   classifier logits, not a single scalar confidence paired with a
+   binary outcome, and doesn't fit this data shape. `test()` requires
+   the fit to actually reduce Expected Calibration Error (the same
+   bucket-weighted-gap formula `src.backtesting.metrics
+   .calibration_error()` already uses, reimplemented locally to
+   operate on the outcome table's already-binary label directly)
+   before a model can be activated. Like the existing
+   `CalibrationEngine`, **not wired into any live route in this
+   milestone** -- `activate()` only changes which row is marked
+   ACTIVE; a real `/decision` response is not yet passed through
+   `apply_calibration()`.
+5. **E4 — Extended accuracy metrics.** Three new functions added to
+   the existing `src/backtesting/metrics.py` (no new module -- these
+   are general-purpose statistics that apply to both backtest and live
+   data, unlike Part 4 below): `maximum_calibration_error()` (MCE,
+   the single worst confidence bucket's gap, complementing the
+   existing count-weighted-average `calibration_error()`/ECE);
+   `reliability_diagram_data()` (a chart-ready reformat of
+   `confidence_buckets()`, no new computation); `brier_score()` (mean
+   squared error between each call's own exact stated confidence and
+   its realized binary outcome -- more granular than the 5-bucket ECE/
+   MCE since it never coarsens confidence into a bucket). All three
+   are wired into `compute_all_metrics()`/`full_report()` alongside
+   the existing metrics. A fourth new function,
+   `by_llm_reasoning_involvement()`, lives in new
+   `src/ai_evolution/accuracy_metrics.py` instead, since it reads live
+   `RecommendationSnapshot.agent_debate_summary` directly (no backtest
+   equivalent exists) rather than the backtest-only `EvaluationOutcome`
+   dataclass the metrics.py functions operate on; it splits win rate/
+   average confidence/average return between recommendations that
+   involved a real agent debate and those that didn't -- currently
+   always reports an empty `llm_assisted` group, since
+   `agent_debate_summary` is never populated until E7 builds the real
+   multi-agent panel.
+6. **E5 — Pattern discovery.** New `discovered_patterns` table
+   (migration `d3f8b21e6a45`) and `src/ai_evolution/pattern_discovery
+   .py`, generalizing `statistical_calibration.py`'s one-sample z-test
+   (there: is a contributor's mean directional P&L distinguishable
+   from zero) to a one-sample z-test **for a proportion**
+   (`proportion_significance_test()`: is a named `Signal`'s subgroup
+   win rate distinguishable from the population's baseline win rate),
+   same no-scipy `statistics.NormalDist()` technique. Deliberately
+   narrower than the original request's "RSI ranges/MACD crossings/
+   volume profiles/news sentiment/market regimes/sectors": only
+   `signal_present` conditions (testing each named `Signal` already
+   recorded on `RecommendationSnapshot.signals` at write time) are
+   tested this milestone, since range/regime/sector buckets aren't yet
+   populated as first-class live fields (`market_regime` stays null
+   until E7) -- fabricating those buckets now would mean testing
+   invented data, not real evidence. `discover_patterns()` only
+   inserts/updates `discovered_patterns` rows; a pattern that stops
+   testing significant on re-run is marked `still_valid=False`, never
+   deleted (Part 11's append-only discipline). New
+   `PatternDiscoveryScheduler` (disabled by default,
+   `PATTERN_DISCOVERY_SCHEDULER_ENABLED=false`, weekly), same asyncio
+   scheduler pattern as every other job in this layer. Like E3, never
+   applied automatically to `CalibrationEngine`'s weight proposals or
+   the analyst framework's narration -- this only produces the
+   evidence, wiring it in is a separate, human-reviewed step.
+7. **E6 — `ReflectionEngine` bug fix + daily recommendation review.**
+   Two independent fixes, both real, previously-latent problems:
+   (a) `src.core.autonomous_intelligence_layer.reflection_engine
+   .ReflectionEngine.reflect_on_memories()`/`_generate_reflection_prompt()`
+   called `MemoryStore.retrieve_memories()`/`.summarize_memories()` --
+   neither method ever existed (confirmed: `main.py`/`src/api/` never
+   import this class, and the one place that held a reference to it,
+   `SupervisorAI`, never called these methods either, so the bug was
+   never exercised in any code path -- including its own unit tests,
+   which mocked `MemoryStore` widely enough that `Mock(spec=...)`
+   silently accepted the nonexistent method names). Fixed by adding a
+   real `MemoryStore.retrieve_by_source(source, memory_type=None,
+   limit=10)` method (no by-source retrieval existed at all; `search()`
+   only matches free-text content, `retrieve()` only filters by memory
+   type) and correcting both call sites to use it plus the real
+   `summarize(entries)`; the one test file that mocked the fictional
+   API was corrected, and new tests using a real (not mocked)
+   `MemoryStore` instance were added specifically so a regression back
+   to a nonexistent method surfaces as a real `AttributeError` again.
+   (b) The actual, purpose-built deliverable: new
+   `reflection_reports` table (migration `f6c1e9a4d720`) and
+   `src.ai_evolution.daily_reflection.generate_daily_reflection()` --
+   a non-LLM, descriptive-statistics review of every
+   `RecommendationOutcome` evaluated on a given day (default:
+   yesterday UTC), flagging the most common signal among that day's
+   failed recommendations and whether confidence actually separated
+   successful from failed calls, writing plain-string
+   `key_findings`/`improvement_suggestions` -- suggestions only,
+   nothing here is applied to production automatically. This is
+   functionally independent of fix (a): the generic agent-memory
+   `ReflectionEngine` reflects on arbitrary agent goals/memories, not
+   specifically on trading outcomes, so wiring recommendation review
+   into that abstraction would have been a mismatch; a purpose-built
+   function reading `RecommendationOutcome`/`RecommendationSnapshot`
+   directly was the more honest design. New
+   `DailyReflectionScheduler` (disabled by default,
+   `DAILY_REFLECTION_SCHEDULER_ENABLED=false`, daily), same asyncio
+   scheduler pattern as every other job in this layer.
+8. **E7 — Real multi-agent panel.** New `src/ai_evolution/agents/`
+   package + `agent_opinions`/`debate_sessions` tables (migration
+   `a1c5f8e3b207`). Seven opinion-producing agents run once per symbol/
+   day, alongside the existing live scan (wired into
+   `MarketIntelligenceRepository.save_symbol_records`, gated behind
+   `AGENT_PANEL_ENABLED`, default off -- even the non-LLM agents write
+   real DB rows per scan). Only 2 of 7 (News, Sentiment) make a real
+   LLM call, plus the Judge on debate; Technical/Fundamental/Risk/Quant
+   wrap already-deterministic `InvestmentDecision.breakdown` categories
+   (Quant mapped to Momentum -- no separate "quant" contributor exists
+   in `AIDecisionEngine`, a disclosed mapping choice); Macro is an
+   always-`UNAVAILABLE` no-op (no real macro data source exists, same
+   honesty already used by `external_factor_contributors.py`). News/
+   Sentiment/Judge all reuse `OpenAILLMAdapter` verbatim -- the exact
+   R3 safety pattern (hard timeout, never raises, numeric-grounding
+   rejection) -- News/Sentiment reasoning over real headlines already
+   analyzed by `NewsIntelligenceService.get_symbol_sentiment()`, no new
+   news retrieval. Debate + Judge (the only LLM-cost-bearing steps)
+   trigger only when `src.ai_evolution.agents.conflict` detects
+   Technical-vs-Fundamental tension at MODERATE (>=15pt spread) or
+   HIGH (>=30pt) -- the exact thresholds `src.analysis.analyst
+   .conflict_resolver` already uses, reimplemented against
+   `InvestmentDecision.breakdown` directly since that resolver's
+   richer `Evidence`/`InterpretedSignals` objects aren't exposed back
+   to the live scan caller. Debate/voting reuse the existing
+   `DebateEngine`/`VotingSystem` bookkeeping from
+   `autonomous_intelligence_layer` unchanged -- mapped onto a single
+   BULLISH/BEARISH proposal, `APPROVED`/`REJECTED`/`TIE` -> BUY/SELL/
+   HOLD. Agents are deliberately plain classes, not
+   `src.core.base_agent.BaseAgent` subclasses -- that base class is a
+   heavyweight, tool-calling/lifecycle abstraction built for a
+   different kind of agent, and forcing simple stateless wrappers to
+   inherit it would add ceremony with no behavior; a disclosed,
+   reasoned deviation from the literal request, in the same spirit as
+   this design's other stated departures. The whole panel invocation
+   never raises (`AgentPanelOrchestrator.run_panel`'s own blanket
+   `except Exception`) -- a panel bug must never trigger
+   `MarketScanner`'s retry-on-exception path for a symbol whose real
+   decision already succeeded; `save_symbol_records` became `async`
+   to support this (its one production caller,
+   `MarketIntelligenceEngine.execute_scan`, now awaits it).
+9. **E8 — Champion/challenger paper trading.** New
+   `src/ai_evolution/paper_trading.py` -- no new table (reuses
+   `RecommendationSnapshot.variant`/`is_paper_trade`, both added by E1
+   and unused until now, plus `CalibrationConfig`/`recommendation_outcomes`
+   unchanged). A "challenger" is always the most recently VALIDATED
+   (not yet ACTIVE) `CalibrationConfig` -- a candidate that already
+   passed `CalibrationEngine`'s own validation-period backtest and is
+   waiting on a human `activate()` call; DRAFT/REJECTED/SUPERSEDED/
+   ROLLED_BACK configs are never paper-traded. `SymbolScanOutcome`
+   gained a `context: Optional[AnalysisContext]` field (not persisted,
+   in-process only) so `generate_challenger_snapshot()` can re-score
+   the *exact same* frozen `AnalysisContext` the champion decision was
+   built from -- no second data fetch -- through a second
+   `AIDecisionEngine` built via
+   `src.backtesting.calibration.parameters.build_strategy_kwargs`, the
+   identical JSON-config-to-engine logic `AIDecisionEngineStrategy`
+   already uses for backtests. The result is persisted as a second
+   `RecommendationSnapshot` (`variant="challenger"`,
+   `is_paper_trade=True`) with its own PENDING `recommendation_outcomes`
+   rows via the unchanged `create_pending_outcomes()` -- a challenger's
+   outcomes are scored by the exact same `OutcomeEvaluationScheduler`
+   as a champion's, zero duplicated evaluation logic. The champion
+   snapshot is only labelled `variant="champion"` at the moment a
+   challenger is actually generated alongside it (so the pairing stays
+   explicit); when paper trading is off or no VALIDATED config exists,
+   an ordinary live snapshot's `variant` stays `null`, unchanged from
+   before E8. Wired into `save_symbol_records()` gated behind
+   `PAPER_TRADING_ENABLED` (default off, same disabled-by-default
+   posture as every other scheduler/feature in this layer);
+   `generate_challenger_snapshot()` never raises (mirrors
+   `AgentPanelOrchestrator.run_panel`'s discipline -- a challenger bug
+   must never break the champion write it rides alongside).
+   `two_sample_significance_test()` generalizes E5's one-sample
+   proportion z-test to a genuine two-sample, pooled-variance,
+   **one-sided** proportion z-test (does the challenger's win rate
+   significantly *exceed* the champion's, not merely differ from it --
+   Part 9/10 of the design requires a significant improvement before a
+   human is even shown the activation option). `significant` requires
+   both samples to meet a minimum size (default 30, same "p-value AND
+   minimum sample" discipline as every other significance test in this
+   layer) and the challenger's observed rate to actually exceed the
+   champion's. `compare_champion_vs_challenger()` loads terminal
+   (SUCCESSFUL/FAILED) outcomes for both variants at a given horizon
+   and runs the test -- purely descriptive; no code path in this
+   module calls `CalibrationEngine.activate()`, which remains the only
+   way to promote a config to ACTIVE, unchanged and still entirely
+   human-gated. 14 new unit tests in
+   `tests/unit/ai_evolution/test_paper_trading.py` (significance-test
+   edge cases, challenger-config selection, snapshot generation
+   including a never-raises case on a malformed config, and
+   comparison-query correctness) plus 4 new repository-level tests
+   verifying the `PAPER_TRADING_ENABLED` gate and the champion/
+   challenger pairing end to end.
+10. **E9 — Basirah Intelligence Dashboard + admin routes.** New
+    `daily_intelligence_snapshots` table (migration `9853a4846eab`,
+    current Alembic head) + `DailyIntelligenceSnapshot` model -- one
+    pre-aggregated row per day, so the dashboard reads a precomputed
+    row instead of live-computing aggregates on every page load, per
+    Part 12 of the design. New `src/ai_evolution/daily_intelligence_aggregation.py::aggregate_daily_intelligence()`
+    mirrors `generate_daily_reflection()`'s exact query shape and
+    idempotent upsert-by-date convention, and reuses
+    `confidence_calibration.expected_calibration_error()` verbatim for
+    the day's ECE (that helper was promoted from module-private to
+    public specifically for this reuse -- a small, disclosed
+    refactor, not a new implementation). Computes: recommendations
+    evaluated/successful/failed/partial/expired that day, win rate,
+    calibration error, sector breakdown (joins `RecommendationSnapshot.stock_id`
+    -> `Stock.sector`), and E7 agent-panel activity (how many
+    snapshots got a panel that day, how many triggered a debate,
+    and the resulting agreement rate = 1 − debate rate). Best/worst
+    `DiscoveredPattern` rows (E5, among `still_valid=True`) are
+    included by win rate, always disjoint even when the total pattern
+    count is small. `market_regime_breakdown` is deliberately *absent*
+    from the table and the dashboard -- `RecommendationSnapshot.market_regime`
+    is not populated by any phase of this milestone (a gap disclosed
+    since E1), so a regime breakdown here would have to be fabricated;
+    omitted rather than faked. New `DailyIntelligenceAggregationScheduler`
+    (same asyncio loop pattern as every other E-phase scheduler),
+    gated behind `DAILY_INTELLIGENCE_AGGREGATION_SCHEDULER_ENABLED`
+    (default off). New staff-gated (`StaffRole.ADMIN`) routes under
+    `/api/v1/admin/ai-evolution/*`: `GET /dashboard` (latest or a
+    specific date's snapshot, 404s honestly if none has been
+    aggregated yet -- never fabricates one), `GET /calibration-status`
+    (both the contributor-WEIGHT `CalibrationConfig` and the
+    confidence-probability `ConfidenceCalibrationModel` active rows
+    side by side, plus E8's latest eligible challenger version),
+    `GET /patterns` (every `DiscoveredPattern`, optional `still_valid`
+    filter), `GET /reflections` (`ReflectionReport` history, most
+    recent first), and `GET /paper-trade-comparison` (E8's
+    `compare_champion_vs_challenger()`, read-only -- calls no
+    activation path). Per Part 14 of the design's non-negotiable
+    rule, **no route or aggregation function here accepts a
+    "hide failures" parameter at all** -- `failed_count` is always
+    computed and always present in every response that reports counts,
+    structurally, not by convention. 10 new unit tests for the
+    aggregation function, 4 new scheduler tests, and 9 new integration
+    tests for the four routes (permission gating, 404 handling,
+    correct field mapping, and an explicit assertion that failed
+    counts are never suppressed).
+11. **Disclosed gaps and unverified-in-this-sandbox items across
+    E1–E9**: `market_regime` on `RecommendationSnapshot` stays
+    unpopulated (no phase populates it -- E9's dashboard omits a
+    regime breakdown for this exact reason). No live outcome has yet
+    been evaluated against real SAHMK forward price data in this
+    sandbox (no live network access here); E2–E9 are verified against
+    hand-seeded price bars, synthetic outcome data, a fake LLM adapter
+    (no real OpenAI call anywhere in this milestone's tests), and real
+    PostgreSQL 16 migration round trips for every schema change (E1,
+    E2, E3, E5, E6, E7, E9 each add a table/columns; all seven
+    migrations have been verified to upgrade and downgrade cleanly
+    against a real local Postgres 16 instance, most recently E9's
+    `9853a4846eab`). E8's paper trading has not yet observed a real
+    challenger config in production -- no `CalibrationProposalJob`
+    exists yet to generate one automatically (Part 6 of the design is
+    still manual), so the champion/challenger comparison logic, and
+    E9's calibration-status/paper-trade-comparison routes that read
+    it, are verified against seeded data only, not a real calibration
+    cycle. No scheduler in this layer has run unattended in a real
+    deployment (all are `*_ENABLED=false` by default and were only
+    ever started/stopped in tests); the daily/weekly aggregation
+    numbers a real deployment would accumulate over time do not yet
+    exist anywhere.
+
+## Live Market Validation Session (L1) — Blocked at the network layer, not in Basirah's code
+
+Two separate attempts (different sessions, same execution environment) to run
+Basirah's pipeline against the real SAHMK live feed both stopped at the same
+point, for the same reason, confirmed by three independent checks each time:
+a real `SahmkClient.get_quote()` call, a raw `curl` through the same proxy,
+and the proxy's own diagnostic status/README.
+
+- **Result**: `app.sahmk.sa` returns `403 Forbidden` at the sandbox's
+  outbound proxy, before SAHMK authentication is ever reached. The proxy's
+  own README classifies 403/407 as an organization egress-policy denial and
+  states explicitly not to retry or route around it. This is not a SAHMK
+  key/plan/rate-limit problem — the request never leaves the sandbox.
+- **Local DB checked too**: PostgreSQL was not running in either session
+  (started manually both times); once started and migrated to head, the
+  `stocks`/`price_bars`/`recommendation_snapshots`/`recommendation_outcomes`
+  tables were all empty — no prior session in this environment has ever
+  ingested a real company or price bar, so even a reachable SAHMK would need
+  a full ingestion pass before a scan had a symbol universe to work with.
+- **What was deliberately NOT done**: falling back to `DevMarketDataProvider`
+  (synthetic data, which `provider_factory.py` does automatically and
+  silently so the app never fails to boot) and presenting the result as a
+  live validation. No recommendations, rankings, or "historical track
+  record" rows were fabricated. Zero rows were written to any AI Evolution
+  Layer table this session.
+- **Conclusion**: Basirah's own code was never the blocker in either
+  attempt — every live-data code path (`SahmkClient`, `provider_factory`,
+  `IngestionScheduler`, `MarketScanner`, `save_symbol_records`) is real,
+  already covered by the existing test suite, and ready to run the moment
+  this sandbox's network policy allows `app.sahmk.sa` egress (a setting
+  chosen when the Claude Code environment is created, not something
+  fixable from inside the session).
+
+### Live Market Mode (built dormant, per explicit instruction, while L1 stays blocked)
+
+New `src/market_intelligence/trading_calendar.py` (pure datetime math, no
+I/O) encodes Tadawul's published regular session hours — Sunday-Thursday,
+10:00-15:00 Arabia Standard Time (UTC+3, no DST) — as `is_market_open()`,
+`seconds_until_next_open()`, `seconds_until_close()`. **Disclosed gap**: this
+does not account for Tadawul's exchange holidays (Saudi National Day, Eid,
+etc.) — no holiday calendar feed is integrated; on a holiday that falls on a
+Sunday-Thursday this will incorrectly report the market open. Closing that
+gap needs either a maintained holiday list or a live market-status read,
+neither of which exists yet.
+
+New `src/market_intelligence/live_market_mode.py::LiveMarketModeScheduler`
+is a thin supervisor, not a third scan/ingestion implementation: it owns one
+`IngestionScheduler` and one `IntervalMarketIntelligenceScheduler` (both
+already real, already independently tested) and only decides *when* to
+`start()`/`stop()` them — every dedup/idempotency/retry guarantee those two
+already provide (unique DB constraints, non-overlapping job loops,
+per-job backoff) carries over unchanged, nothing here duplicates that logic.
+A cheap (`LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS`, default 60s, no network
+I/O) tick starts both inner schedulers the moment the Tadawul session opens
+and stops them the moment it closes.
+
+Gated behind `LIVE_MARKET_MODE_ENABLED` (default off, same disabled-by-
+default posture as every scheduler in this codebase) and wired into
+`main.py` as an *alternative* to, not additive with, the standalone
+`INGESTION_SCHEDULER_ENABLED`/`MARKET_INTELLIGENCE_SCHEDULER_ENABLED`
+flags — when Live Market Mode is enabled, those two standalone startup
+blocks skip starting a second, redundant pair of always-on schedulers.
+`GET /ingestion/status` now also reports `live_market_mode_running` and
+`live_market_mode_tadawul_open`.
+
+**Honesty note, per this session's explicit instruction**: this module has
+NOT been validated against a live market open/close transition or real
+SAHMK traffic — that requires the same network access L1 has been blocked
+on twice. It is verified only against the existing automated test suite (28
+new unit tests: trading-calendar edge cases at exact open/close boundaries,
+weekend rollover, timezone conversion; and the scheduler's start/stop
+lifecycle, open/close transition, exception survival, all against fake
+start-stoppable doubles and an injected clock — no real scheduler, network,
+or database touched). It is real, tested code, not a placeholder — but "real
+and tested against synthetic doubles" is a different, weaker claim than "L1
+was validated," and this document is not claiming the latter.
+
+## Live Market Validation Session (L2) — Full pipeline verified via GitHub Actions
+
+L1 (above) established that live SAHMK access was blocked at this sandbox's
+network layer, never inside Basirah's own code, and that a GitHub-hosted
+runner has no such restriction. L2 executed the same idea end to end: not
+just connectivity, but the full production pipeline against real SAHMK data
+and a real PostgreSQL database.
+
+**Discovery**: `.github/workflows/sahmk-live-verification.yml` (built and run
+successfully in an earlier session, confirmed via `mcp__github__actions_list`
+-- 4 prior runs, all `conclusion: success`) had already live-verified
+SAHMK connectivity, authentication, and response schemas for quotes, market
+summary, company profile/directory, historical bars, and dividends -- with
+two real field-name bugs found and fixed as a result (see
+`docs/SAHMK_INTEGRATION.md`). This was discovered and reported, not
+re-derived from scratch.
+
+**New this session**: `scripts/verify_sahmk_live_pipeline.py` +
+`.github/workflows/sahmk-live-pipeline-validation.yml` (additive, does not
+modify the existing connectivity workflow) run the entire production
+pipeline -- SAHMK ingestion -> a real ephemeral PostgreSQL 16 service
+container -> the unmodified `AnalystEngine`/`AIDecisionEngine` pipeline ->
+recommendation storage -> a real-clock `LiveMarketModeScheduler` soak test --
+with a hard gate that aborts rather than silently falling back to synthetic
+data if SAHMK is unreachable even from the runner.
+
+**Operational note**: the new workflow had to be merged to `main` via a
+minimal, scoped PR (#18) before GitHub's Actions API would allow dispatching
+it -- workflow_dispatch requires a workflow to be registered from the
+default branch. A first dispatch (run `30354883364`, against `main`) failed
+immediately with `ModuleNotFoundError: No module named 'src.ai_evolution'`
+-- not a SAHMK/network problem, but `main` lacking this session's
+AI Evolution Layer/Live Market Mode work, which lives only on
+`feature/sahmk-live-verification`. Fixed by re-dispatching with
+`ref: feature/sahmk-live-verification` (the now-registered workflow can run
+any ref's full tree, not just main's) -- run `30359750520`,
+`conclusion: success`.
+
+**Confirmed live, real evidence** (run `30359750520`, symbols `2222, 2010,
+1120, 7010, 1180`):
+
+- Both market and fundamental providers resolved to `'sahmk'` (the hard gate
+  passed -- no synthetic fallback).
+- `sync_symbols`: 5/5 succeeded. `ingest_historical_ohlcv`: 5/5 succeeded,
+  295 real daily bars upserted. `ingest_dividends`: 5/5 succeeded (0 rows --
+  none in range, not an error). `ingest_fundamentals`: **0/5 succeeded** --
+  a real, honestly-surfaced failure (SAHMK's `/financials/` nested field
+  names don't match this integration's parsing for any symbol tested; see
+  `docs/SAHMK_INTEGRATION.md` Known Gap #2 -- not fixed in this session, out
+  of scope for a verification run).
+- Market scan: `MarketScanRun` `SUCCESS`, 5/5 symbols, 52.6s.
+- **5 real, genuinely differentiated recommendations**: `1120` SELL 49.0%
+  confidence, `1180` BUY 67.0%, `2010` HOLD 81.0%, `2222` HOLD 61.0%, `7010`
+  SELL 59.9% -- each with real per-symbol technical reasoning (actual MACD
+  values) and real target/stop prices. Not hardcoded, not templated.
+- Database integrity: 5 snapshots, 0 duplicates, 0 null critical fields, 0
+  orphaned FKs, 35/35 expected PENDING outcome rows (5 x 7 evaluation
+  horizons) -- PASSED.
+- Live Market Mode soak: dispatched at 15:39 Arabia Standard Time, after
+  Tadawul's real 15:00 close, so `is_market_open()` correctly read `False`
+  against the real clock and the inner schedulers correctly stayed idle for
+  the full 45s window -- 0 new snapshots, clean stop, no leaked asyncio
+  tasks. This confirms the "stays idle while closed" branch against real
+  time; the "market just opened -> auto-scans" branch still needs a run
+  dispatched during an actual Sun-Thu 10:00-15:00 AST session to observe
+  directly -- not yet done (today's real market closed while this session
+  was still building/registering the workflow).
+
+**What this does and does not establish**: this is real evidence that
+Basirah's production code -- unmodified -- can authenticate to SAHMK,
+ingest real market data into a real database, run its full technical/
+fundamental/decision/confidence pipeline, and produce and durably store
+genuinely differentiated recommendations, with verified referential and
+uniqueness integrity. It does **not** establish frontend integration (no
+UI was exercised in this GitHub Actions run -- that requires a separate,
+larger validation with a running frontend + backend + live data, not
+attempted this session), does not establish the open-market Live Market
+Mode transition (noted above), and does not establish anything about
+`/financials/`'s nested schema (confirmed broken, not fixed).
+
+## Live Market Validation Session (L3) — Open-market run, full evidence-based report
+
+Full 16-objective report: `docs/SAHMK_L3_OPEN_MARKET_VALIDATION_REPORT.md`.
+Dispatched during a genuinely open Tadawul session (2026-07-29, ~10:58 AST,
+confirmed via `is_market_open()` against the real clock both before dispatch
+and inside the job) — run [`30433534477`](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30433534477),
+`conclusion: success`, against `feature/sahmk-live-verification` commit
+`4a438ca`.
+
+**Closes the one gap L2 left open**: Live Market Mode's inner ingestion and
+scan schedulers were observed starting *automatically*, with no manual
+trigger, the moment the real market read as open — and the automatically
+triggered scan produced a second, real batch of 5 recommendations
+(post-soak DB total: 10, both integrity-checked and PASSED).
+
+**Surfaces two new, real, precisely-traced gaps this exact run** (both
+disclosed, neither fixed — out of scope for a validation run):
+- `market_price_at_evaluation`/`latest_price` are `None` on every row
+  during live trading hours: `SahmkMarketDataProvider.get_stock_data()`
+  sources price from *today's completed daily bar*, which does not exist
+  yet mid-session; the already-confirmed-live `/quote/` endpoint (real
+  intraday price) is never used for this. See the L3 report's Finding A.
+- Company display names are placeholders (`"Stock {symbol}"`), not real
+  names: `SahmkMarketDataProvider` has no `get_company_profile` method, so
+  `sync_symbols()`'s enrichment branch silently never fires. See Finding B.
+
+**Frontend validation: NOT VERIFIED, confirmed structurally infeasible in
+this sandbox**, not just untried — direct TCP to PostgreSQL's default port
+(5432) is blocked at the network layer for any external host, and HTTPS to
+any non-SAHMK, non-allowlisted host (tested against two arbitrary hosts) is
+also rejected with 403 at the proxy, identically to `app.sahmk.sa`. There is
+no path from this sandbox to connect a locally-run frontend/backend to
+either the live API or a persistent external database that could hold
+CI-generated real data. Not worked around with synthetic data.
+
+**Database persistence**: verified only *within* a single workflow run (two
+full integrity passes, both PASSED, spanning the manual and the
+automatically-triggered batches). The CI database is an ephemeral service
+container, destroyed when the job ends — "records remain available after
+the workflow completes" is explicitly NOT VERIFIED, not assumed.
+
+## Production-readiness pass — Phase 1 root-cause fixes (2026-07-29)
+
+Following the L3 report above, all three of its disclosed, unfixed defects
+were root-caused with real evidence and fixed (code + tests; live
+re-validation is Phase 2, not yet run as of this section):
+
+**Fix #1 — current price / live quote (was Finding A)**: `build_analysis_
+context()` (`src/analysis/context_builder.py`) now calls `market_provider.
+get_latest_quote()` (the already-confirmed-live `/quote/` endpoint)
+opportunistically via `getattr` as the primary price source, falling back
+to the existing daily-bar `get_stock_data()` close only when a live quote
+is unavailable (`DevMarketDataProvider`, or a quote-fetch failure).
+`change`/`change_percent`/`timestamp`/`source` are carried in
+`AnalysisContext.extra["quote"]` — additive, no schema migration, no new
+persisted columns, same pattern already used for news sentiment. Covered by
+3 new unit tests (live quote preferred over stale bar; falls back cleanly
+on quote failure; falls back cleanly when the provider has no quote
+support at all).
+
+**Fix #2 — company profile enrichment (was Finding B)**:
+`SahmkMarketDataProvider` gained the missing `get_company_profile()` method
+(wiring the already-live `SahmkMarketDataService.get_company_profile()`
+through), so `sync_symbols(discover_all=False)`'s existing enrichment
+branch actually fires instead of silently never running. Also added
+`industry`/`exchange` — two new nullable `Stock` columns (migration
+`f3a9c7d21b84`) — populated from `SahmkCompanyProfile` via the same
+defensive multi-key-name extraction already used for name/sector. Applied
+symmetrically to `SahmkFundamentalDataProvider.get_company_profile()` for
+consistency. Covered by new unit tests across the service, both provider
+adapters, and `sync_symbols()`.
+
+**Fix #3 — fundamental ranking pipeline (Known Gap #2)**: a real, live raw-
+response capture (new `scripts/verify_sahmk_financials_raw.py`, workflow
+run [`30436660246`](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30436660246),
+3 real symbols) confirmed SAHMK's actual `/financials/{symbol}/` shape:
+three per-period statement arrays (`income_statements`, `balance_sheets`,
+`cash_flows`), not the flat object the original parser assumed.
+`SahmkMarketDataService.get_financials()` now parses this real shape
+(revenue/gross_profit/net_income from the matching income statement;
+total_assets/total_liabilities/stockholders_equity/total_debt from the
+matching balance sheet), with the old flat-object lookup kept as a
+fallback. The same capture also confirmed `current_assets`,
+`current_liabilities`, `shares_outstanding`, and `eps` are **never present
+anywhere in this response, for any symbol tested** — a genuine data-source
+gap, not a naming mismatch. Rather than continuing to hard-block every real
+ingestion on data that structurally does not exist, `FundamentalSnapshot`'s
+corresponding columns are now nullable (migration `a8e2f4c91d37`), the
+6 ratio functions that read them
+(`current_ratio`/`quick_ratio`/`cash_ratio`/`price_to_earnings`/
+`price_to_book`/`market_cap`/`eps_growth`) now guard against `None` inputs
+instead of assuming they're always present, and `SahmkFundamentalDataProvider`
+now only requires the 5 fields SAHMK genuinely and reliably returns
+(revenue, net_income, total_assets, total_liabilities, total_equity) —
+`FundamentalScoreContributor` already computes a partial score from
+whichever ratios are available (unchanged; this is why the fix is
+contained to the data layer). Once real `FundamentalSnapshot` rows exist,
+`fundamental_score` should stop being `None` and the Strongest Fundamental
+/ Best Medium Term / Best Long Term rankings should stop being empty — this
+causal chain is argued from code, not yet re-observed live (Phase 2).
+
+## Production-readiness pass — Phase 2 live re-validation (2026-07-29)
+
+Dispatched immediately after the Phase 1 commit above, during a real, open
+Tadawul session (`is_market_open()` confirmed `True` both before dispatch
+and inside the job) — workflow run
+[`30437891031`](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30437891031),
+`conclusion: success`, `FINAL_STATUS=PIPELINE_VERIFIED`, against
+`feature/sahmk-live-verification` commit `9704655` (the Fix #3 commit).
+Real, unmocked evidence, symbols `2222/2010/1120/7010/1180`:
+
+- **Fix #1 confirmed**: `market_price_at_evaluation` is populated with a
+  real intraday price on all 5 rows (e.g. `62.2500`, `37.9400`, `49.6800`,
+  `26.1600`, `42.3600`) — no longer `None` during trading hours.
+- **Fix #2 confirmed**: real Arabic company names on every row — الراجحي
+  (Al Rajhi Bank, 1120), الأهلي (Al Ahli, 1180), سابك (SABIC, 2010),
+  أرامكو السعودية (Saudi Aramco, 2222), اس تي سي (STC, 7010) — not
+  placeholder `"Stock {symbol}"` names.
+- **Fix #3 confirmed at both layers**: `ingest_fundamentals` result was
+  `{"symbols_requested": 5, "symbols_succeeded": 5, "symbols_failed": 0,
+  "rows_upserted": 5, "errors": {}}` (previously 0/5 succeeded, every
+  symbol rejected) — and downstream, `fundamental_score` is populated on
+  every recommendation row (`71.00`, `64.00`, `39.00`, `71.00`, `71.00`),
+  no longer `None`.
+- Database integrity: **PASSED**, both immediately after the manual scan
+  and again after the Live Market Mode soak.
+- Live Market Mode soak: `market_open_at_start=True`,
+  `post_soak_integrity_passed=True`, `no_leaked_tasks=True`;
+  `auto_generated_row_count=0` — the 45s/5s-poll soak window did not
+  complete a full auto-triggered scan cycle this run (a timing artifact
+  of the short soak window, not a defect; the open-market auto-trigger
+  path itself was already verified in the L3 report).
+
+**Not yet done as of this section**: a formal, expanded database-validation
+pass (Phase 3), a per-subsystem AI explainability audit (Phase 4), and the
+repository-wide TODO/mock/placeholder audit (Phase 5) — these are separate,
+still-pending phases, not implied by the pipeline-level integrity check
+above.
 
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this

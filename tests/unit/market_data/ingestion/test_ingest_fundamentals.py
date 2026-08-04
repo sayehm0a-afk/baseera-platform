@@ -87,6 +87,49 @@ async def test_ingest_respects_period_type(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_ingest_persists_a_snapshot_when_sahmk_never_reports_current_assets_shares_eps(
+    session_factory,
+):
+    # Real SAHMK /financials/ shape (confirmed live, workflow run
+    # 30436660246): current_assets/current_liabilities/
+    # shares_outstanding/eps are absent, not present-but-null.
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_fundamentals = AsyncMock(
+        return_value={
+            "symbol": "1120",
+            "period_type": "annual",
+            "fiscal_period_end": "2025-12-31",
+            "revenue": 39_093_965_000,
+            "gross_profit": 6_730_335,
+            "net_income": 24_791_754_000,
+            "total_assets": 1_043_268_297_000,
+            "total_liabilities": 900_355_952_000,
+            "total_equity": 142_912_345_000,
+            "total_debt": 80_320_898_000,
+            "dividend_per_share": 0,
+            "source": "sahmk",
+            "is_synthetic": False,
+        }
+    )
+
+    result = await ingest_fundamentals(["1120"], provider, session_factory)
+
+    assert result.symbols_succeeded == 1
+    assert result.symbols_failed == 0
+
+    session = session_factory()
+    snapshot = session.query(FundamentalSnapshot).filter_by(stock_id=session.query(Stock).one().id).one()
+    assert snapshot.revenue == 39_093_965_000
+    assert snapshot.current_assets is None
+    assert snapshot.current_liabilities is None
+    assert snapshot.shares_outstanding is None
+    assert snapshot.eps is None
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_ingest_isolates_per_symbol_failures(session_factory):
     provider = AsyncMock()
     provider.authenticate = AsyncMock(return_value=True)

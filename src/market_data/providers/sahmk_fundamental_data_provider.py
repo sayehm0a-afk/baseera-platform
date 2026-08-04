@@ -40,21 +40,26 @@ from src.market_data.sahmk.service import SahmkMarketDataService
 
 logger = logging.getLogger(__name__)
 
+# current_assets/current_liabilities/shares_outstanding/eps are
+# deliberately NOT required: a real, live capture of SAHMK's
+# /financials/{symbol}/ response (3 symbols, workflow run 30436660246)
+# confirmed they are never present anywhere in it -- see
+# docs/SAHMK_INTEGRATION.md. FundamentalSnapshot stores them as
+# nullable and every ratio that needs one already degrades to None
+# rather than raising (src/analysis/fundamental/ratios/).
 _REQUIRED_FIELDS = [
     "revenue",
     "net_income",
     "total_assets",
     "total_liabilities",
     "total_equity",
-    "current_assets",
-    "current_liabilities",
-    "shares_outstanding",
-    "eps",
 ]
 
 
 class SahmkFundamentalDataProvider(IFundamentalDataProvider):
     """Live fundamental data provider backed by the SAHMK API."""
+
+    is_synthetic = False
 
     def __init__(self, api_endpoint: Optional[str] = None, api_key: Optional[str] = None, **kwargs):
         self._service = SahmkMarketDataService(
@@ -153,6 +158,8 @@ class SahmkFundamentalDataProvider(IFundamentalDataProvider):
             "symbol": profile.symbol,
             "name": profile.name,
             "sector": profile.sector,
+            "industry": profile.industry,
+            "exchange": profile.exchange,
             "source": "sahmk",
             "is_synthetic": False,
         }

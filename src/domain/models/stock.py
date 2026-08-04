@@ -24,6 +24,8 @@ class Stock(Base):
     name_en = Column(String(255), nullable=False)
     name_ar = Column(String(255), nullable=True)
     sector = Column(String(128), nullable=True)
+    industry = Column(String(128), nullable=True)
+    exchange = Column(String(32), nullable=True)
     currency = Column(String(3), nullable=False, default="SAR", server_default="SAR")
     lot_size = Column(Integer, nullable=False, default=1, server_default="1")
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")

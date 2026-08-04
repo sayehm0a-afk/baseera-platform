@@ -45,6 +45,8 @@ class SahmkMarketDataProvider(IMarketDataProvider):
     (src.market_data.config) -- never a hardcoded value.
     """
 
+    is_synthetic = False
+
     def __init__(self, api_endpoint: Optional[str] = None, api_key: Optional[str] = None, **kwargs):
         self.api_endpoint = api_endpoint
         self.api_key = api_key
@@ -154,11 +156,30 @@ class SahmkMarketDataProvider(IMarketDataProvider):
                 "symbol": c.symbol,
                 "name": c.name,
                 "sector": c.sector,
+                "industry": c.industry,
+                "exchange": c.exchange,
                 "source": "sahmk",
                 "is_synthetic": False,
             }
             for c in companies
         ]
+
+    async def get_company_profile(self, symbol: str) -> Dict[str, Any]:
+        """Company profile via GET /company/{symbol}/. Not part of
+        IMarketDataProvider -- exposed opportunistically for
+        ingest_symbols.sync_symbols(), which enriches a Stock's
+        name/sector/industry/exchange from this when the symbol wasn't
+        already covered by the full directory discovery pass."""
+        profile = await self._service.get_company_profile(symbol)
+        return {
+            "symbol": profile.symbol,
+            "name": profile.name,
+            "sector": profile.sector,
+            "industry": profile.industry,
+            "exchange": profile.exchange,
+            "source": "sahmk",
+            "is_synthetic": False,
+        }
 
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:
         summary = await self._service.get_index_snapshot(index_name)

@@ -10,6 +10,7 @@ from src.backtesting.metrics import (
     EvaluationOutcome,
     average_forward_return,
     breakdown_by,
+    brier_score,
     calibration_error,
     compute_all_metrics,
     confidence_buckets,
@@ -18,10 +19,12 @@ from src.backtesting.metrics import (
     full_report,
     loss_rate,
     max_drawdown,
+    maximum_calibration_error,
     median_forward_return,
     position_sizing_quality,
     precision_recall,
     profit_factor,
+    reliability_diagram_data,
     sharpe_ratio,
     sortino_ratio,
     stop_loss_hit_rate,
@@ -237,6 +240,66 @@ def test_calibration_error_none_when_no_directional_data():
     assert calibration_error([]) is None
 
 
+def test_maximum_calibration_error_is_the_worst_single_bucket_gap():
+    outcomes = [
+        # 80-100 bucket: 90% confidence, 100% realized -- small 0.10 gap.
+        _outcome(recommendation="BUY", confidence=90.0, forward_return_pct=5.0),
+        # 20-40 bucket: 30% confidence, 0% realized -- 0.30 gap, the worst one.
+        _outcome(recommendation="BUY", confidence=30.0, forward_return_pct=-2.0),
+    ]
+    ece = calibration_error(outcomes)["overall_error"]
+    mce = maximum_calibration_error(outcomes)
+    assert mce == pytest.approx(0.30, abs=1e-9)
+    assert mce >= ece  # MCE is never smaller than the count-weighted average it's drawn from
+
+
+def test_maximum_calibration_error_none_when_no_directional_data():
+    assert maximum_calibration_error([]) is None
+
+
+def test_reliability_diagram_data_reshapes_confidence_buckets():
+    outcomes = [
+        _outcome(recommendation="BUY", confidence=85.0, forward_return_pct=10.0),
+        _outcome(recommendation="BUY", confidence=90.0, forward_return_pct=-5.0),
+    ]
+    points = reliability_diagram_data(outcomes)
+    assert len(points) == 1
+    point = points[0]
+    assert point["confidence_range"] == "80-100"
+    assert point["predicted"] == pytest.approx(87.5 / 100.0)
+    assert point["actual"] == pytest.approx(0.5)
+    assert point["count"] == 2
+
+
+def test_reliability_diagram_data_empty_when_no_directional_data():
+    assert reliability_diagram_data([]) == []
+
+
+def test_brier_score_zero_for_perfectly_confident_and_correct_calls():
+    outcomes = [_outcome(recommendation="BUY", confidence=100.0, forward_return_pct=5.0) for _ in range(3)]
+    assert brier_score(outcomes) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_brier_score_one_for_perfectly_confident_and_wrong_calls():
+    outcomes = [_outcome(recommendation="BUY", confidence=100.0, forward_return_pct=-5.0) for _ in range(3)]
+    assert brier_score(outcomes) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_brier_score_uses_exact_confidence_not_bucket_averages():
+    # Two calls in the same confidence bucket (80-100) but different exact
+    # confidence -- Brier score must distinguish them even though
+    # calibration_error()'s bucket-based ECE would average them together.
+    outcomes = [
+        _outcome(recommendation="BUY", confidence=80.0, forward_return_pct=5.0),  # correct: (0.8-1)^2 = 0.04
+        _outcome(recommendation="BUY", confidence=95.0, forward_return_pct=-5.0),  # wrong: (0.95-0)^2 = 0.9025
+    ]
+    assert brier_score(outcomes) == pytest.approx((0.04 + 0.9025) / 2, abs=1e-9)
+
+
+def test_brier_score_none_when_no_directional_data():
+    assert brier_score([]) is None
+
+
 # --- breakdown_by / full_report -----------------------------------------
 
 
@@ -258,7 +321,8 @@ def test_compute_all_metrics_has_every_expected_key():
         "evaluation_count", "direction_accuracy", "target_price_hit_rate", "stop_loss_hit_rate",
         "average_forward_return_pct", "median_forward_return_pct", "win_rate", "loss_rate",
         "profit_factor", "max_drawdown", "volatility", "downside_deviation", "sharpe_ratio",
-        "sortino_ratio", "calibration_error", "precision_recall", "position_sizing_quality",
+        "sortino_ratio", "calibration_error", "maximum_calibration_error", "brier_score",
+        "precision_recall", "position_sizing_quality",
     }
     assert expected_keys.issubset(result.keys())
 
@@ -272,7 +336,7 @@ def test_full_report_has_every_requested_breakdown():
     ]
     report = full_report(outcomes)
     assert set(report.keys()) == {
-        "overall", "by_recommendation", "by_confidence_bucket", "by_risk_level",
+        "overall", "by_recommendation", "by_confidence_bucket", "reliability_diagram", "by_risk_level",
         "by_time_horizon", "by_sector", "by_symbol", "by_market_regime",
     }
     assert "BUY" in report["by_recommendation"]

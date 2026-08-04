@@ -26,6 +26,7 @@ from src.market_data.providers.dev_fundamental_data_provider import DevFundament
 from src.market_data.providers.fundamental_data_provider import IFundamentalDataProvider
 from src.market_data.providers.sahmk_fundamental_data_provider import SahmkFundamentalDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
+from src.market_data.strict_mode import StrictRealDataUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +85,14 @@ def get_last_selected_fundamental_provider_kind() -> Optional[str]:
 
 async def _select_provider() -> Tuple[IFundamentalDataProvider, str]:
     override = market_data_config.get_configured_provider_name()
+    strict = not market_data_config.is_synthetic_data_allowed()
 
     if override == "dev":
+        if strict:
+            raise StrictRealDataUnavailableError(
+                "STRICT_REAL_DATA is enabled but MARKET_DATA_PROVIDER=dev explicitly "
+                "requests synthetic data -- refusing to use DevFundamentalDataProvider."
+            )
         logger.info("MARKET_DATA_PROVIDER=dev -- using DevFundamentalDataProvider (synthetic data).")
         return DevFundamentalDataProvider(), "dev"
 
@@ -93,6 +100,8 @@ async def _select_provider() -> Tuple[IFundamentalDataProvider, str]:
         logger.warning("Unknown MARKET_DATA_PROVIDER=%r -- treating as 'auto'.", override)
 
     if not market_data_config.has_sahmk_credentials():
+        if strict:
+            raise StrictRealDataUnavailableError("SAHMK_API_KEY is not configured.")
         if override == "sahmk":
             logger.error(
                 "MARKET_DATA_PROVIDER=sahmk but SAHMK_API_KEY is not configured -- "
@@ -111,26 +120,32 @@ async def _select_provider() -> Tuple[IFundamentalDataProvider, str]:
             timeout=market_data_config.get_provider_probe_timeout_seconds(),
         )
     except asyncio.TimeoutError:
+        await provider.disconnect()
+        if strict:
+            raise StrictRealDataUnavailableError("SAHMK connectivity probe timed out.")
         logger.warning(
             "SAHMK connectivity probe timed out -- falling back to DevFundamentalDataProvider "
             "(synthetic data) for this process."
         )
-        await provider.disconnect()
         return DevFundamentalDataProvider(), "dev"
     except (SahmkError, CircuitBreakerOpenError) as exc:
+        await provider.disconnect()
+        if strict:
+            raise StrictRealDataUnavailableError(f"SAHMK connectivity probe failed: {exc}")
         logger.warning(
             "SAHMK connectivity probe failed (%s) -- falling back to DevFundamentalDataProvider.",
             exc,
         )
-        await provider.disconnect()
         return DevFundamentalDataProvider(), "dev"
 
     if not reachable:
+        await provider.disconnect()
+        if strict:
+            raise StrictRealDataUnavailableError("SAHMK authentication check did not succeed.")
         logger.warning(
             "SAHMK authentication check did not succeed -- falling back to "
             "DevFundamentalDataProvider (synthetic data)."
         )
-        await provider.disconnect()
         return DevFundamentalDataProvider(), "dev"
 
     logger.info(

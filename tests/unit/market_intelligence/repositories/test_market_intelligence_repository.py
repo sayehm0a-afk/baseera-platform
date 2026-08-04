@@ -11,9 +11,20 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.analysis.recommendation.types import Recommendation
+from src.analysis.recommendation.types import AnalysisContext, Recommendation
 from src.core.db.database import Base
-from src.domain.models import AlertSeverity, AlertType, MarketScanStatus, RecommendationLabel, Stock
+from src.domain.models import (
+    AlertSeverity,
+    AlertType,
+    CalibrationConfig,
+    CalibrationStatus,
+    MarketScanRun,
+    MarketScanStatus,
+    RecommendationLabel,
+    RecommendationSnapshot,
+    Stock,
+)
+from src.market_intelligence.repositories import market_intelligence_repository as repository_module
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
 
@@ -71,6 +82,39 @@ def test_get_run_returns_none_for_unknown_id(session, repo):
     assert repo.get_run(session, 9999) is None
 
 
+def test_reap_stale_runs_marks_old_pending_and_running_runs_failed(session, repo):
+    from datetime import timedelta
+
+    stale_pending = repo.create_scan_run(session, symbols_requested=1)
+    stale_running = repo.create_scan_run(session, symbols_requested=1)
+    repo.mark_running(session, stale_running.id)
+    fresh_running = repo.create_scan_run(session, symbols_requested=1)
+    repo.mark_running(session, fresh_running.id)
+
+    # Backdate the two "stale" runs' created_at directly (bypassing the
+    # model's own default) to simulate a run that crashed hours ago.
+    old = datetime.now(timezone.utc) - timedelta(hours=10)
+    session.query(MarketScanRun).filter(
+        MarketScanRun.id.in_([stale_pending.id, stale_running.id])
+    ).update({"created_at": old}, synchronize_session=False)
+    session.commit()
+
+    reaped = repo.reap_stale_runs(session, max_age_hours=4)
+
+    reaped_ids = {run.id for run in reaped}
+    assert reaped_ids == {stale_pending.id, stale_running.id}
+    assert repo.get_run(session, stale_pending.id).status is MarketScanStatus.FAILED
+    assert repo.get_run(session, stale_running.id).status is MarketScanStatus.FAILED
+    assert repo.get_run(session, fresh_running.id).status is MarketScanStatus.RUNNING
+
+
+def test_reap_stale_runs_leaves_recent_runs_untouched(session, repo):
+    run = repo.create_scan_run(session, symbols_requested=1)
+    reaped = repo.reap_stale_runs(session, max_age_hours=4)
+    assert reaped == []
+    assert repo.get_run(session, run.id).status is MarketScanStatus.PENDING
+
+
 def test_get_latest_successful_run_ignores_failed_runs(session, repo):
     failed = repo.create_scan_run(session, symbols_requested=1)
     repo.finish_run(session, failed.id, MarketScanStatus.FAILED, symbols_succeeded=0, symbols_skipped=0, symbols_failed=1)
@@ -99,12 +143,13 @@ def _seed_stock(session, symbol="2222"):
     return stock
 
 
-def test_save_and_read_back_symbol_records(session, repo):
+@pytest.mark.asyncio
+async def test_save_and_read_back_symbol_records(session, repo):
     _seed_stock(session, "2222")
     run = repo.create_scan_run(session, symbols_requested=1)
     outcome = make_outcome(symbol="2222", decision=make_decision(symbol="2222", recommendation=Recommendation.BUY))
 
-    repo.save_symbol_records(session, run.id, [outcome])
+    await repo.save_symbol_records(session, run.id, [outcome])
 
     records = repo.get_symbol_records_by_symbol(session, run.id)
     assert "2222" in records
@@ -112,7 +157,8 @@ def test_save_and_read_back_symbol_records(session, repo):
     assert float(records["2222"].confidence) == outcome.confidence
 
 
-def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(session, repo, monkeypatch):
+@pytest.mark.asyncio
+async def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(session, repo, monkeypatch):
     """Regression test: technical/fundamental indicator computations
     return `numpy.float64` in places (confirmed via a live run against
     real Postgres -- SQLAlchemy 2.0's insertmanyvalues path literal-
@@ -141,7 +187,12 @@ def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(sess
         "confidence", "final_score", "target_price", "stop_loss", "expected_return_pct",
         "latest_price", "rsi", "adx", "bollinger_upper", "dividend_yield",
     )
+    snapshot_fields = (
+        "total_score", "confidence_score", "target_price", "stop_loss",
+        "expected_return_pct", "market_price_at_evaluation",
+    )
     snapshots = []
+    recommendation_snapshots = []
     original_add = session.add
 
     def _spy_add(obj):
@@ -152,34 +203,160 @@ def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_orm(sess
         # that would hide the exact bug this test exists to catch.
         if type(obj).__name__ == "SymbolIntelligenceRecord":
             snapshots.append({f: type(getattr(obj, f)) for f in fields})
+        elif type(obj).__name__ == "RecommendationSnapshot":
+            recommendation_snapshots.append({f: type(getattr(obj, f)) for f in snapshot_fields})
         return original_add(obj)
 
     monkeypatch.setattr(session, "add", _spy_add)
 
-    repo.save_symbol_records(session, run.id, [outcome])
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    assert len(recommendation_snapshots) == 1
+    for field, field_type in recommendation_snapshots[0].items():
+        assert field_type is float, f"RecommendationSnapshot.{field} was {field_type!r}, expected plain float"
 
     assert len(snapshots) == 1
     for field, field_type in snapshots[0].items():
         assert field_type is float, f"{field} was {field_type!r} at insert time, expected plain float"
 
 
-def test_save_symbol_records_skips_unregistered_stock(session, repo):
+@pytest.mark.asyncio
+async def test_save_symbol_records_also_writes_a_live_recommendation_snapshot(session, repo):
+    """E1 of the AI Evolution Layer: every successful live scan outcome
+    must also produce a RecommendationSnapshot row (run_id=None,
+    source="live_scan") so accuracy tracking has real live data to
+    evaluate later, not just backtest data."""
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    decision = make_decision(symbol="2222", recommendation=Recommendation.BUY, confidence=72.0, final_score=68.0)
+    outcome = make_outcome(symbol="2222", decision=decision, latest_price=101.5)
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").all()
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot.run_id is None
+    assert snapshot.source == "live_scan"
+    assert snapshot.is_paper_trade is False
+    assert snapshot.variant is None
+    assert snapshot.recommendation is RecommendationLabel.BUY
+    assert float(snapshot.confidence_score) == 72.0
+    assert float(snapshot.total_score) == 68.0
+    assert float(snapshot.market_price_at_evaluation) == 101.5
+    assert snapshot.engine_version == "1.0.0"
+    assert snapshot.contributor_breakdown == [
+        {"category": "Technical Analysis", "points": 15.0, "weight": 0.25, "confidence": 90.0, "available": True, "notes": None}
+    ]
+    assert snapshot.signals == []
+    assert snapshot.reasons == ["BUY on 2222."]
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_snapshot_skips_failed_and_unregistered_outcomes(session, repo):
+    run = repo.create_scan_run(session, symbols_requested=2)
+    failed = make_outcome(symbol="2222", success=False, report=None, skipped_reason="insufficient_data")
+    unregistered = make_outcome(symbol="9999")  # no matching Stock row seeded
+
+    await repo.save_symbol_records(session, run.id, [failed, unregistered])
+
+    assert session.query(RecommendationSnapshot).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_skips_unregistered_stock(session, repo):
     run = repo.create_scan_run(session, symbols_requested=1)
     outcome = make_outcome(symbol="9999")  # no matching Stock row seeded
 
-    repo.save_symbol_records(session, run.id, [outcome])
+    await repo.save_symbol_records(session, run.id, [outcome])
 
     assert repo.get_symbol_records_by_symbol(session, run.id) == {}
 
 
-def test_save_symbol_records_skips_failed_outcomes(session, repo):
+@pytest.mark.asyncio
+async def test_save_symbol_records_skips_failed_outcomes(session, repo):
     _seed_stock(session, "2222")
     run = repo.create_scan_run(session, symbols_requested=1)
     outcome = make_outcome(symbol="2222", success=False, report=None, skipped_reason="insufficient_data")
 
-    repo.save_symbol_records(session, run.id, [outcome])
+    await repo.save_symbol_records(session, run.id, [outcome])
 
     assert repo.get_symbol_records_by_symbol(session, run.id) == {}
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_does_not_paper_trade_when_disabled(session, repo, monkeypatch):
+    """E8: PAPER_TRADING_ENABLED defaults off -- a scan must write only
+    the champion snapshot, unchanged from before E8 existed, even when
+    a VALIDATED calibration candidate exists."""
+    monkeypatch.setattr(repository_module, "is_paper_trading_enabled", lambda: False)
+    _seed_stock(session, "2222")
+    session.add(CalibrationConfig(version="v1", status=CalibrationStatus.VALIDATED, config={}))
+    session.commit()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", context=AnalysisContext(symbol="2222"))
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").all()
+    assert len(snapshots) == 1
+    assert snapshots[0].variant is None
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_paper_trades_a_challenger_when_enabled(session, repo, monkeypatch):
+    """E8: when PAPER_TRADING_ENABLED and a VALIDATED calibration
+    candidate exists, a second challenger RecommendationSnapshot is
+    written alongside the champion, scored off the exact same
+    AnalysisContext the champion decision was built from."""
+    monkeypatch.setattr(repository_module, "is_paper_trading_enabled", lambda: True)
+    _seed_stock(session, "2222")
+    session.add(CalibrationConfig(version="v1", status=CalibrationStatus.VALIDATED, config={}))
+    session.commit()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", context=AnalysisContext(symbol="2222"))
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").order_by(RecommendationSnapshot.id).all()
+    assert len(snapshots) == 2
+    champion, challenger = snapshots
+    assert champion.variant == "champion"
+    assert champion.is_paper_trade is False
+    assert challenger.variant == "challenger"
+    assert challenger.is_paper_trade is True
+    assert challenger.calibration_version == "v1"
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_paper_trading_enabled_but_no_context_skips_challenger(session, repo, monkeypatch):
+    """A scan outcome with no `context` (e.g. an older code path, or a
+    fixture that never populated one) simply gets no challenger --
+    never an error."""
+    monkeypatch.setattr(repository_module, "is_paper_trading_enabled", lambda: True)
+    _seed_stock(session, "2222")
+    session.add(CalibrationConfig(version="v1", status=CalibrationStatus.VALIDATED, config={}))
+    session.commit()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", context=None)
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    assert session.query(RecommendationSnapshot).filter_by(symbol="2222").count() == 1
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_paper_trading_enabled_but_no_validated_config_skips_challenger(session, repo, monkeypatch):
+    monkeypatch.setattr(repository_module, "is_paper_trading_enabled", lambda: True)
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", context=AnalysisContext(symbol="2222"))
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").all()
+    assert len(snapshots) == 1
+    assert snapshots[0].variant is None
 
 
 def test_save_and_read_back_sector_summaries(session, repo):

@@ -61,7 +61,7 @@ class _RetryableSahmkError(Exception):
 
     def __init__(self, message: str, *, kind: str, retry_after: Optional[float] = None):
         super().__init__(message)
-        self.kind = kind  # "rate_limit" | "server_error"
+        self.kind = kind  # "rate_limit" | "server_error" | "network_error"
         self.retry_after = retry_after
 
 
@@ -206,7 +206,17 @@ class SahmkClient:
         except _RetryableSahmkError:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            raise SahmkRequestError(f"Network error calling SAHMK API: {exc}") from exc
+            # A connection failure or request timeout is exactly as
+            # transient as a 5xx -- both mean "SAHMK/the network was
+            # unavailable for this attempt," and a real full-market
+            # scan should not give up on a symbol after a single slow
+            # response when a 500 in the same spot gets 3 tenacity
+            # attempts. Raising _RetryableSahmkError here (instead of
+            # SahmkRequestError directly) routes it through the same
+            # retry_if_exception_type(_RetryableSahmkError) path as
+            # server_error; _request()'s translation still turns an
+            # exhausted retry into SahmkRequestError for the caller.
+            raise _RetryableSahmkError(f"Network error calling SAHMK API: {exc}", kind="network_error") from exc
 
     async def _handle_response(self, response: aiohttp.ClientResponse) -> Any:
         status = response.status
@@ -340,10 +350,19 @@ class SahmkClient:
         validate_symbol_format(symbol)
         return await self._request(f"/dividends/{symbol}/")
 
-    async def get_companies(self) -> Dict[str, Any]:
+    async def get_companies(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """GET /companies/ -- company directory / symbol discovery
         (Free tier). Used for periodic symbol-universe sync
-        (src.market_data.ingestion.ingest_symbols); a single call, not
-        one per symbol, so discovering the full ~350-symbol Tadawul+Nomu
-        universe costs one rate-limited request, not hundreds."""
-        return await self._request("/companies/")
+        (src.market_data.ingestion.ingest_symbols).
+
+        `params` is UNVERIFIED pagination support: SAHMK's actual
+        pagination convention (if any) for this endpoint has never been
+        confirmed live (see docs/SAHMK_INTEGRATION.md) -- this sandbox's
+        network policy blocks direct calls to app.sahmk.sa, so the real
+        scheme can only be confirmed from a live run's logs, not from
+        here. Passing no params reproduces the original single-call
+        behavior exactly. SahmkMarketDataService.get_company_directory()
+        is responsible for deciding what params (if any) to send on a
+        follow-up page, based on what the first response's envelope
+        actually contains."""
+        return await self._request("/companies/", params=params)

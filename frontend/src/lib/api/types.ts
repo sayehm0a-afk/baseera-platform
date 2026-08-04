@@ -119,6 +119,50 @@ export interface MarketScanRun {
   created_at: string;
 }
 
+/** Live per-symbol progress for one scan run, from
+ * GET /api/v1/market/scan/{runId}/progress -- distinct from
+ * MarketScanRun above, which only updates once, at the very end. */
+export interface MarketScanProgress {
+  run_id: number;
+  status: string;
+  eligible_discovered: number;
+  completed_count: number;
+  remaining_count: number;
+  progress_pct: number;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+  insufficient_data_count: number;
+  published_count: number;
+  rejected_count: number;
+  watch_only_count: number;
+  not_evaluated_count: number;
+  current_symbol: string | null;
+  current_symbol_name_en: string | null;
+  current_symbol_name_ar: string | null;
+  last_completed_symbol: string | null;
+  api_calls_total: number;
+  retries_total: number;
+  latest_error: string | null;
+  latest_warning: string | null;
+  started_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+}
+
+export interface MarketDataHealth {
+  configured_provider: string;
+  strict_real_data: boolean;
+  synthetic_allowed: boolean;
+  sahmk_key_present: boolean;
+  current_provider_kind: string | null;
+  last_connectivity_status: string | null;
+  last_connectivity_at: string | null;
+  last_real_data_at: string | null;
+  last_scan_source: string | null;
+  can_publish_recommendations: boolean;
+}
+
 export interface ApiErrorBody {
   error: {
     code: string;

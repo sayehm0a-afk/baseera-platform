@@ -49,8 +49,8 @@ class CalibrationConfig(Base):
     training_period_end = Column(Date, nullable=True)
     validation_period_start = Column(Date, nullable=True)
     validation_period_end = Column(Date, nullable=True)
-    training_run_id = Column(Integer, ForeignKey("backtest_runs.id"), nullable=True)
-    validation_run_id = Column(Integer, ForeignKey("backtest_runs.id"), nullable=True)
+    training_run_id = Column(Integer, ForeignKey("backtest_runs.id"), nullable=True, index=True)
+    validation_run_id = Column(Integer, ForeignKey("backtest_runs.id"), nullable=True, index=True)
 
     # This candidate's metrics on the validation period, and the
     # currently-active config's metrics on that *same* period, computed

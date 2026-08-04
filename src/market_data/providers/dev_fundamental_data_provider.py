@@ -57,6 +57,8 @@ class DevFundamentalDataProvider(IFundamentalDataProvider):
     NOT REAL FINANCIAL DATA -- see module docstring.
     """
 
+    is_synthetic = True
+
     def __init__(self):
         self._connected = False
 

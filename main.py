@@ -116,6 +116,11 @@ kernel = None
 container = None
 ingestion_scheduler = None
 market_intelligence_scheduler = None
+outcome_evaluation_scheduler = None
+pattern_discovery_scheduler = None
+daily_reflection_scheduler = None
+daily_intelligence_aggregation_scheduler = None
+live_market_mode_scheduler = None
 
 
 class TaskRequest(BaseModel):
@@ -137,18 +142,45 @@ class TaskResponse(BaseModel):
 async def startup_event():
     """Startup event handler."""
     global kernel, container, ingestion_scheduler, market_intelligence_scheduler
+    global outcome_evaluation_scheduler, pattern_discovery_scheduler, daily_reflection_scheduler
+    global daily_intelligence_aggregation_scheduler, live_market_mode_scheduler
+
+    # Live Market Mode (LIVE_MARKET_MODE_ENABLED) supersedes the two
+    # standalone schedulers below -- it owns its own internal instances
+    # of IngestionScheduler/IntervalMarketIntelligenceScheduler and only
+    # runs them while the Tadawul market is actually open (see
+    # src.market_intelligence.live_market_mode). Checked first so the
+    # two `if` guards below skip starting a second, redundant pair of
+    # always-on schedulers when Live Market Mode already owns that job.
+    live_market_mode_enabled = False
+    try:
+        from src.market_intelligence.config import is_live_market_mode_enabled
+        from src.market_intelligence.live_market_mode import LiveMarketModeScheduler
+
+        live_market_mode_enabled = is_live_market_mode_enabled()
+        if live_market_mode_enabled:
+            live_market_mode_scheduler = LiveMarketModeScheduler()
+            live_market_mode_scheduler.start()
+            logger.info("Live Market Mode started (Tadawul-hours-gated ingestion + scanning).")
+        else:
+            logger.info("Live Market Mode disabled (set LIVE_MARKET_MODE_ENABLED=true to enable).")
+    except Exception as e:
+        logger.error(f"Error starting Live Market Mode: {e}", exc_info=True)
 
     # The ingestion scheduler needs only the DB and a market/fundamental
     # data provider -- no Redis, no runtime kernel. Started first, in its
     # own try/except, so a Redis/kernel outage (which the block below
     # depends on and can raise from) never prevents scheduled ingestion
     # from starting, and a scheduler problem never prevents the kernel
-    # from starting either.
+    # from starting either. Skipped when Live Market Mode already owns
+    # an ingestion scheduler of its own (see above).
     try:
         from src.market_data.ingestion.config import is_ingestion_scheduler_enabled
         from src.market_data.ingestion.scheduler import IngestionScheduler
 
-        if is_ingestion_scheduler_enabled():
+        if live_market_mode_enabled:
+            logger.info("Ingestion scheduler: owned by Live Market Mode, not started standalone.")
+        elif is_ingestion_scheduler_enabled():
             ingestion_scheduler = IngestionScheduler()
             ingestion_scheduler.start()
             logger.info("Ingestion scheduler started.")
@@ -163,12 +195,15 @@ async def startup_event():
     # full-market scan is real workload an operator must opt into (see
     # src.market_intelligence.config.is_market_intelligence_scheduler_enabled),
     # disabled by default, and never allowed to prevent the ingestion
-    # scheduler or the kernel from starting.
+    # scheduler or the kernel from starting. Skipped when Live Market
+    # Mode already owns a scan scheduler of its own (see above).
     try:
         from src.market_intelligence.config import is_market_intelligence_scheduler_enabled
         from src.market_intelligence.scheduler import IntervalMarketIntelligenceScheduler
 
-        if is_market_intelligence_scheduler_enabled():
+        if live_market_mode_enabled:
+            logger.info("Market intelligence scheduler: owned by Live Market Mode, not started standalone.")
+        elif is_market_intelligence_scheduler_enabled():
             market_intelligence_scheduler = IntervalMarketIntelligenceScheduler()
             market_intelligence_scheduler.start()
             logger.info("Market intelligence scheduler started.")
@@ -180,6 +215,94 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Error starting market intelligence scheduler: {e}", exc_info=True)
 
+    # AI Evolution Layer (E2): scores already-issued live recommendations
+    # against real forward price data once their horizon has elapsed.
+    # Same isolation, same disabled-by-default posture as the two
+    # schedulers above.
+    try:
+        from src.ai_evolution.config import is_outcome_evaluation_scheduler_enabled
+        from src.ai_evolution.scheduler import OutcomeEvaluationScheduler
+
+        if is_outcome_evaluation_scheduler_enabled():
+            outcome_evaluation_scheduler = OutcomeEvaluationScheduler()
+            outcome_evaluation_scheduler.start()
+            logger.info("Outcome evaluation scheduler started.")
+        else:
+            logger.info(
+                "Outcome evaluation scheduler disabled "
+                "(set OUTCOME_EVALUATION_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting outcome evaluation scheduler: {e}", exc_info=True)
+
+    # AI Evolution Layer (E5): weekly re-discovery of signal conditions
+    # statistically associated with a different win rate. Same isolation,
+    # same disabled-by-default posture as the schedulers above.
+    try:
+        from src.ai_evolution.config import is_pattern_discovery_scheduler_enabled
+        from src.ai_evolution.scheduler import PatternDiscoveryScheduler
+
+        if is_pattern_discovery_scheduler_enabled():
+            pattern_discovery_scheduler = PatternDiscoveryScheduler()
+            pattern_discovery_scheduler.start()
+            logger.info("Pattern discovery scheduler started.")
+        else:
+            logger.info(
+                "Pattern discovery scheduler disabled "
+                "(set PATTERN_DISCOVERY_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting pattern discovery scheduler: {e}", exc_info=True)
+
+    # AI Evolution Layer (E6): daily, non-LLM review of that day's
+    # evaluated recommendations. Same isolation, same disabled-by-default
+    # posture as the schedulers above.
+    try:
+        from src.ai_evolution.config import is_daily_reflection_scheduler_enabled
+        from src.ai_evolution.scheduler import DailyReflectionScheduler
+
+        if is_daily_reflection_scheduler_enabled():
+            daily_reflection_scheduler = DailyReflectionScheduler()
+            daily_reflection_scheduler.start()
+            logger.info("Daily reflection scheduler started.")
+        else:
+            logger.info(
+                "Daily reflection scheduler disabled "
+                "(set DAILY_REFLECTION_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting daily reflection scheduler: {e}", exc_info=True)
+
+    # AI Evolution Layer (E9): daily pre-aggregation feeding the
+    # staff-only Intelligence Dashboard. Same isolation, same
+    # disabled-by-default posture as the schedulers above.
+    try:
+        from src.ai_evolution.config import is_daily_intelligence_aggregation_scheduler_enabled
+        from src.ai_evolution.scheduler import DailyIntelligenceAggregationScheduler
+
+        if is_daily_intelligence_aggregation_scheduler_enabled():
+            daily_intelligence_aggregation_scheduler = DailyIntelligenceAggregationScheduler()
+            daily_intelligence_aggregation_scheduler.start()
+            logger.info("Daily intelligence aggregation scheduler started.")
+        else:
+            logger.info(
+                "Daily intelligence aggregation scheduler disabled "
+                "(set DAILY_INTELLIGENCE_AGGREGATION_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting daily intelligence aggregation scheduler: {e}", exc_info=True)
+
+    # Legacy runtime kernel / worker / sample-agent bootstrap. No real
+    # route (market/stocks/portfolio/analyst/news/admin) reaches into the
+    # `kernel`/`container` globals set here -- see the standalone comment
+    # in src/api/routes/admin/system.py confirming this subsystem is
+    # orthogonal to actual request handling. It previously re-raised on
+    # any failure (e.g. Redis unreachable at boot), which would crash
+    # the entire app's startup -- taking down the real Saudi-market
+    # analysis endpoints along with it even though they never use this
+    # subsystem. Isolated in its own try/except, matching every
+    # scheduler above, so a problem here is logged loudly but never
+    # prevents the real API from serving requests.
     try:
         logger.info("Starting Basirah Enterprise AI Platform...")
 
@@ -198,7 +321,6 @@ async def startup_event():
 
         # Initialize kernel
         if not await kernel.initialize():
-            logger.error("Failed to initialize runtime kernel")
             raise RuntimeError("Failed to initialize runtime kernel")
 
         # Create and register workers
@@ -231,8 +353,11 @@ async def startup_event():
         logger.info("Basirah started successfully")
 
     except Exception as e:
-        logger.error(f"Error during startup: {e}", exc_info=True)
-        raise
+        logger.error(
+            f"Error starting legacy runtime kernel/worker subsystem (does not affect "
+            f"market/stocks/portfolio/analyst/news/admin API routes): {e}",
+            exc_info=True,
+        )
 
 
 @app.on_event("shutdown")
@@ -241,11 +366,26 @@ async def shutdown_event():
     try:
         logger.info("Shutting down Basirah...")
 
+        if live_market_mode_scheduler is not None:
+            await live_market_mode_scheduler.stop()
+
         if ingestion_scheduler is not None:
             await ingestion_scheduler.stop()
 
         if market_intelligence_scheduler is not None:
             await market_intelligence_scheduler.stop()
+
+        if outcome_evaluation_scheduler is not None:
+            await outcome_evaluation_scheduler.stop()
+
+        if pattern_discovery_scheduler is not None:
+            await pattern_discovery_scheduler.stop()
+
+        if daily_reflection_scheduler is not None:
+            await daily_reflection_scheduler.stop()
+
+        if daily_intelligence_aggregation_scheduler is not None:
+            await daily_intelligence_aggregation_scheduler.stop()
 
         if kernel:
             await kernel.stop()
@@ -268,15 +408,22 @@ async def liveness_check():
 @app.get("/health/ready")
 async def readiness_check():
     """Readiness check endpoint -- a readiness probe that never touches
-    its own datastores isn't one, so this checks the in-process kernel
-    *and* issues a real `SELECT 1` against Postgres and a real `PING`
-    against Redis."""
+    its own datastores isn't one, so this checks a real `SELECT 1`
+    against Postgres and a real `PING` against Redis. The legacy
+    in-process kernel (sample-agent/worker scaffolding, unused by every
+    real market/stocks/portfolio/analyst/news/admin route -- see
+    src/api/routes/admin/system.py) is reported for visibility but
+    deliberately excluded from the pass/fail gate below: it failing to
+    initialize once at boot (e.g. a transient Redis hiccup) must never
+    permanently mark an otherwise-healthy app unready, since nothing it
+    powers is on the real request path."""
     from sqlalchemy import text
 
     from src.auth.token_store import get_redis_client
     from src.core.db.database import get_session_factory
 
     health_status = {}
+    dependency_status = {}
 
     try:
         if kernel:
@@ -292,22 +439,53 @@ async def readiness_check():
         db_session = session_factory()
         try:
             db_session.execute(text("SELECT 1"))
-            health_status["database"] = True
+            dependency_status["database"] = True
         finally:
             db_session.close()
     except Exception as e:
         logger.error(f"Readiness DB check failed: {e}")
-        health_status["database"] = False
+        dependency_status["database"] = False
 
     try:
-        health_status["redis"] = bool(get_redis_client().ping())
+        dependency_status["redis"] = bool(get_redis_client().ping())
     except Exception as e:
         logger.error(f"Readiness Redis check failed: {e}")
-        health_status["redis"] = False
+        dependency_status["redis"] = False
 
-    if all(health_status.values()):
+    health_status.update(dependency_status)
+    if all(dependency_status.values()):
         return {"status": "healthy", "details": health_status}
     raise HTTPException(status_code=503, detail=f"Degraded health: {health_status}")
+
+
+@app.get("/health/market-data")
+async def market_data_health():
+    """Safe operational status for the SAHMK market-data integration --
+    no secret value is ever read or returned. Reports whether Basirah
+    is currently permitted to run/publish a real market scan under
+    strict real-data mode (STRICT_REAL_DATA=true), and the most recent
+    provider-selection outcome any caller in this process has observed
+    (in-process only; resets on restart, not a persisted audit trail --
+    see src.market_data.provider_factory.get_market_data_health)."""
+    from src.market_data.provider_factory import get_market_data_health
+
+    health = get_market_data_health()
+    strict = health["strict_real_data"]
+    current_kind = health["current_provider_kind"]
+    last_scan_source = {"sahmk": "SAHMK_REAL", "dev": "DEV_SYNTHETIC"}.get(current_kind)
+
+    # Under strict mode, only ever true when the most recent real
+    # selection actually resolved to SAHMK -- never true merely because
+    # no failure has been observed yet. Non-strict deployments make no
+    # "this is real data" claim in the first place, so this field is
+    # not the relevant gate for them.
+    can_publish = (current_kind == "sahmk") if strict else True
+
+    return {
+        **health,
+        "last_scan_source": last_scan_source,
+        "can_publish_recommendations": can_publish,
+    }
 
 
 @app.get("/metrics")
@@ -427,6 +605,12 @@ async def ingestion_status():
 
         return {
             "scheduler_running": ingestion_scheduler is not None and ingestion_scheduler.is_running,
+            "live_market_mode_running": (
+                live_market_mode_scheduler is not None and live_market_mode_scheduler.is_running
+            ),
+            "live_market_mode_tadawul_open": (
+                live_market_mode_scheduler.is_market_currently_open if live_market_mode_scheduler is not None else None
+            ),
             "jobs": latest_runs,
         }
     except Exception as e:

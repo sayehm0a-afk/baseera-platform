@@ -41,6 +41,14 @@ def _apply_entry(stock: Stock, entry: Dict[str, Any]) -> bool:
     if sector and stock.sector != sector:
         stock.sector = sector
         changed = True
+    industry = entry.get("industry")
+    if industry and stock.industry != industry:
+        stock.industry = industry
+        changed = True
+    exchange = entry.get("exchange")
+    if exchange and stock.exchange != exchange:
+        stock.exchange = exchange
+        changed = True
     return changed
 
 

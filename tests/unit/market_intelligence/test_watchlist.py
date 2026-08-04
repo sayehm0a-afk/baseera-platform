@@ -88,3 +88,20 @@ def test_watchlist_max_size_is_respected(monkeypatch):
     ]
     result = WatchlistEngine().build(outcomes)[WatchlistCategory.HIGH_RISK]
     assert len(result.entries) == 1
+
+
+def test_zero_price_outcome_is_excluded_from_every_watchlist_category():
+    # Same real 2026-08-03 full-universe defect as ranking.py's
+    # equivalent test: a success=True, no-technical-leg, latest_price=0.0
+    # outcome (symbol 2210) must never appear in any watchlist.
+    outcomes = [
+        make_outcome(
+            symbol="2210", latest_price=0.0,
+            decision=make_decision(symbol="2210", recommendation=Recommendation.SELL, risk_level=RiskLevel.HIGH),
+        ),
+        make_outcome(symbol="B", latest_price=50.0, decision=make_decision(symbol="B", risk_level=RiskLevel.HIGH)),
+    ]
+    watchlists = WatchlistEngine().build(outcomes)
+    for category, result in watchlists.items():
+        symbols = [e.symbol for e in result.entries]
+        assert "2210" not in symbols, f"zero-price symbol 2210 leaked into {category}"

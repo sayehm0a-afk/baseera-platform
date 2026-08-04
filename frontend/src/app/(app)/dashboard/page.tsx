@@ -1,47 +1,83 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { AiSignalCard } from "@/components/patterns/AiSignalCard";
+import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { RunScanButton } from "@/components/dashboard/RunScanButton";
 import { ApiError } from "@/lib/api/client";
-import { getAlerts, getMarketSummary, getRankings, getSectors } from "@/lib/api/market";
+import { getAlerts, getMarketSummary, getRankings, getScanRun, getSectors } from "@/lib/api/market";
 import type {
   Alert,
+  MarketScanRun,
   MarketSummary,
   RankingEntry,
   SectorSummary,
 } from "@/lib/api/types";
 import type { RecommendationValue } from "@/components/badges/RecommendationBadge";
 
-async function loadDashboardData(): Promise<
+type DashboardData =
+  | { status: "loading" }
+  | { status: "unavailable" }
+  | { status: "error" }
   | {
-      available: true;
+      status: "ready";
       summary: MarketSummary;
       sectors: SectorSummary[];
       alerts: Alert[];
       topBuy: RankingEntry[];
-    }
-  | { available: false }
-> {
-  try {
-    const [summary, sectors, alerts, rankings] = await Promise.all([
-      getMarketSummary(),
-      getSectors(),
-      getAlerts({ limit: 8 }),
-      getRankings("TOP_BUY"),
-    ]);
-    return {
-      available: true,
-      summary,
-      sectors: sectors.sectors,
-      alerts: alerts.alerts,
-      topBuy: rankings.rankings[0]?.entries.slice(0, 4) ?? [],
+      run: MarketScanRun | null;
     };
-  } catch (error) {
-    if (error instanceof ApiError && error.code === "no_market_scan_data") {
-      return { available: false };
+
+// A Client Component, not a Server Component: apiFetch relies on the
+// browser's own httpOnly session cookie (credentials: "include") --
+// Next.js Server Component fetches run in a separate Node process
+// with no browser cookie jar, so a server-rendered version of this
+// page always 401s ("No access token was presented") against a real
+// running backend, confirmed directly while verifying this screen
+// end-to-end with a real login. Matches the same client-side pattern
+// already used (and already working) by /scan, /watchlist, and the
+// stock-detail page.
+function useDashboardData(): DashboardData {
+  const [data, setData] = useState<DashboardData>({ status: "loading" });
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const [summary, sectors, alerts, rankings] = await Promise.all([
+          getMarketSummary(),
+          getSectors(),
+          getAlerts({ limit: 8 }),
+          getRankings("TOP_BUY"),
+        ]);
+        const run = summary.scan_run_id != null ? await getScanRun(summary.scan_run_id) : null;
+        if (cancelled) return;
+        setData({
+          status: "ready",
+          summary,
+          sectors: sectors.sectors,
+          alerts: alerts.alerts,
+          topBuy: rankings.rankings[0]?.entries.slice(0, 4) ?? [],
+          run,
+        });
+      } catch (error) {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.code === "no_market_scan_data") {
+          setData({ status: "unavailable" });
+        } else {
+          setData({ status: "error" });
+        }
+      }
     }
-    throw error;
-  }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return data;
 }
 
 function StatTile({ label, value }: { label: string; value: string }) {
@@ -55,10 +91,23 @@ function StatTile({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default async function DashboardPage() {
-  const data = await loadDashboardData();
+export default function DashboardPage() {
+  const data = useDashboardData();
 
-  if (!data.available) {
+  if (data.status === "loading") {
+    return <LoadingScreen />;
+  }
+
+  if (data.status === "error") {
+    return (
+      <EmptyState
+        title="تعذّر تحميل نظرة السوق"
+        description="تأكد من اتصال الخادم وحاول مرة أخرى."
+      />
+    );
+  }
+
+  if (data.status === "unavailable") {
     return (
       <EmptyState
         title="لا توجد بيانات مسح للسوق بعد"
@@ -68,7 +117,7 @@ export default async function DashboardPage() {
     );
   }
 
-  const { summary, sectors, alerts, topBuy } = data;
+  const { summary, sectors, alerts, topBuy, run } = data;
 
   return (
     <div className="flex flex-col gap-bsr-6">
@@ -102,6 +151,32 @@ export default async function DashboardPage() {
             value={`${summary.buy_signal_count} / ${summary.sell_signal_count}`}
           />
         </div>
+
+        {run ? (
+          <div className="mt-bsr-3 grid grid-cols-2 gap-bsr-3 md:grid-cols-4">
+            <StatTile label="حالة آخر مسح" value={run.status} />
+            <StatTile
+              label="فشل / تخطّي"
+              value={`${run.symbols_failed} / ${run.symbols_skipped}`}
+            />
+            <StatTile
+              label="مدة المسح"
+              value={
+                run.duration_seconds != null
+                  ? `${Math.round(run.duration_seconds)} ث`
+                  : "—"
+              }
+            />
+            <StatTile
+              label="آخر تحديث"
+              value={
+                run.finished_at
+                  ? new Date(run.finished_at).toLocaleString("ar-SA")
+                  : "—"
+              }
+            />
+          </div>
+        ) : null}
       </section>
 
       <section>
@@ -129,7 +204,7 @@ export default async function DashboardPage() {
                 confidence={entry.confidence}
                 targetPrice={entry.target_price}
                 expectedReturnPct={entry.expected_return_pct}
-                href={`/ai?symbol=${encodeURIComponent(entry.symbol)}`}
+                href={`/stocks/${encodeURIComponent(entry.symbol)}`}
               />
             ))}
           </div>

@@ -15,8 +15,19 @@ langchain-openai>=0.1.0
 # ===========================
 # Data & Analysis
 # ===========================
-pandas>=2.0.0
-numpy>=1.26.0
+# Exact-pinned (not >=), unlike most of this file -- these are the
+# numerical libraries every price/indicator/score computation in the
+# platform ultimately depends on. An untested minor/major bump (e.g.
+# a pandas NaN-handling or numpy dtype-promotion change) could
+# silently alter analysis output between two otherwise-identical CI
+# runs of the same commit. Versions below are exactly what the full
+# 2400+-test suite was passing against at the time of the pre-live-
+# scan production audit -- bump deliberately, with the suite re-run
+# and reviewed, not as an incidental side effect of a loose floor
+# resolving differently.
+pandas==3.0.5
+numpy==2.4.6
+scikit-learn==1.9.0
 
 # ===========================
 # API Framework

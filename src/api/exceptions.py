@@ -84,6 +84,19 @@ class MarketScanRunNotFoundError(APIError):
     code = "market_scan_run_not_found"
 
 
+class DuplicateMarketScanError(APIError):
+    """Another MarketScanRun is already PENDING/RUNNING -- mirrors
+    DuplicateBacktestError's "no overlapping full-scope jobs"
+    safeguard, applied unconditionally here (unlike backtests, every
+    market scan already covers the full selected universe, so there is
+    no "small scope, allow it anyway" case). Overlapping scans would
+    double real SAHMK request volume and race on the same DB rows
+    (found in the pre-live-scan production audit)."""
+
+    status_code = 409
+    code = "duplicate_market_scan"
+
+
 class NoMarketScanDataError(APIError):
     """No successful MarketScanRun exists yet -- a legitimate "not yet"
     state (no scan has ever completed), not a server failure. Every

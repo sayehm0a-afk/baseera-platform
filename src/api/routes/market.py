@@ -29,13 +29,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_market_provider
-from src.api.exceptions import MarketScanRunNotFoundError, NoMarketScanDataError
+from src.api.exceptions import DuplicateMarketScanError, MarketScanRunNotFoundError, NoMarketScanDataError
 from src.auth.rbac import require_active_subscription
 from src.api.schemas.market_intelligence import (
     AlertOut,
     AlertsOut,
     ChangeEventOut,
     ChangesOut,
+    MarketScanProgressOut,
     MarketScanRequest,
     MarketScanRunOut,
     MarketSummaryOut,
@@ -49,8 +50,16 @@ from src.api.schemas.market_intelligence import (
     WatchlistsOut,
 )
 from src.core.db.database import get_db
-from src.domain.models import MarketChangeEvent, MarketScanRun, SectorIntelligenceSummary, User
+from src.domain.models import (
+    MarketChangeEvent,
+    MarketScanProgress,
+    MarketScanRun,
+    MarketScanStatus,
+    SectorIntelligenceSummary,
+    User,
+)
 from src.market_data.providers.market_data_provider import IMarketDataProvider
+from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.market_snapshot import MarketSnapshotBuilder
 from src.market_intelligence.ranking import RankingEngine
 from src.market_intelligence.read_model import outcome_from_record
@@ -166,6 +175,27 @@ async def create_scan(
     market_provider: IMarketDataProvider = Depends(get_market_provider),
     _current_user: User = Depends(require_active_subscription()),
 ) -> MarketScanRunOut:
+    # A run that crashed/was cancelled without ever calling finish_run
+    # (e.g. a killed GitHub Actions job) would otherwise block every
+    # future scan forever via the overlap guard below -- reap it first.
+    _repository.reap_stale_runs(session, get_max_scan_run_duration_hours())
+
+    # No overlapping scans (production audit finding): two concurrent
+    # market scans would double real SAHMK request volume and race on
+    # the same DB rows for the same symbols. Unlike backtests.py's
+    # "only guard large-scope runs" nuance, every market scan already
+    # covers the full selected universe, so this is unconditional.
+    in_flight = (
+        session.query(MarketScanRun)
+        .filter(MarketScanRun.status.in_([MarketScanStatus.PENDING, MarketScanStatus.RUNNING]))
+        .first()
+    )
+    if in_flight is not None:
+        raise DuplicateMarketScanError(
+            f"A market scan (run {in_flight.id}, {in_flight.status.value}) is already in progress -- "
+            "wait for it to finish before starting another scan."
+        )
+
     symbols = SymbolSelector().select(session, request.symbols)
     run = _repository.create_scan_run(session, symbols_requested=len(symbols))
     run_out = _to_run_out(run)
@@ -187,6 +217,58 @@ def get_scan(
     _current_user: User = Depends(require_active_subscription()),
 ) -> MarketScanRunOut:
     return _to_run_out(_resolve_run(session, run_id))
+
+
+@router.get("/scan/{run_id}/progress", response_model=MarketScanProgressOut)
+def get_scan_progress(
+    run_id: int,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> MarketScanProgressOut:
+    """Live per-symbol scan progress, for a Live Scan UI to poll while
+    a scan is running -- reads MarketScanProgress, the row
+    src.market_intelligence.scan_progress.ScanProgressTracker updates
+    after every symbol (not the coarser MarketScanRun counters above,
+    which only change once, at the very end, via finish_run()).
+    404s (via NoMarketScanDataError) if run_id doesn't exist or no
+    progress row was ever created for it (e.g. a scan dispatched by a
+    code path that predates/doesn't use a tracker)."""
+    _resolve_run(session, run_id)  # 404s with the same message shape if run_id is unknown
+    progress = session.query(MarketScanProgress).filter(MarketScanProgress.run_id == run_id).one_or_none()
+    if progress is None:
+        raise NoMarketScanDataError(
+            f"No live progress recorded for run {run_id} -- this run may predate live progress tracking."
+        )
+    return MarketScanProgressOut(
+        run_id=progress.run_id,
+        status=progress.status,
+        eligible_discovered=progress.eligible_discovered,
+        completed_count=progress.completed_count,
+        remaining_count=max(0, progress.eligible_discovered - progress.completed_count),
+        progress_pct=(
+            round(100.0 * progress.completed_count / progress.eligible_discovered, 2)
+            if progress.eligible_discovered else 0.0
+        ),
+        success_count=progress.success_count,
+        failed_count=progress.failed_count,
+        skipped_count=progress.skipped_count,
+        insufficient_data_count=progress.insufficient_data_count,
+        published_count=progress.published_count,
+        rejected_count=progress.rejected_count,
+        watch_only_count=progress.watch_only_count,
+        not_evaluated_count=progress.not_evaluated_count,
+        current_symbol=progress.current_symbol,
+        current_symbol_name_en=progress.current_symbol_name_en,
+        current_symbol_name_ar=progress.current_symbol_name_ar,
+        last_completed_symbol=progress.last_completed_symbol,
+        api_calls_total=progress.api_calls_total,
+        retries_total=progress.retries_total,
+        latest_error=progress.latest_error,
+        latest_warning=progress.latest_warning,
+        started_at=progress.started_at,
+        updated_at=progress.updated_at,
+        completed_at=progress.completed_at,
+    )
 
 
 @router.get("/summary", response_model=MarketSummaryOut)

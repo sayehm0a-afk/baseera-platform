@@ -184,6 +184,47 @@ class MemoryStore:
 
         return sorted_entries[:limit]
 
+    def retrieve_by_source(
+        self,
+        source: str,
+        memory_type: Optional[MemoryType] = None,
+        limit: int = 10,
+    ) -> List[MemoryEntry]:
+        """
+        Retrieve memory entries recorded with a given `source` (e.g. an
+        agent ID) -- `retrieve()` only filters by memory type and
+        `search()` only matches free-text `content`; neither can answer
+        "what has this agent stored," which is what `ReflectionEngine`
+        actually needs. Sorted most-recent-first (unlike `retrieve()`'s
+        access-count ordering) since a reflection cycle cares about
+        recent activity, not historically popular entries.
+
+        Args:
+            source: The `source` value entries were stored with
+            memory_type: Optional single memory type to restrict to;
+                searches every type if omitted
+            limit: Maximum number of entries to retrieve
+
+        Returns:
+            List of MemoryEntry objects
+        """
+        types_to_search = [memory_type] if memory_type is not None else list(MemoryType)
+
+        matching = [
+            entry
+            for mt in types_to_search
+            for entry in self.memory[mt.value]
+            if entry.source == source and not entry.is_archived and not self._is_expired(entry)
+        ]
+
+        sorted_entries = sorted(matching, key=lambda e: e.timestamp, reverse=True)
+
+        for entry in sorted_entries[:limit]:
+            entry.access_count += 1
+            entry.last_accessed = datetime.now(UTC)
+
+        return sorted_entries[:limit]
+
     def search(
         self,
         query: str,

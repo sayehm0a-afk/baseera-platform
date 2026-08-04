@@ -151,6 +151,24 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _reject_default_database_url_in_production(self) -> "Settings":
+        """Mirrors _reject_insecure_secret_in_production: a production
+        boot with DATABASE_URL unset previously fell through to the
+        literal `postgres:postgres@localhost:5432` default (see
+        src/core/db/database.py's identical fallback -- both read the
+        same DATABASE_URL env var, so this fires before init_engine()
+        is ever reached) and either connected to an unintended local
+        database with widely-known credentials, or failed confusingly
+        on the first real query instead of at boot. Found in the
+        pre-live-scan production audit."""
+        if self.is_production and self.database_url == type(self).model_fields["database_url"].default:
+            raise ValueError(
+                "DATABASE_URL is unset (or still the localhost/postgres:postgres default) while "
+                "BASEERA_ENV=production. Set a real DATABASE_URL before starting the app in production."
+            )
+        return self
+
 
 @lru_cache
 def get_settings() -> Settings:
