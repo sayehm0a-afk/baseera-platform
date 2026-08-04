@@ -14,6 +14,7 @@ from typing import Optional
 from src.analysis.analyst.reasoning_pipeline import ReasoningPipeline
 from src.analysis.analyst.types import AnalystReport
 from src.analysis.decision.ai_decision_engine import AIDecisionEngine
+from src.analysis.decision_pipeline import compute_investment_decision
 from src.analysis.recommendation.types import AnalysisContext
 
 # Recorded on every AnalystReport -- bump this when a change to this
@@ -41,7 +42,9 @@ class AnalystEngine:
         self._pipeline = pipeline or ReasoningPipeline()
 
     async def analyze(self, context: AnalysisContext, requesting_user_id: Optional[int] = None) -> AnalystReport:
-        decision = self._decision_engine.decide(context, requesting_user_id=requesting_user_id)
+        decision = compute_investment_decision(
+            context, decision_engine=self._decision_engine, requesting_user_id=requesting_user_id
+        )
         explanation = await self._pipeline.run(context, decision, requesting_user_id=requesting_user_id)
         return AnalystReport(
             symbol=context.symbol,
