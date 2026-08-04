@@ -24,16 +24,6 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class BootstrapOwnerRequest(BaseModel):
-    """POST /api/v1/bootstrap/owner -- a higher minimum password length
-    than the general 8-char consumer floor (RegisterRequest), since
-    this account gets platform-wide OWNER access immediately on
-    creation."""
-
-    email: EmailStr
-    password: str = Field(min_length=12, max_length=72)
-
-
 class VerifyEmailRequest(BaseModel):
     token: str
 
