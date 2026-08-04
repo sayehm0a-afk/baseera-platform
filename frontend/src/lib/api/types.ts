@@ -168,8 +168,11 @@ export interface MarketDataHealth {
 }
 
 /** Mirrors MarketStatusOut (src/api/schemas/market_intelligence.py).
- * `status` is one of OPEN/PRE_OPEN_AUCTION/CLOSING_AUCTION/CLOSED/
- * PROVIDER_UNREACHABLE. */
+ * `status` is one of OPEN/PRE_MARKET/PRE_OPEN_AUCTION/CLOSING_AUCTION/
+ * CLOSING_PRICE_TRADING/POST_CLOSE/WEEKEND/CLOSED/UNKNOWN/
+ * PROVIDER_UNREACHABLE (src.market_intelligence.market_status
+ * .MarketSessionStatus, Phase 1 Decision Engine V2's 9-state
+ * requirement). */
 export interface MarketStatus {
   status: string;
   label_ar: string;

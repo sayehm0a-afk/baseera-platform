@@ -32,14 +32,25 @@ class TestGetMarketStatus:
         assert info.status == MarketSessionStatus.CLOSING_AUCTION
         assert info.label_ar == "مزاد الإغلاق"
 
-    def test_closed_after_hours(self):
+    def test_post_close_after_hours(self):
         info = get_market_status(_tadawul(2026, 7, 28, 20, 0))
-        assert info.status == MarketSessionStatus.CLOSED
-        assert info.label_ar == "السوق مغلق"
+        assert info.status == MarketSessionStatus.POST_CLOSE
+        assert info.label_ar == "بعد الإغلاق"
 
-    def test_closed_on_friday(self):
+    def test_pre_market_before_pre_open(self):
+        info = get_market_status(_tadawul(2026, 7, 28, 6, 0))
+        assert info.status == MarketSessionStatus.PRE_MARKET
+        assert info.label_ar == "قبل الافتتاح"
+
+    def test_closing_price_trading(self):
+        info = get_market_status(_tadawul(2026, 7, 28, 15, 15))
+        assert info.status == MarketSessionStatus.CLOSING_PRICE_TRADING
+        assert info.label_ar == "التداول على سعر الإغلاق"
+
+    def test_weekend_on_friday(self):
         info = get_market_status(_tadawul(2026, 7, 31, 12, 0))
-        assert info.status == MarketSessionStatus.CLOSED
+        assert info.status == MarketSessionStatus.WEEKEND
+        assert info.label_ar == "عطلة أسبوعية"
         assert info.is_trading_day is False
 
     def test_last_completed_session_on_a_trading_day_before_open(self):

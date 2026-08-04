@@ -174,10 +174,18 @@ async def test_degrades_gracefully_when_provider_is_down(session):
 
 
 @pytest.mark.asyncio
-async def test_no_news_leaves_extra_empty(session):
+async def test_no_news_leaves_extra_with_only_quote_provenance(session):
+    # DevMarketDataProvider has no get_latest_quote, so the fallback
+    # get_stock_data() leg runs and populates "quote" with the daily
+    # bar's own source/is_synthetic/timestamp (needed by Decision Engine
+    # V2's freshness/authenticity gates) -- "news_sentiment" stays
+    # absent since no NewsEvent was persisted.
     stock = _make_stock(session)
     context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
-    assert context.extra == {}
+    assert set(context.extra.keys()) == {"quote"}
+    assert context.extra["quote"]["source"] == "dev-synthetic"
+    assert context.extra["quote"]["is_synthetic"] is True
+    assert "news_sentiment" not in context.extra
 
 
 @pytest.mark.asyncio
@@ -203,7 +211,7 @@ async def test_falls_back_to_daily_bar_when_live_quote_fails(session):
     context = await build_analysis_context(stock, PeriodType.ANNUAL, session, _QuoteFailsButBarWorksProvider())
 
     assert context.latest_price is not None
-    assert "quote" not in context.extra
+    assert context.extra["quote"]["source"] == "dev-synthetic"
 
 
 @pytest.mark.asyncio
@@ -216,7 +224,7 @@ async def test_provider_without_live_quote_support_uses_daily_bar(session):
     context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
 
     assert context.latest_price is not None
-    assert "quote" not in context.extra
+    assert context.extra["quote"]["source"] == "dev-synthetic"
 
 
 @pytest.mark.asyncio

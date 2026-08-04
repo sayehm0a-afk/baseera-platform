@@ -200,10 +200,12 @@ class DiagnosticScanOut(BaseModel):
 class MarketStatusOut(BaseModel):
     """GET /api/v1/market/status -- Tadawul session state for the
     frontend's status banner (src.market_intelligence.market_status).
-    `status` is one of OPEN/PRE_OPEN_AUCTION/CLOSING_AUCTION/CLOSED/
-    PROVIDER_UNREACHABLE (the last one overrides the calendar-derived
-    value whenever the configured market data provider's own health
-    check fails, regardless of what the calendar says)."""
+    `status` is one of OPEN/PRE_MARKET/PRE_OPEN_AUCTION/CLOSING_AUCTION/
+    CLOSING_PRICE_TRADING/POST_CLOSE/WEEKEND/CLOSED/UNKNOWN/
+    PROVIDER_UNREACHABLE (see MarketSessionStatus; the last one
+    overrides the calendar-derived value whenever the configured
+    market data provider's own health check fails, regardless of what
+    the calendar says)."""
 
     status: str
     label_ar: str

@@ -11,19 +11,35 @@ type BannerState =
 
 const STATUS_DOT_CLASS: Record<string, string> = {
   OPEN: "bg-bsr-market-up",
+  PRE_MARKET: "bg-bsr-text-muted",
   PRE_OPEN_AUCTION: "bg-bsr-action-watch",
   CLOSING_AUCTION: "bg-bsr-action-watch",
+  CLOSING_PRICE_TRADING: "bg-bsr-action-watch",
+  POST_CLOSE: "bg-bsr-text-muted",
+  WEEKEND: "bg-bsr-text-muted",
   CLOSED: "bg-bsr-text-muted",
+  UNKNOWN: "bg-bsr-text-muted",
   PROVIDER_UNREACHABLE: "bg-bsr-market-down",
 };
 
 const STATUS_TEXT_CLASS: Record<string, string> = {
   OPEN: "text-bsr-market-up",
+  PRE_MARKET: "text-bsr-text-secondary",
   PRE_OPEN_AUCTION: "text-bsr-action-watch",
   CLOSING_AUCTION: "text-bsr-action-watch",
+  CLOSING_PRICE_TRADING: "text-bsr-action-watch",
+  POST_CLOSE: "text-bsr-text-secondary",
+  WEEKEND: "text-bsr-text-secondary",
   CLOSED: "text-bsr-text-secondary",
+  UNKNOWN: "text-bsr-text-secondary",
   PROVIDER_UNREACHABLE: "text-bsr-market-down",
 };
+
+/** Statuses where prices on screen belong to a completed session, not
+ * a live tick -- the banner should always say which session that is. */
+const NON_LIVE_STATUSES = new Set([
+  "PRE_MARKET", "PRE_OPEN_AUCTION", "POST_CLOSE", "WEEKEND", "CLOSED", "UNKNOWN",
+]);
 
 /** Strict real-data mode's visible proof, shown on every authenticated
  * screen (mounted once in AppShell): GET /health/market-data is polled
@@ -97,8 +113,7 @@ export function RealDataStatusBanner() {
   const status = ms?.status ?? "CLOSED";
   const dotClass = STATUS_DOT_CLASS[status] ?? STATUS_DOT_CLASS.CLOSED;
   const textClass = STATUS_TEXT_CLASS[status] ?? STATUS_TEXT_CLASS.CLOSED;
-  const showLastSession =
-    ms && (status === "CLOSED" || status === "PRE_OPEN_AUCTION") && ms.last_completed_session_date;
+  const showLastSession = ms && NON_LIVE_STATUSES.has(status) && ms.last_completed_session_date;
 
   return (
     <div
