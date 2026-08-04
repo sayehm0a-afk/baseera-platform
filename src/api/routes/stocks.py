@@ -21,6 +21,20 @@ from FundamentalSnapshot (which does have those columns), can. Adding
 that column is a schema migration, tracked as follow-up work, not done
 here.
 
+/decision, /decision-v2, and /analyst-report are three different views
+over one computation, not three engines: each builds the same
+AnalysisContext (via `_build_analysis_context`, itself a thin wrapper
+over the shared `context_builder.build_analysis_context`) and calls
+`AIDecisionEngine.decide()` through the single shared
+`decision_pipeline.compute_investment_decision()` (see that module's
+docstring) -- /decision-v2 then layers the 15 publication gates and
+Arabic taxonomy on top (`DecisionEngineV2`), and /analyst-report layers
+an LLM narrative on top (`AnalystEngine`), but neither recomputes the
+underlying decision independently. /decision and /analyst-report are
+kept as stable, unchanged-response-shape compatibility endpoints for
+existing callers; /decision-v2 is the current canonical, gate-checked
+decision surface.
+
 Every route requires `require_active_subscription()` (Phase 13 P13.5
 fix -- this entire file had *no* auth dependency at all before this,
 meaning any anonymous caller could pull live quotes, technical/
@@ -46,7 +60,7 @@ from sqlalchemy.orm import Session
 from src.analysis.analyst.analyst_engine_factory import get_analyst_engine
 from src.analysis.analyst.output_formatter import OutputFormatter
 from src.analysis.context_builder import build_analysis_context
-from src.analysis.decision.ai_decision_engine import AIDecisionEngine
+from src.analysis.decision_pipeline import compute_investment_decision
 from src.analysis.decision_v2.engine import DecisionEngineV2
 from src.analysis.decision_v2.types import ANALYSIS_DISCLAIMER_AR, CONFIDENCE_DISCLAIMER_AR
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
@@ -406,7 +420,7 @@ async def get_investment_decision(
             f"Not enough ingested history or fundamentals for '{symbol}' to generate an investment decision."
         )
 
-    decision = AIDecisionEngine().decide(context)
+    decision = compute_investment_decision(context)
 
     return InvestmentDecisionOut(
         symbol=decision.symbol,
@@ -450,6 +464,31 @@ def _parse_quote_timestamp(raw: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _sub_scores_dict(sub_scores) -> dict:
+    """The one place a DecisionResult's `sub_scores` gets unpacked into
+    a plain dict -- reused for both the DecisionV2Snapshot audit row's
+    JSON column and (via `SubScoresOut(**...)`) the DecisionV2Out
+    response, so the two representations can never silently drift
+    apart from each other."""
+    return {
+        "trend_score": sub_scores.trend_score,
+        "momentum_score": sub_scores.momentum_score,
+        "volume_score": sub_scores.volume_score,
+        "liquidity_score": sub_scores.liquidity_score,
+        "volatility_score": sub_scores.volatility_score,
+        "risk_reward_score": sub_scores.risk_reward_score,
+        "market_context_score": sub_scores.market_context_score,
+        "data_quality_score": sub_scores.data_quality_score,
+    }
+
+
+def _gates_as_dicts(gates) -> list:
+    """Same reasoning as `_sub_scores_dict`, for DecisionResult.gates --
+    reused for both the audit row's JSON column and (via
+    `GateOutcomeOut(**...)`) the response."""
+    return [{"name": g.name, "passed": g.passed, "detail": g.detail, "blocking": g.blocking} for g in gates]
+
+
 @router.get("/{symbol}/decision-v2", response_model=DecisionV2Out)
 async def get_decision_v2(
     symbol: str,
@@ -490,7 +529,7 @@ async def get_decision_v2(
             f"Not enough ingested history or fundamentals for '{symbol}' to generate a decision."
         )
 
-    investment_decision = AIDecisionEngine().decide(context)
+    investment_decision = compute_investment_decision(context)
 
     stock = _get_stock_or_404(session, symbol)
     quote_info = context.extra.get("quote", {})
@@ -548,20 +587,8 @@ async def get_decision_v2(
                 negative_reasons=result.negative_reasons,
                 warnings=result.warnings,
                 recommendation_basis=result.recommendation_basis,
-                sub_scores={
-                    "trend_score": result.sub_scores.trend_score,
-                    "momentum_score": result.sub_scores.momentum_score,
-                    "volume_score": result.sub_scores.volume_score,
-                    "liquidity_score": result.sub_scores.liquidity_score,
-                    "volatility_score": result.sub_scores.volatility_score,
-                    "risk_reward_score": result.sub_scores.risk_reward_score,
-                    "market_context_score": result.sub_scores.market_context_score,
-                    "data_quality_score": result.sub_scores.data_quality_score,
-                },
-                gates=[
-                    {"name": g.name, "passed": g.passed, "detail": g.detail, "blocking": g.blocking}
-                    for g in result.gates
-                ],
+                sub_scores=_sub_scores_dict(result.sub_scores),
+                gates=_gates_as_dicts(result.gates),
                 analysis_version=result.analysis_version,
                 data_source=result.data_source,
                 is_synthetic=quote_info.get("is_synthetic"),
@@ -614,20 +641,8 @@ async def get_decision_v2(
         analysis_version=result.analysis_version,
         data_source=result.data_source,
         scan_run_id=result.scan_run_id,
-        sub_scores=SubScoresOut(
-            trend_score=result.sub_scores.trend_score,
-            momentum_score=result.sub_scores.momentum_score,
-            volume_score=result.sub_scores.volume_score,
-            liquidity_score=result.sub_scores.liquidity_score,
-            volatility_score=result.sub_scores.volatility_score,
-            risk_reward_score=result.sub_scores.risk_reward_score,
-            market_context_score=result.sub_scores.market_context_score,
-            data_quality_score=result.sub_scores.data_quality_score,
-        ),
-        gates=[
-            GateOutcomeOut(name=g.name, passed=g.passed, detail=g.detail, blocking=g.blocking)
-            for g in result.gates
-        ],
+        sub_scores=SubScoresOut(**_sub_scores_dict(result.sub_scores)),
+        gates=[GateOutcomeOut(**g) for g in _gates_as_dicts(result.gates)],
     )
 
 

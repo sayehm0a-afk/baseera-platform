@@ -8,7 +8,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
@@ -36,6 +36,8 @@ from src.api.routes.news import router as news_router  # noqa: E402
 from src.api.routes.portfolio import router as portfolio_router  # noqa: E402
 from src.api.routes.stocks import router as stocks_router  # noqa: E402
 from src.api.routes.subscriptions import router as subscriptions_router  # noqa: E402
+from src.auth.rbac import require_staff_role  # noqa: E402
+from src.domain.models import StaffRole, User  # noqa: E402
 
 # Sentry: opt-in only (settings.sentry_dsn is None unless SENTRY_DSN is set),
 # so a dev/CI run with no DSN configured never attempts a network call.
@@ -54,11 +56,23 @@ if settings.sentry_dsn:
 init_logging(log_level=settings.log_level)
 logger = get_logger(__name__)
 
-# FastAPI app
+# Public interactive API docs (/docs, /redoc) and the raw schema
+# (/openapi.json) enumerate every route this app has -- including the
+# full admin/owner surface -- with no auth in front of them. Fine for
+# development; a real information-disclosure risk in production (Phase
+# 2 Foundation Cleanup security hardening). Disabled outright rather
+# than staff-gated: FastAPI's docs/schema routes are unauthenticated by
+# construction, and re-implementing them behind RBAC is more risk than
+# the feature is worth -- an operator who needs the schema in
+# production can still generate it locally against the same commit.
+_docs_enabled = not settings.is_production
 app = FastAPI(
     title="Basirah",
     description="Enterprise AI Platform for Saudi Financial Market Analysis",
     version="1.0.0",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # Middleware stack -- Starlette applies the LAST-added middleware
@@ -644,8 +658,21 @@ async def get_stats():
 
 
 @app.post("/api/tasks", response_model=TaskResponse)
-async def submit_task(task_request: TaskRequest):
-    """Submit a task for processing."""
+async def submit_task(
+    task_request: TaskRequest, _current_user: User = Depends(require_staff_role(StaffRole.ADMIN))
+):
+    """Submit a task for processing.
+
+    Drives the legacy runtime kernel (see the standalone comment in
+    src/api/routes/admin/system.py: no real market/stocks/portfolio/
+    analyst/news/admin route depends on this subsystem). Previously
+    unauthenticated -- any anonymous caller could enqueue work here.
+    Staff-gated rather than removed outright as part of the Phase 2
+    Foundation Cleanup security hardening (audit finding: "unused
+    legacy endpoints"), since the kernel itself is still bootstrapped
+    at startup and deleting a reachable route is a larger, less
+    reversible change than closing the auth gap on it.
+    """
     try:
         if not kernel or not kernel.service_layer:
             raise HTTPException(status_code=503, detail="Service layer not available")
@@ -676,8 +703,8 @@ async def submit_task(task_request: TaskRequest):
 
 
 @app.get("/api/tasks/{task_id}")
-async def get_task_status(task_id: str):
-    """Get task status."""
+async def get_task_status(task_id: str, _current_user: User = Depends(require_staff_role(StaffRole.ADMIN))):
+    """Get task status. Staff-gated -- see submit_task's docstring."""
     try:
         if not kernel or not kernel.service_layer:
             raise HTTPException(status_code=503, detail="Service layer not available")
@@ -697,8 +724,8 @@ async def get_task_status(task_id: str):
 
 
 @app.get("/api/agents/{agent_id}")
-async def get_agent_status(agent_id: str):
-    """Get agent status."""
+async def get_agent_status(agent_id: str, _current_user: User = Depends(require_staff_role(StaffRole.ADMIN))):
+    """Get agent status. Staff-gated -- see submit_task's docstring."""
     try:
         if not kernel or not kernel.service_layer:
             raise HTTPException(status_code=503, detail="Service layer not available")
