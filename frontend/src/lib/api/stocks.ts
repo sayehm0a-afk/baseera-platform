@@ -7,6 +7,7 @@ import type {
   Quote,
   Recommendation,
   Stock,
+  StockSearch,
   TechnicalAnalysis,
 } from "./stocks-types";
 
@@ -16,6 +17,13 @@ import type {
 
 export function getStock(symbol: string): Promise<Stock> {
   return apiFetch<Stock>(`/api/v1/stocks/${encodeURIComponent(symbol)}`);
+}
+
+/** Search the registered symbol universe by Tadawul symbol, Arabic
+ * company name, or English company name (GET /api/v1/stocks/search). */
+export function searchStocks(query: string, limit = 20): Promise<StockSearch> {
+  const search = new URLSearchParams({ q: query, limit: String(limit) });
+  return apiFetch<StockSearch>(`/api/v1/stocks/search?${search.toString()}`);
 }
 
 export function getQuote(symbol: string): Promise<Quote> {

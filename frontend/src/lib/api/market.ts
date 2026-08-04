@@ -4,6 +4,7 @@ import type {
   MarketDataHealth,
   MarketScanProgress,
   MarketScanRun,
+  MarketStatus,
   MarketSummary,
   RankingsResponse,
   SectorsResponse,
@@ -13,6 +14,10 @@ import type {
 /** Every function here is a direct, unmodified call to an existing
  * `/api/v1/market/*` route (src/api/routes/market.py) -- no ranking,
  * scoring, or sentiment logic is re-derived on the frontend. */
+
+export function getMarketStatus(): Promise<MarketStatus> {
+  return apiFetch<MarketStatus>("/api/v1/market/status");
+}
 
 export function triggerScan(): Promise<MarketScanRun> {
   return apiFetch<MarketScanRun>("/api/v1/market/scan", {

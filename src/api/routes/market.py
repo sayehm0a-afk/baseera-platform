@@ -39,6 +39,7 @@ from src.api.schemas.market_intelligence import (
     MarketScanProgressOut,
     MarketScanRequest,
     MarketScanRunOut,
+    MarketStatusOut,
     MarketSummaryOut,
     RankingEntryOut,
     RankingListOut,
@@ -61,6 +62,7 @@ from src.domain.models import (
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.market_snapshot import MarketSnapshotBuilder
+from src.market_intelligence.market_status import get_market_status
 from src.market_intelligence.ranking import RankingEngine
 from src.market_intelligence.read_model import outcome_from_record
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -164,6 +166,50 @@ def _change_detection_result_from_events(
         new_symbols=[],
         removed_symbols=[],
         previous_scan_run_id=previous_scan_run_id,
+    )
+
+
+@router.get("/status", response_model=MarketStatusOut)
+async def get_market_session_status(
+    _current_user: User = Depends(require_active_subscription()),
+) -> MarketStatusOut:
+    """Tadawul session status (open/pre-open auction/closing auction/
+    closed), combined with a real connectivity probe of the currently
+    selected market data provider -- never a guess about whether the
+    provider is reachable. See src.market_intelligence.market_status
+    for the disclosed holiday-calendar gap this inherits."""
+    info = get_market_status()
+
+    provider_connected = True
+    try:
+        from src.market_data.provider_factory import get_market_data_provider
+        from src.market_data.providers.market_data_provider import ProviderHealth
+
+        provider = await get_market_data_provider()
+        health = await provider.health_check()
+        provider_connected = health == ProviderHealth.HEALTHY
+    except Exception as exc:
+        logger.warning("Market status: provider connectivity probe failed: %s", exc)
+        provider_connected = False
+
+    status_value = info.status.value
+    label_ar = info.label_ar
+    if not provider_connected:
+        status_value = "PROVIDER_UNREACHABLE"
+        label_ar = "تعذر الاتصال بمصدر البيانات"
+
+    return MarketStatusOut(
+        status=status_value,
+        label_ar=label_ar,
+        is_trading_day=info.is_trading_day,
+        server_time_riyadh=info.server_time_riyadh,
+        seconds_until_next_open=info.seconds_until_next_open,
+        seconds_until_close=info.seconds_until_close,
+        last_completed_session_date=(
+            info.last_completed_session_date.isoformat() if info.last_completed_session_date else None
+        ),
+        provider_connected=provider_connected,
+        holiday_calendar_disclosed_gap=info.holiday_calendar_disclosed_gap,
     )
 
 
@@ -340,6 +386,8 @@ def get_rankings(
                         symbol=e.symbol, sector=e.sector, recommendation=e.recommendation,
                         confidence=e.confidence, final_score=e.final_score, target_price=e.target_price,
                         expected_return_pct=e.expected_return_pct, risk_level=e.risk_level, rank_value=e.rank_value,
+                        current_price=e.current_price, stop_loss=e.stop_loss,
+                        risk_reward_ratio=e.risk_reward_ratio, time_horizon=e.time_horizon,
                     )
                     for e in ranking_list.entries
                 ],

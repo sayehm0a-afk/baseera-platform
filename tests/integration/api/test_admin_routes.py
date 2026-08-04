@@ -526,6 +526,16 @@ def test_dashboard_summary_requires_staff(client, customer):
     assert response.status_code == 403
 
 
+def test_dashboard_summary_last_scan_fields_are_none_before_any_scan(client, admin):
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["last_scan_id"] is None
+    assert body["last_scan_status"] is None
+    assert body["last_scan_symbols_requested"] is None
+
+
 # --- billing ---------------------------------------------------------------
 
 

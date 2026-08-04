@@ -112,6 +112,24 @@ export interface InvestmentDecision {
   breakdown: DecisionFactorBreakdown[];
   signals: Signal[];
   generated_at: string;
+  entry_quality: string;
+  entry_quality_notes: string[];
+  risk_reward_ratio: number | null;
+  stop_loss_basis: string;
+  target_price_basis: string;
+  confidence_calibration_notes: string[];
+}
+
+export interface StockSearchResult {
+  symbol: string;
+  name_en: string;
+  name_ar: string | null;
+  sector: string | null;
+}
+
+export interface StockSearch {
+  query: string;
+  results: StockSearchResult[];
 }
 
 export interface AnalystReport {
@@ -139,4 +157,10 @@ export interface AnalystReport {
   final_recommendation_rationale: string;
   generated_at: string;
   engine_version: string;
+  entry_quality: string;
+  entry_quality_notes: string[];
+  risk_reward_ratio: number | null;
+  stop_loss_basis: string;
+  target_price_basis: string;
+  confidence_calibration_notes: string[];
 }

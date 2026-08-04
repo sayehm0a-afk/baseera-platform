@@ -11,7 +11,7 @@ const MAX_POLLS = 40;
  * run until it finishes, then refreshes the dashboard so it reads the
  * newly persisted summary -- no scan/ranking logic is duplicated here,
  * this only calls the existing backend job and waits for it. */
-export function RunScanButton() {
+export function RunScanButton({ label }: { label?: string } = {}) {
   const router = useRouter();
   const [status, setStatus] = useState<"idle" | "running" | "error">("idle");
 
@@ -41,11 +41,12 @@ export function RunScanButton() {
         disabled={status === "running"}
         className="rounded-bsr-md bg-bsr-gold-500 px-bsr-4 py-bsr-2 font-semibold text-bsr-navy-950 transition-colors hover:bg-bsr-gold-400 disabled:opacity-60"
       >
-        {status === "running" ? "جارٍ المسح..." : "تشغيل مسح السوق الآن"}
+        {status === "running" ? "جارٍ المسح..." : (label ?? "تشغيل مسح السوق الآن")}
       </button>
       {status === "error" ? (
         <p className="text-sm text-bsr-market-down">
-          تعذّر تشغيل المسح. تأكد من اتصال الخادم وحاول مرة أخرى.
+          تعذّر تشغيل المسح -- قد يكون هناك مسح آخر قيد التنفيذ بالفعل، أو تعذّر الاتصال بالخادم. حاول
+          مرة أخرى بعد قليل.
         </p>
       ) : null}
     </div>

@@ -24,6 +24,20 @@ class StockOut(BaseModel):
     is_active: bool
 
 
+class StockSearchResultOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    symbol: str
+    name_en: str
+    name_ar: Optional[str] = None
+    sector: Optional[str] = None
+
+
+class StockSearchOut(BaseModel):
+    query: str
+    results: List[StockSearchResultOut]
+
+
 class QuoteOut(BaseModel):
     symbol: str
     open: float

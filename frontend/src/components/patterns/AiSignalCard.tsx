@@ -4,13 +4,19 @@ import {
   RecommendationBadge,
   type RecommendationValue,
 } from "@/components/badges/RecommendationBadge";
+import { RISK_LEVEL_LABELS, TIME_HORIZON_LABELS } from "@/lib/portfolio-labels";
 
 interface AiSignalCardProps {
   symbol: string;
   sector?: string | null;
   recommendation: RecommendationValue;
   confidence?: number | null;
+  currentPrice?: number | null;
   targetPrice?: number | null;
+  stopLoss?: number | null;
+  riskRewardRatio?: number | null;
+  timeHorizon?: string | null;
+  riskLevel?: string | null;
   expectedReturnPct?: number | null;
   href?: string;
 }
@@ -23,7 +29,12 @@ export function AiSignalCard({
   sector,
   recommendation,
   confidence,
+  currentPrice,
   targetPrice,
+  stopLoss,
+  riskRewardRatio,
+  timeHorizon,
+  riskLevel,
   expectedReturnPct,
   href,
 }: AiSignalCardProps) {
@@ -73,6 +84,43 @@ export function AiSignalCard({
           ) : null}
         </div>
       ) : null}
+
+      {currentPrice != null || stopLoss != null ? (
+        <div className="grid grid-cols-2 gap-bsr-2 text-xs">
+          {currentPrice != null ? (
+            <div>
+              <span className="text-bsr-text-muted">السعر المرجعي: </span>
+              <span className="bsr-numeric text-bsr-text-secondary">{currentPrice.toFixed(2)}</span>
+            </div>
+          ) : null}
+          {stopLoss != null ? (
+            <div>
+              <span className="text-bsr-text-muted">وقف الخسارة: </span>
+              <span className="bsr-numeric text-bsr-action-sell">{stopLoss.toFixed(2)}</span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {riskRewardRatio != null || timeHorizon != null || riskLevel != null ? (
+        <div className="flex flex-wrap items-center gap-x-bsr-3 gap-y-1 text-xs text-bsr-text-muted">
+          {riskRewardRatio != null ? (
+            <span>
+              العائد/المخاطرة: <span className="bsr-numeric text-bsr-text-secondary">1:{riskRewardRatio.toFixed(1)}</span>
+            </span>
+          ) : null}
+          {timeHorizon != null ? (
+            <span>المدة: {TIME_HORIZON_LABELS[timeHorizon] ?? timeHorizon}</span>
+          ) : null}
+          {riskLevel != null ? (
+            <span>المخاطرة: {RISK_LEVEL_LABELS[riskLevel] ?? riskLevel}</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      <p className="text-[10px] leading-4 text-bsr-text-muted">
+        درجة الجودة تعكس قوة الأدلة المتاحة وقت التحليل، ولا تضمن تحقيق الربح.
+      </p>
     </div>
   );
 

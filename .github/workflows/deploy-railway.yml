@@ -288,6 +288,7 @@ jobs:
             --set "LOG_LEVEL=INFO"
             --set "RATE_LIMIT_ENABLED=true"
             --set "PORT=8000"
+            --set "DEPLOYMENT_COMMIT=${{ github.sha }}"
           )
           if [ "$SECRET_KEY_GENERATED" = "true" ]; then
             SET_ARGS+=(--set "SECRET_KEY=$SECRET_KEY_VALUE")
@@ -321,7 +322,8 @@ jobs:
           BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
         run: |
           railway variables --service "$RAILWAY_FRONTEND_SERVICE" \
-            --set "NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL"
+            --set "NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL" \
+            --set "NEXT_PUBLIC_DEPLOYMENT_COMMIT=${{ github.sha }}"
 
       - name: Deploy backend (from repo root -- picks up ./railway.toml)
         run: railway up --service "$RAILWAY_BACKEND_SERVICE" --detach

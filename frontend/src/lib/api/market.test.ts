@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getMarketSummary, getRankings, triggerScan } from "./market";
+import { getMarketStatus, getMarketSummary, getRankings, triggerScan } from "./market";
 
 /** market.ts is a direct, unmodified pass-through to the real backend
  * routes -- these tests prove the exact real data returned by the API
@@ -37,6 +37,29 @@ describe("market API client", () => {
     const [, options] = fetchMock.mock.calls[0];
     expect(fetchMock.mock.calls[0][0]).toContain("/api/v1/market/summary");
     expect(options?.method ?? "GET").toBe("GET");
+  });
+
+  it("getMarketStatus returns the real backend session status unmodified", async () => {
+    const realStatus = {
+      status: "OPEN",
+      label_ar: "السوق مفتوح",
+      is_trading_day: true,
+      server_time_riyadh: "2026-08-04T12:00:00+03:00",
+      seconds_until_next_open: 0,
+      seconds_until_close: 10800,
+      last_completed_session_date: "2026-08-04",
+      provider_connected: true,
+      holiday_calendar_disclosed_gap: "لا يوجد تقويم للعطلات الرسمية...",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(realStatus), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getMarketStatus();
+
+    expect(result).toEqual(realStatus);
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/v1/market/status");
   });
 
   it("getMarketSummary passes the run_id through as a real query param, not a synthesized one", async () => {

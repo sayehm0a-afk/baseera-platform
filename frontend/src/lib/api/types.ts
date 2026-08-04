@@ -73,6 +73,10 @@ export interface RankingEntry {
   expected_return_pct: number | null;
   risk_level: string | null;
   rank_value: number | null;
+  current_price: number | null;
+  stop_loss: number | null;
+  risk_reward_ratio: number | null;
+  time_horizon: string | null;
 }
 
 export interface RankingList {
@@ -161,6 +165,21 @@ export interface MarketDataHealth {
   last_real_data_at: string | null;
   last_scan_source: string | null;
   can_publish_recommendations: boolean;
+}
+
+/** Mirrors MarketStatusOut (src/api/schemas/market_intelligence.py).
+ * `status` is one of OPEN/PRE_OPEN_AUCTION/CLOSING_AUCTION/CLOSED/
+ * PROVIDER_UNREACHABLE. */
+export interface MarketStatus {
+  status: string;
+  label_ar: string;
+  is_trading_day: boolean;
+  server_time_riyadh: string;
+  seconds_until_next_open: number;
+  seconds_until_close: number | null;
+  last_completed_session_date: string | null;
+  provider_connected: boolean;
+  holiday_calendar_disclosed_gap: string;
 }
 
 export interface ApiErrorBody {

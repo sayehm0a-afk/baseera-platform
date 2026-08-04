@@ -290,6 +290,16 @@ class RankingEntry:
     expected_return_pct: Optional[float]
     risk_level: Optional[str]
     rank_value: Optional[float]
+    # Practical-testing additions: all three are honestly derivable from
+    # already-persisted SymbolIntelligenceRecord columns (see
+    # read_model.py's outcome_from_record/_risk_reward_ratio) -- no new
+    # storage, no fabricated defaults like entry_quality (which is NOT
+    # persisted and would misleadingly read "FAIR" for every entry, so
+    # it stays absent here).
+    current_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    risk_reward_ratio: Optional[float] = None
+    time_horizon: Optional[str] = None
 
 
 @dataclass(frozen=True)
