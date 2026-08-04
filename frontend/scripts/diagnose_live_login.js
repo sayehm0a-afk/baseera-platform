@@ -59,24 +59,29 @@ async function attempt(browser, label, preSubmitWaitMs) {
 
     await page.click('button[type="submit"]');
 
+    // IMPORTANT: '[role="alert"]' alone also matches Next.js's own
+    // #__next-route-announcer__ (a permanently-present, visually-hidden
+    // accessibility div with role="alert" on every App Router page --
+    // confirmed by run 30913094187, which matched it in ~50ms, before
+    // any real network round-trip could complete). The login page's
+    // actual error banner is specifically a <p role="alert"> -- exclude
+    // the announcer explicitly so this can't false-positive again.
+    const REAL_ERROR_SELECTOR = 'p[role="alert"]';
     const outcome = await Promise.race([
-      page.waitForURL("**/dashboard", { timeout: 15000 }).then(() => "navigated_to_dashboard"),
-      page.waitForSelector('[role="alert"]', { timeout: 15000 }).then(() => "error_banner_shown"),
+      page.waitForURL("**/dashboard", { timeout: 20000 }).then(() => "navigated_to_dashboard"),
+      page.waitForSelector(REAL_ERROR_SELECTOR, { timeout: 20000 }).then(() => "error_banner_shown"),
     ]).catch(() => "timeout_neither_happened");
 
     console.log(`OUTCOME: ${outcome}`);
     console.log(`Current URL: ${page.url()}`);
 
-    // Give React a moment to finish committing the error text, then
-    // read outerHTML (not just textContent) so an empty-but-present
-    // element is visible in the evidence rather than silently blank.
     await page.waitForTimeout(300);
-    const alertEl = await page.$('[role="alert"]');
+    const alertEl = await page.$(REAL_ERROR_SELECTOR);
     if (alertEl) {
       const outerHtml = await alertEl.evaluate((el) => el.outerHTML);
-      console.log(`Alert element outerHTML: ${outerHtml}`);
+      console.log(`Real error banner (p[role=alert]) outerHTML: ${outerHtml}`);
     } else {
-      console.log("No [role=alert] element present.");
+      console.log("No p[role=alert] element present (the real login error banner did not appear).");
     }
 
     await page.screenshot({ path: path.join(EVIDENCE_DIR, `${label}-2-after-submit.png`), fullPage: true });
