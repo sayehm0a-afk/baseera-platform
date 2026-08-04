@@ -103,6 +103,25 @@ jobs:
           echo "=== frontend / ==="
           curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/" || echo "(request failed)"
 
+      # DIAGNOSTIC ONLY -- read-only discovery of how to reach the
+      # production DB from this runner. `railway run` only injects env
+      # vars locally (confirmed by run #2: it resolved DATABASE_URL to
+      # postgres.railway.internal, Railway's private DNS, unreachable
+      # from outside Railway's own network). Checking whether `railway
+      # ssh` (executes inside the real container) or a public DB proxy
+      # variable is the right fix -- prints variable *names* only, never
+      # values, and creates/deletes nothing.
+      - name: DIAGNOSTIC -- how to reach the production DB from this runner
+        run: |
+          echo "=== railway ssh --help ==="
+          railway ssh --help 2>&1 || echo "(railway ssh --help failed)"
+          echo "=== railway run --help ==="
+          railway run --help 2>&1 || echo "(railway run --help failed)"
+          echo "=== service list ==="
+          railway service 2>&1 || echo "(railway service failed)"
+          echo "=== backend variable NAMES only (no values) ==="
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(sorted(d.keys()))" || echo "(could not list backend variable names)"
+
       - name: Bootstrap a temporary OWNER account for this verification run
         id: account
         run: |
