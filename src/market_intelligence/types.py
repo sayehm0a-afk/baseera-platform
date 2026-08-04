@@ -386,3 +386,21 @@ class MarketSnapshotData:
     strongest_sectors: List[str]
     weakest_sectors: List[str]
     most_important_changes: List[ChangeEvent]
+
+
+@dataclass(frozen=True)
+class MarketBreadthSummary:
+    """A cheap, single-aggregate-query view of one completed scan run's
+    recommendation breadth -- deliberately narrower than
+    `MarketSnapshotData` (no sector ranking, no change events) so it is
+    affordable to query once per individual stock decision (Phase 2C's
+    market-risk classification), not just once per market-summary page
+    load. Computed with SQL COUNT/AVG, never by loading every row into
+    Python (see `MarketIntelligenceRepository.get_market_breadth`)."""
+
+    scan_run_id: int
+    generated_at: datetime
+    symbols_scanned: int
+    buy_count: int  # BUY + STRONG_BUY
+    sell_count: int  # SELL + STRONG_SELL
+    average_confidence: Optional[float]

@@ -14,6 +14,7 @@ from src.analysis.decision.types import EntryQuality, InvestmentDecision
 from src.analysis.decision_v2 import evidence, reasoning, scoring, structure, trade_classification
 from src.analysis.decision_v2.config import DecisionV2Tuning
 from src.analysis.decision_v2.gates import GateInputs, evaluate_decision
+from src.analysis.decision_v2.market_risk import classify_market_risk
 from src.analysis.decision_v2.types import (
     DECISION_LABELS_AR,
     ENTRY_STATUS_LABELS_AR,
@@ -31,6 +32,7 @@ from src.market_intelligence.config import (
     get_min_average_traded_value,
     get_min_risk_reward_ratio,
 )
+from src.market_intelligence.types import MarketBreadthSummary
 
 DECISION_V2_ENGINE_VERSION = "2.0.0"
 
@@ -65,11 +67,14 @@ class DecisionEngineV2:
         market_status: str,
         market_is_open: Optional[bool],
         scan_run_id: Optional[int] = None,
+        market_breadth: Optional[MarketBreadthSummary] = None,
     ) -> DecisionResult:
         tuning = self._tuning
         technical = context.technical_result
         price = context.latest_price
         direction = _direction_of(investment_decision.recommendation)
+
+        market_risk = classify_market_risk(market_is_open=bool(market_is_open), breadth=market_breadth)
 
         atr_value = None
         atr_pct = None
@@ -220,6 +225,8 @@ class DecisionEngineV2:
             strong_buy_minimum_confidence=tuning.strong_buy_minimum_confidence,
             confidence_score=confidence,
             market_context_score=market_context,
+            market_risk_entry_permitted=market_risk.entry_permitted,
+            market_risk_label_ar=market_risk.label_ar,
         )
         evaluation = evaluate_decision(gate_inputs, tuning)
         warnings.extend(evaluation.warnings)
@@ -397,6 +404,16 @@ class DecisionEngineV2:
             why_not_stronger_ar=why_not_stronger_ar,
             entry_confirmation_conditions_ar=entry_confirmation_conditions_ar,
             watch_next_session_ar=watch_next_session_ar,
+            # --- Phase 2C: market risk -----------------------------------
+            market_risk_state=market_risk.state.value,
+            market_risk_label_ar=market_risk.label_ar,
+            market_risk_basis_ar=market_risk.basis_ar,
+            market_risk_entry_permitted=market_risk.entry_permitted,
+            market_risk_is_live=market_risk.is_live,
+            market_breadth_buy_count=market_risk.buy_count,
+            market_breadth_sell_count=market_risk.sell_count,
+            market_breadth_symbols_scanned=market_risk.symbols_scanned,
+            market_breadth_average_confidence=market_risk.average_confidence,
         )
         return decision_result
 

@@ -3,8 +3,10 @@ extension (5 more, to the 20-gate list: quote-timestamp, volume-quality,
 trend-consistency/contradiction, market-context, confidence-calibration,
 price-limit-proximity, and risk-warning-disclosure -- several of these
 share one gate entry where the underlying evidence is identical, see
-each gate's own comment below), applied uniformly to every single-stock
-decision -- not only to the market-wide scanner, which is what
+each gate's own comment below) plus Phase 2C's `market_risk_permits_entry`
+gate (a market-wide, not per-symbol, entry-permission check -- see
+`market_risk.py`), applied uniformly to every single-stock decision --
+not only to the market-wide scanner, which is what
 `src.market_intelligence.publication_gate` already does today. Several
 gates below reuse that module's exact threshold getters
 (`get_min_risk_reward_ratio`, `get_min_average_traded_value`,
@@ -87,6 +89,10 @@ class GateInputs:
     strong_buy_minimum_confidence: float
     confidence_score: float
     market_context_score: Optional[float]
+
+    # --- Phase 2C additions -------------------------------------------
+    market_risk_entry_permitted: bool
+    market_risk_label_ar: str
 
 
 @dataclass
@@ -303,6 +309,29 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         "volume_quality", True,
         "حجم التداول يدعم اتجاه القرار." if inputs.volume_confirms_decision else "لا يوجد تأكيد أو تعارض حجمي واضح.",
         False,
+    ))
+
+    # Phase 2C, market-risk entry-permission gate: a market-wide risk
+    # state (see market_risk.py, derived from real scan-run breadth) of
+    # REDUCE_POSITIONS/PARTIAL_EXIT/DEFENSIVE_EXIT blocks *new* entries.
+    # HOLD/REDUCE/EXIT decisions (already returned above) are never
+    # affected -- trimming or exiting a position during a risk-off
+    # market is exactly the defensive behavior this gate exists to
+    # encourage, not discourage.
+    if not inputs.market_risk_entry_permitted:
+        gates.append(GateOutcome(
+            "market_risk_permits_entry", False,
+            f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- يتم تعليق توصيات الدخول الجديدة مؤقتًا.",
+            True,
+        ))
+        warnings.append(
+            f"حالة مخاطر السوق العامة حاليًا «{inputs.market_risk_label_ar}» -- "
+            "يُفضّل تجنب فتح مراكز جديدة حتى تتحسن الحالة."
+        )
+        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
+    gates.append(GateOutcome(
+        "market_risk_permits_entry", True,
+        f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- لا تمنع الدخول.", False,
     ))
 
     # Gate 12: confidence not based on a single indicator -----------------------

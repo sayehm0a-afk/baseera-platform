@@ -283,6 +283,18 @@ export interface DecisionV2 {
   why_not_stronger_ar: string;
   entry_confirmation_conditions_ar: string[];
   watch_next_session_ar: string[];
+
+  /** Phase 2C: Market Risk and Exit Warning Engine -- a market-wide
+   * (not per-symbol) risk read, distinct from `market_status` above. */
+  market_risk_state: string;
+  market_risk_label_ar: string;
+  market_risk_basis_ar: string;
+  market_risk_entry_permitted: boolean;
+  market_risk_is_live: boolean;
+  market_breadth_buy_count: number | null;
+  market_breadth_sell_count: number | null;
+  market_breadth_symbols_scanned: number | null;
+  market_breadth_average_confidence: number | null;
 }
 
 export interface StockSearchResult {

@@ -46,6 +46,8 @@ def _base_buy_inputs(**overrides) -> GateInputs:
         strong_buy_minimum_confidence=TUNING.strong_buy_minimum_confidence,
         confidence_score=80.0,
         market_context_score=70.0,
+        market_risk_entry_permitted=True,
+        market_risk_label_ar="محايد",
     )
     defaults.update(overrides)
     return GateInputs(**defaults)
@@ -354,3 +356,33 @@ class TestPhase2BStrongBuyIsStricterThanBuy:
         strong_result = evaluate_decision(strong_inputs, TUNING)
         assert buy_result.decision is Decision.BUY_CANDIDATE
         assert strong_result.decision is Decision.BUY_CANDIDATE  # downgraded, not STRONG_BUY_CANDIDATE
+
+
+class TestPhase2CMarketRiskPermitsEntryGate:
+    def test_entry_blocked_downgrades_buy_to_watch(self):
+        inputs = _base_buy_inputs(market_risk_entry_permitted=False, market_risk_label_ar="خروج دفاعي")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+        gate = next(g for g in result.gates if g.name == "market_risk_permits_entry")
+        assert gate.passed is False
+        assert gate.blocking is True
+        assert "خروج دفاعي" in gate.detail
+        assert any("خروج دفاعي" in w for w in result.warnings)
+
+    def test_entry_permitted_does_not_block_a_valid_buy(self):
+        inputs = _base_buy_inputs(market_risk_entry_permitted=True, market_risk_label_ar="دخول قوي")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "market_risk_permits_entry")
+        assert gate.passed is True
+        assert gate.blocking is False
+
+    def test_market_risk_gate_does_not_affect_hold_or_sell_side_decisions(self):
+        hold_inputs = _base_buy_inputs(
+            recommendation=Recommendation.HOLD, direction=0, market_risk_entry_permitted=False,
+        )
+        sell_inputs = _base_buy_inputs(
+            recommendation=Recommendation.SELL, direction=-1, market_risk_entry_permitted=False,
+        )
+        assert evaluate_decision(hold_inputs, TUNING).decision is Decision.HOLD
+        assert evaluate_decision(sell_inputs, TUNING).decision is Decision.REDUCE

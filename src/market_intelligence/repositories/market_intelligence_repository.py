@@ -18,6 +18,7 @@ method) -- matches every other DB-touching module in this codebase
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.ai_evolution.agents.orchestrator import AgentPanelOrchestrator
@@ -41,7 +42,7 @@ from src.domain.models import (
 )
 from src.analysis.decision.types import DecisionFactorBreakdown
 from src.analysis.recommendation.types import Signal
-from src.market_intelligence.types import Alert, ChangeEvent, SectorSummary, SymbolScanOutcome
+from src.market_intelligence.types import Alert, ChangeEvent, MarketBreadthSummary, SectorSummary, SymbolScanOutcome
 
 # The source label written into RecommendationSnapshot.source for every
 # row this repository creates -- distinguishes a live scan write from a
@@ -286,6 +287,34 @@ class MarketIntelligenceRepository:
     def get_symbol_records_by_symbol(self, session: Session, run_id: int) -> Dict[str, SymbolIntelligenceRecord]:
         rows = session.query(SymbolIntelligenceRecord).filter_by(scan_run_id=run_id).all()
         return {row.symbol: row for row in rows}
+
+    def get_market_breadth(self, session: Session, run_id: int) -> Optional[MarketBreadthSummary]:
+        """Phase 2C: a single-round-trip aggregate (COUNT/AVG, not a
+        row-by-row load) so this is cheap enough to call once per
+        individual stock decision -- unlike `MarketSnapshotBuilder`,
+        which loads every symbol/sector row and is only ever called
+        once per market-summary page view."""
+        counts = dict(
+            session.query(SymbolIntelligenceRecord.recommendation, func.count(SymbolIntelligenceRecord.id))
+            .filter_by(scan_run_id=run_id)
+            .group_by(SymbolIntelligenceRecord.recommendation)
+            .all()
+        )
+        symbols_scanned = sum(counts.values())
+        if symbols_scanned == 0:
+            return None
+        avg_confidence = (
+            session.query(func.avg(SymbolIntelligenceRecord.confidence)).filter_by(scan_run_id=run_id).scalar()
+        )
+        run = session.query(MarketScanRun).filter_by(id=run_id).one_or_none()
+        return MarketBreadthSummary(
+            scan_run_id=run_id,
+            generated_at=run.finished_at if run and run.finished_at else datetime.now(timezone.utc),
+            symbols_scanned=symbols_scanned,
+            buy_count=counts.get(RecommendationLabel.BUY, 0) + counts.get(RecommendationLabel.STRONG_BUY, 0),
+            sell_count=counts.get(RecommendationLabel.SELL, 0) + counts.get(RecommendationLabel.STRONG_SELL, 0),
+            average_confidence=_f(avg_confidence),
+        )
 
     # --- sector summaries -------------------------------------------------
 

@@ -108,6 +108,15 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
     why_not_stronger_ar: "لم يتحقق قرار أقوى بسبب: نسبة العائد إلى المخاطرة غير كافية.",
     entry_confirmation_conditions_ar: ["اختراق حقيقي لمستوى 27.90 مدعوم بحجم تداول أعلى من المتوسط يعزز الفرضية."],
     watch_next_session_ar: ["رد فعل السعر عند مستوى المقاومة القريب (27.90)."],
+    market_risk_state: "NEUTRAL",
+    market_risk_label_ar: "محايد",
+    market_risk_basis_ar: "نسبة الإشارات الإيجابية 50% (10 شراء مقابل 10 بيع) من أصل 40 سهمًا تم فحصها في آخر عملية مسح.",
+    market_risk_entry_permitted: true,
+    market_risk_is_live: true,
+    market_breadth_buy_count: 10,
+    market_breadth_sell_count: 10,
+    market_breadth_symbols_scanned: 40,
+    market_breadth_average_confidence: 62,
     ...overrides,
   };
 }
@@ -225,5 +234,42 @@ describe("ExecutiveDecisionCard", () => {
     );
     expect(screen.queryByText("أقرب دعم")).not.toBeInTheDocument();
     expect(screen.queryByText("أقرب مقاومة")).not.toBeInTheDocument();
+  });
+
+  it("renders the Phase 2C market risk state and its evidence basis", () => {
+    render(
+      <ExecutiveDecisionCard
+        decision={buildDecision({
+          market_risk_label_ar: "دخول انتقائي",
+          market_risk_basis_ar: "نسبة الإشارات الإيجابية 60% (24 شراء مقابل 16 بيع) من أصل 40 سهمًا.",
+        })}
+      />
+    );
+    expect(screen.getByText("دخول انتقائي")).toBeInTheDocument();
+    expect(
+      screen.getByText("نسبة الإشارات الإيجابية 60% (24 شراء مقابل 16 بيع) من أصل 40 سهمًا.")
+    ).toBeInTheDocument();
+  });
+
+  it("labels a last-session market risk read as such, not as live", () => {
+    render(
+      <ExecutiveDecisionCard
+        decision={buildDecision({
+          market_risk_label_ar: "السوق مغلق",
+          market_risk_is_live: false,
+        })}
+      />
+    );
+    expect(screen.getByText("السوق مغلق (آخر جلسة)")).toBeInTheDocument();
+  });
+
+  it("does not append the last-session note when the market risk read is live", () => {
+    render(
+      <ExecutiveDecisionCard
+        decision={buildDecision({ market_risk_label_ar: "دخول قوي", market_risk_is_live: true })}
+      />
+    );
+    expect(screen.getByText("دخول قوي")).toBeInTheDocument();
+    expect(screen.queryByText(/آخر جلسة/)).not.toBeInTheDocument();
   });
 });

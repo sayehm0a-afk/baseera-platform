@@ -306,3 +306,22 @@ class DecisionResult:
     why_not_stronger_ar: str = ""
     entry_confirmation_conditions_ar: List[str] = field(default_factory=list)
     watch_next_session_ar: List[str] = field(default_factory=list)
+
+    # ======================================================================
+    # Phase 2C: Market Risk and Exit Warning Engine -- a market-wide (not
+    # per-symbol) risk classification, computed from the real breadth of
+    # the most recent completed scan run (see
+    # src.analysis.decision_v2.market_risk). Distinct from `market_status`
+    # above, which is a calendar/session-clock fact, not a risk read.
+    # ======================================================================
+    market_risk_state: str = "INSUFFICIENT_DATA"
+    market_risk_label_ar: str = "البيانات غير كافية"
+    market_risk_basis_ar: str = ""
+    market_risk_entry_permitted: bool = True
+    market_risk_is_live: bool = False
+    """False when the market is currently closed and this reflects the
+    last completed session's breadth instead of a live read."""
+    market_breadth_buy_count: Optional[int] = None
+    market_breadth_sell_count: Optional[int] = None
+    market_breadth_symbols_scanned: Optional[int] = None
+    market_breadth_average_confidence: Optional[float] = None

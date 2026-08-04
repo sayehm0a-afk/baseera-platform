@@ -105,10 +105,28 @@ from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
 from src.market_data.validators.symbol_validator import InvalidSymbolError, validate_symbol_format
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status
+from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/stocks", tags=["stocks"])
+_market_repository = MarketIntelligenceRepository()
+
+
+def _latest_market_breadth(session: Session):
+    """Phase 2C: best-effort, never-raising read of the most recent
+    completed scan run's breadth -- a missing/failed lookup (no scan
+    has ever completed yet, or a transient query error) degrades to
+    `None`, which `classify_market_risk` already handles honestly as
+    INSUFFICIENT_DATA rather than failing the whole decision request."""
+    try:
+        run = _market_repository.get_latest_successful_run(session)
+        if run is None:
+            return None
+        return _market_repository.get_market_breadth(session, run.id)
+    except Exception as exc:  # noqa: BLE001 -- a breadth-read failure must never break /decision-v2
+        logger.info("Could not read latest market breadth: %s", exc)
+        return None
 
 
 def _get_stock_or_404(session: Session, symbol: str) -> Stock:
@@ -547,6 +565,7 @@ async def get_decision_v2(
         quote_timestamp=_parse_quote_timestamp(quote_info.get("timestamp")),
         market_status=market_info.status.value,
         market_is_open=market_info.status == MarketSessionStatus.OPEN,
+        market_breadth=_latest_market_breadth(session),
     )
 
     try:
@@ -689,6 +708,15 @@ async def get_decision_v2(
         why_not_stronger_ar=result.why_not_stronger_ar,
         entry_confirmation_conditions_ar=result.entry_confirmation_conditions_ar,
         watch_next_session_ar=result.watch_next_session_ar,
+        market_risk_state=result.market_risk_state,
+        market_risk_label_ar=result.market_risk_label_ar,
+        market_risk_basis_ar=result.market_risk_basis_ar,
+        market_risk_entry_permitted=result.market_risk_entry_permitted,
+        market_risk_is_live=result.market_risk_is_live,
+        market_breadth_buy_count=result.market_breadth_buy_count,
+        market_breadth_sell_count=result.market_breadth_sell_count,
+        market_breadth_symbols_scanned=result.market_breadth_symbols_scanned,
+        market_breadth_average_confidence=result.market_breadth_average_confidence,
     )
 
 

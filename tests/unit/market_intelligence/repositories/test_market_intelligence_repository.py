@@ -418,3 +418,38 @@ def test_save_and_read_back_change_events_with_pagination(session, repo):
 
     total, rows = repo.get_change_events(session, limit=50, offset=0, run_id=9999)
     assert total == 0
+
+
+@pytest.mark.asyncio
+async def test_get_market_breadth_aggregates_real_symbol_records(session, repo):
+    """Phase 2C: a single aggregate query, not a per-row Python loop --
+    seeds a mix of BUY/STRONG_BUY/SELL/HOLD outcomes and checks the
+    counts/average confidence match what was actually saved."""
+    for symbol in ["1010", "1020", "1030", "1040"]:
+        _seed_stock(session, symbol)
+    run = repo.create_scan_run(session, symbols_requested=4)
+    outcomes = [
+        make_outcome(symbol="1010", decision=make_decision(symbol="1010", recommendation=Recommendation.BUY, confidence=80.0)),
+        make_outcome(symbol="1020", decision=make_decision(symbol="1020", recommendation=Recommendation.STRONG_BUY, confidence=90.0)),
+        make_outcome(symbol="1030", decision=make_decision(symbol="1030", recommendation=Recommendation.SELL, confidence=60.0)),
+        make_outcome(symbol="1040", decision=make_decision(symbol="1040", recommendation=Recommendation.HOLD, confidence=50.0)),
+    ]
+    await repo.save_symbol_records(session, run.id, outcomes)
+
+    breadth = repo.get_market_breadth(session, run.id)
+
+    assert breadth is not None
+    assert breadth.scan_run_id == run.id
+    assert breadth.symbols_scanned == 4
+    assert breadth.buy_count == 2  # BUY + STRONG_BUY
+    assert breadth.sell_count == 1
+    assert breadth.average_confidence == pytest.approx(70.0)
+
+
+def test_get_market_breadth_returns_none_for_a_run_with_no_records(session, repo):
+    run = repo.create_scan_run(session, symbols_requested=1)
+    assert repo.get_market_breadth(session, run.id) is None
+
+
+def test_get_market_breadth_returns_none_for_an_unknown_run_id(session, repo):
+    assert repo.get_market_breadth(session, 9999) is None
