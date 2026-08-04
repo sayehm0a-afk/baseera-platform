@@ -38,9 +38,13 @@ name: Production SAHMK Verification
 #      the same `railway ssh` mechanism) -- no permanent credential is
 #      left in production once this run completes.
 #
-# RAILWAY_TOKEN and SAHMK_API_KEY are read only as GitHub Actions
-# secrets and never echoed; the temporary account's own password is
-# generated at runtime and never printed either.
+# RAILWAY_TOKEN (project-scoped) and RAILWAY_API_TOKEN (workspace-scoped,
+# needed only for railway ssh keys add/remove) are read only as GitHub
+# Actions secrets and never echoed. SAHMK_API_KEY itself is never read by
+# this workflow at all -- it lives only in the backend service's own
+# Railway environment and is never passed to or through this job. The
+# temporary account's own password is generated at runtime and never
+# printed either.
 
 on:
   workflow_dispatch: {}
@@ -58,17 +62,27 @@ jobs:
     timeout-minutes: 20
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fail fast if RAILWAY_TOKEN is not configured
+      - name: Fail fast if required Railway secrets are not configured
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
             echo "::error::RAILWAY_TOKEN is not set."
             exit 1
           fi
           echo "RAILWAY_TOKEN present (length ${#RAILWAY_TOKEN})"
+          if [ -z "$RAILWAY_API_TOKEN" ]; then
+            echo "::error::RAILWAY_API_TOKEN is not set. This is a workspace-scoped Railway" \
+                 "API token (Railway dashboard -> Workspace Settings -> Tokens), separate from" \
+                 "the project-scoped RAILWAY_TOKEN -- required because 'railway ssh keys add/remove'" \
+                 "is rejected outright with a project token ('SSH key management is not" \
+                 "supported with project tokens')."
+            exit 1
+          fi
+          echo "RAILWAY_API_TOKEN present (length ${#RAILWAY_API_TOKEN})"
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -97,45 +111,34 @@ jobs:
           echo "=== frontend / ==="
           curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/" || echo "(request failed)"
 
-      # DIAGNOSTIC ONLY -- run #6 confirmed `railway ssh keys add` is
-      # rejected outright: "SSH key management is not supported with
-      # project tokens (RAILWAY_TOKEN). Use a workspace API token
-      # (RAILWAY_API_TOKEN)." That blocks the SSH approach entirely with
-      # the secret we have. Before escalating for a new secret, check
-      # (read-only, names only, never values) whether the Postgres
-      # service itself exposes a public proxy connection string that a
-      # project token CAN read -- that would let this workflow reach the
-      # DB directly over the public internet with no SSH/DB-access
-      # workaround needed at all.
-      - name: DIAGNOSTIC -- list real service names and check for a public DB URL
-        run: |
-          echo "=== railway status --json ==="
-          railway status --json 2>&1 || echo "(railway status --json failed)"
-          for svc in postgres Postgres postgresql PostgreSQL database Database; do
-            echo "=== variable NAMES for candidate service '$svc' (no values) ==="
-            railway variables --service "$svc" --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(sorted(d.keys()))" 2>/dev/null || echo "(no service named '$svc', or not readable)"
-          done
-
       # `railway run` only injects env vars into a LOCAL process -- confirmed
       # by runs #2/#3, which resolved DATABASE_URL to postgres.railway.internal
       # (Railway's private DNS) and failed to connect, since the GitHub
       # Actions runner is outside Railway's own network, and the backend
-      # service exposes no public DB proxy variable. `railway ssh` instead
-      # executes the given command *inside* the real deployed container
-      # (confirmed via `railway ssh --help`: "[COMMAND]... Command to
-      # execute instead of starting an interactive shell"), where internal
-      # hostnames resolve and the production venv is already installed --
-      # but it requires a registered SSH keypair (confirmed by run #4's
-      # "No SSH keys found" error). Generate a fresh ephemeral ed25519
-      # keypair for this run only, register the public half with Railway
-      # (confirmed syntax via `railway ssh keys add --help`: -k <path>),
-      # and remove it again in the final cleanup step -- no key persists
-      # on the account past this run.
+      # service exposes no public DB proxy variable (confirmed by run #7 --
+      # the Postgres service only exposes internal PGHOST/DATABASE_URL-style
+      # variables). `railway ssh` instead executes the given command
+      # *inside* the real deployed container (confirmed via `railway ssh
+      # --help`: "[COMMAND]... Command to execute instead of starting an
+      # interactive shell"), where internal hostnames resolve and the
+      # production venv is already installed -- but registering the
+      # required SSH keypair (`railway ssh keys add`) is rejected outright
+      # with a project-scoped token (confirmed by run #6: "SSH key
+      # management is not supported with project tokens"), hence the
+      # RAILWAY_API_TOKEN workspace token added above. Generate a fresh
+      # ephemeral ed25519 keypair for this run only, register the public
+      # half with Railway under a unique name captured as a step output
+      # (so the exact same identifier can be used to remove it again in
+      # the final cleanup step) -- no key persists on the account past
+      # this run.
       - name: Generate and register an ephemeral SSH key for this run
+        id: sshkey
         run: |
-          ssh-keygen -t ed25519 -f /tmp/ci_verify_key -N "" -C "prod-verify-$(date +%s)" -q
+          KEY_NAME="prod-verify-$(date +%s)-$RANDOM"
+          echo "key_name=$KEY_NAME" >> "$GITHUB_OUTPUT"
+          ssh-keygen -t ed25519 -f /tmp/ci_verify_key -N "" -C "$KEY_NAME" -q
           chmod 600 /tmp/ci_verify_key
-          railway ssh keys add -k /tmp/ci_verify_key.pub -n "prod-verify-$(date +%s)"
+          railway ssh keys add -k /tmp/ci_verify_key.pub -n "$KEY_NAME"
 
       - name: Bootstrap a temporary OWNER account for this verification run
         id: account
@@ -229,10 +232,16 @@ jobs:
 
       - name: Remove the ephemeral SSH key registered with Railway
         if: always()
+        env:
+          KEY_NAME: ${{ steps.sshkey.outputs.key_name }}
         run: |
-          if [ ! -f /tmp/ci_verify_key.pub ]; then
+          if [ -z "$KEY_NAME" ]; then
             echo "No ephemeral key was generated -- nothing to remove."
             exit 0
           fi
-          railway ssh keys remove -k /tmp/ci_verify_key.pub || echo "::warning::Removing the ephemeral SSH key from Railway may have failed -- check manually under railway ssh keys list."
+          # `railway ssh keys remove` takes the key identifier (name or
+          # fingerprint) as a positional [KEY] argument, not a -k flag
+          # (confirmed by run #6/#7: "-k" was rejected as an unexpected
+          # argument with usage "railway ssh keys remove [OPTIONS] [KEY]").
+          railway ssh keys remove "$KEY_NAME" || echo "::warning::Removing the ephemeral SSH key '$KEY_NAME' from Railway may have failed -- check manually under railway ssh keys list."
           rm -f /tmp/ci_verify_key /tmp/ci_verify_key.pub
