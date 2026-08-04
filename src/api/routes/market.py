@@ -41,6 +41,8 @@ from src.api.schemas.market_intelligence import (
     MarketScanRunOut,
     MarketStatusOut,
     MarketSummaryOut,
+    OpportunitiesOut,
+    OpportunityCategoryOut,
     RankingEntryOut,
     RankingListOut,
     RankingsOut,
@@ -63,6 +65,7 @@ from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.market_snapshot import MarketSnapshotBuilder
 from src.market_intelligence.market_status import get_market_status
+from src.market_intelligence.opportunity_ranking import curate_opportunity_rankings
 from src.market_intelligence.ranking import RankingEngine
 from src.market_intelligence.read_model import outcome_from_record
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -394,6 +397,56 @@ def get_rankings(
                 generated_at=ranking_list.generated_at,
             )
             for ranking_list in rankings.values()
+        ],
+    )
+
+
+@router.get("/opportunities", response_model=OpportunitiesOut)
+def get_opportunities(
+    run_id: Optional[int] = Query(None),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> OpportunitiesOut:
+    """Phase 2D (Stock Ranking Engine): the same 8 categories the
+    Opportunities screen already renders, in one round trip instead of
+    8, each labeled in Arabic with its real scoring factor and an
+    explicit note that publication-gate-rejected symbols are excluded
+    -- see src.market_intelligence.opportunity_ranking. Computes no
+    new ranking of its own; reuses RankingEngine.rank() unchanged."""
+    run = _resolve_run(session, run_id)
+    records = _repository.get_symbol_records_by_symbol(session, run.id)
+    outcomes = [outcome_from_record(r) for r in records.values()]
+
+    previous_run = _repository.get_latest_successful_run(session, before_run_id=run.id)
+    _, change_rows = _repository.get_change_events(session, limit=1000, offset=0, run_id=run.id)
+    change_result = _change_detection_result_from_events(
+        change_rows, previous_run.id if previous_run is not None else None
+    )
+
+    all_rankings = RankingEngine().rank(outcomes, change_result)
+    curated = curate_opportunity_rankings(all_rankings)
+
+    return OpportunitiesOut(
+        scan_run_id=run.id,
+        categories=[
+            OpportunityCategoryOut(
+                category=entry.category.value,
+                label_ar=entry.label_ar,
+                scoring_factor_ar=entry.scoring_factor_ar,
+                gate_exclusion_note_ar=entry.gate_exclusion_note_ar,
+                entries=[
+                    RankingEntryOut(
+                        symbol=e.symbol, sector=e.sector, recommendation=e.recommendation,
+                        confidence=e.confidence, final_score=e.final_score, target_price=e.target_price,
+                        expected_return_pct=e.expected_return_pct, risk_level=e.risk_level, rank_value=e.rank_value,
+                        current_price=e.current_price, stop_loss=e.stop_loss,
+                        risk_reward_ratio=e.risk_reward_ratio, time_horizon=e.time_horizon,
+                    )
+                    for e in entry.ranking_list.entries
+                ],
+                generated_at=entry.ranking_list.generated_at,
+            )
+            for entry in curated
         ],
     )
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getMarketStatus, getMarketSummary, getRankings, triggerScan } from "./market";
+import { getMarketStatus, getMarketSummary, getOpportunities, getRankings, triggerScan } from "./market";
 
 /** market.ts is a direct, unmodified pass-through to the real backend
  * routes -- these tests prove the exact real data returned by the API
@@ -96,6 +96,45 @@ describe("market API client", () => {
     expect(result.rankings).toHaveLength(1);
     expect(result.rankings[0].entries[0].symbol).toBe("2222");
     expect(result.rankings[0].entries[0].recommendation).not.toBe("DEMO");
+  });
+
+  it("getOpportunities returns the real curated 8-category payload unmodified", async () => {
+    const realOpportunities = {
+      scan_run_id: 42,
+      categories: [
+        {
+          category: "TOP_STRONG_BUY",
+          label_ar: "شراء قوي",
+          scoring_factor_ar: "الترتيب حسب درجة الثقة، ضمن توصيات «شراء قوي» فقط.",
+          gate_exclusion_note_ar: "تم استبعاد أي سهم لم يجتز بوابات النشر من هذه القائمة.",
+          entries: [
+            { symbol: "2222", sector: "Energy", recommendation: "STRONG_BUY", confidence: 88.0, final_score: 81.0, target_price: 36.0, expected_return_pct: 8.2, risk_level: "MEDIUM", rank_value: 88.0 },
+          ],
+          generated_at: "2026-08-03T22:17:22Z",
+        },
+      ],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(realOpportunities), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getOpportunities();
+
+    expect(result).toEqual(realOpportunities);
+    expect(result.categories[0].label_ar).toBe("شراء قوي");
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/v1/market/opportunities");
+  });
+
+  it("getOpportunities passes run_id through as a real query param", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ scan_run_id: 42, categories: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getOpportunities(42);
+
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/v1/market/opportunities?run_id=42");
   });
 
   it("triggerScan POSTs to the real scan endpoint and returns the real run row", async () => {

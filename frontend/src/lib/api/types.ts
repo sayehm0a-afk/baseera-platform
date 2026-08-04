@@ -90,6 +90,23 @@ export interface RankingsResponse {
   rankings: RankingList[];
 }
 
+/** Phase 2D (Stock Ranking Engine): the 8 curated opportunity
+ * categories in one response, each with a real Arabic scoring-factor
+ * description -- see src.market_intelligence.opportunity_ranking. */
+export interface OpportunityCategory {
+  category: string;
+  label_ar: string;
+  scoring_factor_ar: string;
+  gate_exclusion_note_ar: string;
+  entries: RankingEntry[];
+  generated_at: string;
+}
+
+export interface OpportunitiesResponse {
+  scan_run_id: number | null;
+  categories: OpportunityCategory[];
+}
+
 export interface WatchlistEntry {
   symbol: string;
   sector: string | null;

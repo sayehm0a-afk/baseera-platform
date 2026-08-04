@@ -90,6 +90,27 @@ class RankingsOut(BaseModel):
     rankings: List[RankingListOut]
 
 
+class OpportunityCategoryOut(BaseModel):
+    """Phase 2D (Stock Ranking Engine): one of the 8 curated
+    Product-Owner-facing opportunity categories -- see
+    src.market_intelligence.opportunity_ranking. `label_ar` and
+    `scoring_factor_ar` make the ranking's real sort field explicit
+    rather than leaving the frontend to guess from a bare category
+    enum value."""
+
+    category: str
+    label_ar: str
+    scoring_factor_ar: str
+    gate_exclusion_note_ar: str
+    entries: List[RankingEntryOut]
+    generated_at: datetime
+
+
+class OpportunitiesOut(BaseModel):
+    scan_run_id: Optional[int] = None
+    categories: List[OpportunityCategoryOut]
+
+
 class WatchlistEntryOut(BaseModel):
     symbol: str
     sector: Optional[str] = None
