@@ -1,0 +1,39 @@
+name: Verify Practical Live-Market-Testing Release (temporary, evidence-only)
+
+# Real, authenticated browser verification of the practical-testing
+# release against the real production frontend/backend, using the real
+# OWNER account. Makes no application-code changes. Deleted in a
+# follow-up commit once its evidence is captured (see
+# docs/ARCHITECTURE_DECISIONS or the PR description for the standard
+# rationale this repo already uses for this class of workflow).
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  verify:
+    name: Playwright verification against real production
+    runs-on: ubuntu-latest
+    env:
+      FRONTEND_URL: https://frontend-production-c3de.up.railway.app
+      BACKEND_URL: https://backend-production-7cca.up.railway.app
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright + Chromium
+        working-directory: frontend
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Run verification script
+        working-directory: frontend
+        run: node scripts/verify_practical_release.js
