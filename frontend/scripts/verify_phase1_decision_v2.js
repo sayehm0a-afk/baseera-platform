@@ -75,9 +75,17 @@ async function main() {
   results.decision_v2_market_status = d.market_status;
 
   // --- 2. Stock analysis page renders the executive decision card --------
+  const consoleErrors = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") consoleErrors.push(msg.text());
+  });
+  page.on("pageerror", (err) => consoleErrors.push(`pageerror: ${err.message}`));
+
   await page.goto(`${FRONTEND_URL}/stocks/${SYMBOL}`, { waitUntil: "networkidle" });
   await page.waitForTimeout(2500);
   const pageText = await page.evaluate(() => document.body.innerText);
+  results.stock_page_text_length = pageText.length;
+  results.stock_page_text_snippet = pageText.slice(0, 800);
   results.stock_page_has_decision_label = !!d.decision_label_ar && pageText.includes(d.decision_label_ar);
   results.stock_page_has_confidence_disclaimer = pageText.includes(
     "درجة الثقة تقيس قوة وتوافق الأدلة المتاحة"
@@ -86,6 +94,7 @@ async function main() {
     "هذا تحليل آلي مساعد مبني على البيانات المتاحة"
   );
   results.stock_page_has_english_leak = /REAL DATA UNAVAILABLE|Unclassified/.test(pageText);
+  results.stock_page_console_errors = consoleErrors.slice(0, 10);
   const overflowCheck = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -93,24 +102,59 @@ async function main() {
   results.mobile_horizontal_overflow_px = overflowCheck.scrollWidth - overflowCheck.clientWidth;
 
   // --- 3. Arabic search normalization (hamza-less query) ------------------
-  const searchResp = await page.evaluate(async (backendUrl) => {
-    const res = await fetch(`${backendUrl}/api/v1/stocks/search?q=${encodeURIComponent("ارامكو")}`, {
-      credentials: "include",
-    });
-    const body = await res.json().catch(() => null);
-    return { status: res.status, body };
+  const searchDiag = await page.evaluate(async (backendUrl) => {
+    async function doSearch(q) {
+      const res = await fetch(`${backendUrl}/api/v1/stocks/search?q=${encodeURIComponent(q)}`, {
+        credentials: "include",
+      });
+      const body = await res.json().catch(() => null);
+      return { status: res.status, body };
+    }
+    return {
+      by_symbol: await doSearch("2222"),
+      by_hamza_form: await doSearch("أرامكو"),
+      by_no_hamza: await doSearch("ارامكو"),
+    };
   }, BACKEND_URL);
-  results.arabic_search_status = searchResp.status;
-  results.arabic_search_result_count = searchResp.body ? searchResp.body.results.length : null;
+  results.search_by_symbol_2222 = searchDiag.by_symbol.body;
+  results.search_by_hamza_form_results = searchDiag.by_hamza_form.body
+    ? searchDiag.by_hamza_form.body.results
+    : null;
+  results.search_by_no_hamza_results = searchDiag.by_no_hamza.body
+    ? searchDiag.by_no_hamza.body.results
+    : null;
+  results.arabic_search_status = searchDiag.by_no_hamza.status;
+  results.arabic_search_result_count = searchDiag.by_no_hamza.body
+    ? searchDiag.by_no_hamza.body.results.length
+    : null;
   results.arabic_search_found_hamza_form = !!(
-    searchResp.body &&
-    searchResp.body.results.some((r) => r.name_ar && r.name_ar.includes("أ"))
+    searchDiag.by_no_hamza.body &&
+    searchDiag.by_no_hamza.body.results.some((r) => r.name_ar && r.name_ar.includes("أ"))
   );
 
   // --- 4. Owner panel Phase 1 additions -----------------------------------
+  const adminSummaryDiag = await page.evaluate(async (backendUrl) => {
+    const res = await fetch(`${backendUrl}/api/v1/admin/system/summary`, { credentials: "include" });
+    const body = await res.json().catch((e) => ({ parse_error: String(e) }));
+    return { status: res.status, body };
+  }, BACKEND_URL);
+  results.admin_summary_api_status = adminSummaryDiag.status;
+  results.admin_summary_decision_engine_version = adminSummaryDiag.body
+    ? adminSummaryDiag.body.decision_engine_version
+    : null;
+  results.admin_summary_market_status_label_ar = adminSummaryDiag.body
+    ? adminSummaryDiag.body.market_status_label_ar
+    : null;
+  results.admin_summary_strict_real_data_enforced = adminSummaryDiag.body
+    ? adminSummaryDiag.body.strict_real_data_enforced
+    : null;
+  results.admin_summary_full_body_when_error = adminSummaryDiag.status !== 200 ? adminSummaryDiag.body : null;
+
   await page.goto(`${FRONTEND_URL}/owner`, { waitUntil: "networkidle" });
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
   const ownerText = await page.evaluate(() => document.body.innerText);
+  results.owner_page_text_length = ownerText.length;
+  results.owner_page_text_snippet = ownerText.slice(0, 800);
   results.owner_page_reachable = page.url().includes("/owner") && !page.url().includes("/dashboard");
   results.owner_page_has_engine_version = ownerText.includes("2.0.0");
   results.owner_page_has_market_status_row = ownerText.includes("حالة السوق الآن");
