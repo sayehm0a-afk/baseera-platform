@@ -170,6 +170,21 @@ jobs:
           curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
             "$BACKEND_URL/api/v1/market/rankings$QS"
 
+      - name: Verify the one-time owner-bootstrap endpoint no longer exists
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/bootstrap/owner" \
+            -H "Content-Type: application/json" \
+            -d '{"email": "x@example.com", "password": "irrelevant123"}')
+          echo "POST /api/v1/bootstrap/owner -> HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "404" ]; then
+            echo "::error::The one-time owner-bootstrap endpoint should have been removed from the codebase and must return 404, got $HTTP_CODE."
+            exit 1
+          fi
+          echo "Confirmed: the bootstrap endpoint route no longer exists."
+
       - name: Verify the frontend renders without a demo/placeholder shell
         env:
           FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
