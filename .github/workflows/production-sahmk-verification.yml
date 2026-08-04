@@ -150,15 +150,25 @@ jobs:
           RUN_ID=$(python3 -c "import json; d=json.load(open('/tmp/diagnostic.json')); print(d.get('run_id') or '')")
           echo "run_id from diagnostic scan: ${RUN_ID:-<none -- scan did not run>}"
           if [ -n "$RUN_ID" ]; then
-            echo "=== GET /api/v1/market/summary?run_id=$RUN_ID ==="
-            curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
-              "$BACKEND_URL/api/v1/market/summary?run_id=$RUN_ID"
-            echo "=== GET /api/v1/market/rankings?run_id=$RUN_ID ==="
-            curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
-              "$BACKEND_URL/api/v1/market/rankings?run_id=$RUN_ID"
+            QS="?run_id=$RUN_ID"
           else
-            echo "No run_id -- diagnostic scan did not persist a run (see its sahmk_error field above). Skipping public-API cross-check."
+            # The diagnostic scan's own overlap guard skips writing a
+            # sample when a real POST /market/scan run is already
+            # RUNNING in production -- that is a sign the Live Market
+            # Mode scheduler is doing its job, not a failure. Falling
+            # back to no run_id lets /summary and /rankings resolve to
+            # the latest *successful* run (see market.py::_resolve_run)
+            # instead of skipping the public-API check outright.
+            echo "No fresh run_id from the diagnostic scan (see its sahmk_error field above) --" \
+                 "falling back to the latest successful scan run instead of skipping this check."
+            QS=""
           fi
+          echo "=== GET /api/v1/market/summary$QS ==="
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
+            "$BACKEND_URL/api/v1/market/summary$QS"
+          echo "=== GET /api/v1/market/rankings$QS ==="
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
+            "$BACKEND_URL/api/v1/market/rankings$QS"
 
       - name: Verify the frontend renders without a demo/placeholder shell
         env:
