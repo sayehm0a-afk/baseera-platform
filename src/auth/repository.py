@@ -24,6 +24,11 @@ class AuthRepository:
     def get_user_by_id(self, session: Session, user_id: int) -> Optional[User]:
         return session.query(User).filter_by(id=user_id).one_or_none()
 
+    def count_owners(self, session: Session) -> int:
+        """Used by src/auth/bootstrap_service.py's one-time bootstrap
+        precondition -- the route refuses outright once this is >0."""
+        return session.query(User).filter_by(staff_role=StaffRole.OWNER).count()
+
     def create_user(
         self, session: Session, email: str, password_hash: str, full_name: Optional[str] = None
     ) -> User:
