@@ -8,6 +8,7 @@ import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { RunScanButton } from "@/components/dashboard/RunScanButton";
 import { ApiError } from "@/lib/api/client";
 import { getAlerts, getMarketSummary, getRankings, getScanRun, getSectors } from "@/lib/api/market";
+import { ALERT_SEVERITY_LABELS, RUN_STATUS_LABELS } from "@/lib/market-intelligence-labels";
 import type {
   Alert,
   MarketScanRun,
@@ -154,7 +155,7 @@ export default function DashboardPage() {
 
         {run ? (
           <div className="mt-bsr-3 grid grid-cols-2 gap-bsr-3 md:grid-cols-4">
-            <StatTile label="حالة آخر مسح" value={run.status} />
+            <StatTile label="حالة آخر مسح" value={RUN_STATUS_LABELS[run.status] ?? run.status} />
             <StatTile
               label="فشل / تخطّي"
               value={`${run.symbols_failed} / ${run.symbols_skipped}`}
@@ -273,7 +274,7 @@ export default function DashboardPage() {
                       {alert.symbol ?? alert.sector ?? "السوق العام"}
                     </span>
                     <span className="text-xs text-bsr-text-muted">
-                      {alert.severity}
+                      {ALERT_SEVERITY_LABELS[alert.severity] ?? alert.severity}
                     </span>
                   </div>
                   <p className="text-sm text-bsr-text-secondary">

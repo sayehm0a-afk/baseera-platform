@@ -121,15 +121,25 @@ export function AiSignalCard({
       <p className="text-[10px] leading-4 text-bsr-text-muted">
         درجة الجودة تعكس قوة الأدلة المتاحة وقت التحليل، ولا تضمن تحقيق الربح.
       </p>
+
+      {href ? (
+        <div className="flex items-center gap-bsr-2 pt-bsr-1">
+          <a
+            href={href}
+            className="flex-1 rounded-bsr-md bg-bsr-gold-500 px-bsr-3 py-bsr-1.5 text-center text-xs font-semibold text-bsr-navy-950 hover:bg-bsr-gold-400"
+          >
+            عرض التحليل الكامل
+          </a>
+          <a
+            href={`${href}#chart`}
+            className="flex-1 rounded-bsr-md border border-bsr-border-subtle px-bsr-3 py-bsr-1.5 text-center text-xs font-semibold text-bsr-text-secondary hover:bg-bsr-surface-overlay"
+          >
+            فتح الشارت
+          </a>
+        </div>
+      ) : null}
     </div>
   );
 
-  if (href) {
-    return (
-      <a href={href} className="block">
-        {content}
-      </a>
-    );
-  }
   return content;
 }

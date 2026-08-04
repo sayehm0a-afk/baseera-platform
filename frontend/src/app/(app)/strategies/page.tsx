@@ -7,6 +7,7 @@ import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { createBacktest, getBacktest, getBacktestMetrics } from "@/lib/api/backtests";
 import { STRATEGY_OPTIONS } from "@/lib/api/backtests-types";
 import type { BacktestRun } from "@/lib/api/backtests-types";
+import { RUN_STATUS_LABELS } from "@/lib/market-intelligence-labels";
 import {
   isFullBacktestReport,
   type FullBacktestReport,
@@ -170,7 +171,7 @@ export default function StrategiesPage() {
       {status === "running" && run ? (
         <div className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
           <p className="text-sm text-bsr-text-secondary">
-            الحالة: {run.status} ({run.progress_current} / {run.progress_total || "…"})
+            الحالة: {RUN_STATUS_LABELS[run.status] ?? run.status} ({run.progress_current} / {run.progress_total || "…"})
           </p>
           <LoadingScreen />
         </div>

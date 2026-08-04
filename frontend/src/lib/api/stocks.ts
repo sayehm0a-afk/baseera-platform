@@ -1,6 +1,7 @@
 import { apiFetch } from "./client";
 import type {
   AnalystReport,
+  DecisionV2,
   FundamentalAnalysis,
   History,
   InvestmentDecision,
@@ -67,6 +68,16 @@ export function getRecommendation(symbol: string): Promise<Recommendation> {
 export function getDecision(symbol: string): Promise<InvestmentDecision> {
   return apiFetch<InvestmentDecision>(
     `/api/v1/stocks/${encodeURIComponent(symbol)}/decision`
+  );
+}
+
+/** Decision Engine V2 (Phase 1): the Arabic-labeled, gate-checked
+ * executive decision -- entry zone, up to 3 targets, holding period,
+ * eight sub-scores, and the full gate list. See
+ * src/analysis/decision_v2/ and this route's own docstring. */
+export function getDecisionV2(symbol: string): Promise<DecisionV2> {
+  return apiFetch<DecisionV2>(
+    `/api/v1/stocks/${encodeURIComponent(symbol)}/decision-v2`
   );
 }
 

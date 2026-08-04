@@ -3,14 +3,17 @@
 import { useMemo, useState } from "react";
 import { AnalystReportView } from "@/components/ai/AnalystReportView";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
+import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import { RecommendationBadge, type RecommendationValue } from "@/components/badges/RecommendationBadge";
 import { PriceChart, type PriceLevel } from "@/components/charts/PriceChart";
+import { ExecutiveDecisionCard } from "@/components/decision/ExecutiveDecisionCard";
 import { CategoryTabs } from "@/components/patterns/CategoryTabs";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import {
   getAnalystReport,
   getDecision,
+  getDecisionV2,
   getFundamentalAnalysis,
   getHistory,
   getQuote,
@@ -63,13 +66,26 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
   const history = useResource(symbol, (s) => getHistory(s));
   const technical = useResource(symbol, getTechnicalAnalysis);
   const decision = useResource(symbol, getDecision);
+  const decisionV2 = useResource(symbol, getDecisionV2);
   const fundamentals = useResource(symbol, getFundamentalAnalysis);
   const analystReport = useResource(symbol, getAnalystReport);
 
   const priceLevels = useMemo<PriceLevel[]>(() => {
     const levels: PriceLevel[] = [];
 
-    if (decision.status === "ready") {
+    // Decision V2's entry zone/stop/targets take priority -- they're
+    // the gate-checked, publication-safe numbers; the legacy /decision
+    // single-point target/stop below is only a fallback when V2 has no
+    // decision yet (e.g. insufficient data for the newer engine).
+    if (decisionV2.status === "ready") {
+      const d = decisionV2.data;
+      if (d.entry_zone_low != null) levels.push({ price: d.entry_zone_low, label: "أسفل نطاق الدخول", color: "#3E8ED0" });
+      if (d.entry_zone_high != null) levels.push({ price: d.entry_zone_high, label: "أعلى نطاق الدخول", color: "#3E8ED0" });
+      if (d.stop_loss != null) levels.push({ price: d.stop_loss, label: "وقف الخسارة", color: "#E5484D" });
+      if (d.target_1 != null) levels.push({ price: d.target_1, label: "الهدف الأول", color: "#1FA97A" });
+      if (d.target_2 != null) levels.push({ price: d.target_2, label: "الهدف الثاني", color: "#1FA97A" });
+      if (d.target_3 != null) levels.push({ price: d.target_3, label: "الهدف الثالث", color: "#1FA97A" });
+    } else if (decision.status === "ready") {
       if (decision.data.target_price != null) {
         levels.push({ price: decision.data.target_price, label: "الهدف", color: "#1FA97A" });
       }
@@ -110,7 +126,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
     }
 
     return levels;
-  }, [decision, quote, technical]);
+  }, [decision, decisionV2, quote, technical]);
 
   if (stock.status === "loading" || quote.status === "loading") {
     return <LoadingScreen />;
@@ -140,6 +156,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
 
   const stockData = stock.data;
   const displayName = stockData.name_ar ?? stockData.name_en;
+  const sectorAr = decisionV2.status === "ready" ? decisionV2.data.sector_ar : null;
   const decisionRec =
     decision.status === "ready" ? (decision.data.recommendation as RecommendationValue) : null;
 
@@ -152,10 +169,14 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
             <h1 className="text-lg font-semibold text-bsr-text-primary">{displayName}</h1>
             <p className="bsr-numeric text-sm text-bsr-text-secondary">
               {stockData.symbol}
-              {stockData.sector ? ` · ${stockData.sector}` : ""}
+              {sectorAr ? ` · ${sectorAr}` : stockData.sector ? ` · ${stockData.sector}` : ""}
             </p>
           </div>
-          {decisionRec ? <RecommendationBadge value={decisionRec} /> : null}
+          {decisionV2.status === "ready" ? (
+            <DecisionBadge value={decisionV2.data.decision} labelAr={decisionV2.data.decision_label_ar} />
+          ) : decisionRec ? (
+            <RecommendationBadge value={decisionRec} />
+          ) : null}
         </div>
 
         {quote.status === "ready" ? (
@@ -180,8 +201,20 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
         )}
       </div>
 
+      {/* Executive decision (Decision Engine V2, Phase 1 foundation) */}
+      {decisionV2.status === "ready" ? (
+        <ExecutiveDecisionCard decision={decisionV2.data} />
+      ) : decisionV2.status === "loading" ? (
+        <LoadingScreen />
+      ) : decisionV2.status === "insufficient_data" ? (
+        <EmptyState
+          title="البيانات غير كافية لإصدار قرار"
+          description="لا تتوفر بيانات فنية أو مالية كافية لهذا السهم بعد لتشغيل محرك القرار الإصدار الثاني."
+        />
+      ) : null}
+
       {/* Chart */}
-      <div className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-3">
+      <div id="chart" className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-3">
         {history.status === "loading" ? <LoadingScreen /> : null}
         {history.status === "insufficient_data" || history.status === "not_found" ? (
           <EmptyState
@@ -205,6 +238,8 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
 
       {tab === "overview" ? (
         decision.status === "ready" ? (
+          <div className="flex flex-col gap-bsr-2">
+          <p className="text-xs text-bsr-text-muted">تفاصيل إضافية من محرك القرار الأساسي (حجم المركز المقترح).</p>
           <div className="grid grid-cols-2 gap-bsr-3 rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 sm:grid-cols-4">
             <div>
               <p className="text-xs text-bsr-text-secondary">الثقة</p>
@@ -231,6 +266,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
                 {POSITION_SIZE_LABELS[decision.data.position_size] ?? decision.data.position_size}
               </p>
             </div>
+          </div>
           </div>
         ) : decision.status === "loading" ? (
           <LoadingScreen />

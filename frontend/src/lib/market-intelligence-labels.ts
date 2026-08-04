@@ -38,3 +38,34 @@ export const WATCHLIST_CATEGORY_LABELS: Record<string, string> = {
 };
 
 export const WATCHLIST_CATEGORY_ORDER = Object.keys(WATCHLIST_CATEGORY_LABELS);
+
+/** Covers both `src.domain.models.market_scan_run.MarketScanStatus`
+ * and `src.domain.models.backtest_run.BacktestRunStatus` -- identical
+ * PENDING/RUNNING/SUCCESS/FAILED values (backtests additionally allow
+ * CANCELLED). A run's raw status must never render in English on any
+ * user-facing screen (Phase 1 Arabic UX requirement). */
+export const RUN_STATUS_LABELS: Record<string, string> = {
+  PENDING: "بانتظار البدء",
+  RUNNING: "قيد التنفيذ",
+  SUCCESS: "مكتمل",
+  FAILED: "فشل",
+  CANCELLED: "أُلغي",
+};
+
+/** Mirrors `src.domain.models.market_alert.AlertSeverity`. */
+export const ALERT_SEVERITY_LABELS: Record<string, string> = {
+  INFO: "معلومة",
+  WARNING: "تنبيه",
+  CRITICAL: "حرج",
+};
+
+/** `MarketScanProgress.status` (src/market_intelligence/scan_progress.py
+ * -- a plain string, not a formal enum, set to "RUNNING"/"COMPLETED"/
+ * "FAILED" by ScanProgressTracker/scan_job_runner.py). Distinct from
+ * `MARKET_SCAN_STATUS_LABELS` above, which covers the separate
+ * MarketScanRun.status enum (PENDING/RUNNING/SUCCESS/FAILED). */
+export const SCAN_PROGRESS_STATUS_LABELS: Record<string, string> = {
+  RUNNING: "قيد التنفيذ",
+  COMPLETED: "مكتمل",
+  FAILED: "فشل",
+};
