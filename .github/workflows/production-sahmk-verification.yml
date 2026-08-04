@@ -3,48 +3,45 @@ name: Production SAHMK Verification
 # Single workflow_dispatch-only job -- real production validation of
 # the already-deployed Basirah backend/frontend on Railway. Never
 # creates/modifies Railway infrastructure (that's deploy-railway.yml's
-# job); this workflow only talks to the already-running public
-# HTTPS backend/frontend and a temporary application-level admin
-# account it creates and deletes within the same run.
+# job); this workflow only talks to the already-running public HTTPS
+# backend/frontend using an existing staff account's own credentials.
+#
+# History: earlier revisions of this workflow tried to bootstrap a
+# throwaway OWNER account for each run, first via `railway run`, then
+# via `railway ssh` with a freshly registered SSH key. Both were
+# abandoned after real dispatched runs proved them structurally
+# blocked from a GitHub Actions runner: `railway run` only injects env
+# vars into a LOCAL process, so DATABASE_URL's internal hostname
+# (postgres.railway.internal) never resolves; the Postgres service
+# exposes no public proxy URL as a fallback; and `railway ssh keys
+# add/remove` (needed to reach the container directly) is rejected
+# outright with a project-scoped RAILWAY_TOKEN ("SSH key management is
+# not supported with project tokens"). This revision instead logs in
+# as an already-existing staff/OWNER account over the public HTTPS API
+# -- no Railway CLI DB/SSH access needed at all.
 #
 # Flow:
 #   1. Confirm backend/frontend/db/redis are healthy (real HTTP calls
 #      against the public URLs, same routes deploy-railway.yml itself
 #      checks).
-#   2. Generate a fresh ephemeral ed25519 SSH keypair for this run only
-#      and register the public half with Railway (`railway ssh keys
-#      add`) -- required for `railway ssh` below, which executes a
-#      command *inside* the real deployed container rather than just
-#      injecting env vars locally (the latter, `railway run`, cannot
-#      reach Railway's private-network-only DATABASE_URL host from a
-#      GitHub Actions runner). The key is removed again at the end.
-#   3. Bootstrap a temporary OWNER-role account via
-#      scripts/bootstrap_owner.py, executed with `railway ssh` (runs
-#      *inside* the real backend container, where DATABASE_URL's
-#      internal hostname actually resolves) so it runs against the
-#      real production database without that value ever being printed
-#      or leaving Railway's own network. A random password is
-#      generated fresh for this run only, never logged.
-#   4. Log in as that account, call the new staff-only
-#      POST /api/v1/admin/market-intelligence/diagnostic-scan (one
-#      real, controlled SAHMK poll through the exact production scan
-#      path), and capture the full JSON response as evidence.
-#   5. Verify the same data is readable back through the public,
+#   2. Log in as the existing staff account (STAFF_EMAIL/STAFF_PASSWORD
+#      secrets -- must already have ADMIN or OWNER role in production;
+#      the diagnostic-scan route below requires at least ADMIN).
+#   3. Call the staff-only POST /api/v1/admin/market-intelligence/
+#      diagnostic-scan (one real, controlled SAHMK poll through the
+#      exact production scan path), and capture the full JSON response
+#      as evidence.
+#   4. Verify the same data is readable back through the public,
 #      customer-facing GET /api/v1/market/summary and
 #      GET /api/v1/market/rankings routes.
-#   6. Verify the frontend actually renders without a demo/placeholder
+#   5. Verify the frontend actually renders without a demo/placeholder
 #      shell (real HTTP fetch of the dashboard page).
-#   7. Delete the temporary account and the ephemeral SSH key (both via
-#      the same `railway ssh` mechanism) -- no permanent credential is
-#      left in production once this run completes.
 #
-# RAILWAY_TOKEN (project-scoped) and RAILWAY_API_TOKEN (workspace-scoped,
-# needed only for railway ssh keys add/remove) are read only as GitHub
-# Actions secrets and never echoed. SAHMK_API_KEY itself is never read by
-# this workflow at all -- it lives only in the backend service's own
-# Railway environment and is never passed to or through this job. The
-# temporary account's own password is generated at runtime and never
-# printed either.
+# RAILWAY_TOKEN (only used to resolve the backend/frontend public
+# domains) and STAFF_EMAIL/STAFF_PASSWORD are read only as GitHub
+# Actions secrets and never echoed. SAHMK_API_KEY itself is never read
+# by this workflow at all -- it lives only in the backend service's
+# own Railway environment and is never passed to or through this job.
 
 on:
   workflow_dispatch: {}
@@ -62,27 +59,27 @@ jobs:
     timeout-minutes: 20
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fail fast if required Railway secrets are not configured
+      - name: Fail fast if required secrets are not configured
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
             echo "::error::RAILWAY_TOKEN is not set."
             exit 1
           fi
           echo "RAILWAY_TOKEN present (length ${#RAILWAY_TOKEN})"
-          if [ -z "$RAILWAY_API_TOKEN" ]; then
-            echo "::error::RAILWAY_API_TOKEN is not set. This is a workspace-scoped Railway" \
-                 "API token (Railway dashboard -> Workspace Settings -> Tokens), separate from" \
-                 "the project-scoped RAILWAY_TOKEN -- required because 'railway ssh keys add/remove'" \
-                 "is rejected outright with a project token ('SSH key management is not" \
-                 "supported with project tokens')."
+          if [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::STAFF_EMAIL/STAFF_PASSWORD are not set. These must belong to an" \
+                 "existing production account with ADMIN or OWNER staff role -- the" \
+                 "diagnostic-scan route this workflow calls requires at least ADMIN."
             exit 1
           fi
-          echo "RAILWAY_API_TOKEN present (length ${#RAILWAY_API_TOKEN})"
+          echo "STAFF_EMAIL present (length ${#STAFF_EMAIL})"
+          echo "STAFF_PASSWORD present (length ${#STAFF_PASSWORD})"
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -111,63 +108,20 @@ jobs:
           echo "=== frontend / ==="
           curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/" || echo "(request failed)"
 
-      # `railway run` only injects env vars into a LOCAL process -- confirmed
-      # by runs #2/#3, which resolved DATABASE_URL to postgres.railway.internal
-      # (Railway's private DNS) and failed to connect, since the GitHub
-      # Actions runner is outside Railway's own network, and the backend
-      # service exposes no public DB proxy variable (confirmed by run #7 --
-      # the Postgres service only exposes internal PGHOST/DATABASE_URL-style
-      # variables). `railway ssh` instead executes the given command
-      # *inside* the real deployed container (confirmed via `railway ssh
-      # --help`: "[COMMAND]... Command to execute instead of starting an
-      # interactive shell"), where internal hostnames resolve and the
-      # production venv is already installed -- but registering the
-      # required SSH keypair (`railway ssh keys add`) is rejected outright
-      # with a project-scoped token (confirmed by run #6: "SSH key
-      # management is not supported with project tokens"), hence the
-      # RAILWAY_API_TOKEN workspace token added above. Generate a fresh
-      # ephemeral ed25519 keypair for this run only, register the public
-      # half with Railway under a unique name captured as a step output
-      # (so the exact same identifier can be used to remove it again in
-      # the final cleanup step) -- no key persists on the account past
-      # this run.
-      - name: Generate and register an ephemeral SSH key for this run
-        id: sshkey
-        run: |
-          KEY_NAME="prod-verify-$(date +%s)-$RANDOM"
-          echo "key_name=$KEY_NAME" >> "$GITHUB_OUTPUT"
-          ssh-keygen -t ed25519 -f /tmp/ci_verify_key -N "" -C "$KEY_NAME" -q
-          chmod 600 /tmp/ci_verify_key
-          railway ssh keys add -k /tmp/ci_verify_key.pub -n "$KEY_NAME"
-
-      - name: Bootstrap a temporary OWNER account for this verification run
-        id: account
-        run: |
-          TEMP_EMAIL="prod-verify-$(date +%s)-$RANDOM@example.com"
-          TEMP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
-          echo "temp_email=$TEMP_EMAIL" >> "$GITHUB_OUTPUT"
-          # Never echo TEMP_PASSWORD. Written to a runner-local file only,
-          # read back by later steps, and the file is removed at the end.
-          echo "$TEMP_PASSWORD" > /tmp/.temp_pw
-          chmod 600 /tmp/.temp_pw
-          printf '%s\n%s\n' "$TEMP_PASSWORD" "$TEMP_PASSWORD" | railway ssh --identity-file /tmp/ci_verify_key --service "$RAILWAY_BACKEND_SERVICE" -- python3 scripts/bootstrap_owner.py --email "$TEMP_EMAIL"
-
-      - name: Log in as the temporary account
+      - name: Log in as the staff account
         id: login
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
-          TEMP_EMAIL: ${{ steps.account.outputs.temp_email }}
         run: |
-          TEMP_PASSWORD=$(cat /tmp/.temp_pw)
           HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
             -X POST "$BACKEND_URL/api/v1/auth/login" \
             -H "Content-Type: application/json" \
-            -d "{\"email\": \"$TEMP_EMAIL\", \"password\": $(python3 -c "import json,sys; print(json.dumps(sys.stdin.read().strip()))" < /tmp/.temp_pw)}")
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
           echo "Login HTTP status: $HTTP_CODE"
           cat /tmp/login_body.json
           echo ""
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Login as the temporary verification account failed."
+            echo "::error::Login as the staff account failed."
             exit 1
           fi
           CSRF=$(grep -i csrf_token /tmp/cookies.txt | awk '{print $NF}')
@@ -218,30 +172,7 @@ jobs:
           fi
           echo "No demo/placeholder marker found in the dashboard HTML."
 
-      - name: Delete the temporary verification account
+      - name: Clean up local session artifacts
         if: always()
-        env:
-          TEMP_EMAIL: ${{ steps.account.outputs.temp_email }}
         run: |
-          if [ -z "$TEMP_EMAIL" ]; then
-            echo "No temporary account was recorded -- nothing to delete."
-            exit 0
-          fi
-          railway ssh --identity-file /tmp/ci_verify_key --service "$RAILWAY_BACKEND_SERVICE" -- python3 -c "from src.auth.repository import AuthRepository; from src.core.db.database import get_session_factory; repo = AuthRepository(); session = get_session_factory()(); user = repo.get_user_by_email(session, '$TEMP_EMAIL'); (repo.delete_user(session, user.id), session.commit(), print('Deleted temporary verification account $TEMP_EMAIL.')) if user is not None else print('No user found for $TEMP_EMAIL -- already gone.'); session.close()" || echo "::warning::Cleanup of the temporary account may have failed -- check manually."
-          rm -f /tmp/.temp_pw /tmp/.csrf /tmp/cookies.txt
-
-      - name: Remove the ephemeral SSH key registered with Railway
-        if: always()
-        env:
-          KEY_NAME: ${{ steps.sshkey.outputs.key_name }}
-        run: |
-          if [ -z "$KEY_NAME" ]; then
-            echo "No ephemeral key was generated -- nothing to remove."
-            exit 0
-          fi
-          # `railway ssh keys remove` takes the key identifier (name or
-          # fingerprint) as a positional [KEY] argument, not a -k flag
-          # (confirmed by run #6/#7: "-k" was rejected as an unexpected
-          # argument with usage "railway ssh keys remove [OPTIONS] [KEY]").
-          railway ssh keys remove "$KEY_NAME" || echo "::warning::Removing the ephemeral SSH key '$KEY_NAME' from Railway may have failed -- check manually under railway ssh keys list."
-          rm -f /tmp/ci_verify_key /tmp/ci_verify_key.pub
+          rm -f /tmp/.csrf /tmp/cookies.txt /tmp/login_body.json /tmp/diagnostic.json
