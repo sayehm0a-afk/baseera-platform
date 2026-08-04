@@ -2480,3 +2480,112 @@ above.
 No claim in this document should be read as "production ready," "fully
 complete," or "100% successful" — none of those are accurate, and this
 document does not use those phrases as characterizations of the platform.
+
+## Phase 1 — Decision Engine V2 (2026-08-04)
+
+New `src/analysis/decision_v2/` package: a reuse-first enrichment layer
+over the existing `AIDecisionEngine`/`InvestmentDecision`
+(`src/analysis/decision/`), computing zero new indicators. Produces the
+9-value Arabic-labeled `Decision` taxonomy (`STRONG_BUY_CANDIDATE`
+through `INSUFFICIENT_DATA`, distinct from the underlying
+`Recommendation` score band), a real entry zone anchored to a
+stop/target-relative "reward already captured" threshold (not the
+live price alone — the earlier, tautological "price + offset" design
+could never detect a missed entry, and was caught and fixed by the
+test suite before any wiring, per `test_engine.py::TestMissedEntry`),
+up to three targets, a holding-period range, 8 documented sub-scores,
+and 15 publication gates. New `decision_v2_snapshots` table (migration
+`be797f1fc67b`, insert-only audit trail) and
+`GET /api/v1/stocks/{symbol}/decision-v2`.
+
+**Market status expanded from 4 to 9 states**
+(`src/market_intelligence/market_status.py`): `PRE_MARKET`,
+`CLOSING_PRICE_TRADING`, `POST_CLOSE`, `WEEKEND`, `UNKNOWN` added
+alongside the existing `OPEN`/`PRE_OPEN_AUCTION`/`CLOSING_AUCTION`/
+`CLOSED`, using Tadawul's real published session schedule — every hour
+of a trading day and the weekend are now classified distinctly instead
+of collapsing into `CLOSED`.
+
+**Frontend**: new `ExecutiveDecisionCard` on the stock analysis page
+(entry zone/stop/targets/holding period/reasons/warnings/invalidation/
+both mandatory Arabic disclaimers), new `DecisionBadge` for the 9-state
+taxonomy, chart now plots the V2 entry zone and up to 3 targets. Fixed
+several raw-English-enum leaks the Arabic UX requirement explicitly
+forbids (`MarketScanRun`/`BacktestRun`/`MarketScanProgress` status and
+`AlertSeverity` were rendering literally as `SUCCESS`/`COMPLETED`/
+`CRITICAL` on the dashboard, strategies, and live-scan-panel screens).
+New `src/domain/arabic_text.py` (`normalize_arabic`) folds hamza/alef-
+maksura/taa-marbuta variants and whitespace for stock search, layered
+as a Python fallback over the existing SQL `ILIKE` path (same rules as
+Elasticsearch's `arabic_normalization` filter). Owner panel gained
+decision engine version, current market status, `STRICT_REAL_DATA`
+enforcement flag, scan lock/concurrency state, and the last scan's
+accepted/watch/rejected/insufficient-data counts.
+
+**Testing**: 91 new unit tests for `decision_v2/` (scoring, structure,
+gates, config, engine — including the missed-entry regression above),
+9 new integration tests (`decision-v2` route, admin summary Phase 1
+fields), 9 new unit tests for `arabic_text.py`, 2 new integration
+tests for the search-normalization fallback, plus updates to existing
+`test_context_builder.py`/`test_market_status.py`/`test_market_routes.py`
+for the now-9-state market status and the fallback quote-provenance
+path added to `context_builder.py`. Full suite: 3000 passed, 0 failed
+(confirmed 3 times against this exact code across the session,
+including once via GitHub Actions CI on `main` with a real Postgres
+migration round-trip). flake8 clean.
+
+**Deployed and verified against real production** (commit
+`f11bd7aba94b016db2f794df8498c5805787df7f` on `main`, via the existing
+`deploy-railway.yml` workflow, CI run
+[30933309644](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30933309644)
+green, deploy run
+[30933790021](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30933790021)
+green): backend `/health/ready` confirmed real PostgreSQL (`SELECT 1`)
+and Redis (`PING`) connectivity; `/health/market-data` confirmed
+`configured_provider: sahmk`, `strict_real_data: true`,
+`synthetic_allowed: false`, `can_publish_recommendations: true`. A
+temporary, evidence-only WebKit (Safari engine) + iPhone-13-viewport
+Playwright check (dispatched twice; deleted after evidence capture)
+against the real production frontend/backend with the real OWNER
+account confirmed, with real values: `GET /stocks/2222/decision-v2`
+returns `200` with `analysis_version: "2.0.0"`, `decision: "WATCH"`,
+15 gate records, `data_source: "sahmk"`; the stock analysis page
+renders the executive decision card with real numbers (entry zone
+`26.80–26.93`, stop `26.46`, target 1 `27.70`, target 2 `28.14`,
+confidence `66%`) and the exact required Arabic confidence/analysis
+disclaimers; zero horizontal overflow at the iPhone 13 viewport width;
+the owner panel shows `إصدار محرك القرار 2.0.0`,
+`تطبيق البيانات الحقيقية الصارم (STRICT_REAL_DATA) مُفعّل`, and real
+last-scan publication counts (`فرص مقبولة (منشورة) 3`,
+`فرص للمراقبة فقط 1`, `فرص مرفوضة 1`); `GET /api/v1/market/status`
+returned the real 9-state value `POST_CLOSE` matching the actual
+Riyadh time at verification. The first verification dispatch showed
+the stock-page and owner-panel checks failing; a second dispatch
+~4 minutes later (no code change) showed them passing, consistent with
+a cold-start/first-request latency on the freshly-deployed backend
+rather than a defect — re-verified, not assumed.
+
+**One real, disclosed data gap found by this verification, not by this
+session's code**: symbol 2222's `name_ar` column is `NULL` in the
+production database — its Arabic company name was stored in `name_en`
+instead at ingestion time. `normalize_arabic`'s unit and integration
+tests (with a correctly-populated `name_ar` fixture) prove the
+normalization logic itself is correct; against real production data
+this means an Arabic hamza-variant search for this specific symbol
+currently falls back to matching the (mislabeled) `name_en` column via
+plain `ILIKE` only when the query happens to use the exact stored
+hamza form, not the normalized fallback. This is a pre-existing
+ingestion data-quality issue, not introduced by Phase 1, and is not
+fixed here — a real backfill of `name_ar` across the production symbol
+universe is a separate, disclosed follow-up.
+
+**Known limitations / deferred to Phase 2 or later**: the "opportunity
+card v2" top-3-reasons/top-warning enrichment is not wired into the
+market-wide scan pipeline (Decision V2 currently runs per-symbol, on
+request, not as part of a scheduled scan) — the dashboard's "ماذا أفعل
+اليوم؟" and opportunity cards still surface the existing scanner's
+publication-gated recommendations, not Decision V2's richer taxonomy,
+until Decision V2 is wired into the scan job. The Complete Stock
+Intelligence Report, Intelligent Chart, Arabic AI Analyst Assistant,
+Portfolio Intelligence, and Outcome Tracking phases are explicitly not
+started, per the user's instruction to stop after Phase 1.
