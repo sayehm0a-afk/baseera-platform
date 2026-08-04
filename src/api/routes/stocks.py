@@ -84,6 +84,7 @@ from src.api.schemas.stocks import (
 from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
+from src.domain.arabic_text import normalize_arabic
 from src.domain.models import DecisionV2Snapshot, FundamentalSnapshot, PeriodType, Stock, Timeframe, User
 from src.domain.sector_labels import sector_label_ar
 from src.market_data.providers.market_data_provider import IMarketDataProvider
@@ -117,6 +118,17 @@ def search_stocks(
     so a misspelled Arabic name may return no results rather than a
     guessed one). Registered *before* `/{symbol}` below so "search" is
     never swallowed as a literal symbol path parameter.
+
+    A plain SQL `ILIKE` substring match alone would miss a real,
+    common case in Arabic: "ارامكو" (no hamza), "أرامكو" (hamza on
+    alef), and "أرامكو  السعودية" (extra internal spacing) are all the
+    same company to a human reader but different byte sequences to
+    the database. The cheap `ILIKE` path runs first and normally
+    supplies every result; only when it comes back short of `limit`
+    does a normalized-Arabic fallback scan the (small, ~250-symbol)
+    active universe in Python via `normalize_arabic` -- see that
+    module's docstring for exactly which letter/diacritic/whitespace
+    variants it folds together.
     """
     query = q.strip()
     if not query:
@@ -133,6 +145,21 @@ def search_stocks(
         .limit(limit)
         .all()
     )
+
+    if len(stocks) < limit:
+        matched_symbols = {s.symbol for s in stocks}
+        normalized_query = normalize_arabic(query)
+        if normalized_query:
+            candidates = session.query(Stock).filter(Stock.is_active.is_(True)).order_by(Stock.symbol).all()
+            for candidate in candidates:
+                if len(stocks) >= limit:
+                    break
+                if candidate.symbol in matched_symbols:
+                    continue
+                if candidate.name_ar and normalized_query in normalize_arabic(candidate.name_ar):
+                    stocks.append(candidate)
+                    matched_symbols.add(candidate.symbol)
+
     return StockSearchOut(
         query=q,
         results=[

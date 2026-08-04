@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError } from "@/lib/api/client";
 import { getRankings, getScanProgress } from "@/lib/api/market";
 import type { MarketScanProgress } from "@/lib/api/types";
+import { SCAN_PROGRESS_STATUS_LABELS } from "@/lib/market-intelligence-labels";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -83,7 +84,7 @@ export function LiveScanPanel() {
     <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
       <div className="mb-bsr-3 flex items-center justify-between">
         <h2 className="text-base font-semibold text-bsr-text-primary">
-          {isRunning ? "المسح جارٍ الآن" : `المسح: ${d.status}`}
+          {isRunning ? "المسح جارٍ الآن" : `المسح: ${SCAN_PROGRESS_STATUS_LABELS[d.status] ?? d.status}`}
         </h2>
         <span className="bsr-numeric text-sm text-bsr-teal-500">
           {d.progress_pct}%

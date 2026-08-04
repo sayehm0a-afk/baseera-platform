@@ -333,6 +333,33 @@ def test_search_by_arabic_name_substring(client, db_session):
     assert results[0]["name_ar"] == "أرامكو السعودية"
 
 
+def test_search_matches_hamza_alef_variant_not_present_in_stored_name(client, db_session):
+    """Stored name uses the hamza form (أرامكو); a query typed without
+    the hamza (ارامكو) must still match via the normalized-Arabic
+    fallback -- a plain SQL ILIKE alone would miss this."""
+    stock = _make_stock(db_session)
+    stock.name_ar = "أرامكو السعودية"
+    db_session.commit()
+
+    response = client.get("/api/v1/stocks/search", params={"q": "ارامكو"})
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert len(results) == 1
+    assert results[0]["symbol"] == "2222"
+
+
+def test_search_matches_despite_extra_internal_whitespace_in_query(client, db_session):
+    stock = _make_stock(db_session)
+    stock.name_ar = "أرامكو السعودية"
+    db_session.commit()
+
+    response = client.get("/api/v1/stocks/search", params={"q": "أرامكو  السعودية"})
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert len(results) == 1
+    assert results[0]["symbol"] == "2222"
+
+
 def test_search_by_english_name_substring_case_insensitive(client, db_session):
     _make_stock(db_session)  # name_en="Saudi Aramco"
     response = client.get("/api/v1/stocks/search", params={"q": "aramco"})

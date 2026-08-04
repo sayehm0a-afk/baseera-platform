@@ -242,3 +242,21 @@ class AdminDashboardSummaryOut(BaseModel):
     last_scan_symbols_requested: Optional[int] = None
     last_scan_symbols_succeeded: Optional[int] = None
     last_scan_symbols_failed: Optional[int] = None
+
+    # Phase 1 Decision Engine V2 additions: publication outcome
+    # breakdown for the last scan (from MarketScanProgress, tracked
+    # per-symbol as the scan runs -- see that model's own columns),
+    # the decision engine version actually deployed, current Tadawul
+    # market status, whether STRICT_REAL_DATA is enforced, the latest
+    # scan error (if any), and whether a scan is currently locked
+    # (PENDING/RUNNING) so a manual scan trigger can be disabled.
+    last_scan_published_count: Optional[int] = None
+    last_scan_watch_only_count: Optional[int] = None
+    last_scan_rejected_count: Optional[int] = None
+    last_scan_insufficient_data_count: Optional[int] = None
+    last_scan_latest_error: Optional[str] = None
+    decision_engine_version: str
+    market_status: str
+    market_status_label_ar: str
+    strict_real_data_enforced: bool
+    scan_lock_active: bool

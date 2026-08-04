@@ -30,4 +30,16 @@ export interface AdminDashboardSummary {
   last_scan_symbols_requested: number | null;
   last_scan_symbols_succeeded: number | null;
   last_scan_symbols_failed: number | null;
+
+  /** Phase 1 Decision Engine V2 additions. */
+  last_scan_published_count: number | null;
+  last_scan_watch_only_count: number | null;
+  last_scan_rejected_count: number | null;
+  last_scan_insufficient_data_count: number | null;
+  last_scan_latest_error: string | null;
+  decision_engine_version: string;
+  market_status: string;
+  market_status_label_ar: string;
+  strict_real_data_enforced: boolean;
+  scan_lock_active: boolean;
 }

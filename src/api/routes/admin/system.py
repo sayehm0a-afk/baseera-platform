@@ -99,11 +99,26 @@ async def get_dashboard_summary(
         session.query(func.count(UserModel.id)).filter(UserModel.locked_until > now).scalar() or 0
     )
 
-    from src.domain.models import MarketScanRun
+    from src.analysis.decision_v2.engine import DECISION_V2_ENGINE_VERSION
+    from src.domain.models import MarketScanProgress, MarketScanRun, MarketScanStatus
+    from src.market_data.config import is_strict_real_data_enabled
+    from src.market_intelligence.market_status import get_market_status
 
     last_scan = (
         session.query(MarketScanRun).order_by(MarketScanRun.created_at.desc()).first()
     )
+    last_scan_progress = (
+        session.query(MarketScanProgress).filter(MarketScanProgress.run_id == last_scan.id).first()
+        if last_scan is not None
+        else None
+    )
+    scan_lock_active = (
+        session.query(MarketScanRun.id)
+        .filter(MarketScanRun.status.in_([MarketScanStatus.PENDING, MarketScanStatus.RUNNING]))
+        .first()
+        is not None
+    )
+    market_info = get_market_status()
 
     return AdminDashboardSummaryOut(
         app_version=main.app.version,
@@ -128,4 +143,19 @@ async def get_dashboard_summary(
         last_scan_symbols_requested=last_scan.symbols_requested if last_scan else None,
         last_scan_symbols_succeeded=last_scan.symbols_succeeded if last_scan else None,
         last_scan_symbols_failed=last_scan.symbols_failed if last_scan else None,
+        last_scan_published_count=last_scan_progress.published_count if last_scan_progress else None,
+        last_scan_watch_only_count=last_scan_progress.watch_only_count if last_scan_progress else None,
+        last_scan_rejected_count=last_scan_progress.rejected_count if last_scan_progress else None,
+        last_scan_insufficient_data_count=(
+            last_scan_progress.insufficient_data_count if last_scan_progress else None
+        ),
+        last_scan_latest_error=(
+            last_scan_progress.latest_error if last_scan_progress
+            else (last_scan.error_summary if last_scan else None)
+        ),
+        decision_engine_version=DECISION_V2_ENGINE_VERSION,
+        market_status=market_info.status.value,
+        market_status_label_ar=market_info.label_ar,
+        strict_real_data_enforced=is_strict_real_data_enabled(),
+        scan_lock_active=scan_lock_active,
     )

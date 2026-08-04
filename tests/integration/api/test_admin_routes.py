@@ -532,6 +532,30 @@ def test_dashboard_summary_last_scan_fields_are_none_before_any_scan(client, adm
     assert response.status_code == 200
     body = response.json()
     assert body["last_scan_id"] is None
+    assert body["last_scan_published_count"] is None
+    assert body["last_scan_watch_only_count"] is None
+    assert body["last_scan_rejected_count"] is None
+    assert body["last_scan_insufficient_data_count"] is None
+    assert body["last_scan_latest_error"] is None
+    assert body["scan_lock_active"] is False
+
+
+def test_dashboard_summary_phase1_decision_v2_fields(client, admin):
+    """Phase 1 OWNER panel additions: decision engine version, current
+    market status, and strict-real-data enforcement flag must always
+    be present -- never omitted or a placeholder, unlike the
+    scan-dependent fields above."""
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision_engine_version"] == "2.0.0"
+    assert body["market_status"] in {
+        "OPEN", "PRE_MARKET", "PRE_OPEN_AUCTION", "CLOSING_AUCTION", "CLOSING_PRICE_TRADING",
+        "POST_CLOSE", "WEEKEND", "CLOSED", "UNKNOWN",
+    }
+    assert body["market_status_label_ar"]
+    assert isinstance(body["strict_real_data_enforced"], bool)
     assert body["last_scan_status"] is None
     assert body["last_scan_symbols_requested"] is None
 

@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { getDashboardSummary, getSystemHealth } from "@/lib/api/admin";
 import type { AdminDashboardSummary, SystemHealth } from "@/lib/api/admin-types";
+import { RUN_STATUS_LABELS } from "@/lib/market-intelligence-labels";
 
 type PageState =
   | { status: "loading" }
@@ -86,6 +87,13 @@ function OwnerStatusPageInner() {
           colorClass={healthColor(health.status)}
         />
         <StatusRow
+          label="تطبيق البيانات الحقيقية الصارم (STRICT_REAL_DATA)"
+          value={summary.strict_real_data_enforced ? "مُفعّل" : "غير مُفعّل"}
+          colorClass={summary.strict_real_data_enforced ? "text-bsr-market-up" : "text-bsr-market-down"}
+        />
+        <StatusRow label="حالة السوق الآن" value={summary.market_status_label_ar} />
+        <StatusRow label="إصدار محرك القرار" value={summary.decision_engine_version} />
+        <StatusRow
           label="قاعدة البيانات"
           value={HEALTH_LABELS[summary.database_health] ?? summary.database_health}
           colorClass={healthColor(summary.database_health)}
@@ -117,7 +125,7 @@ function OwnerStatusPageInner() {
         ) : (
           <>
             <StatusRow label="رقم المسح" value={String(summary.last_scan_id)} />
-            <StatusRow label="الحالة" value={summary.last_scan_status ?? "—"} />
+            <StatusRow label="الحالة" value={summary.last_scan_status ? (RUN_STATUS_LABELS[summary.last_scan_status] ?? summary.last_scan_status) : "—"} />
             <StatusRow
               label="بدأ في"
               value={summary.last_scan_started_at ? new Date(summary.last_scan_started_at).toLocaleString("ar-SA") : "—"}
@@ -129,8 +137,23 @@ function OwnerStatusPageInner() {
             <StatusRow label="الرموز المطلوبة" value={String(summary.last_scan_symbols_requested ?? "—")} />
             <StatusRow label="الرموز الناجحة" value={String(summary.last_scan_symbols_succeeded ?? "—")} />
             <StatusRow label="الرموز الفاشلة" value={String(summary.last_scan_symbols_failed ?? "—")} />
+            <StatusRow label="فرص مقبولة (منشورة)" value={String(summary.last_scan_published_count ?? "—")} />
+            <StatusRow label="فرص للمراقبة فقط" value={String(summary.last_scan_watch_only_count ?? "—")} />
+            <StatusRow label="فرص مرفوضة" value={String(summary.last_scan_rejected_count ?? "—")} />
+            <StatusRow label="بيانات غير كافية" value={String(summary.last_scan_insufficient_data_count ?? "—")} />
+            {summary.last_scan_latest_error ? (
+              <div className="border-b border-bsr-border-subtle py-bsr-2 last:border-0">
+                <p className="text-sm text-bsr-text-secondary">آخر خطأ</p>
+                <p className="text-sm text-bsr-market-down">{summary.last_scan_latest_error}</p>
+              </div>
+            ) : null}
           </>
         )}
+        <StatusRow
+          label="قفل تنفيذ المسح"
+          value={summary.scan_lock_active ? "مقفل (مسح قيد التنفيذ)" : "متاح"}
+          colorClass={summary.scan_lock_active ? "text-bsr-action-watch" : "text-bsr-market-up"}
+        />
         <StatusRow
           label="مجدول المسح الدوري"
           value={summary.market_intelligence_scheduler_running ? "يعمل" : "متوقف"}

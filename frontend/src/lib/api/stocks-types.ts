@@ -120,6 +120,94 @@ export interface InvestmentDecision {
   confidence_calibration_notes: string[];
 }
 
+/** Mirrors src/analysis/decision_v2/types.py's `Decision` enum
+ * exactly -- the Arabic-labeled action taxonomy, distinct from the
+ * legacy `InvestmentDecision.recommendation` (STRONG_BUY/BUY/HOLD/
+ * SELL/STRONG_SELL) band above. */
+export type DecisionV2Value =
+  | "STRONG_BUY_CANDIDATE"
+  | "BUY_CANDIDATE"
+  | "WAIT_FOR_ENTRY"
+  | "WATCH"
+  | "HOLD"
+  | "REDUCE"
+  | "EXIT"
+  | "REJECT"
+  | "INSUFFICIENT_DATA";
+
+export interface SubScoresV2 {
+  trend_score: number | null;
+  momentum_score: number | null;
+  volume_score: number | null;
+  liquidity_score: number | null;
+  volatility_score: number | null;
+  risk_reward_score: number | null;
+  market_context_score: number | null;
+  data_quality_score: number;
+}
+
+export interface GateOutcome {
+  name: string;
+  passed: boolean;
+  detail: string;
+  blocking: boolean;
+}
+
+/** Mirrors DecisionV2Out (src/api/schemas/stocks.py) --
+ * GET /api/v1/stocks/{symbol}/decision-v2. */
+export interface DecisionV2 {
+  symbol: string;
+  company_name_ar: string | null;
+  company_name_en: string;
+  sector_ar: string | null;
+
+  decision: DecisionV2Value;
+  decision_label_ar: string;
+
+  confidence_score: number;
+  confidence_disclaimer_ar: string;
+  opportunity_quality_score: number;
+  risk_score: number;
+  data_quality_score: number;
+  data_freshness_status: "LIVE" | "LAST_SESSION" | "STALE" | "UNKNOWN";
+
+  current_price: number | null;
+  entry_zone_low: number | null;
+  entry_zone_high: number | null;
+  stop_loss: number | null;
+  target_1: number | null;
+  target_2: number | null;
+  target_3: number | null;
+
+  expected_return_target_1: number | null;
+  expected_return_target_2: number | null;
+  downside_to_stop: number | null;
+  risk_reward_target_1: number | null;
+  risk_reward_target_2: number | null;
+
+  expected_holding_period_min_days: number | null;
+  expected_holding_period_max_days: number | null;
+  expected_holding_period_label_ar: string;
+  horizon_type: string;
+
+  market_status: string;
+  decision_timestamp: string;
+
+  invalidation_conditions: string[];
+  positive_reasons: string[];
+  negative_reasons: string[];
+  warnings: string[];
+  recommendation_basis: string;
+  analysis_disclaimer_ar: string;
+
+  analysis_version: string;
+  data_source: string;
+  scan_run_id: number | null;
+
+  sub_scores: SubScoresV2;
+  gates: GateOutcome[];
+}
+
 export interface StockSearchResult {
   symbol: string;
   name_en: string;
