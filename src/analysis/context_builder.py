@@ -125,6 +125,7 @@ async def build_analysis_context(
                     "change_percent": quote.get("change_percent"),
                     "timestamp": quote.get("timestamp"),
                     "source": quote.get("source"),
+                    "is_synthetic": quote.get("is_synthetic"),
                 }
             }
         except (SahmkError, CircuitBreakerOpenError) as exc:
@@ -136,6 +137,16 @@ async def build_analysis_context(
         try:
             bar = await market_provider.get_stock_data(symbol)
             market_price = bar.get("close")
+            quote_extra = {
+                "quote": {
+                    "price": bar.get("close"),
+                    "change": None,
+                    "change_percent": None,
+                    "timestamp": bar.get("timestamp"),
+                    "source": bar.get("source"),
+                    "is_synthetic": bar.get("is_synthetic"),
+                }
+            }
         except (SahmkError, CircuitBreakerOpenError) as exc:
             logger.info("Could not fetch a live price for '%s': %s", symbol, exc)
 

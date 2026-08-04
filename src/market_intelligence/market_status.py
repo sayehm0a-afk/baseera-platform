@@ -15,16 +15,29 @@ years, not fetched live -- SAHMK's `/market/summary/` endpoint returns
 an index snapshot, not an explicit machine-readable session-state
 field, per docs/SAHMK_INTEGRATION.md's verified endpoint table):
 pre-open order collection 09:30-10:00, continuous trading 10:00-15:00
-(already encoded in trading_calendar), closing auction 15:00-15:10.
-Outside 09:30-15:10 on a trading weekday, or on Fri/Sat, the market is
-simply closed.
+(already encoded in trading_calendar), closing auction 15:00-15:10,
+trading at the closing price 15:10-15:20. Every hour of a Sun-Thu
+trading day is classified by one of these real, published windows
+(PRE_MARKET before 09:30, POST_CLOSE after 15:20) -- CLOSED is kept in
+the taxonomy for API back-compatibility and as an explicit fallback,
+but is never actually returned for a trading weekday under this
+schedule; Fri/Sat now report WEEKEND instead, since "closed because
+it's the weekend" and "closed randomly outside session hours" are
+different, useful pieces of information for the frontend/gates to
+distinguish (Phase 1 Decision Engine V2's 9-state status requirement).
 
 Disclosed gap (inherited from trading_calendar, restated here so a
 caller of *this* module sees it too): no exchange holiday calendar is
 integrated. On an actual Tadawul holiday that falls Sun-Thu, this will
 incorrectly report a session state instead of "عطلة رسمية" -- there is
 no data source wired into this codebase that could catch that case
-today.
+today. UNKNOWN exists in the taxonomy for exactly this kind of
+unresolvable case but is not returned by `get_market_status()` itself
+today (every input to this pure function resolves to a real calendar
+window); it is reserved for a future caller (e.g. once a holiday feed
+exists) that needs to say "I cannot classify this" explicitly, and
+`gates.py`'s `market_status_known` check already treats it as
+not-known if it is ever passed through.
 """
 
 from dataclasses import dataclass
@@ -50,20 +63,31 @@ def _to_tadawul_time(now: datetime) -> datetime:
 
 _PRE_OPEN_START = time(9, 30)
 _CLOSING_AUCTION_END = time(15, 10)
+_CLOSING_PRICE_TRADING_END = time(15, 20)
 
 
 class MarketSessionStatus(str, Enum):
     OPEN = "OPEN"
+    PRE_MARKET = "PRE_MARKET"
     PRE_OPEN_AUCTION = "PRE_OPEN_AUCTION"
     CLOSING_AUCTION = "CLOSING_AUCTION"
+    CLOSING_PRICE_TRADING = "CLOSING_PRICE_TRADING"
+    POST_CLOSE = "POST_CLOSE"
+    WEEKEND = "WEEKEND"
     CLOSED = "CLOSED"
+    UNKNOWN = "UNKNOWN"
 
 
 _LABELS_AR = {
     MarketSessionStatus.OPEN: "السوق مفتوح",
+    MarketSessionStatus.PRE_MARKET: "قبل الافتتاح",
     MarketSessionStatus.PRE_OPEN_AUCTION: "مزاد الافتتاح",
     MarketSessionStatus.CLOSING_AUCTION: "مزاد الإغلاق",
+    MarketSessionStatus.CLOSING_PRICE_TRADING: "التداول على سعر الإغلاق",
+    MarketSessionStatus.POST_CLOSE: "بعد الإغلاق",
+    MarketSessionStatus.WEEKEND: "عطلة أسبوعية",
     MarketSessionStatus.CLOSED: "السوق مغلق",
+    MarketSessionStatus.UNKNOWN: "حالة غير مؤكدة",
 }
 
 
@@ -109,14 +133,20 @@ def get_market_status(now: Optional[datetime] = None) -> MarketStatusInfo:
     is_trading_day = local.weekday() in TADAWUL_TRADING_WEEKDAYS
     current_time = local.time()
 
-    if is_trading_day and TADAWUL_SESSION_OPEN <= current_time < TADAWUL_SESSION_CLOSE:
+    if not is_trading_day:
+        status = MarketSessionStatus.WEEKEND
+    elif TADAWUL_SESSION_OPEN <= current_time < TADAWUL_SESSION_CLOSE:
         status = MarketSessionStatus.OPEN
-    elif is_trading_day and _PRE_OPEN_START <= current_time < TADAWUL_SESSION_OPEN:
+    elif _PRE_OPEN_START <= current_time < TADAWUL_SESSION_OPEN:
         status = MarketSessionStatus.PRE_OPEN_AUCTION
-    elif is_trading_day and TADAWUL_SESSION_CLOSE <= current_time < _CLOSING_AUCTION_END:
+    elif TADAWUL_SESSION_CLOSE <= current_time < _CLOSING_AUCTION_END:
         status = MarketSessionStatus.CLOSING_AUCTION
+    elif _CLOSING_AUCTION_END <= current_time < _CLOSING_PRICE_TRADING_END:
+        status = MarketSessionStatus.CLOSING_PRICE_TRADING
+    elif current_time < _PRE_OPEN_START:
+        status = MarketSessionStatus.PRE_MARKET
     else:
-        status = MarketSessionStatus.CLOSED
+        status = MarketSessionStatus.POST_CLOSE
 
     return MarketStatusInfo(
         status=status,

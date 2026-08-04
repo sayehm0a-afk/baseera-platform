@@ -58,6 +58,7 @@ from src.domain.models.news_event import NewsEvent, NewsCategory, SentimentLabel
 from src.domain.models.news_entity import NewsEntity, NewsEntityType
 from src.domain.models.news_source_reliability import NewsSourceReliability
 from src.domain.models.portfolio_news_alert import PortfolioNewsAlert, PortfolioAlertType
+from src.domain.models.decision_v2_snapshot import DecisionV2Snapshot
 
 __all__ = [
     "Stock",
@@ -140,4 +141,5 @@ __all__ = [
     "NewsSourceReliability",
     "PortfolioNewsAlert",
     "PortfolioAlertType",
+    "DecisionV2Snapshot",
 ]

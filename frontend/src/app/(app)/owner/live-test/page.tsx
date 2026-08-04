@@ -12,9 +12,14 @@ import type { RecommendationValue } from "@/components/badges/RecommendationBadg
 
 const STATUS_LABEL_CLASS: Record<string, string> = {
   OPEN: "text-bsr-market-up",
+  PRE_MARKET: "text-bsr-text-secondary",
   PRE_OPEN_AUCTION: "text-bsr-action-watch",
   CLOSING_AUCTION: "text-bsr-action-watch",
+  CLOSING_PRICE_TRADING: "text-bsr-action-watch",
+  POST_CLOSE: "text-bsr-text-secondary",
+  WEEKEND: "text-bsr-text-secondary",
   CLOSED: "text-bsr-text-secondary",
+  UNKNOWN: "text-bsr-text-secondary",
   PROVIDER_UNREACHABLE: "text-bsr-market-down",
 };
 

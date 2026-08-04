@@ -1,6 +1,9 @@
 """GET /api/v1/stocks/* -- consumer-facing REST API over the domain
 layer, the live SAHMK/dev market and fundamental data providers, and
-the existing M2.2/M2.3 analysis engines. Every route here is read-only.
+the existing M2.2/M2.3 analysis engines. Every route here is read-only,
+with one disclosed exception: /decision-v2 additionally inserts a
+best-effort `DecisionV2Snapshot` audit row on success (never updates or
+deletes one) -- see that route's own docstring.
 
 /quote is a live pass-through (no DB row required) -- it never persists
 anything, so it doesn't need the symbol to already be a registered
@@ -44,6 +47,8 @@ from src.analysis.analyst.analyst_engine_factory import get_analyst_engine
 from src.analysis.analyst.output_formatter import OutputFormatter
 from src.analysis.context_builder import build_analysis_context
 from src.analysis.decision.ai_decision_engine import AIDecisionEngine
+from src.analysis.decision_v2.engine import DecisionEngineV2
+from src.analysis.decision_v2.types import ANALYSIS_DISCLAIMER_AR, CONFIDENCE_DISCLAIMER_AR
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
 from src.analysis.ohlcv_loader import load_price_bars
@@ -60,7 +65,9 @@ from src.api.exceptions import (
 from src.api.schemas.stocks import (
     AnalystReportOut,
     DecisionFactorBreakdownOut,
+    DecisionV2Out,
     FundamentalAnalysisOut,
+    GateOutcomeOut,
     HistoricalBarOut,
     HistoryOut,
     InvestmentDecisionOut,
@@ -71,15 +78,18 @@ from src.api.schemas.stocks import (
     StockOut,
     StockSearchOut,
     StockSearchResultOut,
+    SubScoresOut,
     TechnicalAnalysisOut,
 )
 from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
-from src.domain.models import FundamentalSnapshot, PeriodType, Stock, Timeframe, User
+from src.domain.models import DecisionV2Snapshot, FundamentalSnapshot, PeriodType, Stock, Timeframe, User
+from src.domain.sector_labels import sector_label_ar
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
 from src.market_data.validators.symbol_validator import InvalidSymbolError, validate_symbol_format
+from src.market_intelligence.market_status import MarketSessionStatus, get_market_status
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +411,196 @@ async def get_investment_decision(
         stop_loss_basis=decision.stop_loss_basis,
         target_price_basis=decision.target_price_basis,
         confidence_calibration_notes=decision.confidence_calibration_notes,
+    )
+
+
+def _parse_quote_timestamp(raw: Optional[str]) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+@router.get("/{symbol}/decision-v2", response_model=DecisionV2Out)
+async def get_decision_v2(
+    symbol: str,
+    period_type: PeriodType = Query(PeriodType.ANNUAL),
+    session: Session = Depends(get_db),
+    market_provider: IMarketDataProvider = Depends(get_market_provider),
+    current_user: User = Depends(require_active_subscription()),
+) -> DecisionV2Out:
+    """Decision Engine V2 (Phase 1): the Arabic-labeled, gate-checked
+    action Basirah recommends for one symbol -- STRONG_BUY_CANDIDATE
+    through INSUFFICIENT_DATA, never a plain BUY/SELL score band --
+    plus a real entry zone, up to three targets, an expected holding
+    period, eight documented sub-scores, and the full list of the 15
+    publication gates that decided the outcome. See
+    src/analysis/decision_v2/ for the engine itself; this route only
+    assembles its inputs (the same AnalysisContext /recommendation,
+    /decision, and /analyst-report already build) and maps its output.
+
+    Never claims a STRONG_BUY_CANDIDATE/BUY_CANDIDATE unless every
+    mandatory gate passes -- a poor entry, stale data, thin liquidity,
+    or a price that has already run past a sane entry zone all
+    downgrade the decision instead of encouraging a bad or synthetic
+    purchase. `confidence_score` measures evidence strength, never a
+    probability of profit (`confidence_disclaimer_ar`), and every
+    actionable decision carries `analysis_disclaimer_ar` verbatim --
+    Basirah must never claim a guaranteed outcome.
+
+    Best-effort audit: on success, a `DecisionV2Snapshot` row is
+    inserted (never updated/deleted) so this decision can be reviewed
+    later -- see that model's docstring for why persistence is
+    insert-only. A persistence failure never fails this GET; it is
+    logged and rolled back so the read-only response is unaffected.
+    """
+    context = await _build_analysis_context(symbol, period_type, session, market_provider)
+
+    if context.technical_result is None and context.fundamental_result is None:
+        raise InsufficientDataError(
+            f"Not enough ingested history or fundamentals for '{symbol}' to generate a decision."
+        )
+
+    investment_decision = AIDecisionEngine().decide(context)
+
+    stock = _get_stock_or_404(session, symbol)
+    quote_info = context.extra.get("quote", {})
+    market_info = get_market_status()
+
+    result = DecisionEngineV2().decide(
+        context,
+        investment_decision,
+        company_name_ar=stock.name_ar,
+        company_name_en=stock.name_en,
+        sector=stock.sector,
+        sector_ar=sector_label_ar(stock.sector),
+        is_synthetic=quote_info.get("is_synthetic"),
+        data_source=quote_info.get("source") or "unknown",
+        quote_timestamp=_parse_quote_timestamp(quote_info.get("timestamp")),
+        market_status=market_info.status.value,
+        market_is_open=market_info.status == MarketSessionStatus.OPEN,
+    )
+
+    try:
+        session.add(
+            DecisionV2Snapshot(
+                stock_id=stock.id,
+                symbol=result.symbol,
+                company_name_ar=result.company_name_ar,
+                company_name_en=result.company_name_en,
+                sector_ar=result.sector_ar,
+                decision=result.decision.value,
+                decision_label_ar=result.decision_label_ar,
+                confidence_score=result.confidence_score,
+                opportunity_quality_score=result.opportunity_quality_score,
+                risk_score=result.risk_score,
+                data_quality_score=result.data_quality_score,
+                data_freshness_status=result.data_freshness_status.value,
+                current_price=result.current_price,
+                entry_zone_low=result.entry_zone_low,
+                entry_zone_high=result.entry_zone_high,
+                stop_loss=result.stop_loss,
+                target_1=result.target_1,
+                target_2=result.target_2,
+                target_3=result.target_3,
+                expected_return_target_1=result.expected_return_target_1,
+                expected_return_target_2=result.expected_return_target_2,
+                downside_to_stop=result.downside_to_stop,
+                risk_reward_target_1=result.risk_reward_target_1,
+                risk_reward_target_2=result.risk_reward_target_2,
+                expected_holding_period_min_days=result.expected_holding_period_min_days,
+                expected_holding_period_max_days=result.expected_holding_period_max_days,
+                expected_holding_period_label_ar=result.expected_holding_period_label_ar,
+                horizon_type=result.horizon_type,
+                market_status=result.market_status,
+                decision_timestamp=result.decision_timestamp,
+                invalidation_conditions=result.invalidation_conditions,
+                positive_reasons=result.positive_reasons,
+                negative_reasons=result.negative_reasons,
+                warnings=result.warnings,
+                recommendation_basis=result.recommendation_basis,
+                sub_scores={
+                    "trend_score": result.sub_scores.trend_score,
+                    "momentum_score": result.sub_scores.momentum_score,
+                    "volume_score": result.sub_scores.volume_score,
+                    "liquidity_score": result.sub_scores.liquidity_score,
+                    "volatility_score": result.sub_scores.volatility_score,
+                    "risk_reward_score": result.sub_scores.risk_reward_score,
+                    "market_context_score": result.sub_scores.market_context_score,
+                    "data_quality_score": result.sub_scores.data_quality_score,
+                },
+                gates=[
+                    {"name": g.name, "passed": g.passed, "detail": g.detail, "blocking": g.blocking}
+                    for g in result.gates
+                ],
+                analysis_version=result.analysis_version,
+                data_source=result.data_source,
+                is_synthetic=quote_info.get("is_synthetic"),
+                scan_run_id=result.scan_run_id,
+                requested_by_user_id=current_user.id,
+            )
+        )
+        session.commit()
+    except Exception:  # noqa: BLE001 -- audit persistence must never break a read-only GET
+        logger.exception("Failed to persist DecisionV2Snapshot for '%s' -- response is unaffected.", symbol)
+        session.rollback()
+
+    return DecisionV2Out(
+        symbol=result.symbol,
+        company_name_ar=result.company_name_ar,
+        company_name_en=result.company_name_en,
+        sector_ar=result.sector_ar,
+        decision=result.decision.value,
+        decision_label_ar=result.decision_label_ar,
+        confidence_score=result.confidence_score,
+        confidence_disclaimer_ar=CONFIDENCE_DISCLAIMER_AR,
+        opportunity_quality_score=result.opportunity_quality_score,
+        risk_score=result.risk_score,
+        data_quality_score=result.data_quality_score,
+        data_freshness_status=result.data_freshness_status.value,
+        current_price=result.current_price,
+        entry_zone_low=result.entry_zone_low,
+        entry_zone_high=result.entry_zone_high,
+        stop_loss=result.stop_loss,
+        target_1=result.target_1,
+        target_2=result.target_2,
+        target_3=result.target_3,
+        expected_return_target_1=result.expected_return_target_1,
+        expected_return_target_2=result.expected_return_target_2,
+        downside_to_stop=result.downside_to_stop,
+        risk_reward_target_1=result.risk_reward_target_1,
+        risk_reward_target_2=result.risk_reward_target_2,
+        expected_holding_period_min_days=result.expected_holding_period_min_days,
+        expected_holding_period_max_days=result.expected_holding_period_max_days,
+        expected_holding_period_label_ar=result.expected_holding_period_label_ar,
+        horizon_type=result.horizon_type,
+        market_status=result.market_status,
+        decision_timestamp=result.decision_timestamp,
+        invalidation_conditions=result.invalidation_conditions,
+        positive_reasons=result.positive_reasons,
+        negative_reasons=result.negative_reasons,
+        warnings=result.warnings,
+        recommendation_basis=result.recommendation_basis,
+        analysis_disclaimer_ar=ANALYSIS_DISCLAIMER_AR,
+        analysis_version=result.analysis_version,
+        data_source=result.data_source,
+        scan_run_id=result.scan_run_id,
+        sub_scores=SubScoresOut(
+            trend_score=result.sub_scores.trend_score,
+            momentum_score=result.sub_scores.momentum_score,
+            volume_score=result.sub_scores.volume_score,
+            liquidity_score=result.sub_scores.liquidity_score,
+            volatility_score=result.sub_scores.volatility_score,
+            risk_reward_score=result.sub_scores.risk_reward_score,
+            market_context_score=result.sub_scores.market_context_score,
+            data_quality_score=result.sub_scores.data_quality_score,
+        ),
+        gates=[
+            GateOutcomeOut(name=g.name, passed=g.passed, detail=g.detail, blocking=g.blocking)
+            for g in result.gates
+        ],
     )
 
 

@@ -146,6 +146,91 @@ class InvestmentDecisionOut(BaseModel):
     confidence_calibration_notes: List[str] = []
 
 
+class SubScoresOut(BaseModel):
+    trend_score: Optional[float] = None
+    momentum_score: Optional[float] = None
+    volume_score: Optional[float] = None
+    liquidity_score: Optional[float] = None
+    volatility_score: Optional[float] = None
+    risk_reward_score: Optional[float] = None
+    market_context_score: Optional[float] = None
+    data_quality_score: float
+
+
+class GateOutcomeOut(BaseModel):
+    name: str
+    passed: bool
+    detail: str
+    blocking: bool
+
+
+class DecisionV2Out(BaseModel):
+    """Decision Engine V2's Arabic-labeled, gate-checked action for one
+    symbol -- see src/analysis/decision_v2/ for the full engine. Every
+    number here traces back to AIDecisionEngine/TechnicalAnalysisEngine;
+    this schema adds no new computation of its own, only structure and
+    explainability (entry zone, extended targets, eight sub-scores, and
+    the 15 publication gates that decided which `decision` value the
+    evidence actually supports).
+
+    `confidence_score` measures evidence strength/agreement, not a
+    probability of guaranteed profit -- see `CONFIDENCE_DISCLAIMER_AR`.
+    `analysis_disclaimer_ar` (`ANALYSIS_DISCLAIMER_AR`) must accompany
+    every actionable decision shown to a user.
+    """
+
+    symbol: str
+    company_name_ar: Optional[str] = None
+    company_name_en: str
+    sector_ar: Optional[str] = None
+
+    decision: str
+    decision_label_ar: str
+
+    confidence_score: float
+    confidence_disclaimer_ar: str
+    opportunity_quality_score: float
+    risk_score: float
+    data_quality_score: float
+    data_freshness_status: str
+
+    current_price: Optional[float] = None
+    entry_zone_low: Optional[float] = None
+    entry_zone_high: Optional[float] = None
+    stop_loss: Optional[float] = None
+    target_1: Optional[float] = None
+    target_2: Optional[float] = None
+    target_3: Optional[float] = None
+
+    expected_return_target_1: Optional[float] = None
+    expected_return_target_2: Optional[float] = None
+    downside_to_stop: Optional[float] = None
+    risk_reward_target_1: Optional[float] = None
+    risk_reward_target_2: Optional[float] = None
+
+    expected_holding_period_min_days: Optional[int] = None
+    expected_holding_period_max_days: Optional[int] = None
+    expected_holding_period_label_ar: str
+    horizon_type: str
+
+    market_status: str
+    decision_timestamp: datetime
+
+    invalidation_conditions: List[str]
+    positive_reasons: List[str]
+    negative_reasons: List[str]
+    warnings: List[str]
+    recommendation_basis: str
+    analysis_disclaimer_ar: str
+
+    analysis_version: str
+    data_source: str
+    scan_run_id: Optional[int] = None
+
+    sub_scores: SubScoresOut
+    gates: List[GateOutcomeOut]
+
+
 class AnalystReportOut(BaseModel):
     """The Autonomous AI Analyst Framework's report for one symbol --
     everything /decision already produces (the same InvestmentDecision

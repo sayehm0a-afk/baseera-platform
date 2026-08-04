@@ -330,7 +330,8 @@ def test_market_status_returns_a_real_tadawul_session_state(client, session_fact
     assert response.status_code == 200
     body = response.json()
     assert body["status"] in {
-        "OPEN", "PRE_OPEN_AUCTION", "CLOSING_AUCTION", "CLOSED", "PROVIDER_UNREACHABLE",
+        "OPEN", "PRE_MARKET", "PRE_OPEN_AUCTION", "CLOSING_AUCTION", "CLOSING_PRICE_TRADING",
+        "POST_CLOSE", "WEEKEND", "CLOSED", "UNKNOWN", "PROVIDER_UNREACHABLE",
     }
     assert body["label_ar"]
     assert isinstance(body["is_trading_day"], bool)
