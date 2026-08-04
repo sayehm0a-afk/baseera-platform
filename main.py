@@ -30,7 +30,6 @@ from src.api.middleware.security_headers import SecurityHeadersMiddleware  # noq
 from src.api.routes.admin import router as admin_router  # noqa: E402
 from src.api.routes.auth import router as auth_router  # noqa: E402
 from src.api.routes.backtests import router as backtests_router  # noqa: E402
-from src.api.routes.bootstrap import router as bootstrap_router  # noqa: E402
 from src.api.routes.calibrations import router as calibrations_router  # noqa: E402
 from src.api.routes.market import router as market_router  # noqa: E402
 from src.api.routes.news import router as news_router  # noqa: E402
@@ -103,7 +102,6 @@ register_error_handlers(app)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.include_router(auth_router)
-app.include_router(bootstrap_router)
 app.include_router(admin_router)
 app.include_router(stocks_router)
 app.include_router(backtests_router)

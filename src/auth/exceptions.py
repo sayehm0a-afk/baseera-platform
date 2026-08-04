@@ -103,17 +103,6 @@ class StaffAccountSelfDeletionError(APIError):
     code = "staff_account_self_deletion_blocked"
 
 
-class OwnerBootstrapAlreadyCompleteError(APIError):
-    """POST /api/v1/bootstrap/owner (src/api/routes/bootstrap.py) was
-    called after an OWNER account already exists -- the route's
-    self-disabling precondition, enforced by real DB state (not a flag
-    that could be reset), permanently refuses every call after the
-    first successful one."""
-
-    status_code = 403
-    code = "owner_bootstrap_already_complete"
-
-
 class AccountHasBillingHistoryError(APIError):
     """Self-service DELETE /auth/me hit the same FK RESTRICT the admin
     hard-delete route (src/api/routes/admin/users.py) already surfaces
