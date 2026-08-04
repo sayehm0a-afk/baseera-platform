@@ -97,6 +97,25 @@ jobs:
           echo "=== frontend / ==="
           curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/" || echo "(request failed)"
 
+      # DIAGNOSTIC ONLY -- run #6 confirmed `railway ssh keys add` is
+      # rejected outright: "SSH key management is not supported with
+      # project tokens (RAILWAY_TOKEN). Use a workspace API token
+      # (RAILWAY_API_TOKEN)." That blocks the SSH approach entirely with
+      # the secret we have. Before escalating for a new secret, check
+      # (read-only, names only, never values) whether the Postgres
+      # service itself exposes a public proxy connection string that a
+      # project token CAN read -- that would let this workflow reach the
+      # DB directly over the public internet with no SSH/DB-access
+      # workaround needed at all.
+      - name: DIAGNOSTIC -- list real service names and check for a public DB URL
+        run: |
+          echo "=== railway status --json ==="
+          railway status --json 2>&1 || echo "(railway status --json failed)"
+          for svc in postgres Postgres postgresql PostgreSQL database Database; do
+            echo "=== variable NAMES for candidate service '$svc' (no values) ==="
+            railway variables --service "$svc" --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(sorted(d.keys()))" 2>/dev/null || echo "(no service named '$svc', or not readable)"
+          done
+
       # `railway run` only injects env vars into a LOCAL process -- confirmed
       # by runs #2/#3, which resolved DATABASE_URL to postgres.railway.internal
       # (Railway's private DNS) and failed to connect, since the GitHub
