@@ -61,6 +61,28 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
         <p className="text-xs text-bsr-text-secondary">{decision.why_now_ar}</p>
       </div>
 
+      {/* Phase 2C: market-wide risk state -- distinct from the per-quote
+          freshness/market-status pills below. Styled as a warning when
+          new entries are currently blocked market-wide. */}
+      <div
+        className={`flex flex-col gap-0.5 rounded-bsr-md p-bsr-2 ${
+          decision.market_risk_entry_permitted ? "bg-bsr-surface-overlay" : "bg-bsr-action-sell/10"
+        }`}
+      >
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold text-bsr-text-primary">حالة مخاطر السوق</span>
+          <span
+            className={`text-xs font-semibold ${
+              decision.market_risk_entry_permitted ? "text-bsr-text-primary" : "text-bsr-action-sell"
+            }`}
+          >
+            {decision.market_risk_label_ar}
+            {!decision.market_risk_is_live ? " (آخر جلسة)" : ""}
+          </span>
+        </div>
+        <p className="text-[11px] leading-4 text-bsr-text-secondary">{decision.market_risk_basis_ar}</p>
+      </div>
+
       {/* Freshness / market status */}
       <div className="flex flex-wrap items-center gap-bsr-2 text-xs text-bsr-text-secondary">
         <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">

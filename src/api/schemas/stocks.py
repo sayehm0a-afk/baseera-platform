@@ -289,6 +289,17 @@ class DecisionV2Out(BaseModel):
     entry_confirmation_conditions_ar: List[str] = []
     watch_next_session_ar: List[str] = []
 
+    # --- Phase 2C: Market Risk and Exit Warning Engine -------------------
+    market_risk_state: str = "INSUFFICIENT_DATA"
+    market_risk_label_ar: str = "البيانات غير كافية"
+    market_risk_basis_ar: str = ""
+    market_risk_entry_permitted: bool = True
+    market_risk_is_live: bool = False
+    market_breadth_buy_count: Optional[int] = None
+    market_breadth_sell_count: Optional[int] = None
+    market_breadth_symbols_scanned: Optional[int] = None
+    market_breadth_average_confidence: Optional[float] = None
+
 
 class AnalystReportOut(BaseModel):
     """The Autonomous AI Analyst Framework's report for one symbol --
