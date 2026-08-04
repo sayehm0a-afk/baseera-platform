@@ -107,6 +107,97 @@ def test_login_sets_session_cookies(client: TestClient, db_session):
     assert "csrf_token" in client.cookies
 
 
+def _set_cookie_attrs(set_cookie_headers: list, cookie_name: str) -> str:
+    """Pulls the one Set-Cookie line for `cookie_name` out of a response's
+    (possibly several) Set-Cookie headers -- TestClient/httpx exposes
+    them via response.headers.get_list("set-cookie"), same as a real
+    HTTP response can carry more than one Set-Cookie line."""
+    matches = [h for h in set_cookie_headers if h.startswith(f"{cookie_name}=")]
+    assert matches, f"No Set-Cookie header found for {cookie_name!r} in {set_cookie_headers!r}"
+    return matches[0]
+
+
+def test_login_cookies_are_samesite_lax_and_not_secure_outside_production(client: TestClient, db_session):
+    """Locally / in CI (settings.is_production is False, the default),
+    frontend and backend are same-site, so SameSite=Lax is correct and
+    Secure is not required -- forcing Secure here would silently drop
+    the cookie over a plain http:// dev server."""
+    response = _login_and_capture_response(client, "lax@example.com")
+    set_cookie = response.headers.get_list("set-cookie")
+
+    access = _set_cookie_attrs(set_cookie, "access_token")
+    assert "samesite=lax" in access.lower()
+    assert "secure" not in access.lower()
+    assert "httponly" in access.lower()
+
+    refresh = _set_cookie_attrs(set_cookie, "refresh_token")
+    assert "samesite=lax" in refresh.lower()
+    assert "secure" not in refresh.lower()
+    assert "httponly" in refresh.lower()
+
+    csrf = _set_cookie_attrs(set_cookie, "csrf_token")
+    assert "samesite=lax" in csrf.lower()
+    assert "secure" not in csrf.lower()
+    assert "httponly" not in csrf.lower()  # must stay JS-readable for same-origin setups
+
+
+def test_login_cookies_are_samesite_none_and_secure_in_production(client: TestClient, db_session, monkeypatch):
+    """Production (Railway): frontend and backend are different sites
+    under up.railway.app (a registered Public Suffix List entry) --
+    SameSite=None is required for the browser to ever send these
+    cookies back on the frontend's cross-site fetch() calls, which
+    every modern browser only allows when Secure is also set."""
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "environment", "production")
+    response = _login_and_capture_response(client, "none-secure@example.com")
+    set_cookie = response.headers.get_list("set-cookie")
+
+    for name, expect_httponly in (
+        ("access_token", True),
+        ("refresh_token", True),
+        ("csrf_token", False),
+    ):
+        cookie = _set_cookie_attrs(set_cookie, name)
+        assert "samesite=none" in cookie.lower(), cookie
+        assert "secure" in cookie.lower(), cookie
+        assert ("httponly" in cookie.lower()) is expect_httponly, cookie
+
+
+def test_login_echoes_csrf_token_as_a_response_header(client: TestClient, db_session):
+    """The frontend runs on a different origin than this API and can't
+    read the csrf_token cookie via document.cookie -- login (and
+    refresh/me) echo the same value back as X-CSRF-Token so the
+    frontend's JS can capture it directly from the response instead."""
+    response = _login_and_capture_response(client, "csrfheader@example.com")
+    header_value = response.headers.get("x-csrf-token")
+    assert header_value
+    assert header_value == client.cookies.get("csrf_token")
+
+
+def test_me_echoes_csrf_token_as_a_response_header(client: TestClient, db_session):
+    """Covers the reload case: the frontend's in-memory copy of the
+    CSRF token (captured from a prior response header) is lost on a
+    page reload, so /auth/me re-surfaces the existing cookie's value
+    the same way, without rotating it."""
+    _register_verify_and_login(client, "me-csrf@example.com")
+    cookie_value = client.cookies.get("csrf_token")
+
+    response = client.get("/api/v1/auth/me")
+    assert response.status_code == 200
+    assert response.headers.get("x-csrf-token") == cookie_value
+
+
+def _login_and_capture_response(client: TestClient, email: str, password: str = "s3cret-password"):
+    raw_token = _register_and_capture_verification_token(client, email, password)
+    verify_response = client.post("/api/v1/auth/verify-email", json={"token": raw_token})
+    assert verify_response.status_code == 200, verify_response.text
+
+    login_response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert login_response.status_code == 200, login_response.text
+    return login_response
+
+
 def test_login_with_wrong_password_returns_401(client: TestClient, db_session):
     _register_verify_and_login(client, "wrongpass@example.com")
     response = client.post(
@@ -322,6 +413,23 @@ def test_refresh_rotates_cookies_and_old_refresh_token_is_dead(client: TestClien
     assert replay_response.json()["error"]["code"] == "invalid_or_expired_token"
 
 
+def test_refresh_sets_samesite_none_and_secure_cookies_in_production(client: TestClient, db_session, monkeypatch):
+    from src.core.config import settings
+
+    _register_verify_and_login(client, "refresh-prod@example.com")
+    monkeypatch.setattr(settings, "environment", "production")
+
+    refresh_response = client.post("/api/v1/auth/refresh", headers=_csrf_headers(client))
+    assert refresh_response.status_code == 200
+    set_cookie = refresh_response.headers.get_list("set-cookie")
+    for name in ("access_token", "refresh_token", "csrf_token"):
+        cookie = _set_cookie_attrs(set_cookie, name)
+        assert "samesite=none" in cookie.lower(), cookie
+        assert "secure" in cookie.lower(), cookie
+
+    assert refresh_response.headers.get("x-csrf-token") == client.cookies.get("csrf_token")
+
+
 def test_logout_clears_session_and_revokes_it(client: TestClient, db_session):
     _register_verify_and_login(client, "logout@example.com")
 
@@ -330,6 +438,29 @@ def test_logout_clears_session_and_revokes_it(client: TestClient, db_session):
 
     me_response = client.get("/api/v1/auth/me")
     assert me_response.status_code == 401
+
+
+def test_logout_deletes_cookies_with_matching_attributes_in_production(client: TestClient, db_session, monkeypatch):
+    """A cookie deletion (Set-Cookie: name=; Max-Age=0) is only reliably
+    honored by the browser when its Secure/SameSite/Path attributes
+    match how the cookie was originally set -- verifies logout's
+    delete_cookie calls were updated in lockstep with login's
+    set_cookie calls, not just the happy-path "does /me become 401"
+    behavior already covered above."""
+    from src.core.config import settings
+
+    _register_verify_and_login(client, "logout-prod@example.com")
+    monkeypatch.setattr(settings, "environment", "production")
+
+    logout_response = client.post("/api/v1/auth/logout", headers=_csrf_headers(client))
+    assert logout_response.status_code == 200
+    set_cookie = logout_response.headers.get_list("set-cookie")
+
+    for name in ("access_token", "refresh_token", "csrf_token"):
+        cookie = _set_cookie_attrs(set_cookie, name)
+        assert "samesite=none" in cookie.lower(), cookie
+        assert "secure" in cookie.lower(), cookie
+        assert "max-age=0" in cookie.lower(), cookie
 
 
 def test_sessions_lists_current_device_as_current(client: TestClient, db_session):

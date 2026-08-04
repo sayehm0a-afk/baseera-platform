@@ -96,6 +96,16 @@ if settings.cors_allowed_origins:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["*"],
+        # X-CSRF-Token: login/refresh (src/api/routes/auth.py) echo the
+        # csrf_token cookie's value back as this response header too,
+        # since the frontend runs on a different origin than this API
+        # and document.cookie can never read a cookie belonging to
+        # another origin. Without exposing it here, the browser hides
+        # this header from the frontend's own fetch() calls even
+        # though it's present on the wire -- CORS restricts which
+        # response headers cross-origin JS may read, separately from
+        # which headers the server actually sends.
+        expose_headers=["X-CSRF-Token"],
     )
 
 register_error_handlers(app)

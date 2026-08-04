@@ -67,6 +67,28 @@ describe("apiFetch", () => {
     document.cookie = "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
   });
 
+  it("captures X-CSRF-Token from the response and prefers it over the cookie on the next request (cross-origin: document.cookie can't see the API's own cookie)", async () => {
+    document.cookie = "csrf_token=stale-cookie-value";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "X-CSRF-Token": "token-from-response-header" },
+        })
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await apiFetch("/api/v1/auth/login", { method: "POST" });
+    await apiFetch("/api/v1/portfolios");
+
+    const [, secondInit] = fetchMock.mock.calls[1];
+    expect(secondInit.headers["X-CSRF-Token"]).toBe("token-from-response-header");
+
+    document.cookie = "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  });
+
   it("silently refreshes once and retries after a 401 on a non-bootstrap path", async () => {
     const fetchMock = vi
       .fn()
