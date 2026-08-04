@@ -165,6 +165,68 @@ def test_all_seventeen_categories_are_always_present():
     assert len(RankingCategory) == 17
 
 
+def test_highest_expected_return_excludes_a_publication_gate_rejection():
+    # Phase 2D: HIGHEST_EXPECTED_RETURN previously had no is_publishable
+    # check at all -- a BUY with a positive expected_return_pct but a
+    # non-positive risk/reward (rejected by the gate) could still top
+    # this list purely on the raw return number.
+    outcomes = [
+        make_outcome(symbol="GOOD", decision=make_decision(
+            symbol="GOOD", recommendation=Recommendation.BUY, expected_return_pct=4.0,
+        )),
+        make_outcome(symbol="SYNTHETIC", is_synthetic=True, decision=make_decision(
+            symbol="SYNTHETIC", recommendation=Recommendation.BUY, expected_return_pct=20.0,
+        )),
+    ]
+    rankings = RankingEngine().rank(outcomes)
+    entries = rankings[RankingCategory.HIGHEST_EXPECTED_RETURN].entries
+    assert [e.symbol for e in entries] == ["GOOD"]
+
+
+def test_lowest_risk_excludes_a_publication_gate_rejection():
+    outcomes = [
+        make_outcome(symbol="GOOD", decision=make_decision(symbol="GOOD", risk_level=RiskLevel.LOW)),
+        make_outcome(symbol="SYNTHETIC", is_synthetic=True, decision=make_decision(
+            symbol="SYNTHETIC", risk_level=RiskLevel.LOW,
+        )),
+    ]
+    rankings = RankingEngine().rank(outcomes)
+    entries = rankings[RankingCategory.LOWEST_RISK].entries
+    assert [e.symbol for e in entries] == ["GOOD"]
+
+
+def test_top_dividend_stocks_excludes_a_publication_gate_rejection():
+    outcomes = [
+        make_outcome(symbol="GOOD", fundamental_snapshot={"dividend_yield": 0.05}),
+        make_outcome(symbol="SYNTHETIC", is_synthetic=True, fundamental_snapshot={"dividend_yield": 0.09}),
+    ]
+    rankings = RankingEngine().rank(outcomes)
+    entries = rankings[RankingCategory.TOP_DIVIDEND_STOCKS].entries
+    assert [e.symbol for e in entries] == ["GOOD"]
+
+
+def test_most_bullish_and_most_bearish_exclude_publication_gate_rejections():
+    outcomes = [
+        make_outcome(symbol="GOOD_BULL", decision=make_decision(symbol="GOOD_BULL", final_score=80.0)),
+        make_outcome(symbol="SYNTHETIC_BULL", is_synthetic=True, decision=make_decision(
+            symbol="SYNTHETIC_BULL", final_score=95.0,
+        )),
+        make_outcome(symbol="GOOD_BEAR", decision=make_decision(
+            symbol="GOOD_BEAR", recommendation=Recommendation.SELL, final_score=20.0, expected_return_pct=-3.0,
+        )),
+        make_outcome(symbol="SYNTHETIC_BEAR", is_synthetic=True, decision=make_decision(
+            symbol="SYNTHETIC_BEAR", recommendation=Recommendation.SELL, final_score=5.0, expected_return_pct=-9.0,
+        )),
+    ]
+    rankings = RankingEngine().rank(outcomes)
+    # Synthetic-data outcomes are excluded from both lists regardless of
+    # score; among the two real outcomes, MOST_BULLISH still sorts by
+    # final_score descending and MOST_BEARISH ascending (this gate only
+    # removes gate-rejected symbols, it does not filter by direction).
+    assert [e.symbol for e in rankings[RankingCategory.MOST_BULLISH].entries] == ["GOOD_BULL", "GOOD_BEAR"]
+    assert [e.symbol for e in rankings[RankingCategory.MOST_BEARISH].entries] == ["GOOD_BEAR", "GOOD_BULL"]
+
+
 def test_zero_price_outcome_is_excluded_from_every_ranking_category_not_just_gated_ones():
     # Reproduces a real 2026-08-03 full-universe scan defect: symbol
     # 2210 had no technical leg (0 OHLCV rows) but a valid fundamental

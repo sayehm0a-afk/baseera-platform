@@ -250,6 +250,32 @@ def test_full_read_surface_after_a_completed_scan(client, session_factory):
     assert alerts.status_code == 200
 
 
+def test_opportunities_returns_the_eight_curated_categories_with_arabic_labels(client, session_factory):
+    _seed_stock_with_bars(session_factory, "2222", sector="Energy")
+    _seed_stock_with_bars(session_factory, "1010", sector="Banks")
+    _add_fundamentals(session_factory, "2222")
+    _add_fundamentals(session_factory, "1010")
+
+    run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    assert client.get(f"/api/v1/market/scan/{run_id}").json()["status"] == "SUCCESS"
+
+    response = client.get("/api/v1/market/opportunities")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scan_run_id"] == run_id
+    assert len(body["categories"]) == 8
+    assert [c["category"] for c in body["categories"]] == [
+        "TOP_STRONG_BUY", "TOP_BUY", "NEW_OPPORTUNITIES", "HIGHEST_EXPECTED_RETURN",
+        "TOP_DIVIDEND_STOCKS", "LOWEST_RISK", "MOST_BULLISH", "MOST_BEARISH",
+    ]
+    for category in body["categories"]:
+        assert category["label_ar"]
+        assert category["scoring_factor_ar"]
+        assert category["gate_exclusion_note_ar"]
+        assert "entries" in category
+        assert "generated_at" in category
+
+
 def test_rankings_category_filter(client, session_factory):
     _seed_stock_with_bars(session_factory, "2222")
     run_id = client.post("/api/v1/market/scan", json={}).json()["id"]

@@ -6,6 +6,7 @@ import type {
   MarketScanRun,
   MarketStatus,
   MarketSummary,
+  OpportunitiesResponse,
   RankingsResponse,
   SectorsResponse,
   WatchlistsResponse,
@@ -66,6 +67,11 @@ export function getRankings(
   if (runId !== undefined) search.set("run_id", String(runId));
   const query = search.toString() ? `?${search.toString()}` : "";
   return apiFetch<RankingsResponse>(`/api/v1/market/rankings${query}`);
+}
+
+export function getOpportunities(runId?: number): Promise<OpportunitiesResponse> {
+  const query = runId !== undefined ? `?run_id=${runId}` : "";
+  return apiFetch<OpportunitiesResponse>(`/api/v1/market/opportunities${query}`);
 }
 
 export function getWatchlists(

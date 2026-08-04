@@ -81,6 +81,19 @@ def _successful(outcome: SymbolScanOutcome) -> bool:
 
 
 _FILTER_SORT_RULES: Dict[RankingCategory, _FilterSortRule] = {
+    # Phase 2D (Stock Ranking Engine): every category rendered as an
+    # "opportunity" on the frontend Opportunities screen (see
+    # frontend/src/app/(app)/opportunities/page.tsx's OPPORTUNITY_SECTIONS
+    # -- TOP_STRONG_BUY, TOP_BUY, NEW_OPPORTUNITIES, HIGHEST_EXPECTED_RETURN,
+    # TOP_DIVIDEND_STOCKS, LOWEST_RISK, MOST_BULLISH, MOST_BEARISH) now
+    # applies is_publishable() -- previously only the four TOP_* rules did,
+    # leaving HIGHEST_EXPECTED_RETURN/LOWEST_RISK/TOP_DIVIDEND_STOCKS/
+    # MOST_BULLISH/MOST_BEARISH able to surface a symbol the publication
+    # gate would have rejected (stale/synthetic data, non-positive
+    # risk/reward, a poor entry). HIGHEST_CONFIDENCE and HIGHEST_RISK are
+    # deliberately left ungated -- they are diagnostic/analytical views
+    # (Scan screen only), never presented to a user as "here is an
+    # opportunity."
     RankingCategory.TOP_BUY: _FilterSortRule(
         lambda o: _successful(o) and o.recommendation in _BUY_LIKE and is_publishable(o),
         lambda o: o.final_score, True,
@@ -107,18 +120,18 @@ _FILTER_SORT_RULES: Dict[RankingCategory, _FilterSortRule] = {
         lambda o: o.expected_return_pct, True,
     ),
     RankingCategory.TOP_DIVIDEND_STOCKS: _FilterSortRule(
-        lambda o: _successful(o) and o.dividend_yield is not None,
+        lambda o: _successful(o) and o.dividend_yield is not None and is_publishable(o),
         lambda o: o.dividend_yield, True,
     ),
     RankingCategory.HIGHEST_CONFIDENCE: _FilterSortRule(
         _successful, lambda o: o.confidence, True,
     ),
     RankingCategory.HIGHEST_EXPECTED_RETURN: _FilterSortRule(
-        lambda o: _successful(o) and o.expected_return_pct is not None,
+        lambda o: _successful(o) and o.expected_return_pct is not None and is_publishable(o),
         lambda o: o.expected_return_pct, True,
     ),
     RankingCategory.LOWEST_RISK: _FilterSortRule(
-        lambda o: _successful(o) and o.risk_level is not None,
+        lambda o: _successful(o) and o.risk_level is not None and is_publishable(o),
         lambda o: (RISK_RANK[o.risk_level], -o.confidence), False,
     ),
     RankingCategory.HIGHEST_RISK: _FilterSortRule(
@@ -126,10 +139,12 @@ _FILTER_SORT_RULES: Dict[RankingCategory, _FilterSortRule] = {
         lambda o: (RISK_RANK[o.risk_level], o.confidence), True,
     ),
     RankingCategory.MOST_BULLISH: _FilterSortRule(
-        _successful, lambda o: o.final_score, True,
+        lambda o: _successful(o) and is_publishable(o),
+        lambda o: o.final_score, True,
     ),
     RankingCategory.MOST_BEARISH: _FilterSortRule(
-        _successful, lambda o: o.final_score, False,
+        lambda o: _successful(o) and is_publishable(o),
+        lambda o: o.final_score, False,
     ),
 }
 
