@@ -1,0 +1,43 @@
+name: Verify Phase 1 Decision Engine V2 (temporary, evidence-only)
+
+# Real, authenticated WebKit (Safari engine) + iPhone-viewport browser
+# check against the live production frontend/backend using the real
+# OWNER account. Makes no application-code changes. Deleted in a
+# follow-up commit once its evidence is captured.
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Tadawul symbol to verify decision-v2 against"
+        required: false
+        default: "2222"
+
+jobs:
+  verify:
+    name: WebKit/mobile verification against real production
+    runs-on: ubuntu-latest
+    env:
+      FRONTEND_URL: https://frontend-production-c3de.up.railway.app
+      BACKEND_URL: https://backend-production-7cca.up.railway.app
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      VERIFY_SYMBOL: ${{ github.event.inputs.symbol }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright + WebKit
+        working-directory: frontend
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps webkit
+
+      - name: Run verification script
+        working-directory: frontend
+        run: node scripts/verify_phase1_decision_v2.js
