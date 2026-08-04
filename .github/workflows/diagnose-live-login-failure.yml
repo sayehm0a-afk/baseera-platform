@@ -1,0 +1,95 @@
+name: Diagnose Live Login Failure (temporary, evidence-only)
+
+# Read-only. Investigates a reported LIVE production failure (browser
+# shows the generic Arabic login error) that contradicts an earlier
+# automated pass -- gathers real evidence instead of assuming the
+# earlier pass still holds: HTML/JS cache headers (is a stale build
+# being served to a real browser?), full browser console + network
+# logs during an actual login attempt, and the exact visible error
+# text. No application code is touched.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+  RAILWAY_FRONTEND_SERVICE: frontend
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve frontend/backend public URLs
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          railway domain list --service "$RAILWAY_FRONTEND_SERVICE" --json > /tmp/frontend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend:  $BACKEND_URL"
+          echo "Frontend: $FRONTEND_URL"
+
+      - name: Fetch /login HTML and its cache headers (is a stale build servable to a real browser?)
+        env:
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+        run: |
+          echo "=== GET /login response headers ==="
+          curl -sS -D - -o /tmp/login.html --connect-timeout 10 --max-time 20 "$FRONTEND_URL/login"
+          echo
+          echo "=== First JS chunk referenced, and ITS cache headers ==="
+          CHUNK=$(grep -oE 'src="/_next/static/[^"]*\.js"' /tmp/login.html | head -1 | sed -E 's/src="//; s/"$//')
+          echo "Chunk: $CHUNK"
+          if [ -n "$CHUNK" ]; then
+            curl -sS -D - -o /tmp/chunk.js --connect-timeout 10 --max-time 20 "$FRONTEND_URL$CHUNK"
+            echo
+            echo "=== Does this chunk contain the new cross-origin CSRF hand-off code? ==="
+            grep -c "x-csrf-token" /tmp/chunk.js || echo "0 (not found in this chunk -- may be in a different chunk, checking all)"
+          fi
+          echo "=== Searching ALL referenced JS chunks for the new code marker ==="
+          FOUND=no
+          for c in $(grep -oE 'src="/_next/static/[^"]*\.js"' /tmp/login.html | sed -E 's/src="//; s/"$//' | sort -u); do
+            curl -sS --connect-timeout 10 --max-time 20 "$FRONTEND_URL$c" -o /tmp/each_chunk.js
+            if grep -q "x-csrf-token" /tmp/each_chunk.js; then
+              echo "FOUND marker in $c"
+              FOUND=yes
+            fi
+          done
+          echo "New-code marker found in any chunk: $FOUND"
+
+      - name: Install frontend dependencies + Playwright's Chromium
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Real-browser login attempt with FULL console + network capture
+        working-directory: frontend
+        env:
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+        run: node scripts/diagnose_live_login.js
+
+      - name: Upload screenshots + logs as evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-login-diagnostic-evidence
+          path: |
+            frontend/live-login-evidence/*.png
+            frontend/live-login-evidence/*.log
+          retention-days: 7
