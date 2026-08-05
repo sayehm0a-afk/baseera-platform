@@ -6,6 +6,7 @@ import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import { RecommendationBadge, type RecommendationValue } from "@/components/badges/RecommendationBadge";
 import { PriceChart, type PriceLevel } from "@/components/charts/PriceChart";
+import { DecisionTransparencyPanel } from "@/components/decision/DecisionTransparencyPanel";
 import { ExecutiveDecisionCard } from "@/components/decision/ExecutiveDecisionCard";
 import { CategoryTabs } from "@/components/patterns/CategoryTabs";
 import { EmptyState } from "@/components/patterns/EmptyState";
@@ -201,9 +202,15 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
         )}
       </div>
 
-      {/* Executive decision (Decision Engine V2, Phase 1 foundation) */}
+      {/* Executive decision (Decision Engine V2, Phase 1 foundation) --
+          plus the Phase 2E deep-dive transparency panel underneath it,
+          for every field DecisionV2 already computes that the
+          immediate-answer card above deliberately keeps out of the way. */}
       {decisionV2.status === "ready" ? (
-        <ExecutiveDecisionCard decision={decisionV2.data} />
+        <>
+          <ExecutiveDecisionCard decision={decisionV2.data} />
+          <DecisionTransparencyPanel decision={decisionV2.data} />
+        </>
       ) : decisionV2.status === "loading" ? (
         <LoadingScreen />
       ) : decisionV2.status === "insufficient_data" ? (
