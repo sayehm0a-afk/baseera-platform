@@ -189,4 +189,56 @@ describe("DecisionTransparencyPanel", () => {
     expect(screen.getByText("بيانات حديثة")).toBeInTheDocument();
     expect(screen.getByText("العائد إلى المخاطرة غير كافٍ")).toBeInTheDocument();
   });
+
+  it("omits the publication-gates section entirely when there are no gates", () => {
+    render(<DecisionTransparencyPanel decision={buildDecision({ gates: [] })} />);
+    expect(screen.queryByText(/بوابات النشر/)).not.toBeInTheDocument();
+  });
+
+  it("renders a dash for every sub-score when all are null, without crashing", () => {
+    render(
+      <DecisionTransparencyPanel
+        decision={buildDecision({
+          sub_scores: {
+            trend_score: null,
+            momentum_score: null,
+            volume_score: null,
+            liquidity_score: null,
+            volatility_score: null,
+            risk_reward_score: null,
+            market_context_score: null,
+            data_quality_score: 0,
+          },
+        })}
+      />
+    );
+    expect(screen.getByText("الاتجاه")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(7);
+  });
+
+  it("degrades sensibly for a REJECT decision with no opportunity at all", () => {
+    /** 'no opportunity' is a valid, real result -- every list-backed
+     * section (confirmation conditions, watch-next-session) must be
+     * omitted rather than rendered empty, and the panel must not
+     * crash when why_not_stronger_ar explains a hard rejection. */
+    render(
+      <DecisionTransparencyPanel
+        decision={buildDecision({
+          decision: "REJECT",
+          decision_label_ar: "مرفوض",
+          entry_status: "NOT_SUITABLE",
+          entry_status_label_ar: "غير مناسب",
+          why_not_stronger_ar: "تم الرفض بسبب فشل بوابة نشر إلزامية: عدم كفاية بيانات السيولة.",
+          entry_confirmation_conditions_ar: [],
+          watch_next_session_ar: [],
+          invalidation_conditions: [],
+        })}
+      />
+    );
+    expect(
+      screen.getByText("تم الرفض بسبب فشل بوابة نشر إلزامية: عدم كفاية بيانات السيولة.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText("شروط تأكيد الدخول")).not.toBeInTheDocument();
+    expect(screen.queryByText("ما يجب مراقبته في الجلسة القادمة")).not.toBeInTheDocument();
+  });
 });

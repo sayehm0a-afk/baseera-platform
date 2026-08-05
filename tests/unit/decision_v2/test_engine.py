@@ -199,6 +199,21 @@ class TestConfidenceNeverEscapesBounds:
         result = _decide(ctx, _buy_decision(), market_is_open=market_is_open, market_status="OPEN" if market_is_open else "CLOSED")
         assert 0.0 <= result.confidence_score <= 100.0
 
+    def test_confidence_stays_within_bounds_under_multiple_stacked_caps(self):
+        """Phase 2I: closed market + a very stale quote + synthetic
+        (fabricated) data all cap confidence independently -- stacked
+        together, the combined penalty must still clamp into [0, 100],
+        never go negative or NaN, no matter how many caps compound."""
+        ctx = _context(fundamental=None)
+        old_ts = datetime.now(timezone.utc) - timedelta(hours=72)
+        result = _decide(
+            ctx, _buy_decision(),
+            market_status="CLOSED", market_is_open=False,
+            quote_timestamp=old_ts, is_synthetic=True,
+        )
+        assert 0.0 <= result.confidence_score <= 100.0
+        assert result.confidence_score == result.confidence_score  # not NaN
+
 
 class TestPhase2ACanonicalFields:
     """Phase 2A: the canonical stock-intelligence extension fields --

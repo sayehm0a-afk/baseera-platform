@@ -216,4 +216,21 @@ describe("PriceChart", () => {
     expect(chart.removeSeries).toHaveBeenCalledTimes(1);
     expect(chart.lineSeriesCreated).toHaveLength(3);
   });
+
+  it("still draws a (empty) line series when an overlay's points array is empty, without crashing", () => {
+    /** Phase 2I: a real indicator can be entirely undefined over the
+     * whole window (e.g. vwap_20 with all-zero volume) -- the backend
+     * then sends an empty points array rather than omitting the key.
+     * The chart must render that as a real, present-but-empty series,
+     * not silently drop the overlay or throw. */
+    render(
+      <PriceChart
+        bars={BARS}
+        movingAverages={[{ name: "vwap_20", label: "VWAP (20)", color: "#8A63D2", points: [] }]}
+      />
+    );
+    const chart = chartsCreated[0];
+    expect(chart.lineSeriesCreated).toHaveLength(1);
+    expect(chart.lineSeriesCreated[0].setData).toHaveBeenCalledWith([]);
+  });
 });

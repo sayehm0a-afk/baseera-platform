@@ -12,9 +12,15 @@ from sqlalchemy.orm import Session
 
 import pytest
 
+from src.analysis.recommendation.types import Recommendation
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
-from src.domain.models import DecisionV2Snapshot, FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
+from src.domain.models import (
+    DecisionV2Snapshot, FundamentalSnapshot, MarketScanStatus, PeriodType, PriceBar, Stock, Timeframe,
+)
 from src.market_data.providers.market_data_provider import IMarketDataProvider, ProviderHealth
+from src.market_intelligence.market_status import MarketSessionStatus, MarketStatusInfo
+from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
+from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
 
 
 @pytest.fixture(autouse=True)
@@ -248,3 +254,139 @@ def test_decision_v2_response_never_exposes_credentials(client, db_session):
     body_text = response.text.lower()
     assert "sahmk_api_key" not in body_text
     assert "shmk_" not in body_text
+
+
+# --- Phase 2I: end-to-end market-risk coverage (Phase 2C's fields were
+# previously only unit-tested against a hand-built MarketBreadthSummary
+# -- these seed a real MarketScanRun + SymbolIntelligenceRecord rows and
+# hit the route itself). ------------------------------------------------
+
+
+async def _seed_real_breadth(db_session: Session, *, buy_count: int, sell_count: int, confidence: float) -> None:
+    """Seeds `buy_count` real BUY outcomes and `sell_count` real SELL
+    outcomes into a completed MarketScanRun, via the same repository
+    methods a real scan run uses -- not a hand-built MarketBreadthSummary."""
+    repo = MarketIntelligenceRepository()
+    total = buy_count + sell_count
+    symbols = [f"90{i:02d}" for i in range(total)]
+    for symbol in symbols:
+        db_session.add(Stock(symbol=symbol, name_en=f"Stock {symbol}"))
+    db_session.commit()
+
+    run = repo.create_scan_run(db_session, symbols_requested=total)
+    outcomes = [
+        make_outcome(
+            symbol=symbol,
+            decision=make_decision(symbol=symbol, recommendation=Recommendation.BUY, confidence=confidence),
+        )
+        for symbol in symbols[:buy_count]
+    ] + [
+        make_outcome(
+            symbol=symbol,
+            decision=make_decision(symbol=symbol, recommendation=Recommendation.SELL, confidence=confidence),
+        )
+        for symbol in symbols[buy_count:]
+    ]
+    await repo.save_symbol_records(db_session, run.id, outcomes)
+    repo.finish_run(
+        db_session, run.id, MarketScanStatus.SUCCESS,
+        symbols_succeeded=total, symbols_skipped=0, symbols_failed=0,
+    )
+
+
+def _open_market_status() -> MarketStatusInfo:
+    """A fixed, always-OPEN MarketStatusInfo -- these tests assert on
+    the LIVE breadth-classification path, which must not depend on
+    whatever the real wall-clock happens to be when CI runs."""
+    return MarketStatusInfo(
+        status=MarketSessionStatus.OPEN,
+        label_ar="السوق مفتوح",
+        is_trading_day=True,
+        server_time_riyadh=datetime(2026, 1, 4, 12, 0, tzinfo=timezone.utc),
+        seconds_until_next_open=0.0,
+        seconds_until_close=3600.0,
+        last_completed_session_date=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_decision_v2_includes_live_market_risk_fields_from_a_real_scan_run(client, db_session, monkeypatch):
+    """Phase 2C E2E: market_risk_* fields must come from a real,
+    persisted scan run read via get_market_breadth(), not just a
+    hand-built MarketBreadthSummary (see test_market_risk.py)."""
+    monkeypatch.setattr("src.api.routes.stocks.get_market_status", _open_market_status)
+    await _seed_real_breadth(db_session, buy_count=18, sell_count=2, confidence=80.0)  # STRONG_ENTRY
+
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["market_risk_state"] == "STRONG_ENTRY"
+    assert body["market_risk_is_live"] is True
+    assert body["market_risk_entry_permitted"] is True
+    assert body["market_breadth_buy_count"] == 18
+    assert body["market_breadth_sell_count"] == 2
+    assert body["market_breadth_symbols_scanned"] == 20
+    assert body["market_risk_basis_ar"]
+
+
+@pytest.mark.asyncio
+async def test_decision_v2_market_risk_reports_last_session_when_market_is_closed(client, db_session, monkeypatch):
+    """Phase 2C E2E: when the market is closed, the real last completed
+    session's breadth-derived classification must still surface, marked
+    non-live -- never presented as a live read."""
+    await _seed_real_breadth(db_session, buy_count=3, sell_count=17, confidence=80.0)  # DEFENSIVE_EXIT bias
+
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    closed_status = MarketStatusInfo(
+        status=MarketSessionStatus.WEEKEND,
+        label_ar="عطلة أسبوعية",
+        is_trading_day=False,
+        server_time_riyadh=datetime(2026, 1, 3, 12, 0, tzinfo=timezone.utc),
+        seconds_until_next_open=3600.0,
+        seconds_until_close=None,
+        last_completed_session_date=None,
+    )
+    monkeypatch.setattr("src.api.routes.stocks.get_market_status", lambda: closed_status)
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["market_risk_state"] == "MARKET_CLOSED"
+    assert body["market_risk_is_live"] is False
+    assert body["market_breadth_buy_count"] == 3
+    assert body["market_breadth_sell_count"] == 17
+    assert "الجلسة السابقة" in body["market_risk_basis_ar"]
+
+
+def test_decision_v2_degrades_gracefully_when_breadth_read_raises(client, db_session, monkeypatch):
+    """Phase 2C: a breadth-read failure (transient DB error, corrupted
+    run row, etc.) must never turn into a 500 -- _latest_market_breadth
+    swallows it and the route falls back to INSUFFICIENT_DATA."""
+    import src.api.routes.stocks as stocks_module
+
+    monkeypatch.setattr("src.api.routes.stocks.get_market_status", _open_market_status)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("simulated breadth-read failure")
+
+    monkeypatch.setattr(stocks_module._market_repository, "get_latest_successful_run", _raise)
+
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["market_risk_state"] == "INSUFFICIENT_DATA"
+    assert body["market_risk_entry_permitted"] is True

@@ -446,6 +446,38 @@ async def test_get_market_breadth_aggregates_real_symbol_records(session, repo):
     assert breadth.average_confidence == pytest.approx(70.0)
 
 
+@pytest.mark.asyncio
+async def test_get_market_breadth_all_hold_produces_zero_buy_and_sell_counts(session, repo):
+    """Phase 2I adversarial case: a real scan run where every symbol
+    came back HOLD (no BUY/SELL signal at all) is a legitimate result
+    -- the aggregate must report buy_count=0/sell_count=0 rather than
+    dropping the run or erroring, and classify_market_risk (a pure
+    function, tested with hand-built fixtures elsewhere) must accept
+    this real zero/zero breadth and resolve the undefined ratio to
+    NEUTRAL rather than raising or dividing by zero."""
+    from src.analysis.decision_v2.market_risk import MarketRiskState, classify_market_risk
+
+    symbols = [f"70{i:02d}" for i in range(20)]  # >= the 15-symbol classification floor
+    for symbol in symbols:
+        _seed_stock(session, symbol)
+    run = repo.create_scan_run(session, symbols_requested=len(symbols))
+    outcomes = [
+        make_outcome(symbol=s, decision=make_decision(symbol=s, recommendation=Recommendation.HOLD, confidence=55.0))
+        for s in symbols
+    ]
+    await repo.save_symbol_records(session, run.id, outcomes)
+
+    breadth = repo.get_market_breadth(session, run.id)
+
+    assert breadth is not None
+    assert breadth.buy_count == 0
+    assert breadth.sell_count == 0
+    assert breadth.symbols_scanned == 20
+
+    assessment = classify_market_risk(market_is_open=True, breadth=breadth)
+    assert assessment.state == MarketRiskState.NEUTRAL
+
+
 def test_get_market_breadth_returns_none_for_a_run_with_no_records(session, repo):
     run = repo.create_scan_run(session, symbols_requested=1)
     assert repo.get_market_breadth(session, run.id) is None

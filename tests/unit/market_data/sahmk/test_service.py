@@ -272,6 +272,45 @@ async def test_get_company_profile_treats_arabic_script_in_name_field_as_name_ar
 
 
 @pytest.mark.asyncio
+async def test_get_company_profile_whitespace_only_arabic_name_key_falls_through_to_script_detection():
+    """Phase 2I adversarial case: an explicit name_ar key present but
+    blank/whitespace must not win over real Arabic text sitting in the
+    name field -- .strip() rejects it and the script-detection fallback
+    takes over instead of returning the blank string."""
+    client = AsyncMock()
+    client.get_company_profile.return_value = {"name": "أرامكو", "name_ar": "   "}
+    service = _service(client)
+    profile = await service.get_company_profile("2222")
+    assert profile.name_ar == "أرامكو"
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_non_string_arabic_name_key_degrades_gracefully():
+    """Phase 2I adversarial case: a malformed response where name_ar is
+    a number/list/dict instead of a string must not raise -- it should
+    be ignored just like a missing key."""
+    client = AsyncMock()
+    client.get_company_profile.return_value = {"name": "Saudi Aramco", "name_ar": 12345}
+    service = _service(client)
+    profile = await service.get_company_profile("2222")
+    assert profile.name_ar is None
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_mixed_script_name_field_is_returned_as_is():
+    """Phase 2I adversarial case: locks down current, documented
+    behavior for a mixed Latin/Arabic 'name' value -- any single Arabic
+    codepoint is enough to treat the whole string as the Arabic name,
+    since this module never attempts to split or translate text, only
+    to recognize whether real Arabic script is present at all."""
+    client = AsyncMock()
+    client.get_company_profile.return_value = {"name": "Saudi أرامكو Aramco"}
+    service = _service(client)
+    profile = await service.get_company_profile("2222")
+    assert profile.name_ar == "Saudi أرامكو Aramco"
+
+
+@pytest.mark.asyncio
 async def test_get_company_profile_tolerates_missing_fields():
     client = AsyncMock()
     client.get_company_profile.return_value = {}

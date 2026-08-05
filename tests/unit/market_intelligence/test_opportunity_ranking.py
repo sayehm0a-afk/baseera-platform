@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from src.market_intelligence.opportunity_ranking import (
     GATE_EXCLUSION_NOTE_AR,
     OPPORTUNITY_CATEGORIES,
@@ -6,7 +8,7 @@ from src.market_intelligence.opportunity_ranking import (
     curate_opportunity_rankings,
 )
 from src.market_intelligence.ranking import RankingEngine
-from src.market_intelligence.types import RankingCategory
+from src.market_intelligence.types import RankingCategory, RankingList
 from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
 
 
@@ -51,6 +53,26 @@ def test_curate_skips_missing_categories_when_given_a_filtered_dict():
     curated = curate_opportunity_rankings(filtered)
 
     assert [c.category for c in curated] == [RankingCategory.TOP_BUY]
+
+
+def test_curate_keeps_categories_with_zero_publishable_entries():
+    """Phase 2I: a scan where every symbol was gate-rejected (or a scan
+    with zero symbols) must still produce all 8 categories with an
+    empty entries list -- 'no opportunity' is a valid, real result,
+    never a reason to drop or error the category."""
+    empty_rankings = {
+        category: RankingList(category=category, entries=[], generated_at=datetime.now(timezone.utc))
+        for category in OPPORTUNITY_CATEGORIES
+    }
+
+    curated = curate_opportunity_rankings(empty_rankings)
+
+    assert [c.category for c in curated] == OPPORTUNITY_CATEGORIES
+    for entry in curated:
+        assert entry.ranking_list.entries == []
+        assert entry.gate_exclusion_note_ar == GATE_EXCLUSION_NOTE_AR
+        assert entry.label_ar
+        assert entry.scoring_factor_ar
 
 
 def test_diagnostic_only_categories_are_not_among_the_eight():

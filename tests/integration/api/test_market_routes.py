@@ -276,6 +276,30 @@ def test_opportunities_returns_the_eight_curated_categories_with_arabic_labels(c
         assert "generated_at" in category
 
 
+def test_opportunities_all_categories_present_with_empty_entries_when_nothing_is_publishable(client, session_factory):
+    """Phase 2I: a scan where the only requested symbol has no price
+    history at all (insufficient data -> gate-rejected, zero
+    SymbolIntelligenceRecord rows saved) must still return all 8
+    categories, each with an empty entries list -- 'no opportunity' is
+    a valid, real result, never a reason to drop a category or 500."""
+    session = session_factory()
+    session.add(Stock(symbol="9999", name_en="No Data Co", sector="Energy"))
+    session.commit()
+    session.close()
+
+    run_id = client.post("/api/v1/market/scan", json={"symbols": ["9999"]}).json()["id"]
+    assert client.get(f"/api/v1/market/scan/{run_id}").json()["status"] == "SUCCESS"
+
+    response = client.get("/api/v1/market/opportunities")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scan_run_id"] == run_id
+    assert len(body["categories"]) == 8
+    for category in body["categories"]:
+        assert category["entries"] == []
+        assert category["gate_exclusion_note_ar"]
+
+
 def test_rankings_category_filter(client, session_factory):
     _seed_stock_with_bars(session_factory, "2222")
     run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
