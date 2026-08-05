@@ -5,7 +5,7 @@ import { AnalystReportView } from "@/components/ai/AnalystReportView";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import { RecommendationBadge, type RecommendationValue } from "@/components/badges/RecommendationBadge";
-import { PriceChart, type PriceLevel } from "@/components/charts/PriceChart";
+import { PriceChart, type MovingAverageOverlay, type PriceLevel } from "@/components/charts/PriceChart";
 import { DecisionTransparencyPanel } from "@/components/decision/DecisionTransparencyPanel";
 import { ExecutiveDecisionCard } from "@/components/decision/ExecutiveDecisionCard";
 import { CategoryTabs } from "@/components/patterns/CategoryTabs";
@@ -86,6 +86,18 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
       if (d.target_1 != null) levels.push({ price: d.target_1, label: "الهدف الأول", color: "#1FA97A" });
       if (d.target_2 != null) levels.push({ price: d.target_2, label: "الهدف الثاني", color: "#1FA97A" });
       if (d.target_3 != null) levels.push({ price: d.target_3, label: "الهدف الثالث", color: "#1FA97A" });
+      // Phase 2F: breakout/breakdown/invalidation are already computed
+      // by Decision Engine V2 (Phase 2A) but were never drawn on the
+      // chart -- real levels, not derived here.
+      if (d.breakout_level != null) {
+        levels.push({ price: d.breakout_level, label: "مستوى الاختراق", color: "#8B5CF6" });
+      }
+      if (d.breakdown_level != null) {
+        levels.push({ price: d.breakdown_level, label: "مستوى الانكسار", color: "#8B5CF6" });
+      }
+      if (d.invalidation_price != null && d.invalidation_price !== d.stop_loss) {
+        levels.push({ price: d.invalidation_price, label: "سعر إلغاء القرار", color: "#B98900" });
+      }
     } else if (decision.status === "ready") {
       if (decision.data.target_price != null) {
         levels.push({ price: decision.data.target_price, label: "الهدف", color: "#1FA97A" });
@@ -128,6 +140,26 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
 
     return levels;
   }, [decision, decisionV2, quote, technical]);
+
+  // Phase 2F: real per-bar moving-average overlays (GET /technical's
+  // `moving_averages`) -- absent entirely when the indicator wasn't
+  // computed, never interpolated or fabricated here.
+  const movingAverages = useMemo<MovingAverageOverlay[]>(() => {
+    if (technical.status !== "ready") return [];
+    const overlays: { name: string; label: string; color: string }[] = [
+      { name: "sma_20", label: "المتوسط المتحرك البسيط (20)", color: "#3E8ED0" },
+      { name: "ema_20", label: "المتوسط المتحرك الأسي (20)", color: "#C9A24B" },
+      { name: "vwap_20", label: "متوسط السعر المرجّح بالحجم (20)", color: "#8B5CF6" },
+    ];
+    return overlays
+      .map(({ name, label, color }) => ({
+        name,
+        label,
+        color,
+        points: technical.data.moving_averages[name] ?? [],
+      }))
+      .filter((overlay) => overlay.points.length > 0);
+  }, [technical]);
 
   if (stock.status === "loading" || quote.status === "loading") {
     return <LoadingScreen />;
@@ -236,7 +268,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           history.data.bars.length === 0 ? (
             <EmptyState title="لا تتوفر بيانات تاريخية بعد لهذا السهم" />
           ) : (
-            <PriceChart bars={history.data.bars} levels={priceLevels} />
+            <PriceChart bars={history.data.bars} levels={priceLevels} movingAverages={movingAverages} />
           )
         ) : null}
       </div>

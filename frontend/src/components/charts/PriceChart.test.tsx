@@ -15,12 +15,14 @@ import { afterEach } from "vitest";
 const { createChartMock, chartsCreated } = vi.hoisted(() => {
   const chartsCreated: Array<{
     addSeries: ReturnType<typeof vi.fn>;
+    removeSeries: ReturnType<typeof vi.fn>;
     panes: ReturnType<typeof vi.fn>;
     timeScale: ReturnType<typeof vi.fn>;
     remove: ReturnType<typeof vi.fn>;
     candleSeries: ReturnType<typeof makeSeries>;
     volumeSeries: ReturnType<typeof makeSeries>;
     volumePane: { setHeight: ReturnType<typeof vi.fn>; getSeries: ReturnType<typeof vi.fn> };
+    lineSeriesCreated: ReturnType<typeof makeSeries>[];
   }> = [];
 
   function makeSeries(seriesType: string) {
@@ -36,15 +38,26 @@ const { createChartMock, chartsCreated } = vi.hoisted(() => {
     const candleSeries = makeSeries("Candlestick");
     const volumeSeries = makeSeries("Histogram");
     const volumePane = { setHeight: vi.fn(), getSeries: vi.fn(() => [volumeSeries]) };
+    const lineSeriesCreated: ReturnType<typeof makeSeries>[] = [];
 
     const chart = {
-      addSeries: vi.fn((marker: unknown) => (marker === "CandlestickSeriesMarker" ? candleSeries : volumeSeries)),
+      addSeries: vi.fn((marker: unknown) => {
+        if (marker === "CandlestickSeriesMarker") return candleSeries;
+        if (marker === "LineSeriesMarker") {
+          const lineSeries = makeSeries("Line");
+          lineSeriesCreated.push(lineSeries);
+          return lineSeries;
+        }
+        return volumeSeries;
+      }),
+      removeSeries: vi.fn(),
       panes: vi.fn(() => [{}, volumePane]),
       timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
       remove: vi.fn(),
       candleSeries,
       volumeSeries,
       volumePane,
+      lineSeriesCreated,
     };
     chartsCreated.push(chart);
     return chart;
@@ -57,10 +70,11 @@ vi.mock("lightweight-charts", () => ({
   createChart: createChartMock,
   CandlestickSeries: "CandlestickSeriesMarker",
   HistogramSeries: "HistogramSeriesMarker",
+  LineSeries: "LineSeriesMarker",
 }));
 
 import { PriceChart } from "./PriceChart";
-import type { HistoricalBar } from "@/lib/api/stocks-types";
+import type { HistoricalBar, MovingAveragePoint } from "@/lib/api/stocks-types";
 
 afterEach(() => {
   cleanup();
@@ -151,5 +165,55 @@ describe("PriceChart", () => {
     const chart = chartsCreated[0];
     unmount();
     expect(chart.remove).toHaveBeenCalledTimes(1);
+  });
+
+  const SMA_POINTS: MovingAveragePoint[] = [
+    { timestamp: "2026-08-03T00:00:00Z", value: 26.8 },
+    { timestamp: "2026-08-04T00:00:00Z", value: 27.0 },
+  ];
+
+  it("draws one line series per moving-average overlay, with the caller's own label/color", () => {
+    render(
+      <PriceChart
+        bars={BARS}
+        movingAverages={[{ name: "sma_20", label: "المتوسط المتحرك البسيط (20)", color: "#3E8ED0", points: SMA_POINTS }]}
+      />
+    );
+    const chart = chartsCreated[0];
+    expect(chart.lineSeriesCreated).toHaveLength(1);
+    expect(chart.addSeries).toHaveBeenCalledWith(
+      "LineSeriesMarker",
+      expect.objectContaining({ color: "#3E8ED0", title: "المتوسط المتحرك البسيط (20)" })
+    );
+    expect(chart.lineSeriesCreated[0].setData).toHaveBeenCalledWith([
+      { time: expect.any(Number), value: 26.8 },
+      { time: expect.any(Number), value: 27.0 },
+    ]);
+  });
+
+  it("draws no line series when no moving averages are provided", () => {
+    render(<PriceChart bars={BARS} />);
+    const chart = chartsCreated[0];
+    expect(chart.lineSeriesCreated).toHaveLength(0);
+  });
+
+  it("removes the old line series when the movingAverages prop changes", () => {
+    const { rerender } = render(
+      <PriceChart bars={BARS} movingAverages={[{ name: "sma_20", label: "SMA", color: "#3E8ED0", points: SMA_POINTS }]} />
+    );
+    const chart = chartsCreated[0];
+    expect(chart.lineSeriesCreated).toHaveLength(1);
+
+    rerender(
+      <PriceChart
+        bars={BARS}
+        movingAverages={[
+          { name: "sma_20", label: "SMA", color: "#3E8ED0", points: SMA_POINTS },
+          { name: "ema_20", label: "EMA", color: "#C9A24B", points: SMA_POINTS },
+        ]}
+      />
+    );
+    expect(chart.removeSeries).toHaveBeenCalledTimes(1);
+    expect(chart.lineSeriesCreated).toHaveLength(3);
   });
 });

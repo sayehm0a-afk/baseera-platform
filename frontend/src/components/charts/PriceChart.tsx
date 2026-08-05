@@ -5,14 +5,47 @@ import {
   CandlestickSeries,
   createChart,
   HistogramSeries,
+  LineSeries,
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { HistoricalBar } from "@/lib/api/stocks-types";
+import type { HistoricalBar, MovingAveragePoint } from "@/lib/api/stocks-types";
 
 export interface PriceLevel {
   price: number;
+  label: string;
+  color: string;
+}
+
+export interface MovingAverageOverlay {
+  /** Indicator name from GET /technical's real `moving_averages` map
+   * (e.g. "sma_20", "ema_20", "vwap_20") -- used as the React key and
+   * line-series id, never re-derived or renamed. */
+  name: string;
+  label: string;
+  color: string;
+  points: MovingAveragePoint[];
+}
+
+/**
+ * Phase 2F deferred extension point -- chart-pattern detection (head &
+ * shoulders, double top/bottom, flags, etc.) is explicitly NOT
+ * implemented anywhere in this codebase: no indicator computes a
+ * pattern match against price geometry today (see
+ * src/analysis/types.py's `candlestick_patterns` indicator, which
+ * detects single/multi-candle Japanese candlestick patterns only, not
+ * multi-bar chart geometry). This type and the unused `patterns` prop
+ * below exist so a future real pattern-detection engine has a defined
+ * shape to plug into -- `PriceChart` will draw whatever real,
+ * timestamped annotations it receives, exactly like `levels` and
+ * `movingAverages` already do. Passing a fabricated pattern here would
+ * violate this codebase's non-fabrication rule, so nothing populates
+ * this prop yet.
+ */
+export interface PatternAnnotation {
+  /** Bar timestamps (ISO 8601) the pattern spans, in chronological order. */
+  timestamps: string[];
   label: string;
   color: string;
 }
@@ -24,6 +57,14 @@ interface PriceChartProps {
    * stock-detail page requires. Never invented here: the caller
    * (StockDetailClient) passes only what /decision actually returned. */
   levels?: PriceLevel[];
+  /** Phase 2F: real per-bar moving-average series (GET /technical's
+   * `moving_averages`), drawn as line overlays on the same price axis
+   * as the candlesticks. */
+  movingAverages?: MovingAverageOverlay[];
+  /** Deferred, see PatternAnnotation's own docstring -- always empty
+   * today; kept as a prop (not removed) so the extension point is
+   * documented in the component's real signature, not just prose. */
+  patterns?: PatternAnnotation[];
   className?: string;
 }
 
@@ -44,7 +85,7 @@ interface PriceChartProps {
  * (`.bsr-numeric`) regardless of page direction -- only the
  * surrounding labels/legend are RTL Arabic.
  */
-export function PriceChart({ bars, levels, className }: PriceChartProps) {
+export function PriceChart({ bars, levels, movingAverages, className }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -155,6 +196,32 @@ export function PriceChart({ bars, levels, className }: PriceChartProps) {
       priceLines.forEach((line) => candleSeries.removePriceLine(line));
     };
   }, [levels]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const lineSeriesList = (movingAverages ?? []).map((overlay) => {
+      const series = chart.addSeries(LineSeries, {
+        color: overlay.color,
+        lineWidth: 1,
+        title: overlay.label,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      series.setData(
+        overlay.points.map((point) => ({
+          time: (new Date(point.timestamp).getTime() / 1000) as UTCTimestamp,
+          value: point.value,
+        }))
+      );
+      return series;
+    });
+
+    return () => {
+      lineSeriesList.forEach((series) => chart.removeSeries(series));
+    };
+  }, [movingAverages]);
 
   return (
     <div
