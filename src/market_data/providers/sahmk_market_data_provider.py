@@ -155,6 +155,7 @@ class SahmkMarketDataProvider(IMarketDataProvider):
             {
                 "symbol": c.symbol,
                 "name": c.name,
+                "name_ar": c.name_ar,
                 "sector": c.sector,
                 "industry": c.industry,
                 "exchange": c.exchange,
@@ -174,6 +175,7 @@ class SahmkMarketDataProvider(IMarketDataProvider):
         return {
             "symbol": profile.symbol,
             "name": profile.name,
+            "name_ar": profile.name_ar,
             "sector": profile.sector,
             "industry": profile.industry,
             "exchange": profile.exchange,

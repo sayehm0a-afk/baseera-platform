@@ -59,6 +59,45 @@ async def test_refreshes_name_and_sector_via_company_profile(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_refreshes_name_ar_via_company_profile(session_factory):
+    """Phase 2H: name_ar was previously never written by ingestion at
+    all (a structural gap affecting every symbol, including 2222) --
+    once the provider supplies a real Arabic name, _apply_entry must
+    persist it."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_company_profile = AsyncMock(
+        return_value={"symbol": "2222", "name": "Saudi Aramco", "name_ar": "أرامكو السعودية"}
+    )
+
+    result = await sync_symbols(["2222"], provider, session_factory)
+    assert result.rows_upserted == 1
+
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="2222").one()
+    assert stock.name_ar == "أرامكو السعودية"
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_name_ar_leaves_it_null_rather_than_fabricating(session_factory):
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_company_profile = AsyncMock(
+        return_value={"symbol": "2222", "name": "Saudi Aramco"}  # no name_ar key at all
+    )
+
+    await sync_symbols(["2222"], provider, session_factory)
+
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="2222").one()
+    assert stock.name_ar is None
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_refreshes_industry_and_exchange_via_company_profile(session_factory):
     provider = AsyncMock()
     provider.authenticate = AsyncMock(return_value=True)

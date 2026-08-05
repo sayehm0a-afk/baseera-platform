@@ -240,11 +240,35 @@ async def test_get_company_profile_parses_known_field_names():
     assert profile == SahmkCompanyProfile(
         symbol="2222",
         name="Saudi Aramco",
+        name_ar=None,
         sector="Energy",
         industry="Oil & Gas",
         exchange="Tadawul",
         raw={"name": "Saudi Aramco", "sector": "Energy", "industry": "Oil & Gas", "exchange": "Tadawul"},
     )
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_reads_explicit_arabic_name_key():
+    client = AsyncMock()
+    client.get_company_profile.return_value = {"name": "Saudi Aramco", "name_ar": "أرامكو السعودية"}
+    service = _service(client)
+    profile = await service.get_company_profile("2222")
+    assert profile.name_ar == "أرامكو السعودية"
+
+
+@pytest.mark.asyncio
+async def test_get_company_profile_treats_arabic_script_in_name_field_as_name_ar():
+    """A real, observed SAHMK inconsistency: the per-symbol profile
+    endpoint has been seen returning the Arabic company name under the
+    same 'name' key the bulk directory uses for the Latin name. No
+    dedicated Arabic-name key is present here, so this text is the
+    only real signal available -- it must be used, not discarded."""
+    client = AsyncMock()
+    client.get_company_profile.return_value = {"name": "الراجحي"}
+    service = _service(client)
+    profile = await service.get_company_profile("1120")
+    assert profile.name_ar == "الراجحي"
 
 
 @pytest.mark.asyncio
@@ -254,6 +278,7 @@ async def test_get_company_profile_tolerates_missing_fields():
     service = _service(client)
     profile = await service.get_company_profile("2222")
     assert profile.name is None
+    assert profile.name_ar is None
     assert profile.sector is None
     assert profile.industry is None
     assert profile.exchange is None
