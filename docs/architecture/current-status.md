@@ -2589,3 +2589,169 @@ until Decision V2 is wired into the scan job. The Complete Stock
 Intelligence Report, Intelligent Chart, Arabic AI Analyst Assistant,
 Portfolio Intelligence, and Outcome Tracking phases are explicitly not
 started, per the user's instruction to stop after Phase 1.
+
+## Phase 2A–2I — Unified Decision Output, Market Risk, Ranking, Arabic UI, Smart Chart, Beginner Mode, Data Integrity, Testing (2026-08-05)
+
+Ten sequential sub-phases on top of Phase 1's Decision Engine V2, each
+implemented, tested, committed, merged to `main`, and CI-verified green
+before the next began.
+
+**2A — canonical `DecisionResult` extensions**
+(`src/analysis/decision_v2/{types,engine}.py`, commit `e3e3daa`, CI
+[30946840735](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30946840735)
+green): identity, trade classification, price plan, risk, targets,
+support/resistance, liquidity/accumulation, technical evidence, and
+Arabic reasoning fields added to the one canonical decision object
+every route already shares.
+
+**2B — publication gates extended to 20+ named checks**
+(`src/analysis/decision_v2/gates.py`, commit `7d4cafc`, CI
+[30948177828](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30948177828)
+green): contradiction, price-limit-proximity, stale-recommendation,
+duplicate-signal, and risk-warning gates, each with a real Arabic
+rejection reason traced to the evidence that failed it.
+
+**2C — Market Risk and Exit Warning Engine**
+(`src/analysis/decision_v2/market_risk.py`, commit `2ca6e3b`, CI
+[30949596393](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30949596393)
+green): a 9-state market-wide risk classification
+(`STRONG_ENTRY`…`DEFENSIVE_EXIT`, plus `MARKET_CLOSED`/
+`INSUFFICIENT_DATA`) derived from real scan-run breadth via one cheap
+SQL aggregate (`MarketIntelligenceRepository.get_market_breadth`,
+never a per-row load), gating new BUY-type decisions to WATCH under
+`REDUCE_POSITIONS`/`PARTIAL_EXIT`/`DEFENSIVE_EXIT` without ever
+blocking a HOLD/REDUCE/EXIT. A closed market surfaces the real last
+completed session's classification, explicitly marked `is_live: false`.
+
+**2D — Stock Ranking Engine curation layer**
+(`src/market_intelligence/opportunity_ranking.py`, commit `e58e8d6`,
+CI [30951460995](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30951460995)
+green): the frontend's real 8-category subset of the existing
+17-category `RankingEngine`, each with a transparent Arabic scoring-
+factor description and an explicit note that publication-gate-
+rejected symbols were excluded, exposed via one round trip
+(`GET /api/v1/market/opportunities`) instead of 8.
+
+**2E — Arabic Stock Intelligence Page**
+(`frontend/src/components/decision/DecisionTransparencyPanel.tsx`,
+commit `47750dc`, CI
+[30973721025](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30973721025)
+green): a 10-section deep-dive panel — rejection reasoning, entry-
+confirmation conditions, next-session watch items, trend, the 5-part
+confidence breakdown, all 8 sub-scores, extended targets, extended
+support/resistance/breakout/breakdown levels, volume detail, and every
+publication gate — rendered alongside (never replacing) the existing
+`ExecutiveDecisionCard`.
+
+**2F — Smart Chart real overlays**
+(`src/api/routes/stocks.py::_moving_average_series`,
+`frontend/src/components/charts/PriceChart.tsx`, commit `5607b77`, CI
+[30974456270](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30974456270)
+green): `GET /technical` now exposes real per-bar `sma_20`/`ema_20`/
+`vwap_20` series (previously discarded down to a single `latest()`
+value before reaching the API), drawn as line overlays; breakout/
+breakdown/invalidation price levels added to the existing entry/
+target/stop lines. A `PatternAnnotation` shape and `patterns` prop are
+defined but deliberately left unpopulated — no indicator in this
+codebase detects multi-bar chart-pattern geometry, and populating it
+with anything else would be fabrication.
+
+**2G — Beginner Experience**
+(`frontend/src/components/decision/BeginnerSummaryCard.tsx`, commit
+`08bd834`, CI
+[30974956864](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30974956864)
+green): an opt-in plain-Arabic summary answering the 8 questions a
+less-experienced trader actually asks (what to do, why, when to
+enter, how much risk, what could go wrong, how long to hold, what
+confirms it, what would change it) — every field re-selected from
+`DecisionV2`'s existing output, no new backend computation, defaulting
+off so existing behavior is unchanged.
+
+**2H — Data Integrity: real Arabic-name extraction**
+(`src/market_data/sahmk/service.py::_extract_name_ar`, commit
+`7c9a95d`, CI
+[30975952668](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30975952668)
+green): confirmed `STRICT_REAL_DATA`/`ALLOW_SYNTHETIC_DATA=false` is
+real and load-bearing through the entire production path (provider
+selection → API dependency layer → scan pre-flight gate → publication
+gate → decision_v2 gate → ranking filters), not just a naming
+convention. Root-caused the symbol-2222 `name_ar` NULL gap disclosed
+in Phase 1's own report above: it was never symbol-specific —
+`_apply_entry()` in `ingest_symbols.py` never wrote `Stock.name_ar`
+for *any* symbol, because `SahmkCompanyProfile` never had the field
+and nothing ever attempted to extract one, unlike the existing sector
+extraction. Fixed with real-data-only extraction (explicit Arabic-name
+key candidates, then Arabic-script detection in the name fields SAHMK
+itself already returns — never a fabricated or hardcoded name table),
+wired through ingestion with an audit-log line on every real
+population. **Not yet reflected for existing rows**: this fixes the
+code path going forward; `Stock.name_ar` for symbols already in the
+production database (including 2222) will only backfill once the
+scheduled symbol-sync job's next run re-fetches their profile — no
+one-off backfill script was run as part of this phase.
+
+**2I — Testing: closing genuine coverage gaps**
+(commit `1414792`/merged `c79820f`, CI
+[30977259263](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30977259263)
+green): an audit of 2A–2H's existing tests found solid per-module unit
+coverage but real gaps in true end-to-end flows, the "no opportunity
+is a valid result" case, and adversarial/malformed-data inputs. Filled
+only the genuine gaps: 3 new E2E tests seeding a real `MarketScanRun`
+and hitting `GET /decision-v2` (live breadth, `MARKET_CLOSED` last-
+session display, breadth-read-failure degradation), an all-categories-
+present-with-empty-entries case for `/opportunities`, 3 adversarial
+`name_ar` extraction cases (whitespace-only key, non-string value,
+mixed-script text), an entirely-empty moving-average series
+(`vwap_20` under all-zero volume), stacked confidence caps staying in
+bounds, a real all-HOLD scan run resolving to `NEUTRAL` breadth, and
+REJECT/no-opportunity + empty-gates + all-null-sub-scores fixtures for
+both `DecisionTransparencyPanel` and `BeginnerSummaryCard`, plus an
+empty-points-array case for `PriceChart`'s line overlays.
+
+**Combined evidence across 2A–2I**: full backend suite 3170 passed / 0
+failed (up from Phase 1's 3000), flake8 clean on every phase; full
+frontend suite 120 passed (up from Phase 1's baseline), tsc/eslint
+clean, production build succeeds on every phase. All 9 phase commits
+merged to `main` via individual cherry-picks, each with its own green
+CI run (linked above) before the next phase began.
+
+**Deployed and verified against real production** (commit `c79820f`
+on `main` — i.e. all of Phase 2A–2I — via `deploy-railway.yml`,
+dispatch [30980373838](https://github.com/sayehm0a-afk/baseera-platform/actions/runs/30980373838)
+green): `/health/ready` returned
+`{"status":"healthy","details":{"database":true,"redis":true,...}}`
+(real `SELECT 1` / `PING`); `/health/market-data` returned
+`configured_provider: sahmk`, `strict_real_data: true`,
+`synthetic_allowed: false`, `current_provider_kind: sahmk`,
+`last_connectivity_status: SUCCESS`, `last_scan_source: SAHMK_REAL`,
+`can_publish_recommendations: true`; `/health/live` returned
+`{"status":"healthy"}`; the frontend `/`, `/login`, and `/register`
+all returned `HTTP 200`. Production URLs:
+`https://frontend-production-c3de.up.railway.app` (app) and
+`https://backend-production-7cca.up.railway.app` (API).
+
+**Known limitations / deferred**: the `PatternAnnotation`/`patterns`
+extension point from 2F stays empty until a real multi-bar
+pattern-detection indicator exists (disclosed, not fabricated).
+`market_risk`'s live classification requires at least 15 scanned
+symbols in the latest run to be statistically meaningful; fewer than
+that honestly reports `INSUFFICIENT_DATA` rather than guessing. 2H's
+`name_ar` fix is code-complete and deployed but has not yet backfilled
+existing NULL rows in production (see 2H above) — a scheduled
+symbol-sync run or a one-off resync is the remaining step. Decision V2
+(and by extension its Phase 2C market-risk gating) still runs
+per-symbol on request, not as part of the scheduled market-wide scan
+that feeds `/opportunities`'s underlying `RankingEngine` — unchanged
+from the limitation Phase 1 already disclosed above. M10.14 (admin
+frontend) and M10.15 (Virtual Portfolio branding + launch checklist)
+remain pending from the earlier M10 milestone, unrelated to this
+phase sequence.
+
+**Next phase**: wire Decision V2 (with its Phase 2C market-risk gate)
+into the scheduled market-wide scan job so `/opportunities` and the
+dashboard inherit the same richer taxonomy and risk gating individual
+stock pages already have; trigger a symbol-sync resync (or wait for
+the next scheduled one) to backfill `name_ar` across the existing
+production symbol universe now that the extraction code is deployed;
+and pick up the still-pending M10.14/M10.15 admin-frontend and
+branding work.
