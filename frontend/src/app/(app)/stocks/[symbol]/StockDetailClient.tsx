@@ -6,6 +6,7 @@ import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import { RecommendationBadge, type RecommendationValue } from "@/components/badges/RecommendationBadge";
 import { PriceChart, type MovingAverageOverlay, type PriceLevel } from "@/components/charts/PriceChart";
+import { BeginnerSummaryCard } from "@/components/decision/BeginnerSummaryCard";
 import { DecisionTransparencyPanel } from "@/components/decision/DecisionTransparencyPanel";
 import { ExecutiveDecisionCard } from "@/components/decision/ExecutiveDecisionCard";
 import { CategoryTabs } from "@/components/patterns/CategoryTabs";
@@ -61,6 +62,7 @@ const INDICATOR_LABELS: Record<string, string> = {
 
 export function StockDetailClient({ symbol }: { symbol: string }) {
   const [tab, setTab] = useState<Tab>("overview");
+  const [beginnerMode, setBeginnerMode] = useState(false);
 
   const stock = useResource(symbol, getStock);
   const quote = useResource(symbol, getQuote);
@@ -237,9 +239,21 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
       {/* Executive decision (Decision Engine V2, Phase 1 foundation) --
           plus the Phase 2E deep-dive transparency panel underneath it,
           for every field DecisionV2 already computes that the
-          immediate-answer card above deliberately keeps out of the way. */}
+          immediate-answer card above deliberately keeps out of the way.
+          Phase 2G adds an opt-in beginner-mode summary alongside these,
+          never replacing them. */}
       {decisionV2.status === "ready" ? (
         <>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setBeginnerMode((prev) => !prev)}
+              className="rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-raised px-bsr-3 py-1 text-xs font-semibold text-bsr-text-secondary"
+            >
+              {beginnerMode ? "إخفاء العرض المبسّط" : "عرض مبسّط (للمبتدئين)"}
+            </button>
+          </div>
+          {beginnerMode ? <BeginnerSummaryCard decision={decisionV2.data} /> : null}
           <ExecutiveDecisionCard decision={decisionV2.data} />
           <DecisionTransparencyPanel decision={decisionV2.data} />
         </>
