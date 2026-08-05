@@ -51,7 +51,7 @@ anonymous/expired callers are newly rejected).
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
@@ -68,7 +68,7 @@ from src.analysis.fundamental.fundamental_loader import load_fundamental_snapsho
 from src.analysis.ohlcv_loader import load_price_bars
 from src.analysis.recommendation.recommendation_engine import RecommendationEngine
 from src.analysis.recommendation.types import AnalysisContext
-from src.analysis.technical_analysis_engine import TechnicalAnalysisEngine
+from src.analysis.technical_analysis_engine import TechnicalAnalysisEngine, TechnicalAnalysisResult
 from src.api.dependencies import get_market_provider
 from src.api.exceptions import (
     InsufficientDataError,
@@ -85,6 +85,7 @@ from src.api.schemas.stocks import (
     HistoricalBarOut,
     HistoryOut,
     InvestmentDecisionOut,
+    MovingAveragePointOut,
     QuoteOut,
     RecommendationOut,
     ScoreContributionOut,
@@ -264,6 +265,26 @@ def get_history(
     return HistoryOut(symbol=symbol, timeframe=Timeframe.ONE_DAY.value, bars=bars)
 
 
+# Phase 2F (Smart Chart): only the price-scale indicators (drawable on
+# the same axis as candlesticks) -- rsi_14/adx_14/atr_14/obv etc. are
+# real series too but not price-scale, so they are deliberately not
+# included here rather than mislabeled as a price overlay.
+_PRICE_SCALE_MOVING_AVERAGES = ("sma_20", "ema_20", "vwap_20")
+
+
+def _moving_average_series(result: TechnicalAnalysisResult) -> Dict[str, List[MovingAveragePointOut]]:
+    series_by_name = {}
+    for name in _PRICE_SCALE_MOVING_AVERAGES:
+        output = result.indicators.get(name)
+        if output is None:
+            continue
+        series_by_name[name] = [
+            MovingAveragePointOut(timestamp=timestamp.to_pydatetime(), value=float(value))
+            for timestamp, value in output.value.dropna().items()
+        ]
+    return series_by_name
+
+
 @router.get("/{symbol}/technical", response_model=TechnicalAnalysisOut)
 def get_technical_analysis(
     symbol: str,
@@ -284,6 +305,7 @@ def get_technical_analysis(
         bars_used=len(df),
         as_of=df.index[-1].to_pydatetime(),
         indicators=result.latest_snapshot(),
+        moving_averages=_moving_average_series(result),
     )
 
 

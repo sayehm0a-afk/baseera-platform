@@ -228,6 +228,25 @@ def test_get_technical_analysis_returns_full_indicator_set(client, db_session):
     }
 
 
+def test_get_technical_analysis_includes_a_real_moving_average_series(client, db_session):
+    # Phase 2F (Smart Chart): sma_20/ema_20/vwap_20 are exposed as full
+    # per-bar series (not just the single latest() value already in
+    # `indicators`) so the chart can draw an actual line overlay.
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=40)
+
+    response = client.get("/api/v1/stocks/2222/technical")
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["moving_averages"]) == {"sma_20", "ema_20", "vwap_20"}
+    sma_series = body["moving_averages"]["sma_20"]
+    # A 20-period SMA over 40 bars has no value for the first 19 bars --
+    # the real leading NaNs are dropped, not fabricated as zero/None.
+    assert len(sma_series) == 21
+    assert all("timestamp" in point and "value" in point for point in sma_series)
+    assert all(isinstance(point["value"], float) for point in sma_series)
+
+
 def test_get_technical_analysis_422_when_insufficient_history(client, db_session):
     stock = _make_stock(db_session)
     _add_bars(db_session, stock, count=10)  # fewer than the 35-bar minimum

@@ -42,12 +42,20 @@ export interface History {
  * src/analysis/fundamental/registry.py) can grow without a schema
  * change on either side. Consumers must read defensively (typeof
  * checks), never assume a key exists. */
+export interface MovingAveragePoint {
+  timestamp: string;
+  value: number;
+}
+
 export interface TechnicalAnalysis {
   symbol: string;
   timeframe: string;
   bars_used: number;
   as_of: string;
   indicators: Record<string, unknown>;
+  /** Phase 2F: the real per-bar series behind sma_20/ema_20/vwap_20 --
+   * `indicators` above only carries each one's single latest() value. */
+  moving_averages: Record<string, MovingAveragePoint[]>;
 }
 
 export interface FundamentalAnalysis {

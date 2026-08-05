@@ -65,12 +65,26 @@ class HistoryOut(BaseModel):
     bars: List[HistoricalBarOut]
 
 
+class MovingAveragePointOut(BaseModel):
+    timestamp: datetime
+    value: float
+
+
 class TechnicalAnalysisOut(BaseModel):
     symbol: str
     timeframe: str
     bars_used: int
     as_of: datetime
     indicators: Dict[str, Any]
+
+    # Phase 2F (Smart Chart): the real per-bar moving-average series
+    # (src.analysis.technical_analysis_engine's sma_20/ema_20/vwap_20 --
+    # already computed as a pandas Series, previously only exposed via
+    # `indicators`' single latest() value) so the chart can draw an
+    # actual line overlay instead of a single point. Leading periods
+    # before a moving average's window is full are real NaN values,
+    # dropped here rather than fabricated as zero/None.
+    moving_averages: Dict[str, List[MovingAveragePointOut]] = {}
 
 
 class FundamentalAnalysisOut(BaseModel):
