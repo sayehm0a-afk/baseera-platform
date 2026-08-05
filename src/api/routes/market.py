@@ -25,11 +25,12 @@ this file had no auth dependency at all before this).
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_market_provider
 from src.api.exceptions import DuplicateMarketScanError, MarketScanRunNotFoundError, NoMarketScanDataError
+from src.api.middleware.rate_limiting import limiter
 from src.auth.rbac import require_active_subscription
 from src.api.schemas.market_intelligence import (
     AlertOut,
@@ -402,7 +403,9 @@ def get_rankings(
 
 
 @router.get("/opportunities", response_model=OpportunitiesOut)
+@limiter.limit("30/minute")
 def get_opportunities(
+    request: Request,
     run_id: Optional[int] = Query(None),
     session: Session = Depends(get_db),
     _current_user: User = Depends(require_active_subscription()),

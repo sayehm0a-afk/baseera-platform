@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { RequireStaff } from "@/components/auth/RequireStaff";
+import { AiStar } from "@/components/ai/AiStar";
 import { AiSignalCard } from "@/components/patterns/AiSignalCard";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LiveScanPanel } from "@/components/dashboard/LiveScanPanel";
@@ -23,8 +24,22 @@ const STATUS_LABEL_CLASS: Record<string, string> = {
   PROVIDER_UNREACHABLE: "text-bsr-market-down",
 };
 
-function MarketStatusPill({ marketStatus }: { marketStatus: MarketStatus | null }) {
+function MarketStatusPill({
+  marketStatus,
+  loaded,
+}: {
+  marketStatus: MarketStatus | null;
+  loaded: boolean;
+}) {
   if (!marketStatus) {
+    if (!loaded) {
+      return (
+        <div className="flex items-center gap-bsr-2 text-sm text-bsr-text-secondary">
+          <AiStar size="sm" className="animate-[bsr-pulse_1s_ease-in-out_infinite]" />
+          <span>جارٍ التحميل...</span>
+        </div>
+      );
+    }
     return <p className="text-sm text-bsr-text-muted">تعذّر تحميل حالة السوق.</p>;
   }
   const colorClass = STATUS_LABEL_CLASS[marketStatus.status] ?? "text-bsr-text-secondary";
@@ -51,6 +66,7 @@ function MarketStatusPill({ marketStatus }: { marketStatus: MarketStatus | null 
 
 function LiveTestPageInner() {
   const [marketStatus, setMarketStatus] = useState<MarketStatus | null>(null);
+  const [marketStatusLoaded, setMarketStatusLoaded] = useState(false);
   const [topOpportunities, setTopOpportunities] = useState<RankingEntry[] | null>(null);
 
   useEffect(() => {
@@ -62,6 +78,8 @@ function LiveTestPageInner() {
         if (!cancelled) setMarketStatus(ms);
       } catch {
         if (!cancelled) setMarketStatus(null);
+      } finally {
+        if (!cancelled) setMarketStatusLoaded(true);
       }
     }
 
@@ -96,7 +114,7 @@ function LiveTestPageInner() {
 
       <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
         <h2 className="mb-bsr-2 text-base font-semibold text-bsr-text-primary">حالة السوق الآن</h2>
-        <MarketStatusPill marketStatus={marketStatus} />
+        <MarketStatusPill marketStatus={marketStatus} loaded={marketStatusLoaded} />
       </section>
 
       <section className="flex flex-col items-start gap-bsr-2 rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
@@ -116,7 +134,10 @@ function LiveTestPageInner() {
       <section>
         <h2 className="mb-bsr-4 text-base font-semibold text-bsr-text-primary">أفضل الفرص المؤهلة حالياً</h2>
         {topOpportunities == null ? (
-          <p className="text-sm text-bsr-text-muted">جارٍ التحميل...</p>
+          <div className="flex items-center gap-bsr-2 text-sm text-bsr-text-secondary">
+            <AiStar size="sm" className="animate-[bsr-pulse_1s_ease-in-out_infinite]" />
+            <span>جارٍ التحميل...</span>
+          </div>
         ) : topOpportunities.length === 0 ? (
           <EmptyState title="لا توجد فرص شراء مؤهلة حالياً" />
         ) : (
