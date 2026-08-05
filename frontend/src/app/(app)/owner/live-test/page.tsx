@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { RequireStaff } from "@/components/auth/RequireStaff";
+import { OwnerNav } from "@/components/owner/OwnerNav";
 import { AiStar } from "@/components/ai/AiStar";
 import { AiSignalCard } from "@/components/patterns/AiSignalCard";
 import { EmptyState } from "@/components/patterns/EmptyState";
@@ -106,6 +107,7 @@ function LiveTestPageInner() {
 
   return (
     <div className="flex flex-col gap-bsr-4">
+      <OwnerNav />
       <h1 className="text-lg font-semibold text-bsr-text-primary">اختبار السوق المباشر</h1>
       <p className="text-sm text-bsr-text-secondary">
         هذه الصفحة تستخدم بيانات الإنتاج الحقيقية فقط -- وليست وضع تجربة (demo). كل زر أو رقم هنا يعكس
