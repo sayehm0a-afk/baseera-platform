@@ -73,6 +73,52 @@ def _extract_sector(item: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Field names tried, in order, when looking for a company's Arabic name
+# in a /companies/ or /company/{symbol}/ entry -- UNVERIFIED, same
+# discipline as _SECTOR_KEY_CANDIDATES.
+_NAME_AR_KEY_CANDIDATES = ["name_ar", "nameAr", "company_name_ar", "arabic_name", "name_arabic"]
+
+# Unicode ranges covering Arabic script (main block, supplement, and
+# presentation forms) -- used only to recognize Arabic text SAHMK
+# itself already sent under an unlabeled "name" key, never to
+# translate or invent one.
+_ARABIC_SCRIPT_RANGES = (
+    (0x0600, 0x06FF),
+    (0x0750, 0x077F),
+    (0xFB50, 0xFDFF),
+    (0xFE70, 0xFEFF),
+)
+
+
+def _contains_arabic_script(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    return any(
+        any(lo <= ord(ch) <= hi for lo, hi in _ARABIC_SCRIPT_RANGES) for ch in value
+    )
+
+
+def _extract_name_ar(item: Dict[str, Any]) -> Optional[str]:
+    """Tries every flat Arabic-name key candidate first (mirrors
+    _extract_sector's discipline). If none matched, and one of the
+    English-name candidates ("name"/"company_name"/"name_en") happens
+    to actually carry Arabic script -- a real, observed SAHMK
+    inconsistency where the per-symbol profile endpoint has returned
+    the Arabic company name under the same key the bulk directory uses
+    for the Latin name (see docs/phase9_market_intelligence/
+    DATA_QUALITY_REPORT.md) -- that text is used as the Arabic name
+    rather than left null. Never fabricates: only ever returns text
+    SAHMK itself actually sent."""
+    flat = _first_present(item, _NAME_AR_KEY_CANDIDATES)
+    if isinstance(flat, str) and flat.strip():
+        return flat
+    for key in ("name", "company_name", "name_en"):
+        value = item.get(key)
+        if isinstance(value, str) and _contains_arabic_script(value):
+            return value
+    return None
+
+
 @dataclass
 class _DirectoryDiagnostics:
     """Real, evidence-based record of what the last get_company_directory()
@@ -88,6 +134,7 @@ class _DirectoryDiagnostics:
     first_page_keys: List[str] = field(default_factory=list)
     first_item_keys: List[str] = field(default_factory=list)
     sector_populated_count: int = 0
+    name_ar_populated_count: int = 0
 
 
 def _classify_universe(
@@ -299,6 +346,7 @@ class SahmkMarketDataService:
             return SahmkCompanyProfile(
                 symbol=symbol,
                 name=_first_present(data, ["name", "company_name", "name_en"]),
+                name_ar=_extract_name_ar(data),
                 sector=_first_present(data, ["sector", "sector_name"]),
                 industry=_first_present(data, ["industry", "industry_name", "sub_sector", "subsector"]),
                 exchange=_first_present(data, ["exchange", "market", "exchange_name"]),
@@ -368,6 +416,7 @@ class SahmkMarketDataService:
                         SahmkCompanyProfile(
                             symbol=symbol,
                             name=_first_present(item, ["name", "company_name", "name_en"]),
+                            name_ar=_extract_name_ar(item),
                             sector=_extract_sector(item),
                             industry=_first_present(
                                 item, ["industry", "industry_name", "sub_sector", "subsector"]
@@ -406,6 +455,7 @@ class SahmkMarketDataService:
                 fetched=len(result),
             )
             sector_populated = sum(1 for c in result if c.sector)
+            name_ar_populated = sum(1 for c in result if c.name_ar)
             diagnostics = _DirectoryDiagnostics(
                 pages_fetched=pages_fetched,
                 total_fetched=len(result),
@@ -415,14 +465,17 @@ class SahmkMarketDataService:
                 first_page_keys=first_page_keys,
                 first_item_keys=first_item_keys,
                 sector_populated_count=sector_populated,
+                name_ar_populated_count=name_ar_populated,
             )
             self.last_directory_diagnostics = diagnostics
             logger.info(
                 "SAHMK company directory: %d page(s), %d unique companies, "
                 "pagination_signal=%s, reported_total=%s, universe_verdict=%s, "
-                "sector_populated=%d/%d, first_page_keys=%s, first_item_keys=%s",
+                "sector_populated=%d/%d, name_ar_populated=%d/%d, "
+                "first_page_keys=%s, first_item_keys=%s",
                 pages_fetched, len(result), pagination_signal, reported_total, verdict,
-                sector_populated, len(result), first_page_keys, first_item_keys,
+                sector_populated, len(result), name_ar_populated, len(result),
+                first_page_keys, first_item_keys,
             )
             if result and sector_populated == 0:
                 logger.warning(
@@ -431,6 +484,15 @@ class SahmkMarketDataService:
                     "names (%s) matched; sector-dependent analysis will be NOT_EVALUATED "
                     "until the real field name is confirmed from this log line.",
                     len(result), first_item_keys, _SECTOR_KEY_CANDIDATES,
+                )
+            if result and name_ar_populated == 0:
+                logger.warning(
+                    "SAHMK company directory: name_ar unresolved for all %d companies -- "
+                    "raw first item's top-level keys were %s. Neither the tried Arabic-name "
+                    "key names (%s) nor Arabic script in the name/company_name/name_en fields "
+                    "matched; Arabic company names will stay NULL (frontend falls back to "
+                    "name_en) until a real Arabic-name field is confirmed from this log line.",
+                    len(result), first_item_keys, _NAME_AR_KEY_CANDIDATES,
                 )
             return result
 

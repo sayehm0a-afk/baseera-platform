@@ -25,7 +25,13 @@ def _profile(symbol: str, **raw_overrides) -> SahmkCompanyProfile:
     }
     raw.update(raw_overrides)
     return SahmkCompanyProfile(
-        symbol=symbol, name=raw.get("name_en"), sector=None, industry=None, exchange=None, raw=raw,
+        symbol=symbol,
+        name=raw.get("name_en"),
+        name_ar=None,
+        sector=None,
+        industry=None,
+        exchange=None,
+        raw=raw,
     )
 
 

@@ -30,12 +30,17 @@ logger = logging.getLogger(__name__)
 
 
 def _apply_entry(stock: Stock, entry: Dict[str, Any]) -> bool:
-    """Updates stock.name_en/sector from a directory/profile entry.
-    Returns True iff something actually changed."""
+    """Updates stock.name_en/name_ar/sector from a directory/profile
+    entry. Returns True iff something actually changed."""
     changed = False
     name = entry.get("name")
     if name and stock.name_en != name:
         stock.name_en = name
+        changed = True
+    name_ar = entry.get("name_ar")
+    if name_ar and stock.name_ar != name_ar:
+        logger.info("Populated name_ar for symbol '%s' from real SAHMK data: %r", stock.symbol, name_ar)
+        stock.name_ar = name_ar
         changed = True
     sector = entry.get("sector")
     if sector and stock.sector != sector:

@@ -66,10 +66,17 @@ class SahmkCompanyProfile:
     plausible keys are tried, and either can legitimately be None if
     SAHMK's response doesn't carry that granularity for a given
     symbol -- `raw` is kept so a caller can always inspect exactly
-    what SAHMK actually returned."""
+    what SAHMK actually returned.
+
+    `name_ar` is likewise UNVERIFIED and legitimately None: it is only
+    ever set from a real Arabic-name field or Arabic-script text SAHMK
+    itself returned (see service.py's _extract_name_ar), never
+    fabricated -- a symbol whose response carries no Arabic text
+    anywhere stays None rather than being guessed at."""
 
     symbol: str
     name: Optional[str]
+    name_ar: Optional[str]
     sector: Optional[str]
     industry: Optional[str]
     exchange: Optional[str]
