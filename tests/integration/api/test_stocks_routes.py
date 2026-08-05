@@ -247,6 +247,37 @@ def test_get_technical_analysis_includes_a_real_moving_average_series(client, db
     assert all(isinstance(point["value"], float) for point in sma_series)
 
 
+def test_get_technical_analysis_handles_a_moving_average_series_that_is_entirely_empty(client, db_session):
+    """Phase 2I: vwap_20 is undefined (NaN) over any window with zero
+    total volume -- with zero volume on every bar, the whole series
+    drops out via dropna(), leaving an empty list rather than a
+    partial one. The response must still serialize cleanly and the
+    other two series (which don't depend on volume) stay populated."""
+    stock = _make_stock(db_session)
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i in range(40):
+        db_session.add(
+            PriceBar(
+                stock_id=stock.id,
+                timeframe=Timeframe.ONE_DAY,
+                timestamp=base + timedelta(days=i),
+                open=Decimal("30.0") + i * Decimal("0.1"),
+                high=Decimal("31.0") + i * Decimal("0.1"),
+                low=Decimal("29.0") + i * Decimal("0.1"),
+                close=Decimal("30.5") + i * Decimal("0.1"),
+                volume=0,
+            )
+        )
+    db_session.commit()
+
+    response = client.get("/api/v1/stocks/2222/technical")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["moving_averages"]["vwap_20"] == []
+    assert len(body["moving_averages"]["sma_20"]) == 21
+    assert len(body["moving_averages"]["ema_20"]) > 0
+
+
 def test_get_technical_analysis_422_when_insufficient_history(client, db_session):
     stock = _make_stock(db_session)
     _add_bars(db_session, stock, count=10)  # fewer than the 35-bar minimum

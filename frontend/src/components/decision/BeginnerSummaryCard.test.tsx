@@ -174,4 +174,31 @@ describe("BeginnerSummaryCard", () => {
     render(<BeginnerSummaryCard decision={buildDecision()} />);
     expect(screen.getByText("هذا التحليل لا يُعد توصية استثمارية مضمونة ولا يضمن تحقيق ربح.")).toBeInTheDocument();
   });
+
+  it("degrades sensibly for a REJECT decision with no real opportunity", () => {
+    /** 'no opportunity' is a valid, real result for a beginner to see
+     * too -- confirmation/invalidation sections must disappear rather
+     * than render empty, and 'what could go wrong' becomes the
+     * dominant answer instead of crashing or showing stale content. */
+    render(
+      <BeginnerSummaryCard
+        decision={buildDecision({
+          decision: "REJECT",
+          decision_label_ar: "مرفوض",
+          decision_summary_ar: "مرفوض -- لا توجد فرصة حقيقية حاليًا وفق بوابات النشر.",
+          entry_status: "NOT_SUITABLE",
+          entry_status_label_ar: "غير مناسب",
+          entry_confirmation_conditions_ar: [],
+          invalidation_conditions: [],
+          negative_reasons: ["فشل بوابة العائد إلى المخاطرة."],
+          warnings: [],
+        })}
+      />
+    );
+    expect(screen.getByText("مرفوض")).toBeInTheDocument();
+    expect(screen.getByText("غير مناسب")).toBeInTheDocument();
+    expect(screen.getByText("فشل بوابة العائد إلى المخاطرة.", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("ما الذي يؤكد صحة القرار؟")).not.toBeInTheDocument();
+    expect(screen.queryByText("ما الذي يلغي هذا القرار؟")).not.toBeInTheDocument();
+  });
 });
