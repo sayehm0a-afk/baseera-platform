@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { RequireStaff } from "@/components/auth/RequireStaff";
+import { OwnerNav } from "@/components/owner/OwnerNav";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { getDashboardSummary, getSystemHealth } from "@/lib/api/admin";
@@ -54,13 +55,23 @@ function OwnerStatusPageInner() {
     };
   }, []);
 
-  if (state.status === "loading") return <LoadingScreen />;
+  if (state.status === "loading") {
+    return (
+      <div className="flex flex-col gap-bsr-4">
+        <OwnerNav />
+        <LoadingScreen />
+      </div>
+    );
+  }
   if (state.status === "error") {
     return (
-      <EmptyState
-        title="تعذّر تحميل حالة النظام"
-        description="هذه الصفحة مخصّصة لملاك المنصة فقط، وتتطلب اتصالاً سليماً بالخادم."
-      />
+      <div className="flex flex-col gap-bsr-4">
+        <OwnerNav />
+        <EmptyState
+          title="تعذّر تحميل حالة النظام"
+          description="هذه الصفحة مخصّصة لملاك المنصة فقط، وتتطلب اتصالاً سليماً بالخادم."
+        />
+      </div>
     );
   }
 
@@ -69,6 +80,7 @@ function OwnerStatusPageInner() {
 
   return (
     <div className="flex flex-col gap-bsr-4">
+      <OwnerNav />
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-bsr-text-primary">لوحة حالة الإنتاج (المالك)</h1>
         <Link
