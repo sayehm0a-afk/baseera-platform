@@ -53,7 +53,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -76,6 +76,7 @@ from src.api.exceptions import (
     ProviderUnavailableError,
     StockNotFoundError,
 )
+from src.api.middleware.rate_limiting import limiter
 from src.api.schemas.stocks import (
     AnalystReportOut,
     DecisionFactorBreakdownOut,
@@ -286,7 +287,9 @@ def _moving_average_series(result: TechnicalAnalysisResult) -> Dict[str, List[Mo
 
 
 @router.get("/{symbol}/technical", response_model=TechnicalAnalysisOut)
+@limiter.limit("60/minute")
 def get_technical_analysis(
+    request: Request,
     symbol: str,
     session: Session = Depends(get_db),
     _current_user: User = Depends(require_active_subscription()),
@@ -530,7 +533,9 @@ def _gates_as_dicts(gates) -> list:
 
 
 @router.get("/{symbol}/decision-v2", response_model=DecisionV2Out)
+@limiter.limit("60/minute")
 async def get_decision_v2(
+    request: Request,
     symbol: str,
     period_type: PeriodType = Query(PeriodType.ANNUAL),
     session: Session = Depends(get_db),
