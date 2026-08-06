@@ -446,5 +446,5 @@ def _benchmark_data_gate(disclosures: List[str]) -> GateResult:
     return GateResult(name="benchmark_data", status=GateStatus.NOT_EVALUATED, detail="TASI not integrated")
 
 
-def is_publishable(outcome: SymbolScanOutcome) -> bool:
-    return evaluate_publication(outcome).status is PublicationStatus.PUBLISHED
+def is_publishable(outcome: SymbolScanOutcome, calibrated_success_probability: Optional[float] = None) -> bool:
+    return evaluate_publication(outcome, calibrated_success_probability).status is PublicationStatus.PUBLISHED

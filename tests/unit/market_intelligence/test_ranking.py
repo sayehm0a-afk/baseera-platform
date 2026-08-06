@@ -247,3 +247,38 @@ def test_zero_price_outcome_is_excluded_from_every_ranking_category_not_just_gat
     for category, ranking_list in rankings.items():
         symbols = [e.symbol for e in ranking_list.entries]
         assert "2210" not in symbols, f"zero-price symbol 2210 leaked into {category}"
+
+
+def test_calibrated_confidences_excludes_a_below_threshold_symbol_from_gated_categories():
+    # Recommendation-engine hardening: a symbol whose raw confidence
+    # looks fine but whose real calibrated success probability is below
+    # get_min_calibrated_success_probability() (default 0.35) must be
+    # excluded from every is_publishable()-gated category, not just
+    # written-but-ignored on the historical RecommendationSnapshot.
+    outcomes = [
+        make_outcome(symbol="LOW_CAL", decision=make_decision(symbol="LOW_CAL", final_score=90.0, confidence=95.0)),
+        make_outcome(symbol="HIGH_CAL", decision=make_decision(symbol="HIGH_CAL", final_score=60.0, confidence=70.0)),
+    ]
+    calibrated_confidences = {"LOW_CAL": 0.10, "HIGH_CAL": 0.80}
+
+    rankings = RankingEngine().rank(outcomes, calibrated_confidences=calibrated_confidences)
+
+    assert [e.symbol for e in rankings[RankingCategory.TOP_BUY].entries] == ["HIGH_CAL"]
+    assert [e.symbol for e in rankings[RankingCategory.MOST_BULLISH].entries] == ["HIGH_CAL"]
+    # HIGHEST_CONFIDENCE is deliberately never gated (a diagnostic view,
+    # not an "opportunity") -- both symbols must still appear there,
+    # proving the exclusion above is the calibration gate specifically.
+    assert {e.symbol for e in rankings[RankingCategory.HIGHEST_CONFIDENCE].entries} == {"LOW_CAL", "HIGH_CAL"}
+
+
+def test_no_calibrated_confidences_argument_behaves_exactly_as_before():
+    # Backward compatibility: omitting calibrated_confidences entirely
+    # (every existing caller before this hardening pass) must produce
+    # the same NOT_EVALUATED-not-FAIL behavior as passing an empty dict.
+    outcomes = [make_outcome(symbol="A", decision=make_decision(symbol="A"))]
+    without_arg = RankingEngine().rank(outcomes)
+    with_empty_dict = RankingEngine().rank(outcomes, calibrated_confidences={})
+    for category in RankingCategory:
+        assert (
+            [e.symbol for e in without_arg[category].entries] == [e.symbol for e in with_empty_dict[category].entries]
+        )

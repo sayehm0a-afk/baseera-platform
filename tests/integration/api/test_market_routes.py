@@ -26,17 +26,23 @@ from src.api.dependencies import get_current_user, get_market_provider
 from src.core.db import database
 from src.core.db.database import Base, get_db
 from src.domain.models import (
+    ConfidenceCalibrationMethod,
+    ConfidenceCalibrationModel,
+    ConfidenceCalibrationStatus,
     FundamentalSnapshot,
     MarketScanRun,
     MarketScanStatus,
     PeriodType,
     PriceBar,
+    RecommendationLabel,
     StaffRole,
     Stock,
+    SymbolIntelligenceRecord,
     Timeframe,
     User,
 )
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 
 
 @pytest.fixture
@@ -402,3 +408,107 @@ def test_ranking_entries_carry_stop_loss_and_risk_reward(client, session_factory
         assert "risk_reward_ratio" in entry
         assert "time_horizon" in entry
         assert "current_price" in entry
+
+
+# --- confidence calibration wired into read-time rankings/watchlists --------
+
+
+def _seed_publishable_buy(session_factory, symbol="7777"):
+    """A hand-built, deterministic SymbolIntelligenceRecord that clears
+    every publication gate on its own (real price/target/stop, real
+    risk/reward, a real position size) -- unlike the DevMarketData-
+    Provider-driven scans elsewhere in this file, whether this specific
+    symbol ends up BUY/STRONG_BUY is not left to the technical engine's
+    own read of a synthetic price series."""
+    repo = MarketIntelligenceRepository()
+    session = session_factory()
+    stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector="Energy")
+    session.add(stock)
+    session.commit()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    repo.finish_run(session, run.id, MarketScanStatus.SUCCESS, symbols_succeeded=1, symbols_skipped=0, symbols_failed=0)
+    session.add(
+        SymbolIntelligenceRecord(
+            scan_run_id=run.id, stock_id=stock.id, symbol=symbol, sector="Energy",
+            recommendation=RecommendationLabel.STRONG_BUY, confidence=Decimal("85.0"), final_score=Decimal("80.0"),
+            latest_price=Decimal("100.0"), target_price=Decimal("110.0"), stop_loss=Decimal("95.0"),
+            expected_return_pct=Decimal("10.0"), position_size="STANDARD",
+            evaluated_at=datetime.now(timezone.utc), engine_version="1.0.0",
+        )
+    )
+    session.commit()
+    run_id = run.id
+    session.close()
+    return run_id
+
+
+def _seed_active_calibration_model_mapping_everything_near_zero(session_factory):
+    """A real, ACTIVE Platt-scaling model whose (coef=0, intercept=-10)
+    parameters map every raw confidence to sigmoid(-10) ~= 0.000045 --
+    far below get_min_calibrated_success_probability()'s default 0.35,
+    so any symbol this model is applied to must fail the
+    confidence_calibration gate regardless of its raw confidence."""
+    session = session_factory()
+    session.add(
+        ConfidenceCalibrationModel(
+            version="test-v1", status=ConfidenceCalibrationStatus.ACTIVE,
+            method=ConfidenceCalibrationMethod.PLATT, model_params={"coef": 0.0, "intercept": -10.0},
+            training_sample_size=100,
+        )
+    )
+    session.commit()
+    session.close()
+
+
+def test_rankings_include_a_gate_clearing_buy_when_no_calibration_model_is_active(client, session_factory):
+    run_id = _seed_publishable_buy(session_factory)
+
+    rankings = client.get("/api/v1/market/rankings", params={"run_id": run_id}).json()
+    top_buy = next(r for r in rankings["rankings"] if r["category"] == "TOP_BUY")
+    assert [e["symbol"] for e in top_buy["entries"]] == ["7777"]
+
+    watchlists = client.get("/api/v1/market/watchlists", params={"run_id": run_id}).json()
+    # read_model.outcome_from_record defaults an unset time_horizon to
+    # SHORT_TERM, so this STRONG_BUY record also clears the SWING
+    # watchlist rule (recommendation in BUY-like + SHORT_TERM +
+    # is_publishable) -- gated by the same confidence_calibration gate
+    # the second test below proves suppresses it.
+    swing = next(w for w in watchlists["watchlists"] if w["category"] == "SWING")
+    assert [e["symbol"] for e in swing["entries"]] == ["7777"]
+
+
+def test_rankings_and_opportunities_exclude_a_symbol_below_calibrated_confidence_threshold(client, session_factory):
+    """The real regression this pair of tests exists for: once a
+    ConfidenceCalibrationEngine model is ACTIVE, a symbol whose raw
+    confidence looked fine (85%) but whose calibrated true success
+    probability is near zero must be excluded from every publication-
+    gated ranking/opportunity category -- not just from the write-time
+    RecommendationSnapshot audit trail (see src.ai_evolution.
+    confidence_calibration.compute_calibrated_confidences and its
+    wiring into src.api.routes.market)."""
+    run_id = _seed_publishable_buy(session_factory)
+    _seed_active_calibration_model_mapping_everything_near_zero(session_factory)
+
+    rankings = client.get("/api/v1/market/rankings", params={"run_id": run_id}).json()
+    top_buy = next(r for r in rankings["rankings"] if r["category"] == "TOP_BUY")
+    top_strong_buy = next(r for r in rankings["rankings"] if r["category"] == "TOP_STRONG_BUY")
+    most_bullish = next(r for r in rankings["rankings"] if r["category"] == "MOST_BULLISH")
+    assert top_buy["entries"] == []
+    assert top_strong_buy["entries"] == []
+    assert most_bullish["entries"] == []
+
+    opportunities = client.get("/api/v1/market/opportunities", params={"run_id": run_id}).json()
+    for category in opportunities["categories"]:
+        assert category["entries"] == [], f"{category['category']} still shows a below-threshold symbol"
+
+    watchlists = client.get("/api/v1/market/watchlists", params={"run_id": run_id}).json()
+    swing = next(w for w in watchlists["watchlists"] if w["category"] == "SWING")
+    assert swing["entries"] == []
+
+    # HIGHEST_CONFIDENCE is deliberately never gated (a diagnostic/
+    # analytical view, see ranking.py's own Phase 2D docstring note) --
+    # the symbol must still appear there, proving the exclusion above is
+    # the confidence_calibration gate specifically, not some accidental
+    # data loss.
+    highest_confidence = next(r for r in rankings["rankings"] if r["category"] == "HIGHEST_CONFIDENCE")
+    assert [e["symbol"] for e in highest_confidence["entries"]] == ["7777"]

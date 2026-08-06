@@ -16,6 +16,7 @@ from src.ai_evolution.confidence_calibration import (
     DEFAULT_REFERENCE_HORIZON_DAYS,
     ConfidenceCalibrationEngine,
     apply_calibration,
+    compute_calibrated_confidences,
     get_effective_confidence,
 )
 from src.core.db.database import Base
@@ -291,3 +292,52 @@ class TestGetEffectiveConfidence:
         calibrated, version = get_effective_confidence(session, 80.0)
         assert calibrated is None
         assert version is None
+
+
+class TestComputeCalibratedConfidences:
+    """The batch counterpart to get_effective_confidence -- one query,
+    used by read-time ranking/watchlist/opportunities callers (see
+    src.api.routes.market._calibrated_confidences_for) rather than the
+    single-symbol write path."""
+
+    def test_no_active_model_returns_empty_mapping(self, session, stock):
+        result = compute_calibrated_confidences(session, {"2222": 80.0, "1010": 70.0})
+        assert result == {}
+
+    def test_active_model_calibrates_every_symbol_with_one_query(self, session, stock, monkeypatch):
+        _seed_overconfident_dataset(session, stock, n=100)
+        engine = ConfidenceCalibrationEngine()
+        row = engine.propose(session, date(2026, 1, 1), date(2026, 12, 31), min_sample_size=30)
+        engine.test(session, row.version)
+        engine.activate(session, row.version)
+
+        query_calls = []
+        original_query = session.query
+
+        def _counting_query(*args, **kwargs):
+            query_calls.append(args)
+            return original_query(*args, **kwargs)
+
+        monkeypatch.setattr(session, "query", _counting_query)
+
+        result = compute_calibrated_confidences(session, {"2222": 85.0, "1010": 70.0, "3030": 90.0})
+
+        assert set(result.keys()) == {"2222", "1010", "3030"}
+        for symbol, calibrated in result.items():
+            assert 0.0 <= calibrated <= 1.0
+        assert result["2222"] == apply_calibration(row, 85.0)
+        assert result["1010"] == apply_calibration(row, 70.0)
+        # get_active_model() is the only query -- apply_calibration is a
+        # pure in-memory sklearn transform on the already-fetched row,
+        # so 3 symbols must not cost 3 round trips.
+        assert len(query_calls) == 1
+
+    def test_skips_entries_with_no_confidence(self, session, stock):
+        _seed_overconfident_dataset(session, stock, n=100)
+        engine = ConfidenceCalibrationEngine()
+        row = engine.propose(session, date(2026, 1, 1), date(2026, 12, 31), min_sample_size=30)
+        engine.test(session, row.version)
+        engine.activate(session, row.version)
+
+        result = compute_calibrated_confidences(session, {"2222": 85.0, "9999": None})
+        assert set(result.keys()) == {"2222"}

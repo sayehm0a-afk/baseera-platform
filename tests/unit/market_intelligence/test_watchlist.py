@@ -105,3 +105,37 @@ def test_zero_price_outcome_is_excluded_from_every_watchlist_category():
     for category, result in watchlists.items():
         symbols = [e.symbol for e in result.entries]
         assert "2210" not in symbols, f"zero-price symbol 2210 leaked into {category}"
+
+
+def test_calibrated_confidences_excludes_a_below_threshold_symbol_from_gated_watchlists():
+    # Same recommendation-engine hardening as ranking.py's equivalent
+    # test -- INVESTMENT/SWING/RECOVERY are all gated by is_publishable(),
+    # so a real ACTIVE calibration model must be able to suppress a
+    # symbol there too, not just on the historical audit record.
+    outcomes = [
+        make_outcome(symbol="LOW_CAL", decision=make_decision(
+            symbol="LOW_CAL", recommendation=Recommendation.BUY,
+            time_horizon=TimeHorizon.LONG_TERM, risk_level=RiskLevel.LOW,
+        )),
+        make_outcome(symbol="HIGH_CAL", decision=make_decision(
+            symbol="HIGH_CAL", recommendation=Recommendation.BUY,
+            time_horizon=TimeHorizon.LONG_TERM, risk_level=RiskLevel.LOW,
+        )),
+    ]
+    calibrated_confidences = {"LOW_CAL": 0.10, "HIGH_CAL": 0.80}
+
+    result = WatchlistEngine().build(outcomes, calibrated_confidences)[WatchlistCategory.INVESTMENT]
+
+    assert [e.symbol for e in result.entries] == ["HIGH_CAL"]
+
+
+def test_no_calibrated_confidences_argument_behaves_exactly_as_before():
+    outcomes = [make_outcome(symbol="A", decision=make_decision(
+        symbol="A", recommendation=Recommendation.BUY, time_horizon=TimeHorizon.LONG_TERM, risk_level=RiskLevel.LOW,
+    ))]
+    without_arg = WatchlistEngine().build(outcomes)
+    with_empty_dict = WatchlistEngine().build(outcomes, {})
+    for category in WatchlistCategory:
+        assert (
+            [e.symbol for e in without_arg[category].entries] == [e.symbol for e in with_empty_dict[category].entries]
+        )

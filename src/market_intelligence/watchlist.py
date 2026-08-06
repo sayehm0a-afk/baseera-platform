@@ -17,7 +17,7 @@ identically here.
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from src.analysis.decision.types import RiskLevel, TimeHorizon
 from src.analysis.recommendation.types import Recommendation
@@ -52,13 +52,17 @@ def _successful(outcome: SymbolScanOutcome) -> bool:
 
 @dataclass(frozen=True)
 class _WatchlistRule:
-    predicate: Callable[[SymbolScanOutcome], bool]
+    # See ranking.py's `_FilterSortRule.predicate` for why every
+    # predicate takes `calibrated_confidences` (symbol -> calibrated
+    # 0-1 success probability) even when it doesn't use it -- a single
+    # uniform signature the shared build() loop can call the same way.
+    predicate: Callable[[SymbolScanOutcome, Dict[str, float]], bool]
     reason_fn: Callable[[SymbolScanOutcome], str]
     key_fn: Callable[[SymbolScanOutcome], float]
     reverse: bool
 
 
-def _momentum_predicate(o: SymbolScanOutcome) -> bool:
+def _momentum_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return (
         _successful(o)
         and o.recommendation in (_BUY_LIKE | _SELL_LIKE)
@@ -67,42 +71,42 @@ def _momentum_predicate(o: SymbolScanOutcome) -> bool:
     )
 
 
-def _investment_predicate(o: SymbolScanOutcome) -> bool:
+def _investment_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return (
         _successful(o)
         and o.recommendation in _BUY_LIKE
         and o.time_horizon is TimeHorizon.LONG_TERM
         and o.risk_level in _LOW_MEDIUM_RISK
-        and is_publishable(o)
+        and is_publishable(o, cc.get(o.symbol))
     )
 
 
-def _swing_predicate(o: SymbolScanOutcome) -> bool:
+def _swing_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return (
         _successful(o) and o.recommendation in _BUY_LIKE and o.time_horizon is TimeHorizon.SHORT_TERM
-        and is_publishable(o)
+        and is_publishable(o, cc.get(o.symbol))
     )
 
 
-def _high_risk_predicate(o: SymbolScanOutcome) -> bool:
+def _high_risk_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return _successful(o) and o.risk_level in _HIGH_RISK
 
 
-def _dividend_predicate(o: SymbolScanOutcome) -> bool:
+def _dividend_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return _successful(o) and o.dividend_yield is not None and o.dividend_yield >= get_dividend_yield_threshold()
 
 
-def _recovery_predicate(o: SymbolScanOutcome) -> bool:
+def _recovery_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return (
         _successful(o)
         and o.recommendation in _BUY_LIKE
         and o.rsi is not None
         and o.rsi < get_oversold_rsi_threshold()
-        and is_publishable(o)
+        and is_publishable(o, cc.get(o.symbol))
     )
 
 
-def _breakout_predicate(o: SymbolScanOutcome) -> bool:
+def _breakout_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return (
         _successful(o)
         and o.latest_price is not None
@@ -113,7 +117,7 @@ def _breakout_predicate(o: SymbolScanOutcome) -> bool:
     )
 
 
-def _oversold_predicate(o: SymbolScanOutcome) -> bool:
+def _oversold_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return (
         _successful(o)
         and o.rsi is not None
@@ -122,7 +126,7 @@ def _oversold_predicate(o: SymbolScanOutcome) -> bool:
     )
 
 
-def _overbought_predicate(o: SymbolScanOutcome) -> bool:
+def _overbought_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return _successful(o) and o.rsi is not None and o.rsi > get_overbought_rsi_threshold()
 
 
@@ -170,13 +174,22 @@ _RULES: Dict[WatchlistCategory, _WatchlistRule] = {
 
 
 class WatchlistEngine:
-    def build(self, outcomes: List[SymbolScanOutcome]) -> Dict[WatchlistCategory, WatchlistResult]:
+    def build(
+        self,
+        outcomes: List[SymbolScanOutcome],
+        calibrated_confidences: Optional[Dict[str, float]] = None,
+    ) -> Dict[WatchlistCategory, WatchlistResult]:
+        """See ranking.py's `RankingEngine.rank()` docstring for what
+        `calibrated_confidences` is and why it must come from the
+        caller (src.api.routes.market, via src.ai_evolution.
+        confidence_calibration.compute_calibrated_confidences)."""
         generated_at = datetime.now(timezone.utc)
         max_size = get_watchlist_max_size()
+        calibrated_confidences = calibrated_confidences or {}
         results: Dict[WatchlistCategory, WatchlistResult] = {}
 
         for category, rule in _RULES.items():
-            matching = [o for o in outcomes if rule.predicate(o)]
+            matching = [o for o in outcomes if rule.predicate(o, calibrated_confidences)]
             matching.sort(key=rule.key_fn, reverse=rule.reverse)
             entries = [
                 WatchlistEntry(
