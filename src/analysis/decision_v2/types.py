@@ -341,6 +341,17 @@ def parse_quote_timestamp(raw: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _native_float(value: Optional[float]) -> Optional[float]:
+    """Coerce to a plain Python float -- the indicator registry's
+    computations (src.analysis.indicators, numpy-backed) return
+    `numpy.float64` in several sub-score/gate inputs, which json.dumps
+    cannot serialize when this dict is written into a JSON column.
+    Same fix as market_intelligence_repository.py's `_f()`, applied
+    here since sub_scores/gates are the two JSON-column consumers of
+    these values."""
+    return None if value is None else float(value)
+
+
 def sub_scores_to_dict(sub_scores: SubScores) -> Dict[str, Optional[float]]:
     """Flattens a `SubScores` into a plain dict -- the one place this
     happens, reused by every caller that persists a `DecisionResult`
@@ -348,17 +359,23 @@ def sub_scores_to_dict(sub_scores: SubScores) -> Dict[str, Optional[float]]:
     `DecisionV2Snapshot` writes) so the two representations can never
     silently drift apart from each other."""
     return {
-        "trend_score": sub_scores.trend_score,
-        "momentum_score": sub_scores.momentum_score,
-        "volume_score": sub_scores.volume_score,
-        "liquidity_score": sub_scores.liquidity_score,
-        "volatility_score": sub_scores.volatility_score,
-        "risk_reward_score": sub_scores.risk_reward_score,
-        "market_context_score": sub_scores.market_context_score,
-        "data_quality_score": sub_scores.data_quality_score,
+        "trend_score": _native_float(sub_scores.trend_score),
+        "momentum_score": _native_float(sub_scores.momentum_score),
+        "volume_score": _native_float(sub_scores.volume_score),
+        "liquidity_score": _native_float(sub_scores.liquidity_score),
+        "volatility_score": _native_float(sub_scores.volatility_score),
+        "risk_reward_score": _native_float(sub_scores.risk_reward_score),
+        "market_context_score": _native_float(sub_scores.market_context_score),
+        "data_quality_score": _native_float(sub_scores.data_quality_score),
     }
 
 
 def gates_to_dicts(gates: List[GateOutcome]) -> List[Dict[str, Any]]:
-    """Same reasoning as `sub_scores_to_dict`, for `DecisionResult.gates`."""
-    return [{"name": g.name, "passed": g.passed, "detail": g.detail, "blocking": g.blocking} for g in gates]
+    """Same reasoning as `sub_scores_to_dict`, for `DecisionResult.gates`
+    -- `passed`/`blocking` are coerced to plain `bool` for the same
+    JSON-serialization reason (a numpy.bool_ comparison result is not
+    JSON serializable even though it prints identically to `bool`)."""
+    return [
+        {"name": g.name, "passed": bool(g.passed), "detail": g.detail, "blocking": bool(g.blocking)}
+        for g in gates
+    ]

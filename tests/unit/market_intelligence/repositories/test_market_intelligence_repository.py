@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.analysis.decision_v2.types import DataFreshnessStatus, Decision, DecisionResult, GateOutcome, SubScores
 from src.analysis.recommendation.types import AnalysisContext, Recommendation
 from src.core.db.database import Base
 from src.domain.models import (
@@ -18,6 +19,7 @@ from src.domain.models import (
     AlertType,
     CalibrationConfig,
     CalibrationStatus,
+    DecisionV2Snapshot,
     MarketScanRun,
     MarketScanStatus,
     RecommendationLabel,
@@ -27,6 +29,50 @@ from src.domain.models import (
 from src.market_intelligence.repositories import market_intelligence_repository as repository_module
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
+
+
+def make_decision_v2_result(symbol="2222", **numpy_overrides) -> DecisionResult:
+    """A minimal, real DecisionResult -- numeric fields default to
+    numpy.float64 (matching what DecisionEngineV2.decide() actually
+    produces from numpy-backed indicator computations) so tests can
+    assert every one of them gets coerced before it reaches the ORM."""
+    defaults = dict(
+        confidence_score=np.float64(70.0),
+        opportunity_quality_score=np.float64(60.5),
+        risk_score=np.float64(40.0),
+        data_quality_score=np.float64(100.0),
+        current_price=np.float64(26.9),
+        entry_zone_low=np.float64(26.5),
+        entry_zone_high=np.float64(27.1),
+        stop_loss=np.float64(26.46),
+        target_1=np.float64(27.71),
+        target_2=np.float64(28.3),
+        target_3=np.float64(29.0),
+        expected_return_target_1=np.float64(3.01),
+        expected_return_target_2=np.float64(5.2),
+        downside_to_stop=np.float64(1.6),
+        risk_reward_target_1=np.float64(1.84),
+        risk_reward_target_2=np.float64(2.1),
+    )
+    defaults.update(numpy_overrides)
+    return DecisionResult(
+        symbol=symbol, company_name_ar="سهم", company_name_en=f"Stock {symbol}", sector_ar="الطاقة",
+        decision=Decision.BUY_CANDIDATE, decision_label_ar="مرشح شراء",
+        data_freshness_status=DataFreshnessStatus.LIVE,
+        expected_holding_period_min_days=1, expected_holding_period_max_days=15,
+        expected_holding_period_label_ar="من جلسة إلى 3 أسابيع", horizon_type="SHORT_TERM",
+        market_status="OPEN", decision_timestamp=datetime.now(timezone.utc),
+        invalidation_conditions=[], positive_reasons=[], negative_reasons=[], warnings=[],
+        recommendation_basis="test", analysis_version="2.0.0", data_source="SAHMK_REAL", scan_run_id=None,
+        sub_scores=SubScores(
+            trend_score=np.float64(50.0), momentum_score=np.float64(57.4), volume_score=np.float64(65.0),
+            liquidity_score=np.float64(70.0), volatility_score=np.float64(30.0),
+            risk_reward_score=np.float64(64.75), market_context_score=np.float64(75.0),
+            data_quality_score=np.float64(100.0),
+        ),
+        gates=[GateOutcome(name="real_data_source", passed=np.bool_(True), detail="ok", blocking=np.bool_(True))],
+        **defaults,
+    )
 
 
 @pytest.fixture
@@ -218,6 +264,71 @@ async def test_save_symbol_records_coerces_numpy_floats_before_they_reach_the_or
     assert len(snapshots) == 1
     for field, field_type in snapshots[0].items():
         assert field_type is float, f"{field} was {field_type!r} at insert time, expected plain float"
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_coerces_numpy_types_in_decision_v2_snapshot(session, repo):
+    """Regression for a real production failure: the Phase 3A
+    DecisionV2Snapshot write path (added alongside the V1 fix above)
+    did not apply the same numpy coercion, so every scheduled scan run
+    that reached this code failed with a real Postgres error
+    (confirmed live: 'schema "np" does not exist' / 'Object of type
+    bool is not JSON serializable') once DecisionEngineV2's numpy-
+    backed indicator computations reached this batched insert. Uses
+    the same session.add() spy technique as the V1 test above, since
+    SQLite silently tolerates the un-coerced type and a post-commit
+    read-back can't distinguish a fixed call from a broken one."""
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    decision_v2 = make_decision_v2_result(symbol="2222")
+    outcome = make_outcome(symbol="2222", decision_v2=decision_v2)
+
+    numeric_fields = (
+        "confidence_score", "opportunity_quality_score", "risk_score", "data_quality_score",
+        "current_price", "entry_zone_low", "entry_zone_high", "stop_loss",
+        "target_1", "target_2", "target_3",
+        "expected_return_target_1", "expected_return_target_2", "downside_to_stop",
+        "risk_reward_target_1", "risk_reward_target_2",
+    )
+    captured = []
+    original_add = session.add
+
+    def _spy_add(obj):
+        # Snapshot attribute types *at add() time* -- session.commit()
+        # (called internally by save_symbol_records) expires every
+        # instrumented attribute, and a later access silently re-queries
+        # SQLite, which would hide exactly the numpy leak this test
+        # exists to catch (same reasoning as the V1 test above).
+        if type(obj).__name__ == "DecisionV2Snapshot":
+            captured.append(
+                {
+                    "numeric": {f: type(getattr(obj, f)) for f in numeric_fields},
+                    "gates": [(type(g["passed"]), type(g["blocking"])) for g in obj.gates],
+                    "sub_scores": {k: type(v) for k, v in obj.sub_scores.items() if v is not None},
+                }
+            )
+        return original_add(obj)
+
+    session.add = _spy_add
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+    session.add = original_add
+
+    assert len(captured) == 1
+    snapshot = captured[0]
+    for field, field_type in snapshot["numeric"].items():
+        assert field_type is float, f"DecisionV2Snapshot.{field} was {field_type!r}, expected plain float"
+    for passed_type, blocking_type in snapshot["gates"]:
+        assert passed_type is bool, f"gate 'passed' was {passed_type!r}, expected plain bool"
+        assert blocking_type is bool, f"gate 'blocking' was {blocking_type!r}, expected plain bool"
+    for field, field_type in snapshot["sub_scores"].items():
+        assert field_type is float, f"sub_scores.{field} was {field_type!r}, expected plain float"
+
+    # The row must also be genuinely insertable end-to-end -- proves the
+    # coercion actually fixes the crash, not just the attribute types.
+    reloaded = session.query(DecisionV2Snapshot).filter_by(symbol="2222").one()
+    assert reloaded.scan_run_id == run.id
+    assert reloaded.decision == "BUY_CANDIDATE"
 
 
 @pytest.mark.asyncio

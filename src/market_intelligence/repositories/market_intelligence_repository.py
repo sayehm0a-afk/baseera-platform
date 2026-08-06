@@ -310,23 +310,37 @@ class MarketIntelligenceRepository:
                             sector_ar=result.sector_ar,
                             decision=result.decision.value,
                             decision_label_ar=result.decision_label_ar,
-                            confidence_score=result.confidence_score,
-                            opportunity_quality_score=result.opportunity_quality_score,
-                            risk_score=result.risk_score,
-                            data_quality_score=result.data_quality_score,
+                            # `_f()` (defined above): DecisionEngineV2's
+                            # entry-zone/target/ATR computation runs
+                            # over numpy-backed indicator arrays, so
+                            # several of these fields arrive as
+                            # numpy.float64 -- harmless for the V1
+                            # SymbolIntelligenceRecord block above
+                            # (already coerced) or for a single-row
+                            # /decision-v2 insert, but SQLAlchemy 2.0's
+                            # insertmanyvalues path this batched
+                            # per-run write goes through literal-renders
+                            # numpy's `np.float64(...)` repr into the
+                            # SQL text against real Postgres, which is
+                            # invalid syntax and fails the whole batch
+                            # (confirmed in production: runs 52/55).
+                            confidence_score=_f(result.confidence_score),
+                            opportunity_quality_score=_f(result.opportunity_quality_score),
+                            risk_score=_f(result.risk_score),
+                            data_quality_score=_f(result.data_quality_score),
                             data_freshness_status=result.data_freshness_status.value,
-                            current_price=result.current_price,
-                            entry_zone_low=result.entry_zone_low,
-                            entry_zone_high=result.entry_zone_high,
-                            stop_loss=result.stop_loss,
-                            target_1=result.target_1,
-                            target_2=result.target_2,
-                            target_3=result.target_3,
-                            expected_return_target_1=result.expected_return_target_1,
-                            expected_return_target_2=result.expected_return_target_2,
-                            downside_to_stop=result.downside_to_stop,
-                            risk_reward_target_1=result.risk_reward_target_1,
-                            risk_reward_target_2=result.risk_reward_target_2,
+                            current_price=_f(result.current_price),
+                            entry_zone_low=_f(result.entry_zone_low),
+                            entry_zone_high=_f(result.entry_zone_high),
+                            stop_loss=_f(result.stop_loss),
+                            target_1=_f(result.target_1),
+                            target_2=_f(result.target_2),
+                            target_3=_f(result.target_3),
+                            expected_return_target_1=_f(result.expected_return_target_1),
+                            expected_return_target_2=_f(result.expected_return_target_2),
+                            downside_to_stop=_f(result.downside_to_stop),
+                            risk_reward_target_1=_f(result.risk_reward_target_1),
+                            risk_reward_target_2=_f(result.risk_reward_target_2),
                             expected_holding_period_min_days=result.expected_holding_period_min_days,
                             expected_holding_period_max_days=result.expected_holding_period_max_days,
                             expected_holding_period_label_ar=result.expected_holding_period_label_ar,
