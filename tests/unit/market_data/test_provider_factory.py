@@ -37,6 +37,9 @@ def _reset(monkeypatch):
     monkeypatch.delenv("SAHMK_API_KEY", raising=False)
     monkeypatch.setenv("SAHMK_PROBE_TIMEOUT_SECONDS", "0.1")
     monkeypatch.setenv("MARKET_DATA_PROVIDER_CACHE_SECONDS", "60")
+    # Near-instant so tests can observe a genuine-kind-change disconnect
+    # without a real 90s wait -- see the grace-delay tests below.
+    monkeypatch.setenv("MARKET_DATA_PROVIDER_DISCONNECT_GRACE_SECONDS", "0")
     yield
     provider_factory.reset_provider_cache()
 
@@ -139,16 +142,26 @@ async def test_selection_is_cached_across_calls(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_force_refresh_bypasses_cache(monkeypatch):
+    """force_refresh must skip the cached-selection short-circuit and
+    genuinely re-verify reachability -- but, per the concurrency fix
+    below, that re-verification reuses the existing healthy instance
+    rather than always constructing a new one. Observed here via a real
+    authenticate() call count, not instance count."""
     monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
 
-    async def _ok():
+    call_count = 0
+
+    async def _ok(_self):
+        nonlocal call_count
+        call_count += 1
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.authenticate = _ok
 
     await provider_factory.get_market_data_provider()
     await provider_factory.get_market_data_provider(force_refresh=True)
-    assert len(_FakeSahmkProvider.instances) == 2
+    assert call_count == 2  # both calls genuinely re-probed, unlike a cache hit
+    assert len(_FakeSahmkProvider.instances) == 1  # reused, not recreated
 
 
 @pytest.mark.asyncio
@@ -156,14 +169,29 @@ async def test_get_last_selected_provider_kind_none_before_any_selection():
     assert provider_factory.get_last_selected_provider_kind() is None
 
 
-# --- regression: superseded providers must be disconnected (resource leak) --
+# --- regression: aiohttp ClientSession concurrency bug (superseded
+# providers being closed out from under a still-in-flight caller) ---
+#
+# Production evidence (two independent audit runs) traced a recurring
+# `AssertionError: assert self._connector is not None` inside aiohttp,
+# surfaced as "Circuit breaker operation failed in CLOSED state", to
+# get_market_data_provider() closing the outgoing provider's session
+# synchronously on every cache refresh -- even when SAHMK stayed
+# healthy across the refresh. The SAHMK rate limiter routinely stalls
+# the ingestion scheduler's per-symbol loop for up to ~60s between
+# requests, easily outliving the default 60s cache window, so a loop
+# that fetched the provider moments before a refresh would have its
+# live session pulled out from under it mid-iteration. These tests
+# lock in the fix: reuse across refreshes when the kind is unchanged,
+# and a grace-delayed (not synchronous) disconnect when it does change.
 
 
 @pytest.mark.asyncio
-async def test_force_refresh_disconnects_the_superseded_provider(monkeypatch):
-    """Regression test for the resource leak a prior review caught and
-    reproduced: replacing the cached provider without disconnecting the
-    old one leaked its aiohttp session every cache-refresh cycle."""
+async def test_force_refresh_reuses_the_same_instance_when_sahmk_stays_healthy(monkeypatch):
+    """The core fix: a refresh must not construct a new provider (and
+    therefore must not disconnect the old one's live session) when
+    SAHMK is still reachable -- the steady-state case a long-running
+    caller's loop needs to stay safe across."""
     monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
 
     async def _ok():
@@ -172,18 +200,18 @@ async def test_force_refresh_disconnects_the_superseded_provider(monkeypatch):
     _FakeSahmkProvider.authenticate = lambda self: _ok()
 
     first = await provider_factory.get_market_data_provider()
-    await provider_factory.get_market_data_provider(force_refresh=True)
+    second = await provider_factory.get_market_data_provider(force_refresh=True)
 
-    assert first.disconnected is True
+    assert first is second
+    assert len(_FakeSahmkProvider.instances) == 1
+    assert first.disconnected is False
 
 
 @pytest.mark.asyncio
-async def test_repeated_refreshes_disconnect_every_superseded_instance_but_not_the_current_one(
-    monkeypatch,
-):
-    """Extends the single-refresh regression test above to several
-    refreshes in a row -- every instance that gets replaced must be
-    disconnected, and the still-active one must never be."""
+async def test_repeated_healthy_refreshes_never_create_a_new_instance_or_disconnect(monkeypatch):
+    """Extends the single-refresh case to several refreshes in a row --
+    as long as SAHMK stays healthy, the exact same instance must be
+    reused every time, never disconnected."""
     monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
 
     async def _ok():
@@ -194,10 +222,87 @@ async def test_repeated_refreshes_disconnect_every_superseded_instance_but_not_t
     for _ in range(5):
         await provider_factory.get_market_data_provider(force_refresh=True)
 
-    *superseded, current = _FakeSahmkProvider.instances
-    assert len(superseded) == 4
-    assert all(instance.disconnected is True for instance in superseded)
-    assert current.disconnected is False
+    assert len(_FakeSahmkProvider.instances) == 1
+    assert _FakeSahmkProvider.instances[0].disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_kind_change_still_eventually_disconnects_the_superseded_provider(monkeypatch):
+    """When SAHMK genuinely becomes unreachable mid-run (a real kind
+    change, sahmk -> dev), the superseded provider must still end up
+    disconnected -- just not synchronously inside the swap, so a
+    straggling concurrent caller isn't cut off mid-request. The grace
+    delay is patched to ~0 in the _reset fixture so the background task
+    resolves within this test without a real wait."""
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    sahmk_provider = await provider_factory.get_market_data_provider()
+    assert sahmk_provider.disconnected is False
+
+    async def _now_unreachable():
+        raise SahmkRequestError("Network error calling SAHMK API: connection refused")
+
+    _FakeSahmkProvider.authenticate = lambda self: _now_unreachable()
+    dev_provider = await provider_factory.get_market_data_provider(force_refresh=True)
+
+    assert isinstance(dev_provider, DevMarketDataProvider)
+    # Not disconnected synchronously as part of the swap itself --
+    # this is the exact behavior that used to race a concurrent caller.
+    assert sahmk_provider.disconnected is False
+
+    # But it does still happen, once the (near-zero) grace delay elapses.
+    await asyncio.sleep(0.05)
+    assert sahmk_provider.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_a_provider_still_mid_request_survives_a_concurrent_kind_change(monkeypatch):
+    """End-to-end reproduction of the original bug scenario: a caller
+    holds the sahmk provider and is mid-"request" (simulated by an
+    event it controls) when a concurrent refresh discovers SAHMK is now
+    unreachable and swaps to dev. Before the fix, disconnect() ran
+    synchronously and the held provider's session was already torn
+    down; after the fix, the held provider must remain usable
+    (disconnected is False) for the duration of the in-flight call."""
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    held_provider = await provider_factory.get_market_data_provider()
+
+    request_started = asyncio.Event()
+    release_request = asyncio.Event()
+
+    async def _simulated_in_flight_request():
+        request_started.set()
+        await release_request.wait()
+        # If disconnect() had already run synchronously against this
+        # same instance, a real SahmkClient would raise here trying to
+        # use its closed session -- the fake models that as still not
+        # being disconnected.
+        assert held_provider.disconnected is False
+
+    request_task = asyncio.ensure_future(_simulated_in_flight_request())
+    await request_started.wait()
+
+    async def _now_unreachable():
+        raise SahmkRequestError("Network error calling SAHMK API: connection refused")
+
+    _FakeSahmkProvider.authenticate = lambda self: _now_unreachable()
+    await provider_factory.get_market_data_provider(force_refresh=True)
+
+    # The swap has happened, but the held provider must still be alive
+    # for the caller that's mid-request against it.
+    assert held_provider.disconnected is False
+
+    release_request.set()
+    await request_task
 
 
 @pytest.mark.asyncio
@@ -240,9 +345,11 @@ async def test_switching_from_dev_to_sahmk_does_not_attempt_to_disconnect_dev_in
     sahmk_provider = await provider_factory.get_market_data_provider(force_refresh=True)
 
     assert isinstance(sahmk_provider, _FakeSahmkProvider)
-    # dev_provider.disconnect() ran (without raising) as part of the
-    # dev->sahmk transition; DevMarketDataProvider marks itself
-    # unhealthy once disconnected.
+    # dev_provider.disconnect() runs (without raising) after the grace
+    # delay (patched to ~0 in _reset) as part of the dev->sahmk
+    # transition; DevMarketDataProvider marks itself unhealthy once
+    # disconnected.
+    await asyncio.sleep(0.05)
     from src.market_data.providers.market_data_provider import ProviderHealth
 
     assert await dev_provider.health_check() == ProviderHealth.UNHEALTHY
