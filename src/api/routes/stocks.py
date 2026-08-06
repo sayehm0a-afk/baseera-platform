@@ -83,8 +83,12 @@ from src.api.exceptions import (
     StockNotFoundError,
 )
 from src.api.middleware.rate_limiting import limiter
+from src.ai_evolution.committee.orchestrator import InvestmentCommitteeOrchestrator
+from src.ai_evolution.committee.types import ConsensusResult
 from src.api.schemas.stocks import (
     AnalystReportOut,
+    CommitteeAgentOpinionOut,
+    CommitteeConsensusOut,
     DecisionFactorBreakdownOut,
     DecisionV2Out,
     FundamentalAnalysisOut,
@@ -95,6 +99,7 @@ from src.api.schemas.stocks import (
     MovingAveragePointOut,
     QuoteOut,
     RecommendationOut,
+    RejectedAlternativeOut,
     ScoreContributionOut,
     SignalOut,
     StockOut,
@@ -135,6 +140,44 @@ def _latest_market_breadth(session: Session):
     except Exception as exc:  # noqa: BLE001 -- a breadth-read failure must never break /decision-v2
         logger.info("Could not read latest market breadth: %s", exc)
         return None
+
+
+def _committee_consensus_to_schema(consensus: Optional[ConsensusResult]) -> Optional[CommitteeConsensusOut]:
+    """Maps the Consensus Engine's dataclass output onto the API
+    schema -- the one place this happens, so the route body doesn't
+    duplicate it. `None` in, `None` out (the committee did not run)."""
+    if consensus is None:
+        return None
+    return CommitteeConsensusOut(
+        final_decision=consensus.final_decision,
+        final_confidence=consensus.final_confidence,
+        participant_count=consensus.participant_count,
+        directional_count=consensus.directional_count,
+        agreement_pct=consensus.agreement_pct,
+        disagreement_pct=consensus.disagreement_pct,
+        disagreement_score=consensus.disagreement_score,
+        most_optimistic_agent=consensus.most_optimistic_agent,
+        most_optimistic_stance=consensus.most_optimistic_stance,
+        most_conservative_agent=consensus.most_conservative_agent,
+        most_conservative_stance=consensus.most_conservative_stance,
+        consensus_reasoning_ar=consensus.consensus_reasoning_ar,
+        rejected_alternatives=[
+            RejectedAlternativeOut(
+                agent_name=r.agent_name, role=r.role, stance=r.stance.value, confidence=r.confidence,
+                reasoning=r.reasoning, rejection_reason=r.rejection_reason,
+            )
+            for r in consensus.rejected_alternatives
+        ],
+        weighted_votes=dict(consensus.weighted_votes),
+        opinions=[
+            CommitteeAgentOpinionOut(
+                agent_name=v.agent_name, role=v.role, stance=v.stance.value, confidence=v.confidence,
+                reasoning=v.reasoning, evidence=list(v.evidence), rejection_reasons=list(v.rejection_reasons),
+                used_llm=v.used_llm,
+            )
+            for v in consensus.opinions
+        ],
+    )
 
 
 def _get_stock_or_404(session: Session, symbol: str) -> Stock:
@@ -607,123 +650,142 @@ async def get_decision_v2(
         market_breadth=_latest_market_breadth(session),
     )
 
+    snapshot = None
+    committee_consensus = None
     try:
-        session.add(
-            DecisionV2Snapshot(
-                stock_id=stock.id,
-                symbol=result.symbol,
-                company_name_ar=result.company_name_ar,
-                company_name_en=result.company_name_en,
-                sector_ar=result.sector_ar,
-                decision=result.decision.value,
-                decision_label_ar=result.decision_label_ar,
-                # `_f()` (market_intelligence_repository.py): DecisionEngineV2's
-                # entry-zone/target/ATR computation runs over numpy-backed
-                # indicator arrays, so several of these fields arrive as
-                # numpy.float64 -- confirmed in production (2026-08-06) that
-                # this single-row insert fails identically to the batched
-                # scan-pipeline insert once one of these fields is numpy-typed.
-                confidence_score=_f(result.confidence_score),
-                opportunity_quality_score=_f(result.opportunity_quality_score),
-                risk_score=_f(result.risk_score),
-                data_quality_score=_f(result.data_quality_score),
-                data_freshness_status=result.data_freshness_status.value,
-                current_price=_f(result.current_price),
-                entry_zone_low=_f(result.entry_zone_low),
-                entry_zone_high=_f(result.entry_zone_high),
-                stop_loss=_f(result.stop_loss),
-                target_1=_f(result.target_1),
-                target_2=_f(result.target_2),
-                target_3=_f(result.target_3),
-                expected_return_target_1=_f(result.expected_return_target_1),
-                expected_return_target_2=_f(result.expected_return_target_2),
-                downside_to_stop=_f(result.downside_to_stop),
-                risk_reward_target_1=_f(result.risk_reward_target_1),
-                risk_reward_target_2=_f(result.risk_reward_target_2),
-                expected_holding_period_min_days=result.expected_holding_period_min_days,
-                expected_holding_period_max_days=result.expected_holding_period_max_days,
-                expected_holding_period_label_ar=result.expected_holding_period_label_ar,
-                horizon_type=result.horizon_type,
-                market_status=result.market_status,
-                decision_timestamp=result.decision_timestamp,
-                invalidation_conditions=result.invalidation_conditions,
-                positive_reasons=result.positive_reasons,
-                negative_reasons=result.negative_reasons,
-                warnings=result.warnings,
-                recommendation_basis=result.recommendation_basis,
-                sub_scores=sub_scores_to_dict(result.sub_scores),
-                gates=gates_to_dicts(result.gates),
-                analysis_version=result.analysis_version,
-                data_source=result.data_source,
-                is_synthetic=quote_info.get("is_synthetic"),
-                scan_run_id=result.scan_run_id,
-                requested_by_user_id=current_user.id,
-                is_real_data=result.is_real_data,
-                quote_timestamp=result.quote_timestamp,
-                technical_confidence=_f(result.technical_confidence),
-                momentum_confidence=_f(result.momentum_confidence),
-                liquidity_confidence=_f(result.liquidity_confidence),
-                market_context_confidence=_f(result.market_context_confidence),
-                data_quality_confidence=_f(result.data_quality_confidence),
-                trade_type=result.trade_type.value if result.trade_type else None,
-                trade_type_label_ar=result.trade_type_label_ar,
-                time_horizon_rationale_ar=result.time_horizon_rationale_ar,
-                best_entry_price=_f(result.best_entry_price),
-                accumulation_zone_low=_f(result.accumulation_zone_low),
-                accumulation_zone_high=_f(result.accumulation_zone_high),
-                entry_quality=result.entry_quality,
-                entry_quality_label_ar=result.entry_quality_label_ar,
-                entry_status=result.entry_status.value,
-                entry_status_label_ar=result.entry_status_label_ar,
-                invalidation_price=_f(result.invalidation_price),
-                risk_level=result.risk_level,
-                risk_level_label_ar=result.risk_level_label_ar,
-                estimated_days_target_1=result.estimated_days_target_1,
-                estimated_days_target_2=result.estimated_days_target_2,
-                estimated_days_target_3=result.estimated_days_target_3,
-                nearest_support=_f(result.nearest_support),
-                major_support=_f(result.major_support),
-                nearest_resistance=_f(result.nearest_resistance),
-                major_resistance=_f(result.major_resistance),
-                breakout_level=_f(result.breakout_level),
-                breakdown_level=_f(result.breakdown_level),
-                support_resistance_evidence_ar=result.support_resistance_evidence_ar,
-                current_volume=_f(result.current_volume),
-                average_volume=_f(result.average_volume),
-                relative_volume=_f(result.relative_volume),
-                liquidity_quality_ar=result.liquidity_quality_ar,
-                accumulation_score=_f(result.accumulation_score),
-                accumulation_assessment_ar=result.accumulation_assessment_ar,
-                volume_confirms_decision=result.volume_confirms_decision,
-                abnormal_volume=result.abnormal_volume,
-                technical_evidence=result.technical_evidence,
-                trend_direction_ar=result.trend_direction_ar,
-                trend_strength_label_ar=result.trend_strength_label_ar,
-                decision_summary_ar=result.decision_summary_ar,
-                why_now_ar=result.why_now_ar,
-                why_not_stronger_ar=result.why_not_stronger_ar,
-                why_not_buy_reasons=result.why_not_buy_reasons,
-                entry_confirmation_conditions_ar=result.entry_confirmation_conditions_ar,
-                watch_next_session_ar=result.watch_next_session_ar,
-                market_risk_state=result.market_risk_state,
-                market_risk_label_ar=result.market_risk_label_ar,
-                market_risk_basis_ar=result.market_risk_basis_ar,
-                market_risk_entry_permitted=result.market_risk_entry_permitted,
-                market_risk_is_live=result.market_risk_is_live,
-                market_breadth_buy_count=result.market_breadth_buy_count,
-                market_breadth_sell_count=result.market_breadth_sell_count,
-                market_breadth_symbols_scanned=result.market_breadth_symbols_scanned,
-                market_breadth_average_confidence=_f(result.market_breadth_average_confidence),
-                fundamental_summary=result.fundamental_summary,
-                fundamental_summary_ar=result.fundamental_summary_ar,
-                news_impact=result.news_impact,
-                news_impact_summary_ar=result.news_impact_summary_ar,
-            )
+        snapshot = DecisionV2Snapshot(
+            stock_id=stock.id,
+            symbol=result.symbol,
+            company_name_ar=result.company_name_ar,
+            company_name_en=result.company_name_en,
+            sector_ar=result.sector_ar,
+            decision=result.decision.value,
+            decision_label_ar=result.decision_label_ar,
+            # `_f()` (market_intelligence_repository.py): DecisionEngineV2's
+            # entry-zone/target/ATR computation runs over numpy-backed
+            # indicator arrays, so several of these fields arrive as
+            # numpy.float64 -- confirmed in production (2026-08-06) that
+            # this single-row insert fails identically to the batched
+            # scan-pipeline insert once one of these fields is numpy-typed.
+            confidence_score=_f(result.confidence_score),
+            opportunity_quality_score=_f(result.opportunity_quality_score),
+            risk_score=_f(result.risk_score),
+            data_quality_score=_f(result.data_quality_score),
+            data_freshness_status=result.data_freshness_status.value,
+            current_price=_f(result.current_price),
+            entry_zone_low=_f(result.entry_zone_low),
+            entry_zone_high=_f(result.entry_zone_high),
+            stop_loss=_f(result.stop_loss),
+            target_1=_f(result.target_1),
+            target_2=_f(result.target_2),
+            target_3=_f(result.target_3),
+            expected_return_target_1=_f(result.expected_return_target_1),
+            expected_return_target_2=_f(result.expected_return_target_2),
+            downside_to_stop=_f(result.downside_to_stop),
+            risk_reward_target_1=_f(result.risk_reward_target_1),
+            risk_reward_target_2=_f(result.risk_reward_target_2),
+            expected_holding_period_min_days=result.expected_holding_period_min_days,
+            expected_holding_period_max_days=result.expected_holding_period_max_days,
+            expected_holding_period_label_ar=result.expected_holding_period_label_ar,
+            horizon_type=result.horizon_type,
+            market_status=result.market_status,
+            decision_timestamp=result.decision_timestamp,
+            invalidation_conditions=result.invalidation_conditions,
+            positive_reasons=result.positive_reasons,
+            negative_reasons=result.negative_reasons,
+            warnings=result.warnings,
+            recommendation_basis=result.recommendation_basis,
+            sub_scores=sub_scores_to_dict(result.sub_scores),
+            gates=gates_to_dicts(result.gates),
+            analysis_version=result.analysis_version,
+            data_source=result.data_source,
+            is_synthetic=quote_info.get("is_synthetic"),
+            scan_run_id=result.scan_run_id,
+            requested_by_user_id=current_user.id,
+            is_real_data=result.is_real_data,
+            quote_timestamp=result.quote_timestamp,
+            technical_confidence=_f(result.technical_confidence),
+            momentum_confidence=_f(result.momentum_confidence),
+            liquidity_confidence=_f(result.liquidity_confidence),
+            market_context_confidence=_f(result.market_context_confidence),
+            data_quality_confidence=_f(result.data_quality_confidence),
+            trade_type=result.trade_type.value if result.trade_type else None,
+            trade_type_label_ar=result.trade_type_label_ar,
+            time_horizon_rationale_ar=result.time_horizon_rationale_ar,
+            best_entry_price=_f(result.best_entry_price),
+            accumulation_zone_low=_f(result.accumulation_zone_low),
+            accumulation_zone_high=_f(result.accumulation_zone_high),
+            entry_quality=result.entry_quality,
+            entry_quality_label_ar=result.entry_quality_label_ar,
+            entry_status=result.entry_status.value,
+            entry_status_label_ar=result.entry_status_label_ar,
+            invalidation_price=_f(result.invalidation_price),
+            risk_level=result.risk_level,
+            risk_level_label_ar=result.risk_level_label_ar,
+            estimated_days_target_1=result.estimated_days_target_1,
+            estimated_days_target_2=result.estimated_days_target_2,
+            estimated_days_target_3=result.estimated_days_target_3,
+            nearest_support=_f(result.nearest_support),
+            major_support=_f(result.major_support),
+            nearest_resistance=_f(result.nearest_resistance),
+            major_resistance=_f(result.major_resistance),
+            breakout_level=_f(result.breakout_level),
+            breakdown_level=_f(result.breakdown_level),
+            support_resistance_evidence_ar=result.support_resistance_evidence_ar,
+            current_volume=_f(result.current_volume),
+            average_volume=_f(result.average_volume),
+            relative_volume=_f(result.relative_volume),
+            liquidity_quality_ar=result.liquidity_quality_ar,
+            accumulation_score=_f(result.accumulation_score),
+            accumulation_assessment_ar=result.accumulation_assessment_ar,
+            volume_confirms_decision=result.volume_confirms_decision,
+            abnormal_volume=result.abnormal_volume,
+            technical_evidence=result.technical_evidence,
+            trend_direction_ar=result.trend_direction_ar,
+            trend_strength_label_ar=result.trend_strength_label_ar,
+            decision_summary_ar=result.decision_summary_ar,
+            why_now_ar=result.why_now_ar,
+            why_not_stronger_ar=result.why_not_stronger_ar,
+            why_not_buy_reasons=result.why_not_buy_reasons,
+            entry_confirmation_conditions_ar=result.entry_confirmation_conditions_ar,
+            watch_next_session_ar=result.watch_next_session_ar,
+            market_risk_state=result.market_risk_state,
+            market_risk_label_ar=result.market_risk_label_ar,
+            market_risk_basis_ar=result.market_risk_basis_ar,
+            market_risk_entry_permitted=result.market_risk_entry_permitted,
+            market_risk_is_live=result.market_risk_is_live,
+            market_breadth_buy_count=result.market_breadth_buy_count,
+            market_breadth_sell_count=result.market_breadth_sell_count,
+            market_breadth_symbols_scanned=result.market_breadth_symbols_scanned,
+            market_breadth_average_confidence=_f(result.market_breadth_average_confidence),
+            fundamental_summary=result.fundamental_summary,
+            fundamental_summary_ar=result.fundamental_summary_ar,
+            news_impact=result.news_impact,
+            news_impact_summary_ar=result.news_impact_summary_ar,
         )
+        session.add(snapshot)
         session.commit()
     except Exception:  # noqa: BLE001 -- audit persistence must never break a read-only GET
         logger.exception("Failed to persist DecisionV2Snapshot for '%s' -- response is unaffected.", symbol)
         session.rollback()
+        snapshot = None
+
+    # AI Multi-Agent Investment Committee: runs only when the audit
+    # snapshot above actually persisted (its id is the FK every
+    # committee row needs) -- best-effort, never breaks this read-only
+    # GET (see InvestmentCommitteeOrchestrator.run_committee's own
+    # docstring). Reuses the same `investment_decision`/`result`/
+    # `context` this route already computed -- no re-fetch, no new
+    # indicator or fundamental computation.
+    if snapshot is not None:
+        committee_consensus = await InvestmentCommitteeOrchestrator().run_committee(
+            session,
+            snapshot.id,
+            symbol,
+            investment_decision,
+            result,
+            news_events=context.extra.get("news_sentiment", {}).get("events", []),
+        )
 
     return DecisionV2Out(
         symbol=result.symbol,
@@ -827,6 +889,7 @@ async def get_decision_v2(
         fundamental_summary_ar=result.fundamental_summary_ar,
         news_impact=result.news_impact,
         news_impact_summary_ar=result.news_impact_summary_ar,
+        committee=_committee_consensus_to_schema(committee_consensus),
     )
 
 

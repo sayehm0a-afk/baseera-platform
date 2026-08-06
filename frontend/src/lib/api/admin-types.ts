@@ -208,3 +208,89 @@ export interface DecisionIntelligence {
   rejection_reason_counts: RejectionReasonCount[];
   sector_ranking: SectorRanking[];
 }
+
+/** AI Multi-Agent Investment Committee -- GET
+ * /api/v1/admin/investment-committee/*. Every field is a direct read
+ * of the real, persisted CommitteeConsensus/CommitteeAgentOpinion rows
+ * (see src.ai_evolution.committee) -- no client-side computation. */
+export type AgentStanceValue = "BULLISH" | "BEARISH" | "NEUTRAL" | "UNAVAILABLE";
+
+export interface CommitteeSessionSummary {
+  session_id: number;
+  decision_v2_snapshot_id: number;
+  symbol: string;
+  company_name_ar: string | null;
+  decision: string;
+  decision_label_ar: string;
+  final_decision: string;
+  final_confidence: number;
+  agreement_pct: number;
+  disagreement_pct: number;
+  disagreement_score: number;
+  most_optimistic_agent: string | null;
+  most_conservative_agent: string | null;
+  created_at: string;
+}
+
+export interface CommitteeSessionList {
+  generated_at: string;
+  total_sessions: number;
+  sessions: CommitteeSessionSummary[];
+}
+
+export interface CommitteeAgentOpinionDetail {
+  agent_name: string;
+  role: string;
+  stance: AgentStanceValue;
+  confidence: number;
+  reasoning: string;
+  evidence: string[];
+  rejection_reasons: string[];
+  used_llm: boolean;
+}
+
+export interface RejectedAlternativeDetail {
+  agent_name: string;
+  role: string;
+  stance: AgentStanceValue;
+  confidence: number;
+  reasoning: string;
+  rejection_reason: string;
+}
+
+export interface CommitteeSessionDetail {
+  session_id: number;
+  decision_v2_snapshot_id: number;
+  symbol: string;
+  company_name_ar: string | null;
+  decision: string;
+  decision_label_ar: string;
+  decision_timestamp: string;
+  final_decision: string;
+  final_confidence: number;
+  participant_count: number;
+  directional_count: number;
+  agreement_pct: number;
+  disagreement_pct: number;
+  disagreement_score: number;
+  most_optimistic_agent: string | null;
+  most_optimistic_stance: string | null;
+  most_conservative_agent: string | null;
+  most_conservative_stance: string | null;
+  consensus_reasoning_ar: string;
+  weighted_votes: Record<string, number>;
+  rejected_alternatives: RejectedAlternativeDetail[];
+  opinions: CommitteeAgentOpinionDetail[];
+  created_at: string;
+}
+
+export interface CommitteeStats {
+  generated_at: string;
+  window_hours: number;
+  total_sessions: number;
+  average_agreement_pct: number | null;
+  average_disagreement_score: number | null;
+  final_decision_distribution: Record<string, number>;
+  most_optimistic_agent_counts: Record<string, number>;
+  most_conservative_agent_counts: Record<string, number>;
+}

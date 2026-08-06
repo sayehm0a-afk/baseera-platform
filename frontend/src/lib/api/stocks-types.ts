@@ -322,6 +322,55 @@ export interface DecisionV2 {
    * real reported financials, never fabricated. */
   fundamental_summary: Record<string, number | null>;
   fundamental_summary_ar: string;
+
+  /** AI Multi-Agent Investment Committee -- present only on a
+   * successful, best-effort committee run alongside this decision
+   * (see src.ai_evolution.committee). Null when the committee could
+   * not run, never a fabricated consensus. */
+  committee: CommitteeConsensus | null;
+}
+
+export type AgentStanceValue = "BULLISH" | "BEARISH" | "NEUTRAL" | "UNAVAILABLE";
+
+export interface CommitteeAgentOpinion {
+  agent_name: string;
+  role: string;
+  stance: AgentStanceValue;
+  confidence: number;
+  reasoning: string;
+  evidence: string[];
+  rejection_reasons: string[];
+  used_llm: boolean;
+}
+
+export interface RejectedAlternative {
+  agent_name: string;
+  role: string;
+  stance: AgentStanceValue;
+  confidence: number;
+  reasoning: string;
+  rejection_reason: string;
+}
+
+export interface CommitteeConsensus {
+  final_decision: "BUY" | "SELL" | "HOLD";
+  final_confidence: number;
+
+  participant_count: number;
+  directional_count: number;
+  agreement_pct: number;
+  disagreement_pct: number;
+  disagreement_score: number;
+
+  most_optimistic_agent: string | null;
+  most_optimistic_stance: string | null;
+  most_conservative_agent: string | null;
+  most_conservative_stance: string | null;
+
+  consensus_reasoning_ar: string;
+  rejected_alternatives: RejectedAlternative[];
+  weighted_votes: Record<string, number>;
+  opinions: CommitteeAgentOpinion[];
 }
 
 export interface StockSearchResult {

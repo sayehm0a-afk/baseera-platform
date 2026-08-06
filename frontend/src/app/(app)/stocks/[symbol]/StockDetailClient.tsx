@@ -6,6 +6,7 @@ import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import { RecommendationBadge, type RecommendationValue } from "@/components/badges/RecommendationBadge";
 import { PriceChart, type MovingAverageOverlay, type PriceLevel } from "@/components/charts/PriceChart";
+import { CommitteePanel } from "@/components/committee/CommitteePanel";
 import { BeginnerSummaryCard } from "@/components/decision/BeginnerSummaryCard";
 import { DecisionTransparencyPanel } from "@/components/decision/DecisionTransparencyPanel";
 import { ExecutiveDecisionCard } from "@/components/decision/ExecutiveDecisionCard";
@@ -256,6 +257,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           {beginnerMode ? <BeginnerSummaryCard decision={decisionV2.data} /> : null}
           <ExecutiveDecisionCard decision={decisionV2.data} />
           <DecisionTransparencyPanel decision={decisionV2.data} />
+          <CommitteePanel committee={decisionV2.data.committee} />
         </>
       ) : decisionV2.status === "loading" ? (
         <LoadingScreen />
