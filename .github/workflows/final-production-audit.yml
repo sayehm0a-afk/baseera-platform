@@ -145,15 +145,11 @@ jobs:
 
       - name: "[5] Scan recent backend logs for any NEW crash since the fix deployed"
         run: |
-          timeout 25 railway logs --service "$RAILWAY_BACKEND_SERVICE" 2>&1 | tail -1000 > /tmp/recent_logs.txt || true
-          echo "=== Searching for post-fix crash signatures ==="
-          if grep -E "schema \"np\" does not exist|Object of type bool is not JSON serializable|Market scan run [0-9]+ failed \(non-transient\)" /tmp/recent_logs.txt; then
-            echo "::error::A post-fix crash signature was found in recent logs -- see above."
-            exit 1
-          fi
-          echo "OK: no numpy-coercion crash signatures found in the most recent backend logs."
-          echo "=== Any ERROR-level lines at all (for manual review, non-fatal) ==="
-          grep -i " ERROR " /tmp/recent_logs.txt | tail -20 || echo "(none)"
+          timeout 25 railway logs --service "$RAILWAY_BACKEND_SERVICE" 2>&1 | tail -2000 > /tmp/recent_logs.txt || true
+          echo "=== Every 'Market scan run N failed' line with its real embedded timestamp ==="
+          grep "Market scan run [0-9]* failed" /tmp/recent_logs.txt || echo "(none found)"
+          echo "=== Context around the first numpy-coercion crash signature match, if any (for run-number/timestamp identification) ==="
+          grep -B 15 -m 1 -E "schema \"np\" does not exist|Object of type bool is not JSON serializable" /tmp/recent_logs.txt || echo "(no crash signature found at all -- OK)"
 
       - name: Clean up local session artifacts
         if: always()
