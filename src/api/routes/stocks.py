@@ -62,7 +62,13 @@ from src.analysis.analyst.output_formatter import OutputFormatter
 from src.analysis.context_builder import build_analysis_context
 from src.analysis.decision_pipeline import compute_investment_decision
 from src.analysis.decision_v2.engine import DecisionEngineV2
-from src.analysis.decision_v2.types import ANALYSIS_DISCLAIMER_AR, CONFIDENCE_DISCLAIMER_AR
+from src.analysis.decision_v2.types import (
+    ANALYSIS_DISCLAIMER_AR,
+    CONFIDENCE_DISCLAIMER_AR,
+    gates_to_dicts,
+    parse_quote_timestamp,
+    sub_scores_to_dict,
+)
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
 from src.analysis.ohlcv_loader import load_price_bars
@@ -498,40 +504,6 @@ async def get_investment_decision(
     )
 
 
-def _parse_quote_timestamp(raw: Optional[str]) -> Optional[datetime]:
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-
-
-def _sub_scores_dict(sub_scores) -> dict:
-    """The one place a DecisionResult's `sub_scores` gets unpacked into
-    a plain dict -- reused for both the DecisionV2Snapshot audit row's
-    JSON column and (via `SubScoresOut(**...)`) the DecisionV2Out
-    response, so the two representations can never silently drift
-    apart from each other."""
-    return {
-        "trend_score": sub_scores.trend_score,
-        "momentum_score": sub_scores.momentum_score,
-        "volume_score": sub_scores.volume_score,
-        "liquidity_score": sub_scores.liquidity_score,
-        "volatility_score": sub_scores.volatility_score,
-        "risk_reward_score": sub_scores.risk_reward_score,
-        "market_context_score": sub_scores.market_context_score,
-        "data_quality_score": sub_scores.data_quality_score,
-    }
-
-
-def _gates_as_dicts(gates) -> list:
-    """Same reasoning as `_sub_scores_dict`, for DecisionResult.gates --
-    reused for both the audit row's JSON column and (via
-    `GateOutcomeOut(**...)`) the response."""
-    return [{"name": g.name, "passed": g.passed, "detail": g.detail, "blocking": g.blocking} for g in gates]
-
-
 @router.get("/{symbol}/decision-v2", response_model=DecisionV2Out)
 @limiter.limit("60/minute")
 async def get_decision_v2(
@@ -589,7 +561,7 @@ async def get_decision_v2(
         sector_ar=sector_label_ar(stock.sector),
         is_synthetic=quote_info.get("is_synthetic"),
         data_source=quote_info.get("source") or "unknown",
-        quote_timestamp=_parse_quote_timestamp(quote_info.get("timestamp")),
+        quote_timestamp=parse_quote_timestamp(quote_info.get("timestamp")),
         market_status=market_info.status.value,
         market_is_open=market_info.status == MarketSessionStatus.OPEN,
         market_breadth=_latest_market_breadth(session),
@@ -633,8 +605,8 @@ async def get_decision_v2(
                 negative_reasons=result.negative_reasons,
                 warnings=result.warnings,
                 recommendation_basis=result.recommendation_basis,
-                sub_scores=_sub_scores_dict(result.sub_scores),
-                gates=_gates_as_dicts(result.gates),
+                sub_scores=sub_scores_to_dict(result.sub_scores),
+                gates=gates_to_dicts(result.gates),
                 analysis_version=result.analysis_version,
                 data_source=result.data_source,
                 is_synthetic=quote_info.get("is_synthetic"),
@@ -687,8 +659,8 @@ async def get_decision_v2(
         analysis_version=result.analysis_version,
         data_source=result.data_source,
         scan_run_id=result.scan_run_id,
-        sub_scores=SubScoresOut(**_sub_scores_dict(result.sub_scores)),
-        gates=[GateOutcomeOut(**g) for g in _gates_as_dicts(result.gates)],
+        sub_scores=SubScoresOut(**sub_scores_to_dict(result.sub_scores)),
+        gates=[GateOutcomeOut(**g) for g in gates_to_dicts(result.gates)],
         is_real_data=result.is_real_data,
         quote_timestamp=result.quote_timestamp,
         technical_confidence=result.technical_confidence,

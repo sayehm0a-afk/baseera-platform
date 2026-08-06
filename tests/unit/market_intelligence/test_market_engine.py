@@ -40,7 +40,7 @@ class _FakeScanner:
     def __init__(self, outcomes):
         self._outcomes = outcomes
 
-    async def scan(self, symbols, on_symbol_start=None, on_symbol_complete=None, on_retry=None):
+    async def scan(self, symbols, on_symbol_start=None, on_symbol_complete=None, on_retry=None, market_breadth=None):
         for outcome in self._outcomes:
             if on_symbol_start is not None:
                 on_symbol_start(outcome.symbol)

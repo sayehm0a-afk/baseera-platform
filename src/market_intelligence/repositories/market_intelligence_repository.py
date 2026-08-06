@@ -15,6 +15,7 @@ method) -- matches every other DB-touching module in this codebase
 (`ohlcv_loader.py`, `fundamental_loader.py`, the backtesting engine).
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -26,10 +27,12 @@ from src.ai_evolution.config import is_agent_panel_enabled, is_paper_trading_ena
 from src.ai_evolution.outcome_evaluation import create_pending_outcomes
 from src.ai_evolution.paper_trading import generate_challenger_snapshot, get_latest_challenger_config
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
+from src.analysis.decision_v2.types import gates_to_dicts, sub_scores_to_dict
 from src.domain.models import (
     ChangeType as DomainChangeType,
     AlertSeverity as DomainAlertSeverity,
     AlertType as DomainAlertType,
+    DecisionV2Snapshot,
     MarketAlert,
     MarketChangeEvent,
     MarketScanRun,
@@ -43,6 +46,8 @@ from src.domain.models import (
 from src.analysis.decision.types import DecisionFactorBreakdown
 from src.analysis.recommendation.types import Signal
 from src.market_intelligence.types import Alert, ChangeEvent, MarketBreadthSummary, SectorSummary, SymbolScanOutcome
+
+logger = logging.getLogger(__name__)
 
 # The source label written into RecommendationSnapshot.source for every
 # row this repository creates -- distinguishes a live scan write from a
@@ -282,6 +287,70 @@ class MarketIntelligenceRepository:
                 challenger_config = get_latest_challenger_config(session)
                 if challenger_config is not None:
                     generate_challenger_snapshot(session, snapshot, outcome.context, challenger_config)
+            # Phase 3A: this symbol's Decision Engine V2 result
+            # (computed by MarketScanner alongside the V1 decision
+            # above, from the same InvestmentDecision -- see
+            # SymbolScanOutcome.decision_v2's docstring), persisted as
+            # the same insert-only DecisionV2Snapshot audit row
+            # /decision-v2 writes, with scan_run_id finally populated
+            # for a scan-originated decision. `decision_v2` is None
+            # whenever V2 computation itself failed for this symbol
+            # (best-effort) -- guarded independently of the writes
+            # above so a V2-only failure never discards this symbol's
+            # V1 records already added to this same session.
+            if outcome.decision_v2 is not None:
+                try:
+                    result = outcome.decision_v2
+                    session.add(
+                        DecisionV2Snapshot(
+                            stock_id=stock_id,
+                            symbol=result.symbol,
+                            company_name_ar=result.company_name_ar,
+                            company_name_en=result.company_name_en,
+                            sector_ar=result.sector_ar,
+                            decision=result.decision.value,
+                            decision_label_ar=result.decision_label_ar,
+                            confidence_score=result.confidence_score,
+                            opportunity_quality_score=result.opportunity_quality_score,
+                            risk_score=result.risk_score,
+                            data_quality_score=result.data_quality_score,
+                            data_freshness_status=result.data_freshness_status.value,
+                            current_price=result.current_price,
+                            entry_zone_low=result.entry_zone_low,
+                            entry_zone_high=result.entry_zone_high,
+                            stop_loss=result.stop_loss,
+                            target_1=result.target_1,
+                            target_2=result.target_2,
+                            target_3=result.target_3,
+                            expected_return_target_1=result.expected_return_target_1,
+                            expected_return_target_2=result.expected_return_target_2,
+                            downside_to_stop=result.downside_to_stop,
+                            risk_reward_target_1=result.risk_reward_target_1,
+                            risk_reward_target_2=result.risk_reward_target_2,
+                            expected_holding_period_min_days=result.expected_holding_period_min_days,
+                            expected_holding_period_max_days=result.expected_holding_period_max_days,
+                            expected_holding_period_label_ar=result.expected_holding_period_label_ar,
+                            horizon_type=result.horizon_type,
+                            market_status=result.market_status,
+                            decision_timestamp=result.decision_timestamp,
+                            invalidation_conditions=result.invalidation_conditions,
+                            positive_reasons=result.positive_reasons,
+                            negative_reasons=result.negative_reasons,
+                            warnings=result.warnings,
+                            recommendation_basis=result.recommendation_basis,
+                            sub_scores=sub_scores_to_dict(result.sub_scores),
+                            gates=gates_to_dicts(result.gates),
+                            analysis_version=result.analysis_version,
+                            data_source=result.data_source,
+                            is_synthetic=outcome.is_synthetic,
+                            scan_run_id=run_id,
+                            requested_by_user_id=None,
+                        )
+                    )
+                except Exception:  # noqa: BLE001 -- a V2 audit-row build failure must never discard this symbol's V1 records
+                    logger.exception(
+                        "Failed to build DecisionV2Snapshot for '%s' during scan persist -- skipped.", outcome.symbol
+                    )
         session.commit()
 
     def get_symbol_records_by_symbol(self, session: Session, run_id: int) -> Dict[str, SymbolIntelligenceRecord]:
