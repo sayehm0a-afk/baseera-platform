@@ -34,6 +34,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.api.schemas.market_intelligence import (
+    DbConsistencyOut,
     DiagnosticDecisionV2SampleOut,
     DiagnosticSampleSymbolOut,
     DiagnosticScanOut,
@@ -41,12 +42,16 @@ from src.api.schemas.market_intelligence import (
     MarketCoverageOut,
     MarketScanRequest,
     MarketScanRunOut,
+    PipelineStageOut,
+    SectorCoverageOut,
     UniverseBucketCountOut,
 )
 from src.auth.rbac import require_staff_role
 from src.core.db.database import get_db
 from src.domain.models import (
     DecisionV2Snapshot,
+    Dividend,
+    FundamentalSnapshot,
     IngestionRunLog,
     MarketScanRun,
     MarketScanStatus,
@@ -389,6 +394,202 @@ async def get_market_coverage(
 
     coverage_pct = (stocks_with_price_history / active_stocks * 100) if active_stocks > 0 else None
 
+    # Main Market vs Nomu split, derived from the bucket
+    # universe_policy.classify_universe already assigned -- see that
+    # module's MAIN_SEGMENT_MARKERS/NOMU_SEGMENT_MARKERS.
+    main_market_stocks = sum(
+        count for bucket, count in bucket_rows if bucket and bucket.startswith("MAIN_MARKET_EQUITY")
+    )
+    nomu_market_stocks = sum(
+        count for bucket, count in bucket_rows if bucket and bucket.startswith("NOMU_EQUITY")
+    )
+    _EXCLUSION_BUCKETS = {"ETF_FUND", "REIT", "SUKUK_BOND", "RIGHTS_ISSUE", "SUSPENDED", "INACTIVE_DELISTED"}
+    excluded_instrument_counts = [
+        UniverseBucketCountOut(bucket=bucket, count=count) for bucket, count in bucket_rows if bucket in _EXCLUSION_BUCKETS
+    ]
+    total_excluded_non_equity = sum(count for bucket, count in bucket_rows if bucket in _EXCLUSION_BUCKETS)
+    unclassified_market_segment_stocks = (
+        total_stocks - main_market_stocks - nomu_market_stocks - total_excluded_non_equity
+    )
+
+    fundamentals_subq = session.query(FundamentalSnapshot.stock_id).distinct().subquery()
+    stocks_with_fundamentals = (
+        session.query(func.count(Stock.id))
+        .filter(Stock.is_active.is_(True))
+        .filter(Stock.id.in_(session.query(fundamentals_subq.c.stock_id)))
+        .scalar()
+        or 0
+    )
+    stocks_without_fundamentals = active_stocks - stocks_with_fundamentals
+
+    dividends_subq = session.query(Dividend.stock_id).distinct().subquery()
+    stocks_with_dividends = (
+        session.query(func.count(Stock.id))
+        .filter(Stock.is_active.is_(True))
+        .filter(Stock.id.in_(session.query(dividends_subq.c.stock_id)))
+        .scalar()
+        or 0
+    )
+    stocks_without_dividends = active_stocks - stocks_with_dividends
+
+    # Per-sector coverage. `Stock.sector` is nullable (SAHMK's directory
+    # response has no confirmed sector field -- see universe_policy.py's
+    # docstring), so a None group is real evidence of that gap, not an
+    # ingestion bug, and is reported the same way as any named sector.
+    sector_values = [row[0] for row in session.query(Stock.sector).distinct().all()]
+    sector_coverage: List[SectorCoverageOut] = []
+    for sector in sector_values:
+        sector_predicate = Stock.sector.is_(None) if sector is None else Stock.sector == sector
+        sector_total = session.query(func.count(Stock.id)).filter(sector_predicate).scalar() or 0
+        sector_active = (
+            session.query(func.count(Stock.id)).filter(sector_predicate).filter(Stock.is_active.is_(True)).scalar()
+            or 0
+        )
+        sector_with_bars = (
+            session.query(func.count(Stock.id))
+            .filter(sector_predicate)
+            .filter(Stock.is_active.is_(True))
+            .filter(Stock.id.in_(session.query(symbols_with_bars.c.stock_id)))
+            .scalar()
+            or 0
+        )
+        sector_coverage.append(
+            SectorCoverageOut(
+                sector=sector,
+                total_stocks=sector_total,
+                active_stocks=sector_active,
+                stocks_with_price_history=sector_with_bars,
+                coverage_pct=(sector_with_bars / sector_active * 100) if sector_active > 0 else None,
+            )
+        )
+    sector_coverage.sort(key=lambda s: s.total_stocks, reverse=True)
+
+    latest_scan_symbols_entering_decision_engine = 0
+    latest_scan_recommendations_generated = 0
+    if latest_scan is not None:
+        latest_scan_symbols_entering_decision_engine = (
+            session.query(func.count(DecisionV2Snapshot.id))
+            .filter(DecisionV2Snapshot.scan_run_id == latest_scan.id)
+            .scalar()
+            or 0
+        )
+        latest_scan_recommendations_generated = (
+            session.query(func.count(SymbolIntelligenceRecord.id))
+            .filter(SymbolIntelligenceRecord.scan_run_id == latest_scan.id)
+            .scalar()
+            or 0
+        )
+
+    db_consistency = DbConsistencyOut(
+        active_stocks_missing_instrument_bucket=(
+            session.query(func.count(Stock.id))
+            .filter(Stock.is_active.is_(True))
+            .filter(Stock.instrument_bucket.is_(None))
+            .scalar()
+            or 0
+        ),
+        active_stocks_missing_sector=(
+            session.query(func.count(Stock.id))
+            .filter(Stock.is_active.is_(True))
+            .filter(Stock.sector.is_(None))
+            .scalar()
+            or 0
+        ),
+        active_stocks_missing_exchange=(
+            session.query(func.count(Stock.id))
+            .filter(Stock.is_active.is_(True))
+            .filter(Stock.exchange.is_(None))
+            .scalar()
+            or 0
+        ),
+        inactive_stocks_missing_exclusion_reason=(
+            session.query(func.count(Stock.id))
+            .filter(Stock.is_active.is_(False))
+            .filter(Stock.exclusion_reason.is_(None))
+            .scalar()
+            or 0
+        ),
+        active_stocks_with_exclusion_reason_set=(
+            session.query(func.count(Stock.id))
+            .filter(Stock.is_active.is_(True))
+            .filter(Stock.exclusion_reason.isnot(None))
+            .scalar()
+            or 0
+        ),
+    )
+
+    pipeline_funnel = [
+        PipelineStageOut(
+            stage="Discovery (total Stock rows)",
+            output_count=total_stocks,
+            relative_to=total_stocks,
+            dropped=0,
+            reason="Every symbol a SAHMK directory sync has ever seen, plus any explicitly configured symbol.",
+        ),
+        PipelineStageOut(
+            stage="Eligibility (active, non-excluded)",
+            output_count=active_stocks,
+            relative_to=total_stocks,
+            dropped=total_stocks - active_stocks,
+            reason="Excluded by universe_policy.classify_universe as ETF/REIT/sukuk/rights/suspended/delisted.",
+        ),
+        PipelineStageOut(
+            stage="OHLCV ingested",
+            output_count=stocks_with_price_history,
+            relative_to=active_stocks,
+            dropped=active_stocks - stocks_with_price_history,
+            reason="Active stock has no PriceBar rows yet; SymbolSelector requires at least one bar to scan it.",
+        ),
+        PipelineStageOut(
+            stage="Fundamentals ingested",
+            output_count=stocks_with_fundamentals,
+            relative_to=active_stocks,
+            dropped=active_stocks - stocks_with_fundamentals,
+            reason="Active stock has no FundamentalSnapshot rows yet.",
+        ),
+        PipelineStageOut(
+            stage="Dividends ingested",
+            output_count=stocks_with_dividends,
+            relative_to=active_stocks,
+            dropped=active_stocks - stocks_with_dividends,
+            reason="Active stock has no Dividend rows yet (many real companies pay none -- absence alone is not a defect).",
+        ),
+        PipelineStageOut(
+            stage="Entered Decision Engine (latest scan)",
+            output_count=latest_scan_symbols_entering_decision_engine,
+            relative_to=stocks_with_price_history,
+            dropped=max(stocks_with_price_history - latest_scan_symbols_entering_decision_engine, 0),
+            reason=(
+                "Symbols with a DecisionV2Snapshot tied to the latest MarketScanRun."
+                if latest_scan is not None
+                else "No MarketScanRun has completed yet."
+            ),
+        ),
+        PipelineStageOut(
+            stage="Recommendations generated (latest scan)",
+            output_count=latest_scan_recommendations_generated,
+            relative_to=(
+                latest_scan_symbols_entering_decision_engine
+                if latest_scan_symbols_entering_decision_engine
+                else stocks_with_price_history
+            ),
+            dropped=max(
+                (
+                    latest_scan_symbols_entering_decision_engine
+                    if latest_scan_symbols_entering_decision_engine
+                    else stocks_with_price_history
+                )
+                - latest_scan_recommendations_generated,
+                0,
+            ),
+            reason=(
+                "SymbolIntelligenceRecord rows written by the latest MarketScanRun."
+                if latest_scan is not None
+                else "No MarketScanRun has completed yet."
+            ),
+        ),
+    ]
+
     return MarketCoverageOut(
         generated_at=datetime.now(timezone.utc),
         total_stocks=total_stocks,
@@ -402,4 +603,18 @@ async def get_market_coverage(
         latest_ingestion_runs=latest_ingestion_runs,
         latest_scan_run=latest_scan_run,
         coverage_pct=coverage_pct,
+        main_market_stocks=main_market_stocks,
+        nomu_market_stocks=nomu_market_stocks,
+        unclassified_market_segment_stocks=unclassified_market_segment_stocks,
+        excluded_instrument_counts=excluded_instrument_counts,
+        total_excluded_non_equity=total_excluded_non_equity,
+        stocks_with_fundamentals=stocks_with_fundamentals,
+        stocks_without_fundamentals=stocks_without_fundamentals,
+        stocks_with_dividends=stocks_with_dividends,
+        stocks_without_dividends=stocks_without_dividends,
+        sector_coverage=sector_coverage,
+        latest_scan_symbols_entering_decision_engine=latest_scan_symbols_entering_decision_engine,
+        latest_scan_recommendations_generated=latest_scan_recommendations_generated,
+        db_consistency=db_consistency,
+        pipeline_funnel=pipeline_funnel,
     )

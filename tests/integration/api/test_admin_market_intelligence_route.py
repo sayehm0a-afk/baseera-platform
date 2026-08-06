@@ -27,8 +27,11 @@ from src.core.db import database
 from src.core.db.database import Base, get_db
 from src.domain.models import (
     DecisionV2Snapshot,
+    Dividend,
+    FundamentalSnapshot,
     MarketScanRun,
     MarketScanStatus,
+    PeriodType,
     PriceBar,
     RecommendationLabel,
     StaffRole,
@@ -423,6 +426,179 @@ def test_coverage_reports_the_latest_scan_run(client, session_factory, as_staff)
     assert body["latest_scan_run"]["symbols_succeeded"] == 245
 
 
+def test_coverage_reports_main_nomu_split_and_excluded_instrument_counts(client, session_factory, as_staff):
+    session = session_factory()
+    session.add(Stock(symbol="2222", name_en="Saudi Aramco", is_active=True, instrument_bucket="MAIN_MARKET_EQUITY"))
+    session.add(Stock(symbol="9999", name_en="Nomu Co", is_active=True, instrument_bucket="NOMU_EQUITY"))
+    session.add(
+        Stock(
+            symbol="4342", name_en="Some REIT Fund", is_active=False,
+            instrument_bucket="REIT", exclusion_reason="security_type='REIT'",
+        )
+    )
+    session.add(
+        Stock(
+            symbol="8010", name_en="Some ETF", is_active=False,
+            instrument_bucket="ETF_FUND", exclusion_reason="is_etf=True",
+        )
+    )
+    session.add(Stock(symbol="1010", name_en="Never classified", is_active=True))
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["main_market_stocks"] == 1
+    assert body["nomu_market_stocks"] == 1
+    assert body["total_excluded_non_equity"] == 2
+    excluded = {row["bucket"]: row["count"] for row in body["excluded_instrument_counts"]}
+    assert excluded == {"REIT": 1, "ETF_FUND": 1}
+    # total(5) - main(1) - nomu(1) - excluded(2) = 1 (the never-classified row)
+    assert body["unclassified_market_segment_stocks"] == 1
+
+
+def test_coverage_reports_fundamentals_and_dividend_counts(client, session_factory, as_staff):
+    session = session_factory()
+    with_fundamentals = Stock(symbol="2222", name_en="Saudi Aramco", is_active=True)
+    with_dividend = Stock(symbol="1120", name_en="Al Rajhi Bank", is_active=True)
+    bare = Stock(symbol="1180", name_en="No fundamentals or dividends", is_active=True)
+    session.add_all([with_fundamentals, with_dividend, bare])
+    session.commit()
+    session.add(
+        FundamentalSnapshot(
+            stock_id=with_fundamentals.id, period_type=PeriodType.ANNUAL,
+            fiscal_period_end=datetime(2025, 12, 31).date(), revenue=Decimal("1000"),
+            net_income=Decimal("100"), total_assets=Decimal("5000"), total_liabilities=Decimal("2000"),
+            total_equity=Decimal("3000"), source="sahmk",
+        )
+    )
+    session.add(
+        Dividend(
+            stock_id=with_dividend.id, ex_date=datetime(2026, 1, 1).date(),
+            amount_per_share=Decimal("1.5"), source="sahmk",
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stocks_with_fundamentals"] == 1
+    assert body["stocks_without_fundamentals"] == 2
+    assert body["stocks_with_dividends"] == 1
+    assert body["stocks_without_dividends"] == 2
+
+
+def test_coverage_reports_per_sector_breakdown(client, session_factory, as_staff):
+    _seed_stock_with_bars(session_factory, "2222", sector="Energy", count=5)
+    session = session_factory()
+    session.add(Stock(symbol="1120", name_en="Al Rajhi Bank", sector="Banks", is_active=True))
+    session.add(Stock(symbol="4030", name_en="No sector yet", sector=None, is_active=True))
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    by_sector = {row["sector"]: row for row in body["sector_coverage"]}
+    assert by_sector["Energy"]["total_stocks"] == 1
+    assert by_sector["Energy"]["stocks_with_price_history"] == 1
+    assert by_sector["Energy"]["coverage_pct"] == pytest.approx(100.0)
+    assert by_sector["Banks"]["total_stocks"] == 1
+    assert by_sector["Banks"]["stocks_with_price_history"] == 0
+    assert by_sector["Banks"]["coverage_pct"] == pytest.approx(0.0)
+    assert by_sector[None]["total_stocks"] == 1
+
+
+def test_coverage_reports_decision_engine_entry_and_recommendation_counts_for_latest_scan(
+    client, session_factory, as_staff
+):
+    session = session_factory()
+    scan = MarketScanRun(status=MarketScanStatus.SUCCESS, symbols_requested=2, symbols_succeeded=2)
+    session.add(scan)
+    session.commit()
+    stock = Stock(symbol="2222", name_en="Saudi Aramco", sector="Energy", is_active=True)
+    session.add(stock)
+    session.commit()
+    session.add(
+        SymbolIntelligenceRecord(
+            scan_run_id=scan.id, stock_id=stock.id, symbol="2222", recommendation=RecommendationLabel.BUY,
+            confidence=Decimal("70"), final_score=Decimal("65"), evaluated_at=datetime.now(timezone.utc),
+            engine_version="v1",
+        )
+    )
+    session.add(
+        DecisionV2Snapshot(
+            stock_id=stock.id, symbol="2222", company_name_en="Saudi Aramco", decision="BUY_CANDIDATE",
+            decision_label_ar="شراء", confidence_score=Decimal("70"),
+            opportunity_quality_score=Decimal("60"), risk_score=Decimal("30"), data_quality_score=Decimal("90"),
+            data_freshness_status="FRESH", market_status="OPEN", decision_timestamp=datetime.now(timezone.utc),
+            analysis_version="v2", data_source="SAHMK_REAL", scan_run_id=scan.id,
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["latest_scan_symbols_entering_decision_engine"] == 1
+    assert body["latest_scan_recommendations_generated"] == 1
+
+
+def test_coverage_reports_db_consistency_gaps(client, session_factory, as_staff):
+    session = session_factory()
+    # Active but missing instrument_bucket/sector/exchange.
+    session.add(Stock(symbol="2222", name_en="Missing classification", is_active=True))
+    # Inactive but missing exclusion_reason (a real inconsistency to surface).
+    session.add(Stock(symbol="4342", name_en="Excluded, no reason recorded", is_active=False))
+    # Active but has an exclusion_reason set (also a real inconsistency).
+    session.add(
+        Stock(
+            symbol="1010", name_en="Active with stale exclusion_reason", is_active=True,
+            exclusion_reason="security_type='REIT'",
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    consistency = response.json()["db_consistency"]
+    assert consistency["active_stocks_missing_instrument_bucket"] == 2
+    assert consistency["active_stocks_missing_sector"] == 2
+    assert consistency["active_stocks_missing_exchange"] == 2
+    assert consistency["inactive_stocks_missing_exclusion_reason"] == 1
+    assert consistency["active_stocks_with_exclusion_reason_set"] == 1
+
+
+def test_coverage_pipeline_funnel_stages_are_all_present_with_reasons(client, session_factory, as_staff):
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    stages = response.json()["pipeline_funnel"]
+    stage_names = [s["stage"] for s in stages]
+    assert stage_names == [
+        "Discovery (total Stock rows)",
+        "Eligibility (active, non-excluded)",
+        "OHLCV ingested",
+        "Fundamentals ingested",
+        "Dividends ingested",
+        "Entered Decision Engine (latest scan)",
+        "Recommendations generated (latest scan)",
+    ]
+    for stage in stages:
+        assert stage["reason"]
+        assert stage["dropped"] >= 0
+
+
 def test_coverage_handles_an_entirely_empty_database(client, session_factory, as_staff):
     """No stocks, no ingestion runs, no scan runs yet -- must report
     real zeros/nulls, never crash or fabricate a number."""
@@ -434,3 +610,23 @@ def test_coverage_handles_an_entirely_empty_database(client, session_factory, as
     assert body["active_stocks"] == 0
     assert body["coverage_pct"] is None
     assert body["latest_scan_run"] is None
+    assert body["main_market_stocks"] == 0
+    assert body["nomu_market_stocks"] == 0
+    assert body["unclassified_market_segment_stocks"] == 0
+    assert body["excluded_instrument_counts"] == []
+    assert body["total_excluded_non_equity"] == 0
+    assert body["stocks_with_fundamentals"] == 0
+    assert body["stocks_without_fundamentals"] == 0
+    assert body["stocks_with_dividends"] == 0
+    assert body["stocks_without_dividends"] == 0
+    assert body["sector_coverage"] == []
+    assert body["latest_scan_symbols_entering_decision_engine"] == 0
+    assert body["latest_scan_recommendations_generated"] == 0
+    assert body["db_consistency"] == {
+        "active_stocks_missing_instrument_bucket": 0,
+        "active_stocks_missing_sector": 0,
+        "active_stocks_missing_exchange": 0,
+        "inactive_stocks_missing_exclusion_reason": 0,
+        "active_stocks_with_exclusion_reason_set": 0,
+    }
+    assert len(body["pipeline_funnel"]) == 7
