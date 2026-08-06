@@ -143,6 +143,17 @@ jobs:
           echo "=== Diagnostic scan result ==="
           python3 -m json.tool /tmp/diagnostic.json
 
+      - name: Fetch real, SQL-backed market coverage evidence
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          CSRF=$(cat /tmp/.csrf)
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/coverage" \
+            -o /tmp/coverage.json -w "\nHTTP %{http_code}\n"
+          echo "=== Market coverage result ==="
+          python3 -m json.tool /tmp/coverage.json
+
       - name: Verify the same data is readable through the public market API
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
