@@ -30,24 +30,33 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.api.schemas.market_intelligence import (
     DiagnosticDecisionV2SampleOut,
     DiagnosticSampleSymbolOut,
     DiagnosticScanOut,
+    IngestionJobStatusOut,
+    MarketCoverageOut,
     MarketScanRequest,
+    MarketScanRunOut,
+    UniverseBucketCountOut,
 )
 from src.auth.rbac import require_staff_role
 from src.core.db.database import get_db
 from src.domain.models import (
     DecisionV2Snapshot,
+    IngestionRunLog,
     MarketScanRun,
     MarketScanStatus,
+    PriceBar,
     StaffRole,
+    Stock,
     SymbolIntelligenceRecord,
     User,
 )
+from src.market_data.ingestion import config as ingestion_config
 from src.market_data.strict_mode import StrictRealDataUnavailableError
 from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -288,4 +297,109 @@ async def trigger_diagnostic_scan(
         latest_completed_run_v1_sample_symbols=latest_completed_run_v1_sample_symbols,
         latest_completed_run_decision_v2_rows_written=latest_completed_run_decision_v2_rows_written,
         latest_completed_run_decision_v2_sample=latest_completed_run_decision_v2_sample,
+    )
+
+
+_INGESTION_JOB_NAMES = ["symbols", "historical_ohlcv", "fundamentals", "dividends"]
+
+
+@router.get("/coverage", response_model=MarketCoverageOut)
+async def get_market_coverage(
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> MarketCoverageOut:
+    """Real, SQL-backed evidence of how much of the Saudi market Basirah
+    actually tracks and scans right now -- direct query results, never
+    estimated. Exists to make "is the platform only covering a handful
+    of stocks" an answerable question instead of an impression: total/
+    active/inactive Stock rows, the ETF/REIT/sukuk/rights/suspended
+    breakdown universe_policy already computes (see ingest_symbols.py),
+    how many active symbols actually have price history to scan (the
+    real SymbolSelector eligibility condition), the current ingestion
+    scheduler configuration, the last run of each of the 4 ingestion
+    jobs, and the most recent market scan."""
+    total_stocks = session.query(func.count(Stock.id)).scalar() or 0
+    active_stocks = session.query(func.count(Stock.id)).filter(Stock.is_active.is_(True)).scalar() or 0
+    inactive_stocks = total_stocks - active_stocks
+
+    symbols_with_bars = session.query(PriceBar.stock_id).distinct().subquery()
+    stocks_with_price_history = (
+        session.query(func.count(Stock.id))
+        .filter(Stock.is_active.is_(True))
+        .filter(Stock.id.in_(session.query(symbols_with_bars.c.stock_id)))
+        .scalar()
+        or 0
+    )
+    stocks_without_price_history = active_stocks - stocks_with_price_history
+
+    bucket_rows = (
+        session.query(Stock.instrument_bucket, func.count(Stock.id)).group_by(Stock.instrument_bucket).all()
+    )
+    instrument_bucket_counts = [
+        UniverseBucketCountOut(bucket=bucket, count=count) for bucket, count in bucket_rows
+    ]
+
+    latest_ingestion_runs: List[IngestionJobStatusOut] = []
+    for job_name in _INGESTION_JOB_NAMES:
+        latest = (
+            session.query(IngestionRunLog)
+            .filter(IngestionRunLog.job_name == job_name)
+            .order_by(IngestionRunLog.started_at.desc())
+            .first()
+        )
+        if latest is None:
+            latest_ingestion_runs.append(IngestionJobStatusOut(job_name=job_name, status=None))
+        else:
+            latest_ingestion_runs.append(
+                IngestionJobStatusOut(
+                    job_name=job_name,
+                    status=latest.status.value,
+                    symbols_requested=latest.symbols_requested,
+                    symbols_succeeded=latest.symbols_succeeded,
+                    symbols_failed=latest.symbols_failed,
+                    rows_upserted=latest.rows_upserted,
+                    retry_count=latest.retry_count,
+                    started_at=latest.started_at,
+                    finished_at=latest.finished_at,
+                    duration_seconds=float(latest.duration_seconds) if latest.duration_seconds is not None else None,
+                    error_summary=latest.error_summary,
+                )
+            )
+
+    latest_scan = session.query(MarketScanRun).order_by(MarketScanRun.id.desc()).first()
+    latest_scan_run = (
+        MarketScanRunOut(
+            id=latest_scan.id,
+            status=latest_scan.status.value,
+            symbols_requested=latest_scan.symbols_requested,
+            symbols_succeeded=latest_scan.symbols_succeeded,
+            symbols_skipped=latest_scan.symbols_skipped,
+            symbols_failed=latest_scan.symbols_failed,
+            error_summary=latest_scan.error_summary,
+            started_at=latest_scan.started_at,
+            finished_at=latest_scan.finished_at,
+            duration_seconds=(
+                float(latest_scan.duration_seconds) if latest_scan.duration_seconds is not None else None
+            ),
+            created_at=latest_scan.created_at,
+        )
+        if latest_scan is not None
+        else None
+    )
+
+    coverage_pct = (stocks_with_price_history / active_stocks * 100) if active_stocks > 0 else None
+
+    return MarketCoverageOut(
+        generated_at=datetime.now(timezone.utc),
+        total_stocks=total_stocks,
+        active_stocks=active_stocks,
+        inactive_stocks=inactive_stocks,
+        stocks_with_price_history=stocks_with_price_history,
+        stocks_without_price_history=stocks_without_price_history,
+        instrument_bucket_counts=instrument_bucket_counts,
+        ingestion_auto_discover_enabled=ingestion_config.is_symbol_auto_discovery_enabled(),
+        ingestion_configured_seed_symbols=len(ingestion_config.get_ingestion_symbol_universe()),
+        latest_ingestion_runs=latest_ingestion_runs,
+        latest_scan_run=latest_scan_run,
+        coverage_pct=coverage_pct,
     )

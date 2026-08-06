@@ -32,6 +32,7 @@ from src.market_data.sahmk.exceptions import (
     SahmkError,
 )
 from src.market_data.sahmk.service import SahmkMarketDataService
+from src.market_intelligence.universe_policy import UniverseClassificationResult, classify_universe
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class SahmkMarketDataProvider(IMarketDataProvider):
             client=SahmkClient(api_key=api_key, base_url=api_endpoint)
         )
         self.authenticated = False
+        self.last_universe_classification: Optional[UniverseClassificationResult] = None
 
     async def authenticate(self) -> bool:
         """Verifies the configured key against the cheapest confirmed
@@ -151,8 +153,23 @@ class SahmkMarketDataProvider(IMarketDataProvider):
         Not part of IMarketDataProvider -- DevMarketDataProvider has no
         real "discovery" concept, so this is opportunistic: callers
         (ingest_symbols.py) check for this method's presence rather
-        than assuming every provider has it."""
+        than assuming every provider has it.
+
+        Every entry is run through `universe_policy.classify_universe`
+        (deny-list: ETFs/REITs/sukuk/rights/suspended/delisted excluded,
+        everything else eligible) and carries `is_eligible` +
+        `instrument_bucket` so ingest_symbols.sync_symbols can mark a
+        non-equity instrument's Stock row inactive instead of scanning
+        it as if it were a common stock. `self.last_universe_classification`
+        keeps the full breakdown (bucket counts, distinct observed field
+        values) for admin/coverage reporting -- the same "record real
+        diagnostics for the last real call" pattern
+        SahmkMarketDataService.last_directory_diagnostics already uses."""
         companies = await self._service.get_company_directory()
+        classification: UniverseClassificationResult = classify_universe(companies)
+        self.last_universe_classification = classification
+        eligible_symbols = set(classification.eligible_symbols)
+        detail_by_symbol = {c.symbol: c for c in classification.classifications}
         return [
             {
                 "symbol": c.symbol,
@@ -163,6 +180,11 @@ class SahmkMarketDataProvider(IMarketDataProvider):
                 "exchange": c.exchange,
                 "source": "sahmk",
                 "is_synthetic": False,
+                "is_eligible": c.symbol in eligible_symbols,
+                "instrument_bucket": detail_by_symbol[c.symbol].bucket if c.symbol in detail_by_symbol else None,
+                "exclusion_reason": (
+                    detail_by_symbol[c.symbol].exclusion_reason if c.symbol in detail_by_symbol else None
+                ),
             }
             for c in companies
         ]

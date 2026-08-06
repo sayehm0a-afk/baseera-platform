@@ -263,6 +263,55 @@ class MarketStatusOut(BaseModel):
     holiday_calendar_disclosed_gap: str
 
 
+class UniverseBucketCountOut(BaseModel):
+    """One row of Stock.instrument_bucket -> count -- e.g. how many
+    discovered instruments are common equities vs. ETFs/REITs/sukuk/
+    rights/suspended. `bucket=None` means the row predates universe
+    classification (added explicitly, or ingested before this column
+    existed), not an unclassified equity."""
+
+    bucket: Optional[str] = None
+    count: int
+
+
+class IngestionJobStatusOut(BaseModel):
+    """The most recent IngestionRunLog row for one scheduled ingestion
+    job (symbols/historical_ohlcv/fundamentals/dividends).
+    `status=None` means this job has never run in this deployment."""
+
+    job_name: str
+    status: Optional[str] = None
+    symbols_requested: int = 0
+    symbols_succeeded: int = 0
+    symbols_failed: int = 0
+    rows_upserted: int = 0
+    retry_count: int = 0
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    error_summary: Optional[str] = None
+
+
+class MarketCoverageOut(BaseModel):
+    """GET /api/v1/admin/market-intelligence/coverage -- real,
+    SQL-backed evidence of how much of the Saudi market Basirah
+    actually tracks, scans, and can recommend from, right now. Every
+    field is a direct query result, never estimated."""
+
+    generated_at: datetime
+    total_stocks: int
+    active_stocks: int
+    inactive_stocks: int
+    stocks_with_price_history: int
+    stocks_without_price_history: int
+    instrument_bucket_counts: List[UniverseBucketCountOut]
+    ingestion_auto_discover_enabled: bool
+    ingestion_configured_seed_symbols: int
+    latest_ingestion_runs: List[IngestionJobStatusOut]
+    latest_scan_run: Optional[MarketScanRunOut] = None
+    coverage_pct: Optional[float] = None
+
+
 class MarketSummaryOut(BaseModel):
     scan_run_id: Optional[int] = None
     generated_at: datetime

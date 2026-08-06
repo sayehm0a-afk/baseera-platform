@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.core.db.database import Base
-from src.domain.models import IngestionJobStatus, IngestionRunLog
+from src.domain.models import IngestionJobStatus, IngestionRunLog, Stock
 from src.market_data.ingestion._common import IngestionResult
 from src.market_data.ingestion.scheduler import (
     IngestionScheduler,
@@ -344,6 +344,96 @@ async def test_scheduler_loop_survives_a_job_exception_and_keeps_scheduling(
     session.close()
     assert len(runs) == len(calls)
     assert all(r.status == IngestionJobStatus.FAILED for r in runs)
+
+
+# --- _resolve_target_symbols (root-cause fix: OHLCV/fundamentals/ ------
+# dividends must scale to every discovered active Stock, not stay
+# capped at the static INGESTION_SYMBOL_UNIVERSE seed list forever) ----
+
+
+def test_resolve_target_symbols_falls_back_to_configured_list_on_cold_start(
+    session_factory, monkeypatch
+):
+    """Empty Stock table (no symbols job has run yet, or auto-discovery
+    is off) -- must return exactly the configured seed list, unchanged
+    from prior behavior."""
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ingestion_symbol_universe",
+        lambda: ["2222", "1120"],
+    )
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    assert scheduler._resolve_target_symbols() == ["2222", "1120"]
+
+
+def test_resolve_target_symbols_unions_configured_with_discovered_active_stocks(
+    session_factory, monkeypatch
+):
+    """The confirmed production root cause: once the symbols job has
+    discovered and activated real Tadawul equities beyond the 5-symbol
+    default, OHLCV/fundamentals/dividends must pick every one of them
+    up automatically -- not silently stay capped at the seed list
+    forever, which was why production only ever surfaced a handful of
+    stocks."""
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ingestion_symbol_universe",
+        lambda: ["2222"],
+    )
+    session = session_factory()
+    session.add(Stock(symbol="2222", name_en="Saudi Aramco", is_active=True))
+    session.add(Stock(symbol="1120", name_en="Al Rajhi Bank", is_active=True))
+    session.add(Stock(symbol="4342", name_en="Some REIT Fund", is_active=False))
+    session.commit()
+    session.close()
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    resolved = scheduler._resolve_target_symbols()
+
+    assert set(resolved) == {"2222", "1120"}  # the inactive REIT is excluded
+    assert resolved.count("2222") == 1  # deduped, not doubled
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_fundamentals_dividends_jobs_use_resolved_symbols_not_just_configured(
+    session_factory, monkeypatch
+):
+    """End-to-end proof at the job level: a symbol discovered and
+    activated by a prior symbols-job run (never in
+    INGESTION_SYMBOL_UNIVERSE) must actually be ingested by the OHLCV
+    job, not silently skipped."""
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ingestion_symbol_universe",
+        lambda: ["2222"],
+    )
+    session = session_factory()
+    session.add(Stock(symbol="2222", name_en="Saudi Aramco", is_active=True))
+    session.add(Stock(symbol="1211", name_en="Newly Discovered Co", is_active=True))
+    session.commit()
+    session.close()
+
+    class _FakeMarketProvider:
+        async def authenticate(self):
+            return True
+
+        async def disconnect(self):
+            pass
+
+        async def get_historical_ohlcv(self, symbol, start, end, interval="1d"):
+            return [
+                {
+                    "symbol": symbol, "open": 1, "high": 2, "low": 0.5, "close": 1.5,
+                    "volume": 100, "timestamp": "2026-01-01T00:00:00+00:00",
+                    "source": "fake", "is_synthetic": True,
+                }
+            ]
+
+    async def get_provider():
+        return _FakeMarketProvider()
+
+    scheduler = IngestionScheduler(session_factory=session_factory, market_provider_getter=get_provider)
+    result = await scheduler._run_historical_ohlcv()
+
+    assert result.symbols_requested == 2
+    assert result.symbols_succeeded == 2
 
 
 @pytest.mark.asyncio

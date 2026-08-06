@@ -311,3 +311,126 @@ def test_overlap_skip_still_reports_evidence_from_the_latest_completed_run(
     assert body["latest_completed_run_decision_v2_rows_written"] == 1
     assert body["latest_completed_run_decision_v2_sample"][0]["symbol"] == "2222"
     assert body["latest_completed_run_decision_v2_sample"][0]["decision"] == "BUY_CANDIDATE"
+
+
+# --- GET /coverage -------------------------------------------------------
+
+
+def test_coverage_requires_staff_role(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 403
+
+
+def test_coverage_reports_real_stock_and_price_history_counts(client, session_factory, as_staff):
+    """The direct evidence this endpoint exists for: exact active/
+    inactive Stock counts and how many of the active ones actually have
+    price history (the real SymbolSelector eligibility condition) --
+    not an estimate, a real query result."""
+    _seed_stock_with_bars(session_factory, "2222", count=5)  # active, has bars
+
+    session = session_factory()
+    session.add(Stock(symbol="1120", name_en="Al Rajhi Bank", is_active=True))  # active, no bars yet
+    session.add(
+        Stock(
+            symbol="4342", name_en="Some REIT Fund", is_active=False,
+            instrument_bucket="REIT", exclusion_reason="security_type='REIT'",
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_stocks"] == 3
+    assert body["active_stocks"] == 2
+    assert body["inactive_stocks"] == 1
+    assert body["stocks_with_price_history"] == 1
+    assert body["stocks_without_price_history"] == 1
+    assert body["coverage_pct"] == pytest.approx(50.0)
+
+    buckets = {row["bucket"]: row["count"] for row in body["instrument_bucket_counts"]}
+    assert buckets["REIT"] == 1
+    assert buckets[None] == 2  # 2222/1120 predate universe classification
+
+
+def test_coverage_reports_ingestion_scheduler_configuration(client, session_factory, as_staff, monkeypatch):
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ingestion_symbol_universe",
+        lambda: ["2222", "1120", "2010"],
+    )
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.is_symbol_auto_discovery_enabled", lambda: True
+    )
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ingestion_auto_discover_enabled"] is True
+    assert body["ingestion_configured_seed_symbols"] == 3
+
+
+def test_coverage_reports_the_latest_run_of_every_ingestion_job(client, session_factory, as_staff):
+    from src.domain.models import IngestionJobStatus, IngestionRunLog
+
+    session = session_factory()
+    now = datetime.now(timezone.utc)
+    session.add(
+        IngestionRunLog(
+            job_name="symbols", started_at=now - timedelta(hours=2), finished_at=now - timedelta(hours=1, minutes=58),
+            duration_seconds=Decimal("120.5"), symbols_requested=250, symbols_succeeded=248, symbols_failed=2,
+            rows_upserted=250, status=IngestionJobStatus.PARTIAL, error_summary="2 symbols failed",
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    by_job = {row["job_name"]: row for row in body["latest_ingestion_runs"]}
+    assert set(by_job.keys()) == {"symbols", "historical_ohlcv", "fundamentals", "dividends"}
+    assert by_job["symbols"]["status"] == "partial"
+    assert by_job["symbols"]["symbols_requested"] == 250
+    assert by_job["symbols"]["symbols_succeeded"] == 248
+    assert by_job["historical_ohlcv"]["status"] is None  # never run yet
+
+
+def test_coverage_reports_the_latest_scan_run(client, session_factory, as_staff):
+    session = session_factory()
+    session.add(
+        MarketScanRun(
+            status=MarketScanStatus.SUCCESS, symbols_requested=250, symbols_succeeded=245,
+            symbols_skipped=0, symbols_failed=5, duration_seconds=Decimal("310.2"),
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["latest_scan_run"]["status"] == "SUCCESS"
+    assert body["latest_scan_run"]["symbols_requested"] == 250
+    assert body["latest_scan_run"]["symbols_succeeded"] == 245
+
+
+def test_coverage_handles_an_entirely_empty_database(client, session_factory, as_staff):
+    """No stocks, no ingestion runs, no scan runs yet -- must report
+    real zeros/nulls, never crash or fabricate a number."""
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_stocks"] == 0
+    assert body["active_stocks"] == 0
+    assert body["coverage_pct"] is None
+    assert body["latest_scan_run"] is None

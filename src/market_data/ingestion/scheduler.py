@@ -43,7 +43,7 @@ from typing import Awaitable, Callable, List, Optional
 from sqlalchemy.orm import Session
 
 from src.core.db import database
-from src.domain.models import IngestionJobStatus, IngestionRunLog
+from src.domain.models import IngestionJobStatus, IngestionRunLog, Stock
 from src.market_data.ingestion import config as ingestion_config
 from src.market_data.ingestion._common import IngestionResult
 from src.market_data.ingestion.ingest_dividends import ingest_dividends
@@ -287,6 +287,36 @@ class IngestionScheduler:
                 )
             await asyncio.sleep(interval_fn())
 
+    def _resolve_target_symbols(self) -> List[str]:
+        """The symbol set every job except `_run_symbols` operates on:
+        the explicitly configured seed list, unioned with every symbol
+        the `symbols` job has already discovered and left active in the
+        `Stock` table (real Tadawul/Nomu equities when
+        INGESTION_AUTO_DISCOVER_SYMBOLS=true and universe_policy has
+        excluded non-equity instruments -- see ingest_symbols.py).
+
+        Without this union, OHLCV/fundamentals/dividends would silently
+        stay capped at INGESTION_SYMBOL_UNIVERSE (5 symbols by default)
+        forever, even after the symbols job discovers the full market --
+        SymbolSelector requires PriceBar rows to select a symbol for
+        scanning, so those symbols would exist as inert Stock rows but
+        never actually be scanned, ranked, or recommended. This was the
+        confirmed root cause of production only ever surfacing a small,
+        fixed handful of stocks. Falls back to exactly the configured
+        seed list when the DB has no other active Stock rows yet (cold
+        start, or auto-discovery disabled) -- behavior-preserving in
+        that case."""
+        configured = ingestion_config.get_ingestion_symbol_universe()
+        session = self._session_factory()
+        try:
+            discovered = [
+                row[0]
+                for row in session.query(Stock.symbol).filter(Stock.is_active.is_(True)).all()
+            ]
+        finally:
+            session.close()
+        return list(dict.fromkeys(list(configured) + discovered))
+
     async def _run_symbols(self) -> IngestionResult:
         provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
         symbols = ingestion_config.get_ingestion_symbol_universe()
@@ -299,7 +329,7 @@ class IngestionScheduler:
 
     async def _run_historical_ohlcv(self) -> IngestionResult:
         provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
-        symbols = ingestion_config.get_ingestion_symbol_universe()
+        symbols = self._resolve_target_symbols()
         return await ingest_historical_ohlcv(
             symbols,
             provider,
@@ -309,7 +339,7 @@ class IngestionScheduler:
 
     async def _run_fundamentals(self) -> IngestionResult:
         provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
-        symbols = ingestion_config.get_ingestion_symbol_universe()
+        symbols = self._resolve_target_symbols()
         return await ingest_fundamentals(
             symbols,
             provider,
@@ -319,5 +349,5 @@ class IngestionScheduler:
 
     async def _run_dividends(self) -> IngestionResult:
         provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
-        symbols = ingestion_config.get_ingestion_symbol_universe()
+        symbols = self._resolve_target_symbols()
         return await ingest_dividends(symbols, provider, self._session_factory)

@@ -29,6 +29,18 @@ class Stock(Base):
     currency = Column(String(3), nullable=False, default="SAR", server_default="SAR")
     lot_size = Column(Integer, nullable=False, default=1, server_default="1")
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    # Persisted result of universe_policy.classify_universe() the last
+    # time a SAHMK directory sync (ingest_symbols.sync_symbols with
+    # discover_all=True) saw this symbol -- e.g. "MAIN_MARKET_EQUITY",
+    # "ETF_FUND", "REIT", "SUKUK_BOND", "RIGHTS_ISSUE", "SUSPENDED",
+    # "INACTIVE_DELISTED". Null for a symbol that was only ever added
+    # explicitly (never went through directory classification) or
+    # ingested before this column existed. Kept as a durable,
+    # SQL-queryable record (not just an in-process diagnostic that
+    # resets on every deploy) so real universe-composition evidence
+    # (exact ETF/REIT/sukuk counts) survives process restarts.
+    instrument_bucket = Column(String(64), nullable=True)
+    exclusion_reason = Column(String(255), nullable=True)
     listed_at = Column(DateTime(timezone=True), nullable=True)
     # server_default (not just the Python-side `default=`) so any insert
     # that bypasses the SQLAlchemy ORM (raw SQL, a future async engine
