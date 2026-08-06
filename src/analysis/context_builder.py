@@ -77,6 +77,27 @@ def _news_sentiment_extra(session: Session, symbol: str, news_service: NewsIntel
     }
 
 
+_SUSPENSION_LOOKBACK_BARS = 3
+
+
+def _detect_likely_suspended(df) -> Optional[bool]:
+    """A real, computable-from-real-data proxy for "this symbol is
+    currently suspended/halted from trading" -- SAHMK exposes no
+    explicit trading-status field (confirmed against the verified
+    field list in docs/SAHMK_INTEGRATION.md), so this reads the signal
+    a genuine suspension actually produces in daily OHLCV data: zero
+    volume and an unchanged close across the most recent consecutive
+    sessions. `None` (not `False`) when there isn't enough history to
+    judge either way -- the publication gate reading this treats `None`
+    as NOT_EVALUATED, never as "confirmed not suspended"."""
+    if len(df) < _SUSPENSION_LOOKBACK_BARS:
+        return None
+    recent = df.tail(_SUSPENSION_LOOKBACK_BARS)
+    zero_volume = bool((recent["volume"] == 0).all())
+    frozen_price = bool(recent["close"].nunique() == 1)
+    return zero_volume and frozen_price
+
+
 async def build_analysis_context(
     stock: Stock,
     period_type: PeriodType,
@@ -127,6 +148,13 @@ async def build_analysis_context(
                     "timestamp": quote.get("timestamp"),
                     "source": quote.get("source"),
                     "is_synthetic": quote.get("is_synthetic"),
+                    # Real bid/ask when the provider's quote carries them
+                    # (SAHMK does; DevMarketDataProvider has no quote leg
+                    # at all) -- feeds the abnormal-spread publication
+                    # gate. None here means "not available", never a
+                    # fabricated spread.
+                    "bid": quote.get("bid"),
+                    "ask": quote.get("ask"),
                 }
             }
         except (SahmkError, CircuitBreakerOpenError) as exc:
@@ -161,7 +189,12 @@ async def build_analysis_context(
         )
 
     news_service = news_service if news_service is not None else NewsIntelligenceService()
-    extra = {**quote_extra, **_news_sentiment_extra(session, symbol, news_service)}
+    extra = {
+        **quote_extra,
+        **_news_sentiment_extra(session, symbol, news_service),
+        "bars_used": len(df),
+        "likely_suspended": _detect_likely_suspended(df),
+    }
 
     return AnalysisContext(
         symbol=symbol,

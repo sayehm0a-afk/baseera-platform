@@ -97,6 +97,29 @@ class RecommendationSnapshot(Base):
     risk_level = Column(String(16), nullable=True)
     position_size = Column(String(16), nullable=True)
 
+    # Recommendation-engine hardening: `target_price_2`/`target_price_3`
+    # mirror Decision Engine V2's up-to-three-target plan when that
+    # richer computation was available for this scan (null otherwise --
+    # the legacy single `target_price` above remains the primary
+    # target and is always populated whenever any target is).
+    # `expires_at` is computed from `time_horizon` at write time (see
+    # MarketIntelligenceRepository.save_symbol_records). `bars_used`/
+    # `spread_pct`/`likely_suspended` are the real signals the
+    # min_candles/abnormal_spread/suspension publication gates read,
+    # persisted alongside the recommendation they gated for later
+    # audit. `calibrated_confidence_score` is
+    # ConfidenceCalibrationEngine.apply_calibration's output (0-1) when
+    # an active model existed at write time, paired with the existing
+    # `calibration_version` column above -- null whenever no model was
+    # active, never a fabricated calibration.
+    target_price_2 = Column(Numeric(18, 4), nullable=True)
+    target_price_3 = Column(Numeric(18, 4), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    bars_used = Column(Integer, nullable=True)
+    spread_pct = Column(Numeric(9, 4), nullable=True)
+    likely_suspended = Column(Boolean, nullable=True)
+    calibrated_confidence_score = Column(Numeric(6, 4), nullable=True)
+
     # Provenance / anti-look-ahead audit trail -- exactly what data this
     # decision was allowed to see, and where the price it was scored
     # against came from.

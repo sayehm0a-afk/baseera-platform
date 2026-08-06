@@ -253,6 +253,8 @@ class SahmkMarketDataService:
                 change_percent=_optional_float(data.get("change_percent")),
                 volume=_optional_int(data.get("volume")),
                 timestamp=_parse_timestamp(data.get("updated_at")) or datetime.now(timezone.utc),
+                bid=_optional_float(data.get("bid")),
+                ask=_optional_float(data.get("ask")),
             )
 
         return await self._cache.get_or_compute(

@@ -142,6 +142,8 @@ class SahmkMarketDataProvider(IMarketDataProvider):
             "timestamp": quote.timestamp.isoformat(),
             "source": "sahmk",
             "is_synthetic": False,
+            "bid": quote.bid,
+            "ask": quote.ask,
         }
 
     async def get_symbol_directory(self) -> List[Dict[str, Any]]:

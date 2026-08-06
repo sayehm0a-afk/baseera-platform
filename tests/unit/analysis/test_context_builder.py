@@ -179,12 +179,18 @@ async def test_no_news_leaves_extra_with_only_quote_provenance(session):
     # get_stock_data() leg runs and populates "quote" with the daily
     # bar's own source/is_synthetic/timestamp (needed by Decision Engine
     # V2's freshness/authenticity gates) -- "news_sentiment" stays
-    # absent since no NewsEvent was persisted.
+    # absent since no NewsEvent was persisted. "bars_used"/
+    # "likely_suspended" are always present (the min_candles/suspension
+    # publication gates' real signals) -- no bars were ingested for
+    # this stock, so bars_used is 0 and likely_suspended is None (not
+    # enough history to judge either way).
     stock = _make_stock(session)
     context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
-    assert set(context.extra.keys()) == {"quote"}
+    assert set(context.extra.keys()) == {"quote", "bars_used", "likely_suspended"}
     assert context.extra["quote"]["source"] == "dev-synthetic"
     assert context.extra["quote"]["is_synthetic"] is True
+    assert context.extra["bars_used"] == 0
+    assert context.extra["likely_suspended"] is None
     assert "news_sentiment" not in context.extra
 
 

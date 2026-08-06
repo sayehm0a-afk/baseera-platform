@@ -137,6 +137,69 @@ def get_min_average_traded_value() -> float:
     return float(os.getenv("MARKET_MIN_AVERAGE_TRADED_VALUE_SAR", "1000000"))
 
 
+def get_min_candles_for_recommendation() -> int:
+    """Minimum daily bars of history a symbol must have before a BUY/
+    SELL is published -- distinct from TechnicalAnalysisEngine's own
+    hard floor of 35 rows (below which it cannot compute its indicator
+    set at all and the symbol is skipped as insufficient_data before
+    ever reaching this gate). 35 rows is "enough to not crash"; this
+    default (60, ~3 trading months) is "enough recent history that a
+    trend/momentum read is reasonably trustworthy" -- e.g. a stock that
+    IPO'd 40 sessions ago clears the engine's own floor but not this
+    one. Configurable, not empirically calibrated against a specific
+    Tadawul study."""
+    return int(os.getenv("MARKET_MIN_CANDLES_FOR_RECOMMENDATION", "60"))
+
+
+def get_max_spread_pct() -> float:
+    """Maximum real bid/ask spread (as a percent of price) a BUY/SELL
+    may have to pass the abnormal-spread gate. A wide spread on an
+    otherwise clean setup means the visible price is not one a real
+    order could actually fill near -- the same "not really tradeable"
+    concern the liquidity gate addresses via traded value, applied to
+    the other real signal SAHMK's quote endpoint provides (`bid`/`ask`,
+    see docs/SAHMK_INTEGRATION.md's verified field list). NOT_EVALUATED
+    (never a hard fail) whenever bid/ask is unavailable for this quote,
+    same convention as the liquidity gate's average-traded-value gap."""
+    return float(os.getenv("MARKET_MAX_SPREAD_PCT", "3.0"))
+
+
+def get_news_conflict_sentiment_threshold() -> float:
+    """How strongly negative/positive (on NewsIntelligenceService's -1..1
+    scale) aggregate news sentiment must be, opposite the recommended
+    direction, to fail the news-conflict gate -- e.g. a BUY recommendation
+    with sentiment_score <= -0.5 (clearly bad news) is flagged. Paired
+    with get_news_conflict_min_articles() so a single noisy headline
+    can't trip this on its own."""
+    return float(os.getenv("MARKET_NEWS_CONFLICT_SENTIMENT_THRESHOLD", "0.5"))
+
+
+def get_news_conflict_min_articles() -> int:
+    return int(os.getenv("MARKET_NEWS_CONFLICT_MIN_ARTICLES", "2"))
+
+
+def get_fundamental_conflict_margin() -> float:
+    """How far (in points, on the 0-100 scale where 50 is neutral) the
+    fundamental contributor's score must sit against the recommended
+    direction to fail the fundamental-conflict gate -- e.g. a BUY with
+    a fundamental_score of 30 (50 - 20, past the default margin of 15)
+    is flagged: the technical/momentum picture may look good, but the
+    fundamentals module actively disagrees, which is exactly the kind
+    of contradiction a real analyst would not silently publish over."""
+    return float(os.getenv("MARKET_FUNDAMENTAL_CONFLICT_MARGIN", "15.0"))
+
+
+def get_min_calibrated_success_probability() -> float:
+    """Minimum calibrated (not raw) success probability, 0-1, a BUY/
+    SELL must clear to pass the confidence_calibration gate -- only
+    ever evaluated when a real ConfidenceCalibrationEngine active model
+    exists and was actually applied (see
+    src.ai_evolution.confidence_calibration.get_effective_confidence);
+    NOT_EVALUATED, never a hard fail, before enough real outcome
+    history exists to fit one."""
+    return float(os.getenv("MARKET_MIN_CALIBRATED_SUCCESS_PROBABILITY", "0.35"))
+
+
 def get_min_risk_reward_ratio() -> float:
     """Below this reward:risk ratio, a BUY/SELL is rejected outright by
     publication_gate.py rather than merely shrunk in position size.
@@ -165,6 +228,52 @@ def get_confidence_change_threshold() -> float:
 
 def get_target_price_change_threshold_pct() -> float:
     return float(os.getenv("MARKET_TARGET_PRICE_CHANGE_THRESHOLD_PCT", "5.0"))
+
+
+def get_duplicate_suppression_window_hours() -> float:
+    """A newly-computed recommendation for a symbol is suppressed
+    (not written as a second RecommendationSnapshot) when the most
+    recent prior live-scan snapshot for that symbol, within this many
+    hours, already says materially the same thing (see
+    MarketIntelligenceRepository's duplicate-suppression check for the
+    exact tolerance) -- prevents Live Market Mode's frequent polling
+    from writing near-identical rows every cycle. A materially
+    *different* call (direction or price plan actually changed) is
+    never suppressed, regardless of how recently the prior one was
+    published -- suppression is about noise, not about limiting how
+    often real new information can update a call."""
+    return float(os.getenv("MARKET_DUPLICATE_SUPPRESSION_WINDOW_HOURS", "24"))
+
+
+def get_duplicate_suppression_price_tolerance_pct() -> float:
+    """How close (as a percent) target/stop/entry must be between two
+    snapshots for them to count as "the same call" for duplicate
+    suppression."""
+    return float(os.getenv("MARKET_DUPLICATE_SUPPRESSION_PRICE_TOLERANCE_PCT", "0.5"))
+
+
+# --- expiration ------------------------------------------------------------
+
+
+def get_expiration_days_short_term() -> int:
+    """Days from publication until a RecommendationSnapshot.expires_at
+    for a SHORT_TERM call (TimeHorizon.SHORT_TERM -- "days to a few
+    weeks", see src.analysis.decision.types) -- a recommendation whose
+    own stated horizon has elapsed with no fresh scan superseding it is
+    stale, not still actionable at its original price plan."""
+    return int(os.getenv("MARKET_EXPIRATION_DAYS_SHORT_TERM", "14"))
+
+
+def get_expiration_days_medium_term() -> int:
+    return int(os.getenv("MARKET_EXPIRATION_DAYS_MEDIUM_TERM", "45"))
+
+
+def get_expiration_days_long_term() -> int:
+    """Capped at 90 -- the deepest horizon
+    `src.ai_evolution.outcome_evaluation.EVALUATION_HORIZON_DAYS` ever
+    tracks an outcome for, so no recommendation is left "active" past
+    the point this platform stops being able to score it."""
+    return int(os.getenv("MARKET_EXPIRATION_DAYS_LONG_TERM", "90"))
 
 
 # --- alerts --------------------------------------------------------------
