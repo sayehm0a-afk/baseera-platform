@@ -60,6 +60,18 @@ export function DecisionTransparencyPanel({ decision }: { decision: DecisionV2 }
         </div>
       ) : null}
 
+      {/* 1b: why not a buy at all */}
+      {decision.why_not_buy_reasons.length > 0 ? (
+        <div>
+          <p className="text-xs font-semibold text-bsr-text-primary">لماذا ليست هذه فرصة شراء؟</p>
+          <ul className="mt-1 flex flex-col gap-0.5 text-xs text-bsr-text-secondary">
+            {decision.why_not_buy_reasons.map((reason, i) => (
+              <li key={i}>• {reason}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {/* 2: entry confirmation conditions */}
       {decision.entry_confirmation_conditions_ar.length > 0 ? (
         <div>
@@ -248,6 +260,14 @@ export function DecisionTransparencyPanel({ decision }: { decision: DecisionV2 }
               </li>
             ))}
           </ul>
+        </div>
+      ) : null}
+
+      {/* 11: fundamental summary */}
+      {decision.fundamental_summary_ar ? (
+        <div>
+          <p className="text-xs font-semibold text-bsr-text-primary">الملخص المالي الأساسي</p>
+          <p className="mt-1 text-xs text-bsr-text-secondary">{decision.fundamental_summary_ar}</p>
         </div>
       ) : null}
     </div>

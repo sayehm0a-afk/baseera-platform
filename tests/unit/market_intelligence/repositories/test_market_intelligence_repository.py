@@ -55,6 +55,17 @@ def make_decision_v2_result(symbol="2222", **numpy_overrides) -> DecisionResult:
         downside_to_stop=np.float64(1.6),
         risk_reward_target_1=np.float64(1.84),
         risk_reward_target_2=np.float64(2.1),
+        technical_confidence=np.float64(50.0), momentum_confidence=np.float64(57.4),
+        liquidity_confidence=np.float64(70.0), market_context_confidence=np.float64(75.0),
+        data_quality_confidence=np.float64(100.0),
+        best_entry_price=np.float64(26.6), accumulation_zone_low=np.float64(26.4),
+        accumulation_zone_high=np.float64(26.9), invalidation_price=np.float64(26.3),
+        nearest_support=np.float64(26.0), major_support=np.float64(25.0),
+        nearest_resistance=np.float64(28.0), major_resistance=np.float64(29.5),
+        breakout_level=np.float64(27.5), breakdown_level=np.float64(25.8),
+        current_volume=np.float64(3_500_000.0), average_volume=np.float64(2_800_000.0),
+        relative_volume=np.float64(1.25), accumulation_score=np.float64(65.0),
+        market_breadth_average_confidence=np.float64(60.0),
     )
     defaults.update(numpy_overrides)
     return DecisionResult(
@@ -291,6 +302,13 @@ async def test_save_symbol_records_coerces_numpy_types_in_decision_v2_snapshot(s
         "target_1", "target_2", "target_3",
         "expected_return_target_1", "expected_return_target_2", "downside_to_stop",
         "risk_reward_target_1", "risk_reward_target_2",
+        "technical_confidence", "momentum_confidence", "liquidity_confidence",
+        "market_context_confidence", "data_quality_confidence",
+        "best_entry_price", "accumulation_zone_low", "accumulation_zone_high", "invalidation_price",
+        "nearest_support", "major_support", "nearest_resistance", "major_resistance",
+        "breakout_level", "breakdown_level",
+        "current_volume", "average_volume", "relative_volume", "accumulation_score",
+        "market_breadth_average_confidence",
     )
     captured = []
     original_add = session.add
@@ -331,6 +349,15 @@ async def test_save_symbol_records_coerces_numpy_types_in_decision_v2_snapshot(s
     reloaded = session.query(DecisionV2Snapshot).filter_by(symbol="2222").one()
     assert reloaded.scan_run_id == run.id
     assert reloaded.decision == "BUY_CANDIDATE"
+    # Phase 2A/2C fields must reach the scan-pipeline row too, not just
+    # the single-row /decision-v2 route insert -- both write sites share
+    # the same previously-incomplete field list (see decision_v2_snapshot.py).
+    assert reloaded.entry_status == decision_v2.entry_status.value
+    assert reloaded.risk_level == decision_v2.risk_level
+    assert reloaded.technical_evidence == decision_v2.technical_evidence
+    assert reloaded.decision_summary_ar == decision_v2.decision_summary_ar
+    assert reloaded.market_risk_state == decision_v2.market_risk_state
+    assert float(reloaded.best_entry_price) == pytest.approx(float(decision_v2.best_entry_price))
 
 
 @pytest.mark.asyncio

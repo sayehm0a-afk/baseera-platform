@@ -337,6 +337,7 @@ class DecisionResult:
     decision_summary_ar: str = ""
     why_now_ar: str = ""
     why_not_stronger_ar: str = ""
+    why_not_buy_reasons: List[str] = field(default_factory=list)
     entry_confirmation_conditions_ar: List[str] = field(default_factory=list)
     watch_next_session_ar: List[str] = field(default_factory=list)
 
@@ -358,6 +359,20 @@ class DecisionResult:
     market_breadth_sell_count: Optional[int] = None
     market_breadth_symbols_scanned: Optional[int] = None
     market_breadth_average_confidence: Optional[float] = None
+
+    # ======================================================================
+    # Section 12: fundamental summary -- real M2.3 ratios, never
+    # fabricated (see fundamental_summary.py).
+    # ======================================================================
+    fundamental_summary: Dict[str, Any] = field(default_factory=dict)
+    fundamental_summary_ar: str = ""
+
+    # ======================================================================
+    # Section 11: news impact -- real, DB-only aggregate sentiment
+    # classification (see news_impact.py), never fabricated.
+    # ======================================================================
+    news_impact: str = "NO_RELEVANT_NEWS"
+    news_impact_summary_ar: str = "لا توجد أخبار محلَّلة حديثة ذات صلة بهذا السهم."
 
 
 def parse_quote_timestamp(raw: Optional[str]) -> Optional[datetime]:

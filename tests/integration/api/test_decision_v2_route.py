@@ -152,6 +152,80 @@ def test_decision_v2_with_both_legs_available(client, db_session):
     assert rows[0].decision == body["decision"]
 
 
+def test_decision_v2_persists_the_phase_2a_canonical_fields(client, db_session):
+    """The stored row, not just the HTTP response, must carry every
+    Phase 2A/2C field DecisionEngineV2 computes -- otherwise a stored
+    snapshot cannot reproduce what the user actually saw (see
+    decision_v2_snapshot.py's migration docstring: these fields were
+    previously computed and returned but silently discarded)."""
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+    body = response.json()
+
+    rows = db_session.query(DecisionV2Snapshot).filter(DecisionV2Snapshot.symbol == "2222").all()
+    assert len(rows) == 1
+    row = rows[0]
+
+    assert row.is_real_data == body["is_real_data"]
+    assert row.entry_status == body["entry_status"]
+    assert row.entry_status_label_ar == body["entry_status_label_ar"]
+    assert row.risk_level == body["risk_level"]
+    assert row.risk_level_label_ar == body["risk_level_label_ar"]
+    assert row.entry_quality == body["entry_quality"]
+    assert row.entry_quality_label_ar == body["entry_quality_label_ar"]
+    assert float(row.technical_confidence) == pytest.approx(body["technical_confidence"])
+    assert row.technical_evidence == body["technical_evidence"]
+    assert row.trend_direction_ar == body["trend_direction_ar"]
+    assert row.trend_strength_label_ar == body["trend_strength_label_ar"]
+    assert row.decision_summary_ar == body["decision_summary_ar"]
+    assert row.why_now_ar == body["why_now_ar"]
+    assert row.why_not_stronger_ar == body["why_not_stronger_ar"]
+    assert row.why_not_buy_reasons == body["why_not_buy_reasons"]
+    if body["decision"] in ("STRONG_BUY_CANDIDATE", "BUY_CANDIDATE"):
+        assert body["why_not_buy_reasons"] == []
+    else:
+        assert len(body["why_not_buy_reasons"]) > 0
+    assert row.entry_confirmation_conditions_ar == body["entry_confirmation_conditions_ar"]
+    assert row.watch_next_session_ar == body["watch_next_session_ar"]
+    assert row.market_risk_state == body["market_risk_state"]
+    assert row.market_risk_label_ar == body["market_risk_label_ar"]
+    assert row.market_risk_entry_permitted == body["market_risk_entry_permitted"]
+    assert row.market_risk_is_live == body["market_risk_is_live"]
+    if body["accumulation_score"] is not None:
+        assert float(row.accumulation_score) == pytest.approx(body["accumulation_score"])
+    assert row.volume_confirms_decision == body["volume_confirms_decision"]
+    assert row.abnormal_volume == body["abnormal_volume"]
+    assert row.fundamental_summary == body["fundamental_summary"]
+    assert row.fundamental_summary_ar == body["fundamental_summary_ar"]
+    assert row.news_impact == body["news_impact"]
+    assert row.news_impact_summary_ar == body["news_impact_summary_ar"]
+
+
+def test_decision_v2_response_includes_a_real_fundamental_summary(client, db_session):
+    """Section 12: fundamental summary must reflect the real
+    FundamentalSnapshot rows seeded for this stock -- never fabricated,
+    and present with a full key set even when a given ratio can't be
+    computed (e.g. no prior-period snapshot for growth ratios)."""
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert set(body["fundamental_summary"].keys()) == {
+        "revenue_growth", "profit_growth", "net_profit_margin", "gross_profit_margin",
+        "return_on_equity", "debt_to_equity", "price_to_earnings", "price_to_book",
+        "dividend_yield", "eps_growth",
+    }
+    assert body["fundamental_summary_ar"] != ""
+
+
 def _make_numpy_laden_decision_v2_result(symbol: str) -> DecisionResult:
     """A real DecisionResult with every numeric field as numpy.float64
     and every gate bool as numpy.bool_ -- matches exactly what
@@ -181,6 +255,17 @@ def _make_numpy_laden_decision_v2_result(symbol: str) -> DecisionResult:
             data_quality_score=np.float64(100.0),
         ),
         gates=[GateOutcome(name="real_data_source", status=GateStatus.PASS, detail="ok", blocking=np.bool_(True))],
+        technical_confidence=np.float64(50.0), momentum_confidence=np.float64(57.4),
+        liquidity_confidence=np.float64(70.0), market_context_confidence=np.float64(75.0),
+        data_quality_confidence=np.float64(100.0),
+        best_entry_price=np.float64(64.9), accumulation_zone_low=np.float64(64.5),
+        accumulation_zone_high=np.float64(65.1), invalidation_price=np.float64(62.9),
+        nearest_support=np.float64(63.0), major_support=np.float64(61.0),
+        nearest_resistance=np.float64(67.0), major_resistance=np.float64(70.0),
+        breakout_level=np.float64(66.5), breakdown_level=np.float64(62.0),
+        current_volume=np.float64(1_500_000.0), average_volume=np.float64(1_200_000.0),
+        relative_volume=np.float64(1.25), accumulation_score=np.float64(65.0),
+        market_breadth_average_confidence=np.float64(60.0),
     )
 
 
@@ -211,6 +296,13 @@ def test_decision_v2_persists_a_real_numpy_laden_result_without_crashing(client,
         "target_1", "target_2", "target_3",
         "expected_return_target_1", "expected_return_target_2", "downside_to_stop",
         "risk_reward_target_1", "risk_reward_target_2",
+        "technical_confidence", "momentum_confidence", "liquidity_confidence",
+        "market_context_confidence", "data_quality_confidence",
+        "best_entry_price", "accumulation_zone_low", "accumulation_zone_high", "invalidation_price",
+        "nearest_support", "major_support", "nearest_resistance", "major_resistance",
+        "breakout_level", "breakdown_level",
+        "current_volume", "average_volume", "relative_volume", "accumulation_score",
+        "market_breadth_average_confidence",
     )
     captured = []
     original_add = Session.add

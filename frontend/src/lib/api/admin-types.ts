@@ -145,3 +145,66 @@ export interface Analytics {
   total_portfolios: number;
   total_backtest_runs: number;
 }
+
+export interface DecisionCount {
+  decision: string;
+  count: number;
+}
+
+export interface ConfidenceBucketCount {
+  bucket_label: string;
+  count: number;
+}
+
+export interface RiskCount {
+  risk_level: string | null;
+  count: number;
+}
+
+export interface TopOpportunity {
+  symbol: string;
+  company_name_ar: string | null;
+  sector_ar: string | null;
+  decision: string;
+  decision_label_ar: string;
+  confidence_score: number;
+  risk_level: string | null;
+  decision_timestamp: string;
+}
+
+export interface RejectedOpportunity {
+  symbol: string;
+  company_name_ar: string | null;
+  sector_ar: string | null;
+  decision: string;
+  failed_gate_names: string[];
+  decision_timestamp: string;
+}
+
+export interface RejectionReasonCount {
+  gate_name: string;
+  fail_count: number;
+}
+
+export interface SectorRanking {
+  sector_ar: string | null;
+  symbols_evaluated: number;
+  average_confidence: number | null;
+  buy_candidate_count: number;
+}
+
+/** GET /api/v1/admin/market-intelligence/decision-intelligence -- real,
+ * SQL-backed statistics over each symbol's most recent Decision Engine
+ * V2 snapshot within the reporting window. */
+export interface DecisionIntelligence {
+  generated_at: string;
+  window_hours: number;
+  total_symbols_evaluated: number;
+  decision_distribution: DecisionCount[];
+  confidence_buckets: ConfidenceBucketCount[];
+  risk_distribution: RiskCount[];
+  top_opportunities: TopOpportunity[];
+  rejected_opportunities: RejectedOpportunity[];
+  rejection_reason_counts: RejectionReasonCount[];
+  sector_ranking: SectorRanking[];
+}

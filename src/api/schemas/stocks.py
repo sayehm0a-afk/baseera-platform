@@ -307,6 +307,7 @@ class DecisionV2Out(BaseModel):
     decision_summary_ar: str = ""
     why_now_ar: str = ""
     why_not_stronger_ar: str = ""
+    why_not_buy_reasons: List[str] = []
     entry_confirmation_conditions_ar: List[str] = []
     watch_next_session_ar: List[str] = []
 
@@ -320,6 +321,20 @@ class DecisionV2Out(BaseModel):
     market_breadth_sell_count: Optional[int] = None
     market_breadth_symbols_scanned: Optional[int] = None
     market_breadth_average_confidence: Optional[float] = None
+
+    # Section 12: fundamental summary -- real M2.3 ratios (revenue/
+    # profit growth, margins, ROE, debt-to-equity, valuation multiples,
+    # dividend yield), never fabricated. Keys are always present;
+    # values are None when the underlying ratio could not be computed
+    # from real reported financials.
+    fundamental_summary: Dict[str, Any] = {}
+    fundamental_summary_ar: str = ""
+
+    # Section 11: news impact -- POSITIVE/NEGATIVE/NEUTRAL/NO_RELEVANT_NEWS,
+    # a real DB-only aggregate over analyzed news events (see
+    # src.analysis.decision_v2.news_impact), never fabricated.
+    news_impact: str = "NO_RELEVANT_NEWS"
+    news_impact_summary_ar: str = "لا توجد أخبار محلَّلة حديثة ذات صلة بهذا السهم."
 
 
 class AnalystReportOut(BaseModel):

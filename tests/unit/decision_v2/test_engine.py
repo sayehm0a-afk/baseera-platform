@@ -7,7 +7,7 @@ covered by that engine's own test suite) to exercise the full
 DecisionEngineV2.decide() path end to end.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,8 @@ from src.analysis.decision.types import (
 )
 from src.analysis.decision_v2.engine import DecisionEngineV2
 from src.analysis.decision_v2.types import DECISION_LABELS_AR, Decision, DataFreshnessStatus
+from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
+from src.analysis.fundamental.types import FundamentalFacts
 from src.analysis.recommendation.types import AnalysisContext, Recommendation
 from src.analysis.technical_analysis_engine import TechnicalAnalysisEngine
 
@@ -44,10 +46,10 @@ def _technical():
     return TechnicalAnalysisEngine().analyze(_make_ohlcv())
 
 
-def _context(price=100.0, technical=None, fundamental=None):
+def _context(price=100.0, technical=None, fundamental=None, extra=None):
     return AnalysisContext(
         symbol="2222", technical_result=technical if technical is not None else _technical(),
-        fundamental_result=fundamental, latest_price=price,
+        fundamental_result=fundamental, latest_price=price, extra=extra or {},
     )
 
 
@@ -365,3 +367,56 @@ class TestPhase2ACanonicalFields:
         assert DECISION_LABELS_AR[Decision.EXIT] == "خروج"
         assert DECISION_LABELS_AR[Decision.REJECT] == "رفض التوصية"
         assert DECISION_LABELS_AR[Decision.INSUFFICIENT_DATA] == "بيانات غير كافية"
+
+
+def _fundamental_facts(**overrides) -> FundamentalFacts:
+    defaults = dict(
+        stock_id=1, period_type="annual", fiscal_period_end=date(2024, 12, 31),
+        revenue=1000.0, gross_profit=400.0, net_income=150.0, total_assets=3000.0,
+        total_liabilities=1200.0, total_equity=1800.0, current_assets=700.0,
+        current_liabilities=400.0, inventory=100.0, cash_and_equivalents=200.0,
+        total_debt=500.0, shares_outstanding=500, eps=0.3, dividend_per_share=0.1,
+    )
+    defaults.update(overrides)
+    return FundamentalFacts(**defaults)
+
+
+class TestFundamentalSummaryWiring:
+    def test_no_fundamental_result_yields_the_not_available_default(self):
+        ctx = _context(fundamental=None)
+        result = _decide(ctx, _buy_decision())
+        assert all(v is None for v in result.fundamental_summary.values())
+        assert "غير متوفرة" in result.fundamental_summary_ar
+
+    def test_real_fundamental_result_populates_real_ratios_not_fabricated(self):
+        fundamental = FundamentalAnalysisEngine().analyze(
+            _fundamental_facts(),
+            prior_facts=_fundamental_facts(
+                fiscal_period_end=date(2023, 12, 31), revenue=800.0, net_income=100.0, eps=0.2
+            ),
+            market_price=15.0,
+        )
+        ctx = _context(fundamental=fundamental)
+        result = _decide(ctx, _buy_decision())
+        assert result.fundamental_summary["revenue_growth"] == pytest.approx(fundamental.revenue_growth)
+        assert result.fundamental_summary["return_on_equity"] == pytest.approx(fundamental.return_on_equity)
+        assert result.fundamental_summary["price_to_earnings"] == pytest.approx(fundamental.price_to_earnings)
+        assert result.fundamental_summary_ar != ""
+
+
+class TestNewsImpactWiring:
+    def test_no_news_sentiment_extra_yields_no_relevant_news(self):
+        ctx = _context(extra={})
+        result = _decide(ctx, _buy_decision())
+        assert result.news_impact == "NO_RELEVANT_NEWS"
+
+    def test_real_news_sentiment_extra_is_classified_not_fabricated(self):
+        ctx = _context(extra={"news_sentiment": {"sentiment_score": 0.5, "article_count": 4}})
+        result = _decide(ctx, _buy_decision())
+        assert result.news_impact == "POSITIVE"
+        assert "4" in result.news_impact_summary_ar
+
+    def test_negative_news_sentiment_is_classified_negative(self):
+        ctx = _context(extra={"news_sentiment": {"sentiment_score": -0.5, "article_count": 2}})
+        result = _decide(ctx, _buy_decision())
+        assert result.news_impact == "NEGATIVE"

@@ -298,6 +298,9 @@ export interface DecisionV2 {
   decision_summary_ar: string;
   why_now_ar: string;
   why_not_stronger_ar: string;
+  /** Distinct from why_not_stronger_ar: a general "why isn't this a
+   * buy at all" list, empty for STRONG_BUY_CANDIDATE/BUY_CANDIDATE. */
+  why_not_buy_reasons: string[];
   entry_confirmation_conditions_ar: string[];
   watch_next_session_ar: string[];
 
@@ -312,6 +315,13 @@ export interface DecisionV2 {
   market_breadth_sell_count: number | null;
   market_breadth_symbols_scanned: number | null;
   market_breadth_average_confidence: number | null;
+
+  /** Section 12: real M2.3 fundamental ratios (revenue/profit growth,
+   * margins, ROE, debt-to-equity, valuation multiples, dividend
+   * yield) -- values are null when a ratio could not be computed from
+   * real reported financials, never fabricated. */
+  fundamental_summary: Record<string, number | null>;
+  fundamental_summary_ar: string;
 }
 
 export interface StockSearchResult {

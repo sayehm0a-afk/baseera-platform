@@ -77,6 +77,31 @@ def build_why_not_stronger(decision: Decision, gates: List[GateOutcome], warning
     return "غير قابل للتطبيق لهذا التصنيف من القرار."
 
 
+def build_why_not_buy_reasons(
+    decision: Decision, negative_reasons: List[str], gates: List[GateOutcome]
+) -> List[str]:
+    """A dedicated, structured "why not buy" list -- distinct from
+    `why_not_stronger_ar` (a single sentence explaining why STRONG_BUY
+    specifically wasn't reached, only meaningful for an already-buy-side
+    decision). This answers the more general question a user asks about
+    any non-buy decision: "why isn't this a buy at all." Sourced only
+    from real failed blocking gates and the engine's own negative
+    reasons -- never a fabricated explanation, and empty for a genuine
+    buy-side decision (there is nothing to explain away)."""
+    if decision in (Decision.STRONG_BUY_CANDIDATE, Decision.BUY_CANDIDATE):
+        return []
+    reasons: List[str] = []
+    for gate in gates:
+        if gate.blocking and not gate.passed and gate.detail not in reasons:
+            reasons.append(gate.detail)
+    for reason in negative_reasons:
+        if reason not in reasons:
+            reasons.append(reason)
+    if not reasons:
+        reasons.append("لم تتوافر أدلة فنية أو أساسية كافية تدعم قرار الشراء حاليًا.")
+    return reasons[:_MAX_LIST_ITEMS]
+
+
 def build_entry_confirmation_conditions(
     decision: Decision,
     entry_status: EntryStatus,

@@ -26,15 +26,19 @@ existing secret-free contract.
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import List, Optional
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.api.schemas.market_intelligence import (
+    ConfidenceBucketCountOut,
     DbConsistencyOut,
+    DecisionCountOut,
+    DecisionIntelligenceOut,
     DiagnosticDecisionV2SampleOut,
     DiagnosticSampleSymbolOut,
     DiagnosticScanOut,
@@ -43,7 +47,12 @@ from src.api.schemas.market_intelligence import (
     MarketScanRequest,
     MarketScanRunOut,
     PipelineStageOut,
+    RejectedOpportunityOut,
+    RejectionReasonCountOut,
+    RiskCountOut,
     SectorCoverageOut,
+    SectorRankingOut,
+    TopOpportunityOut,
     UniverseBucketCountOut,
 )
 from src.auth.rbac import require_staff_role
@@ -617,4 +626,146 @@ async def get_market_coverage(
         latest_scan_recommendations_generated=latest_scan_recommendations_generated,
         db_consistency=db_consistency,
         pipeline_funnel=pipeline_funnel,
+    )
+
+
+_BUY_DECISIONS = {"STRONG_BUY_CANDIDATE", "BUY_CANDIDATE"}
+_REJECTED_DECISIONS = {"REJECT", "INSUFFICIENT_DATA"}
+
+
+def _confidence_bucket_label(score: float) -> str:
+    lo = min(int(score) // 20 * 20, 80)
+    return f"{lo}-{lo + 20}"
+
+
+@router.get("/decision-intelligence", response_model=DecisionIntelligenceOut)
+async def get_decision_intelligence(
+    within_hours: int = Query(72, ge=1, le=24 * 30),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> DecisionIntelligenceOut:
+    """Real, SQL-backed statistics over each symbol's most recent
+    Decision Engine V2 snapshot within the last `within_hours` hours --
+    what an administrator needs to answer "what is Basirah actually
+    deciding right now, and why did it reject what it rejected."
+    Multiple `/decision-v2` requests for the same symbol within the
+    window are collapsed to that symbol's single latest snapshot (this
+    table is an insert-only request log, so counting every row would
+    double-count a symbol a user simply opened more than once) -- never
+    an estimate, always a direct aggregate over decision_v2_snapshots."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=within_hours)
+
+    latest_ts_subq = (
+        session.query(
+            DecisionV2Snapshot.stock_id.label("stock_id"),
+            func.max(DecisionV2Snapshot.decision_timestamp).label("max_ts"),
+        )
+        .filter(DecisionV2Snapshot.decision_timestamp >= cutoff)
+        .group_by(DecisionV2Snapshot.stock_id)
+        .subquery()
+    )
+    latest_rows: List[DecisionV2Snapshot] = (
+        session.query(DecisionV2Snapshot)
+        .join(
+            latest_ts_subq,
+            (DecisionV2Snapshot.stock_id == latest_ts_subq.c.stock_id)
+            & (DecisionV2Snapshot.decision_timestamp == latest_ts_subq.c.max_ts),
+        )
+        .all()
+    )
+
+    decision_counter: Counter = Counter()
+    bucket_counter: Counter = Counter()
+    risk_counter: Counter = Counter()
+    gate_fail_counter: Counter = Counter()
+    sector_stats: Dict[Optional[str], Dict[str, Any]] = {}
+
+    for row in latest_rows:
+        decision_counter[row.decision] += 1
+        risk_counter[row.risk_level] += 1
+        confidence = float(row.confidence_score)
+        bucket_counter[_confidence_bucket_label(confidence)] += 1
+
+        stats = sector_stats.setdefault(
+            row.sector_ar, {"symbols_evaluated": 0, "confidence_sum": 0.0, "buy_candidate_count": 0}
+        )
+        stats["symbols_evaluated"] += 1
+        stats["confidence_sum"] += confidence
+        if row.decision in _BUY_DECISIONS:
+            stats["buy_candidate_count"] += 1
+
+        if row.decision in _REJECTED_DECISIONS:
+            for gate in row.gates or []:
+                if gate.get("status") == "FAIL":
+                    gate_fail_counter[gate.get("name", "unknown")] += 1
+
+    top_opportunities = sorted(
+        (row for row in latest_rows if row.decision in _BUY_DECISIONS),
+        key=lambda r: float(r.confidence_score),
+        reverse=True,
+    )[:10]
+    rejected_opportunities = sorted(
+        (row for row in latest_rows if row.decision in _REJECTED_DECISIONS),
+        key=lambda r: r.decision_timestamp,
+        reverse=True,
+    )[:10]
+
+    return DecisionIntelligenceOut(
+        generated_at=datetime.now(timezone.utc),
+        window_hours=within_hours,
+        total_symbols_evaluated=len(latest_rows),
+        decision_distribution=[
+            DecisionCountOut(decision=decision, count=count) for decision, count in decision_counter.items()
+        ],
+        confidence_buckets=[
+            ConfidenceBucketCountOut(bucket_label=label, count=count) for label, count in bucket_counter.items()
+        ],
+        risk_distribution=[
+            RiskCountOut(risk_level=risk_level, count=count) for risk_level, count in risk_counter.items()
+        ],
+        top_opportunities=[
+            TopOpportunityOut(
+                symbol=row.symbol,
+                company_name_ar=row.company_name_ar,
+                sector_ar=row.sector_ar,
+                decision=row.decision,
+                decision_label_ar=row.decision_label_ar,
+                confidence_score=float(row.confidence_score),
+                risk_level=row.risk_level,
+                decision_timestamp=row.decision_timestamp,
+            )
+            for row in top_opportunities
+        ],
+        rejected_opportunities=[
+            RejectedOpportunityOut(
+                symbol=row.symbol,
+                company_name_ar=row.company_name_ar,
+                sector_ar=row.sector_ar,
+                decision=row.decision,
+                failed_gate_names=[g.get("name", "unknown") for g in (row.gates or []) if g.get("status") == "FAIL"],
+                decision_timestamp=row.decision_timestamp,
+            )
+            for row in rejected_opportunities
+        ],
+        rejection_reason_counts=[
+            RejectionReasonCountOut(gate_name=gate_name, fail_count=count)
+            for gate_name, count in gate_fail_counter.most_common()
+        ],
+        sector_ranking=sorted(
+            (
+                SectorRankingOut(
+                    sector_ar=sector_ar,
+                    symbols_evaluated=stats["symbols_evaluated"],
+                    average_confidence=(
+                        stats["confidence_sum"] / stats["symbols_evaluated"]
+                        if stats["symbols_evaluated"] > 0
+                        else None
+                    ),
+                    buy_candidate_count=stats["buy_candidate_count"],
+                )
+                for sector_ar, stats in sector_stats.items()
+            ),
+            key=lambda s: s.average_confidence or 0.0,
+            reverse=True,
+        ),
     )
