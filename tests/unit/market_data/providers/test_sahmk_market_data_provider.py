@@ -196,12 +196,50 @@ async def test_get_symbol_directory_maps_companies_to_dicts():
         {
             "symbol": "2222", "name": "Saudi Aramco", "name_ar": "أرامكو السعودية", "sector": "Energy",
             "industry": "Oil & Gas", "exchange": "Tadawul", "source": "sahmk", "is_synthetic": False,
+            "is_eligible": True, "instrument_bucket": "MAIN_MARKET_EQUITY_TYPE_UNCONFIRMED",
+            "exclusion_reason": None,
         },
         {
             "symbol": "1120", "name": "Al Rajhi Bank", "name_ar": None, "sector": "Financials", "industry": None,
             "exchange": "Tadawul", "source": "sahmk", "is_synthetic": False,
+            "is_eligible": True, "instrument_bucket": "MAIN_MARKET_EQUITY_TYPE_UNCONFIRMED",
+            "exclusion_reason": None,
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_symbol_directory_excludes_a_confirmed_etf_via_is_eligible():
+    """Root-cause repair: a discovered ETF must carry is_eligible=False
+    (via universe_policy.classify_universe on the raw is_etf field) so
+    ingest_symbols.sync_symbols can deactivate its Stock row instead of
+    letting it pollute the scan universe as if it were a common stock."""
+    provider = _provider_with_mock_service()
+    provider._service.get_company_directory.return_value = [
+        SahmkCompanyProfile(
+            symbol="2222", name="Saudi Aramco", name_ar=None, sector=None, industry=None,
+            exchange=None, raw={"is_etf": False, "security_type": "Common Share"},
+        ),
+        SahmkCompanyProfile(
+            symbol="4342", name="Some ETF Fund", name_ar=None, sector=None, industry=None,
+            exchange=None, raw={"is_etf": True},
+        ),
+    ]
+
+    directory = await provider.get_symbol_directory()
+    by_symbol = {d["symbol"]: d for d in directory}
+
+    assert by_symbol["2222"]["is_eligible"] is True
+    assert by_symbol["4342"]["is_eligible"] is False
+    assert by_symbol["4342"]["instrument_bucket"] == "ETF_FUND"
+    assert by_symbol["4342"]["exclusion_reason"] == "is_etf=True (raw=True)"
+
+    # The full classification breakdown is retained for admin/coverage
+    # reporting, not just used-and-discarded.
+    assert provider.last_universe_classification is not None
+    assert provider.last_universe_classification.total_instruments == 2
+    assert provider.last_universe_classification.total_eligible == 1
+    assert provider.last_universe_classification.bucket_counts["ETF_FUND"] == 1
 
 
 # --- get_company_profile() (extra, not part of IMarketDataProvider) --------

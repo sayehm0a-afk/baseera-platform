@@ -31,8 +31,27 @@ logger = logging.getLogger(__name__)
 
 def _apply_entry(stock: Stock, entry: Dict[str, Any]) -> bool:
     """Updates stock.name_en/name_ar/sector from a directory/profile
-    entry. Returns True iff something actually changed."""
+    entry. Returns True iff something actually changed.
+
+    `is_eligible` (present only on SahmkMarketDataProvider.get_symbol_
+    directory() entries, via universe_policy.classify_universe) marks
+    a non-equity instrument -- ETF, REIT, sukuk, rights issue,
+    suspended/delisted -- inactive so SymbolSelector (which filters on
+    Stock.is_active) never scans it as if it were a common stock. Absent
+    on a plain get_company_profile() lookup for one explicit symbol;
+    `stock.is_active` is left at its existing/default value (True) in
+    that case, matching prior behavior exactly."""
     changed = False
+    is_eligible = entry.get("is_eligible")
+    if is_eligible is not None and stock.is_active != bool(is_eligible):
+        stock.is_active = bool(is_eligible)
+        changed = True
+    if "instrument_bucket" in entry and stock.instrument_bucket != entry["instrument_bucket"]:
+        stock.instrument_bucket = entry["instrument_bucket"]
+        changed = True
+    if "exclusion_reason" in entry and stock.exclusion_reason != entry["exclusion_reason"]:
+        stock.exclusion_reason = entry["exclusion_reason"]
+        changed = True
     name = entry.get("name")
     if name and stock.name_en != name:
         stock.name_en = name

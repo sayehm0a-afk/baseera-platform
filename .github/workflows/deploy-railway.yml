@@ -285,6 +285,7 @@ jobs:
             --set "FRONTEND_BASE_URL=$FRONTEND_URL"
             --set "LIVE_MARKET_MODE_ENABLED=true"
             --set "LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS=60"
+            --set "INGESTION_AUTO_DISCOVER_SYMBOLS=true"
             --set "LOG_LEVEL=INFO"
             --set "RATE_LIMIT_ENABLED=true"
             --set "PORT=8000"

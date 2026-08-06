@@ -201,6 +201,62 @@ async def test_directory_discovery_failure_falls_back_to_explicit_symbols_only(s
 
 
 @pytest.mark.asyncio
+async def test_discover_all_deactivates_a_non_eligible_instrument(session_factory):
+    """A discovered ETF/REIT/sukuk (universe_policy classified
+    is_eligible=False on the directory entry) must be persisted with
+    is_active=False, so SymbolSelector (which filters Stock.is_active)
+    never scans it as if it were a common stock -- while still creating
+    a Stock row, for admin/coverage visibility."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(
+        return_value=[
+            {
+                "symbol": "2222", "name": "Saudi Aramco", "sector": "Energy",
+                "is_eligible": True, "instrument_bucket": "MAIN_MARKET_EQUITY", "exclusion_reason": None,
+            },
+            {
+                "symbol": "4342", "name": "Some REIT Fund",
+                "is_eligible": False, "instrument_bucket": "REIT", "exclusion_reason": "security_type='REIT'",
+            },
+        ]
+    )
+
+    result = await sync_symbols([], provider, session_factory, discover_all=True)
+    assert result.symbols_succeeded == 2
+
+    session = session_factory()
+    stock_2222 = session.query(Stock).filter_by(symbol="2222").one()
+    assert stock_2222.is_active is True
+    assert stock_2222.instrument_bucket == "MAIN_MARKET_EQUITY"
+
+    stock_4342 = session.query(Stock).filter_by(symbol="4342").one()
+    assert stock_4342.is_active is False
+    assert stock_4342.instrument_bucket == "REIT"
+    assert stock_4342.exclusion_reason == "security_type='REIT'"
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_is_eligible_key_leaves_is_active_at_its_default(session_factory):
+    """A get_company_profile() single-symbol lookup (no is_eligible key
+    at all) must not touch is_active -- only directory entries that
+    actually ran through universe_policy carry that key."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_company_profile = AsyncMock(return_value={"name": "Saudi Aramco"})
+
+    result = await sync_symbols(["2222"], provider, session_factory)
+    assert result.rows_upserted == 1  # name changed, but not because of is_active
+
+    session = session_factory()
+    assert session.query(Stock).filter_by(symbol="2222").one().is_active is True
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_isolates_per_symbol_failures(session_factory):
     provider = AsyncMock()
     provider.authenticate = AsyncMock(return_value=True)
