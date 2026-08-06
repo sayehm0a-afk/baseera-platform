@@ -320,9 +320,17 @@ jobs:
       - name: Configure frontend environment variables
         env:
           BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
         run: |
+          # NEXT_PUBLIC_SITE_URL backs layout.tsx's metadataBase/OG tags
+          # and sitemap.ts/robots.ts -- self-configured from whatever
+          # domain Railway actually assigned this service, same as
+          # every other URL this workflow wires up. Moving to the
+          # official domain (Mandate 8) is then just changing what
+          # `railway domain` resolves to, no code change.
           railway variables --service "$RAILWAY_FRONTEND_SERVICE" \
             --set "NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL" \
+            --set "NEXT_PUBLIC_SITE_URL=$FRONTEND_URL" \
             --set "NEXT_PUBLIC_DEPLOYMENT_COMMIT=${{ github.sha }}"
 
       - name: Deploy backend (from repo root -- picks up ./railway.toml)
