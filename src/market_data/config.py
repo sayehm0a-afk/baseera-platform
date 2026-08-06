@@ -56,6 +56,18 @@ def get_provider_selection_cache_seconds() -> float:
     return float(os.getenv("MARKET_DATA_PROVIDER_CACHE_SECONDS", "60"))
 
 
+def get_provider_disconnect_grace_seconds() -> float:
+    """How long provider_factory/fundamental_provider_factory keep a
+    superseded provider's session open before actually closing it, once
+    a genuine kind change (sahmk <-> dev) supersedes it. Must comfortably
+    exceed both a single SAHMK request's own timeout and the SAHMK rate
+    limiter's worst-case per-minute wait, so a caller still mid-loop
+    against the superseded provider isn't cut off. See
+    provider_factory._disconnect_with_grace()'s docstring for the
+    concurrency bug this guards against."""
+    return float(os.getenv("MARKET_DATA_PROVIDER_DISCONNECT_GRACE_SECONDS", "90"))
+
+
 def get_sahmk_max_requests_per_minute() -> int:
     """Ceiling on SAHMK requests per rolling 60s window, shared by every
     SahmkClient in this process (src.market_data.sahmk.rate_limiter) --

@@ -39,10 +39,13 @@ _cached_at: float = 0.0
 async def get_fundamental_data_provider(force_refresh: bool = False) -> IFundamentalDataProvider:
     """Returns the IFundamentalDataProvider the caller should use right now.
 
-    Any provider this call replaces is disconnected before the new one
-    is installed -- see provider_factory.get_market_data_provider()'s
-    docstring for the full rationale and the disclosed trade-off (this
-    is the fundamentals-side twin of that fix).
+    Fundamentals-side twin of provider_factory.get_market_data_provider()
+    -- see that function's docstring for the full rationale. A cache
+    refresh reuses the previous SahmkFundamentalDataProvider instance
+    (and its live aiohttp session) whenever it's still the right kind,
+    instead of unconditionally closing it out from under a caller that
+    might still be mid-request against it; a genuine kind change is
+    disconnected with a grace delay rather than immediately.
     """
     global _cached_provider, _cached_provider_kind, _cached_at
 
@@ -58,10 +61,10 @@ async def get_fundamental_data_provider(force_refresh: bool = False) -> IFundame
             return _cached_provider
 
         previous_provider = _cached_provider
-        provider, kind = await _select_provider()
+        provider, kind = await _select_provider(previous_provider)
 
         if previous_provider is not None and previous_provider is not provider:
-            await _disconnect_quietly(previous_provider)
+            _disconnect_with_grace(previous_provider)
 
         _cached_provider = provider
         _cached_provider_kind = kind
@@ -69,13 +72,25 @@ async def get_fundamental_data_provider(force_refresh: bool = False) -> IFundame
         return provider
 
 
-async def _disconnect_quietly(provider: IFundamentalDataProvider) -> None:
-    """Disconnects a superseded provider. Never lets a disconnect
-    failure prevent the new selection from being installed."""
-    try:
-        await provider.disconnect()
-    except Exception:
-        logger.warning("Error disconnecting a superseded fundamental data provider.", exc_info=True)
+_pending_disconnects: "set[asyncio.Task]" = set()
+
+
+def _disconnect_with_grace(provider: IFundamentalDataProvider) -> None:
+    """Schedules a superseded provider's disconnect after a grace
+    delay instead of closing it immediately -- see
+    provider_factory._disconnect_with_grace()'s docstring for the full
+    concurrency-bug rationale this mirrors."""
+
+    async def _delayed_disconnect() -> None:
+        try:
+            await asyncio.sleep(market_data_config.get_provider_disconnect_grace_seconds())
+            await provider.disconnect()
+        except Exception:
+            logger.warning("Error disconnecting a superseded fundamental data provider.", exc_info=True)
+
+    task = asyncio.ensure_future(_delayed_disconnect())
+    _pending_disconnects.add(task)
+    task.add_done_callback(_pending_disconnects.discard)
 
 
 def get_last_selected_fundamental_provider_kind() -> Optional[str]:
@@ -83,7 +98,14 @@ def get_last_selected_fundamental_provider_kind() -> Optional[str]:
     return _cached_provider_kind
 
 
-async def _select_provider() -> Tuple[IFundamentalDataProvider, str]:
+async def _select_provider(
+    previous_provider: Optional[IFundamentalDataProvider] = None,
+) -> Tuple[IFundamentalDataProvider, str]:
+    """See provider_factory._select_provider()'s docstring -- this
+    mirrors it exactly, including reusing `previous_provider` (and its
+    live aiohttp session) instead of constructing and swapping in a
+    fresh SahmkFundamentalDataProvider whenever it's already the right
+    kind."""
     override = market_data_config.get_configured_provider_name()
     strict = not market_data_config.is_synthetic_data_allowed()
 
@@ -113,14 +135,20 @@ async def _select_provider() -> Tuple[IFundamentalDataProvider, str]:
             )
         return DevFundamentalDataProvider(), "dev"
 
-    provider = SahmkFundamentalDataProvider()
+    reused = isinstance(previous_provider, SahmkFundamentalDataProvider)
+    provider = previous_provider if reused else SahmkFundamentalDataProvider()
+
+    async def _cleanup_on_failure() -> None:
+        if not reused:
+            await provider.disconnect()
+
     try:
         reachable = await asyncio.wait_for(
             provider.authenticate(),
             timeout=market_data_config.get_provider_probe_timeout_seconds(),
         )
     except asyncio.TimeoutError:
-        await provider.disconnect()
+        await _cleanup_on_failure()
         if strict:
             raise StrictRealDataUnavailableError("SAHMK connectivity probe timed out.")
         logger.warning(
@@ -129,7 +157,7 @@ async def _select_provider() -> Tuple[IFundamentalDataProvider, str]:
         )
         return DevFundamentalDataProvider(), "dev"
     except (SahmkError, CircuitBreakerOpenError) as exc:
-        await provider.disconnect()
+        await _cleanup_on_failure()
         if strict:
             raise StrictRealDataUnavailableError(f"SAHMK connectivity probe failed: {exc}")
         logger.warning(
@@ -139,7 +167,7 @@ async def _select_provider() -> Tuple[IFundamentalDataProvider, str]:
         return DevFundamentalDataProvider(), "dev"
 
     if not reachable:
-        await provider.disconnect()
+        await _cleanup_on_failure()
         if strict:
             raise StrictRealDataUnavailableError("SAHMK authentication check did not succeed.")
         logger.warning(
@@ -149,8 +177,9 @@ async def _select_provider() -> Tuple[IFundamentalDataProvider, str]:
         return DevFundamentalDataProvider(), "dev"
 
     logger.info(
-        "SAHMK is reachable and the configured API key was accepted -- "
-        "using SahmkFundamentalDataProvider (live data)."
+        "SAHMK is reachable and the configured API key was accepted -- using "
+        "%s SahmkFundamentalDataProvider (live data).",
+        "the existing" if reused else "a new",
     )
     return provider, "sahmk"
 

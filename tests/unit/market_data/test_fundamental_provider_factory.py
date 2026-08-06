@@ -37,6 +37,7 @@ def _reset(monkeypatch):
     monkeypatch.delenv("SAHMK_API_KEY", raising=False)
     monkeypatch.setenv("SAHMK_PROBE_TIMEOUT_SECONDS", "0.1")
     monkeypatch.setenv("MARKET_DATA_PROVIDER_CACHE_SECONDS", "60")
+    monkeypatch.setenv("MARKET_DATA_PROVIDER_DISCONNECT_GRACE_SECONDS", "0")
     yield
     fundamental_provider_factory.reset_fundamental_provider_cache()
 
@@ -111,14 +112,13 @@ async def test_selection_is_cached_across_calls(monkeypatch):
     assert len(_FakeSahmkFundamentalProvider.instances) == 1
 
 
-# --- regression: superseded providers must be disconnected (resource leak) --
+# --- regression: aiohttp ClientSession concurrency bug -- see
+# test_provider_factory.py's equivalent block for the full production
+# evidence/root-cause writeup this mirrors. ---
 
 
 @pytest.mark.asyncio
-async def test_force_refresh_disconnects_the_superseded_provider(monkeypatch):
-    """Regression test for the resource leak a prior review caught and
-    reproduced -- the fundamentals-side twin of provider_factory's
-    equivalent test."""
+async def test_force_refresh_reuses_the_same_instance_when_sahmk_stays_healthy(monkeypatch):
     monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
 
     async def _ok():
@@ -127,15 +127,15 @@ async def test_force_refresh_disconnects_the_superseded_provider(monkeypatch):
     _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
 
     first = await fundamental_provider_factory.get_fundamental_data_provider()
-    await fundamental_provider_factory.get_fundamental_data_provider(force_refresh=True)
+    second = await fundamental_provider_factory.get_fundamental_data_provider(force_refresh=True)
 
-    assert first.disconnected is True
+    assert first is second
+    assert len(_FakeSahmkFundamentalProvider.instances) == 1
+    assert first.disconnected is False
 
 
 @pytest.mark.asyncio
-async def test_repeated_refreshes_disconnect_every_superseded_instance_but_not_the_current_one(
-    monkeypatch,
-):
+async def test_repeated_healthy_refreshes_never_create_a_new_instance_or_disconnect(monkeypatch):
     monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
 
     async def _ok():
@@ -146,10 +146,32 @@ async def test_repeated_refreshes_disconnect_every_superseded_instance_but_not_t
     for _ in range(5):
         await fundamental_provider_factory.get_fundamental_data_provider(force_refresh=True)
 
-    *superseded, current = _FakeSahmkFundamentalProvider.instances
-    assert len(superseded) == 4
-    assert all(instance.disconnected is True for instance in superseded)
-    assert current.disconnected is False
+    assert len(_FakeSahmkFundamentalProvider.instances) == 1
+    assert _FakeSahmkFundamentalProvider.instances[0].disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_kind_change_still_eventually_disconnects_the_superseded_provider(monkeypatch):
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+    sahmk_provider = await fundamental_provider_factory.get_fundamental_data_provider()
+    assert sahmk_provider.disconnected is False
+
+    async def _now_unreachable():
+        raise SahmkRequestError("Network error calling SAHMK API: connection refused")
+
+    _FakeSahmkFundamentalProvider.authenticate = lambda self: _now_unreachable()
+    dev_provider = await fundamental_provider_factory.get_fundamental_data_provider(force_refresh=True)
+
+    assert isinstance(dev_provider, DevFundamentalDataProvider)
+    assert sahmk_provider.disconnected is False  # not synchronous
+
+    await asyncio.sleep(0.05)
+    assert sahmk_provider.disconnected is True
 
 
 @pytest.mark.asyncio
