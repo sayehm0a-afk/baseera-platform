@@ -25,7 +25,18 @@ import main
 from src.api.dependencies import get_current_user, get_market_provider
 from src.core.db import database
 from src.core.db.database import Base, get_db
-from src.domain.models import PriceBar, StaffRole, Stock, Timeframe, User
+from src.domain.models import (
+    DecisionV2Snapshot,
+    MarketScanRun,
+    MarketScanStatus,
+    PriceBar,
+    RecommendationLabel,
+    StaffRole,
+    Stock,
+    SymbolIntelligenceRecord,
+    Timeframe,
+    User,
+)
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 
 
@@ -177,6 +188,12 @@ def test_happy_path_runs_the_real_scan_path_and_persists_rows(client, session_fa
     assert body["decision_v2_sample"][0]["symbol"] == "2222"
     assert body["decision_v2_sample"][0]["scan_run_id"] == body["run_id"]
     assert body["decision_v2_sample"][0]["decision"]
+    # This run is itself now the "latest completed run" -- the two
+    # independent lookups must agree.
+    assert body["latest_completed_run_id"] == body["run_id"]
+    assert body["latest_completed_run_v1_rows_written"] == 1
+    assert body["latest_completed_run_decision_v2_rows_written"] == 1
+    assert body["latest_completed_run_decision_v2_sample"][0]["symbol"] == "2222"
 
 
 def test_secret_never_appears_in_the_response(client, session_factory, as_staff, monkeypatch):
@@ -215,3 +232,82 @@ def test_secret_never_appears_in_the_response(client, session_factory, as_staff,
     assert response.status_code == 200
     assert secret_value not in response.text
     assert "***" in response.json()["sahmk_error"]
+
+
+def test_overlap_skip_still_reports_evidence_from_the_latest_completed_run(
+    client, session_factory, as_staff, monkeypatch
+):
+    """Real production behavior observed live: when the Live Market
+    Mode scheduler already has a scan RUNNING, this route's own overlap
+    guard correctly skips starting a second one (run_id/run_status come
+    back None) -- but that must never mean the response reports zero
+    evidence. The latest_completed_run_* fields must still surface real
+    V1 + Decision V2 output from the most recent *finished* run, which
+    is the only reliable way to observe the scheduler's own real
+    output when a fresh diagnostic dispatch collides with it."""
+    from src.market_data import provider_factory
+
+    session = session_factory()
+    stock = Stock(symbol="2222", name_en="Stock 2222", name_ar="سهم", sector="Energy")
+    session.add(stock)
+    session.commit()
+
+    completed_run = MarketScanRun(status=MarketScanStatus.SUCCESS, symbols_requested=1, symbols_succeeded=1)
+    session.add(completed_run)
+    session.commit()
+    completed_run_id = completed_run.id
+    session.add(
+        SymbolIntelligenceRecord(
+            scan_run_id=completed_run.id, stock_id=stock.id, symbol="2222",
+            recommendation=RecommendationLabel.BUY, confidence=70.0, final_score=65.0,
+            risk_level="MEDIUM", time_horizon="SHORT_TERM", position_size="STANDARD",
+            evaluated_at=datetime.now(timezone.utc), engine_version="1.0.0",
+        )
+    )
+    session.add(
+        DecisionV2Snapshot(
+            stock_id=stock.id, symbol="2222", company_name_en="Stock 2222",
+            decision="BUY_CANDIDATE", decision_label_ar="مرشح شراء",
+            confidence_score=70.0, opportunity_quality_score=60.0, risk_score=40.0,
+            data_quality_score=80.0, data_freshness_status="LIVE",
+            market_status="OPEN", decision_timestamp=datetime.now(timezone.utc),
+            recommendation_basis="test", analysis_version="2.0.0", data_source="SAHMK_REAL",
+            scan_run_id=completed_run_id,
+        )
+    )
+    # A second run currently RUNNING -- the condition this route's
+    # overlap guard exists to detect.
+    session.add(MarketScanRun(status=MarketScanStatus.RUNNING, symbols_requested=3))
+    session.commit()
+    session.close()
+
+    def _fake_health():
+        return {
+            "configured_provider": "sahmk",
+            "strict_real_data": True,
+            "synthetic_allowed": False,
+            "sahmk_key_present": True,
+            "current_provider_kind": "sahmk",
+            "last_connectivity_status": "SUCCESS",
+            "last_connectivity_at": datetime.now(timezone.utc).isoformat(),
+            "last_real_data_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def _fake_get_provider(force_refresh=False):
+        return DevMarketDataProvider()
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_health)
+
+    response = client.post("/api/v1/admin/market-intelligence/diagnostic-scan", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] is None
+    assert "already in progress" in body["sahmk_error"]
+    assert body["latest_completed_run_id"] == completed_run_id
+    assert body["latest_completed_run_v1_rows_written"] == 1
+    assert body["latest_completed_run_v1_sample_symbols"][0]["symbol"] == "2222"
+    assert body["latest_completed_run_decision_v2_rows_written"] == 1
+    assert body["latest_completed_run_decision_v2_sample"][0]["symbol"] == "2222"
+    assert body["latest_completed_run_decision_v2_sample"][0]["decision"] == "BUY_CANDIDATE"

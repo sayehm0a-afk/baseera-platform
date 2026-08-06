@@ -235,6 +235,11 @@ class DiagnosticScanOut(BaseModel):
     freshness_note: str = ""
     decision_v2_rows_written: int = 0
     decision_v2_sample: List[DiagnosticDecisionV2SampleOut] = Field(default_factory=list)
+    latest_completed_run_id: Optional[int] = None
+    latest_completed_run_v1_rows_written: int = 0
+    latest_completed_run_v1_sample_symbols: List[DiagnosticSampleSymbolOut] = Field(default_factory=list)
+    latest_completed_run_decision_v2_rows_written: int = 0
+    latest_completed_run_decision_v2_sample: List[DiagnosticDecisionV2SampleOut] = Field(default_factory=list)
 
 
 class MarketStatusOut(BaseModel):
