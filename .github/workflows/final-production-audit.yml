@@ -51,17 +51,13 @@ jobs:
           # (including secrets like SAHMK_API_KEY) -- never echo the file
           # itself, only extract and print the one non-secret key we care about.
           railway variable list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_vars.json 2>/dev/null || echo '{}' > /tmp/backend_vars.json
-          python3 -c "
-import json
-d = json.load(open('/tmp/backend_vars.json'))
-val = d.get('MARKET_MAX_SCAN_RUN_DURATION_HOURS')
-print('MARKET_MAX_SCAN_RUN_DURATION_HOURS =', repr(val))
-if val is not None and val != '4':
-    print('::error::Leftover temporary value detected -- expected unset or \"4\", got ' + repr(val))
-    raise SystemExit(1)
-print('OK: no leftover temporary threshold (unset falls back to code default 4, or explicitly 4).')
-"
-          rm -f /tmp/backend_vars.json
+          python3 -c "import json; d=json.load(open('/tmp/backend_vars.json')); val=d.get('MARKET_MAX_SCAN_RUN_DURATION_HOURS'); print('MARKET_MAX_SCAN_RUN_DURATION_HOURS =', repr(val)); print('LEFTOVER_TEMPORARY_VALUE_DETECTED:' + repr(val)) if (val is not None and val != '4') else print('OK: no leftover temporary threshold.')" > /tmp/audit_step1_out.txt
+          cat /tmp/audit_step1_out.txt
+          if grep -q 'LEFTOVER_TEMPORARY_VALUE_DETECTED' /tmp/audit_step1_out.txt; then
+            echo "::error::Leftover temporary MARKET_MAX_SCAN_RUN_DURATION_HOURS value detected."
+            exit 1
+          fi
+          rm -f /tmp/backend_vars.json /tmp/audit_step1_out.txt
 
       - name: Log in as the staff account
         id: login
@@ -81,6 +77,7 @@ print('OK: no leftover temporary threshold (unset falls back to code default 4, 
           echo "$CSRF" > /tmp/.csrf
 
       - name: "[2] Dispatch a diagnostic scan -- confirms no orphaned run blocks it"
+        id: diag
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
         run: |
@@ -93,24 +90,13 @@ print('OK: no leftover temporary threshold (unset falls back to code default 4, 
             -o /tmp/diagnostic.json -w "\nHTTP %{http_code}\n"
           echo "=== Diagnostic scan result ==="
           python3 -m json.tool /tmp/diagnostic.json
-          python3 -c "
-import json
-d = json.load(open('/tmp/diagnostic.json'))
-err = d.get('sahmk_error') or ''
-if 'run 44' in err:
-    print('::error::Run 44 still referenced -- orphan was NOT actually cleared.')
-    raise SystemExit(1)
-if 'already in progress' in err:
-    print('NOTE: skipped because a DIFFERENT run is genuinely in progress right now (real scheduler activity, not an orphan) --', err)
-else:
-    print('OK: no overlap skip -- this dispatch either ran a fresh scan or found none needed.')
-print('latest_completed_run_id =', d.get('latest_completed_run_id'))
-print('latest_completed_run_decision_v2_rows_written =', d.get('latest_completed_run_decision_v2_rows_written'))
-print('RUN_ID=' + str(d.get('run_id') or d.get('latest_completed_run_id') or ''))
-" | tee /tmp/diag_summary.txt
+          python3 -c "import json; d=json.load(open('/tmp/diagnostic.json')); err=d.get('sahmk_error') or ''; status=('RUN_44_STILL_REFERENCED:' + err) if 'run 44' in err else (('NOTE_GENUINE_OVERLAP:' + err) if 'already in progress' in err else 'OK_NO_OVERLAP_SKIP'); print(status); print('latest_completed_run_id =', d.get('latest_completed_run_id')); print('latest_completed_run_decision_v2_rows_written =', d.get('latest_completed_run_decision_v2_rows_written')); print('RUN_ID=' + str(d.get('run_id') or d.get('latest_completed_run_id') or ''))" | tee /tmp/diag_summary.txt
+          if grep -q 'RUN_44_STILL_REFERENCED' /tmp/diag_summary.txt; then
+            echo "::error::Run 44 still referenced -- orphan was NOT actually cleared."
+            exit 1
+          fi
           RUN_ID=$(grep '^RUN_ID=' /tmp/diag_summary.txt | cut -d= -f2)
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-        id: diag
 
       - name: "[3] Check the referenced run's real terminal state (proves no new orphan)"
         env:
@@ -128,16 +114,15 @@ print('RUN_ID=' + str(d.get('run_id') or d.get('latest_completed_run_id') or '')
         run: |
           for SYM in 2222 1120 1180; do
             echo "=== GET /api/v1/stocks/$SYM/decision-v2 ==="
-            curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
-              "$BACKEND_URL/api/v1/stocks/$SYM/decision-v2" -o /tmp/decision_v2_$SYM.json
-            HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt -o /dev/null -w "%{http_code}" \
+            HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt -o /tmp/decision_v2_out.json -w "%{http_code}" \
               "$BACKEND_URL/api/v1/stocks/$SYM/decision-v2")
+            echo "HTTP $HTTP_CODE"
             if [ "$HTTP_CODE" != "200" ]; then
               echo "::error::GET /stocks/$SYM/decision-v2 returned $HTTP_CODE"
-              cat /tmp/decision_v2_$SYM.json
+              cat /tmp/decision_v2_out.json
               exit 1
             fi
-            python3 -m json.tool /tmp/decision_v2_$SYM.json | head -20
+            python3 -m json.tool /tmp/decision_v2_out.json | head -20
           done
 
       - name: "[4b] Verify every other DecisionV2Snapshot-dependent public endpoint"
@@ -172,4 +157,4 @@ print('RUN_ID=' + str(d.get('run_id') or d.get('latest_completed_run_id') or '')
 
       - name: Clean up local session artifacts
         if: always()
-        run: rm -f /tmp/.csrf /tmp/cookies.txt /tmp/login_body.json /tmp/diagnostic.json /tmp/decision_v2_*.json /tmp/ep_out.json /tmp/recent_logs.txt /tmp/backend_vars.json /tmp/diag_summary.txt
+        run: rm -f /tmp/.csrf /tmp/cookies.txt /tmp/login_body.json /tmp/diagnostic.json /tmp/decision_v2_out.json /tmp/ep_out.json /tmp/recent_logs.txt /tmp/backend_vars.json /tmp/diag_summary.txt /tmp/check_threshold.py /tmp/check_diag.py /tmp/audit_step1_out.txt
