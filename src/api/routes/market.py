@@ -28,6 +28,7 @@ from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from sqlalchemy.orm import Session
 
+from src.ai_evolution.confidence_calibration import compute_calibrated_confidences
 from src.api.dependencies import get_market_provider
 from src.api.exceptions import DuplicateMarketScanError, MarketScanRunNotFoundError, NoMarketScanDataError
 from src.api.middleware.rate_limiting import limiter
@@ -142,6 +143,17 @@ def _to_sector_summary_out(summary: SectorSummary) -> SectorSummaryOut:
         buy_count=summary.buy_count, sell_count=summary.sell_count, hold_count=summary.hold_count,
         breadth=summary.breadth, momentum=summary.momentum,
     )
+
+
+def _calibrated_confidences_for(session: Session, outcomes: List) -> dict:
+    """One query (get_active_model), not one per symbol -- see
+    src.ai_evolution.confidence_calibration.compute_calibrated_
+    confidences' own docstring for why this must be computed once per
+    request by a caller that holds a Session, then threaded into
+    RankingEngine.rank()/WatchlistEngine.build() as a plain dict rather
+    than looked up inside those pure, no-IO modules."""
+    raw_confidences = {o.symbol: o.confidence for o in outcomes if o.confidence is not None}
+    return compute_calibrated_confidences(session, raw_confidences)
 
 
 def _change_detection_result_from_events(
@@ -376,7 +388,8 @@ def get_rankings(
         change_rows, previous_run.id if previous_run is not None else None
     )
 
-    rankings = RankingEngine().rank(outcomes, change_result)
+    calibrated_confidences = _calibrated_confidences_for(session, outcomes)
+    rankings = RankingEngine().rank(outcomes, change_result, calibrated_confidences)
     if category is not None:
         rankings = {k: v for k, v in rankings.items() if k.value == category}
 
@@ -426,7 +439,8 @@ def get_opportunities(
         change_rows, previous_run.id if previous_run is not None else None
     )
 
-    all_rankings = RankingEngine().rank(outcomes, change_result)
+    calibrated_confidences = _calibrated_confidences_for(session, outcomes)
+    all_rankings = RankingEngine().rank(outcomes, change_result, calibrated_confidences)
     curated = curate_opportunity_rankings(all_rankings)
 
     return OpportunitiesOut(
@@ -485,7 +499,8 @@ def get_watchlists(
     records = _repository.get_symbol_records_by_symbol(session, run.id)
     outcomes = [outcome_from_record(r) for r in records.values()]
 
-    watchlists = WatchlistEngine().build(outcomes)
+    calibrated_confidences = _calibrated_confidences_for(session, outcomes)
+    watchlists = WatchlistEngine().build(outcomes, calibrated_confidences)
     if category is not None:
         watchlists = {k: v for k, v in watchlists.items() if k.value == category}
 

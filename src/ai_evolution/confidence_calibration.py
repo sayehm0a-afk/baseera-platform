@@ -195,6 +195,35 @@ def get_effective_confidence(session: Session, raw_confidence: float) -> Tuple[O
     return apply_calibration(active_model, raw_confidence), active_model.version
 
 
+def compute_calibrated_confidences(session: Session, raw_confidences: Dict[str, float]) -> Dict[str, float]:
+    """The batch counterpart to `get_effective_confidence()`, for
+    read-time callers that evaluate many symbols per request
+    (RankingEngine.rank/WatchlistEngine.build, called once per
+    /rankings, /opportunities, /watchlists request -- see
+    src.api.routes.market) rather than one symbol per write. Fetches
+    whichever model is ACTIVE exactly once (not once per symbol) and
+    applies it to every entry in `raw_confidences` (symbol -> raw 0-100
+    confidence, already known to the caller from its own
+    SymbolScanOutcome list -- this module intentionally has no
+    dependency on market_intelligence's types, the same layering
+    src.domain keeps relative to src.analysis).
+
+    Returns `{}` (no entries, not a per-symbol `None`) when no model is
+    active -- the exact same honest "not yet calibrated" state
+    `get_effective_confidence`'s own `(None, None)` return represents
+    for the single-symbol write path; a caller checking `symbol in
+    result` gets the correct answer either way.
+    """
+    active_model = ConfidenceCalibrationEngine().get_active_model(session)
+    if active_model is None:
+        return {}
+    return {
+        symbol: apply_calibration(active_model, confidence)
+        for symbol, confidence in raw_confidences.items()
+        if confidence is not None
+    }
+
+
 class ConfidenceCalibrationEngine:
     def get_active_model(self, session: Session) -> Optional[ConfidenceCalibrationModel]:
         return (

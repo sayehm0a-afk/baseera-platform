@@ -58,7 +58,14 @@ def _to_entry(outcome: SymbolScanOutcome, rank_value: Optional[float]) -> Rankin
 
 @dataclass(frozen=True)
 class _FilterSortRule:
-    predicate: Callable[[SymbolScanOutcome], bool]
+    # `calibrated_confidences` (symbol -> calibrated 0-1 success
+    # probability, from src.ai_evolution.confidence_calibration.
+    # compute_calibrated_confidences) is threaded into every predicate
+    # so is_publishable() can activate the real confidence_calibration
+    # gate at read time -- see rank()'s own docstring for why this must
+    # be computed once by the caller (which has a Session) rather than
+    # inside this pure module.
+    predicate: Callable[[SymbolScanOutcome, Dict[str, float]], bool]
     key_fn: Callable[[SymbolScanOutcome], float]
     reverse: bool
 
@@ -95,55 +102,57 @@ _FILTER_SORT_RULES: Dict[RankingCategory, _FilterSortRule] = {
     # (Scan screen only), never presented to a user as "here is an
     # opportunity."
     RankingCategory.TOP_BUY: _FilterSortRule(
-        lambda o: _successful(o) and o.recommendation in _BUY_LIKE and is_publishable(o),
+        lambda o, cc: _successful(o) and o.recommendation in _BUY_LIKE and is_publishable(o, cc.get(o.symbol)),
         lambda o: o.final_score, True,
     ),
     RankingCategory.TOP_STRONG_BUY: _FilterSortRule(
-        lambda o: _successful(o) and o.recommendation is Recommendation.STRONG_BUY and is_publishable(o),
+        lambda o, cc: (
+            _successful(o) and o.recommendation is Recommendation.STRONG_BUY and is_publishable(o, cc.get(o.symbol))
+        ),
         lambda o: o.confidence, True,
     ),
     RankingCategory.TOP_LONG_TERM_INVESTMENT: _FilterSortRule(
-        lambda o: (
+        lambda o, cc: (
             _successful(o) and o.recommendation in _BUY_LIKE
             and o.time_horizon is not None and o.time_horizon.value == "LONG_TERM"
-            and is_publishable(o)
+            and is_publishable(o, cc.get(o.symbol))
         ),
         lambda o: o.confidence, True,
     ),
     RankingCategory.TOP_SWING_TRADE: _FilterSortRule(
-        lambda o: (
+        lambda o, cc: (
             _successful(o) and o.recommendation in _BUY_LIKE
             and o.time_horizon is not None and o.time_horizon.value == "SHORT_TERM"
             and o.expected_return_pct is not None
-            and is_publishable(o)
+            and is_publishable(o, cc.get(o.symbol))
         ),
         lambda o: o.expected_return_pct, True,
     ),
     RankingCategory.TOP_DIVIDEND_STOCKS: _FilterSortRule(
-        lambda o: _successful(o) and o.dividend_yield is not None and is_publishable(o),
+        lambda o, cc: _successful(o) and o.dividend_yield is not None and is_publishable(o, cc.get(o.symbol)),
         lambda o: o.dividend_yield, True,
     ),
     RankingCategory.HIGHEST_CONFIDENCE: _FilterSortRule(
-        _successful, lambda o: o.confidence, True,
+        lambda o, cc: _successful(o), lambda o: o.confidence, True,
     ),
     RankingCategory.HIGHEST_EXPECTED_RETURN: _FilterSortRule(
-        lambda o: _successful(o) and o.expected_return_pct is not None and is_publishable(o),
+        lambda o, cc: _successful(o) and o.expected_return_pct is not None and is_publishable(o, cc.get(o.symbol)),
         lambda o: o.expected_return_pct, True,
     ),
     RankingCategory.LOWEST_RISK: _FilterSortRule(
-        lambda o: _successful(o) and o.risk_level is not None and is_publishable(o),
+        lambda o, cc: _successful(o) and o.risk_level is not None and is_publishable(o, cc.get(o.symbol)),
         lambda o: (RISK_RANK[o.risk_level], -o.confidence), False,
     ),
     RankingCategory.HIGHEST_RISK: _FilterSortRule(
-        lambda o: _successful(o) and o.risk_level is not None,
+        lambda o, cc: _successful(o) and o.risk_level is not None,
         lambda o: (RISK_RANK[o.risk_level], o.confidence), True,
     ),
     RankingCategory.MOST_BULLISH: _FilterSortRule(
-        lambda o: _successful(o) and is_publishable(o),
+        lambda o, cc: _successful(o) and is_publishable(o, cc.get(o.symbol)),
         lambda o: o.final_score, True,
     ),
     RankingCategory.MOST_BEARISH: _FilterSortRule(
-        lambda o: _successful(o) and is_publishable(o),
+        lambda o, cc: _successful(o) and is_publishable(o, cc.get(o.symbol)),
         lambda o: o.final_score, False,
     ),
 }
@@ -170,14 +179,27 @@ class RankingEngine:
         self,
         outcomes: List[SymbolScanOutcome],
         change_result: Optional[ChangeDetectionResult] = None,
+        calibrated_confidences: Optional[Dict[str, float]] = None,
     ) -> Dict[RankingCategory, RankingList]:
+        """`calibrated_confidences` (symbol -> calibrated 0-1 success
+        probability) is optional and defaults to an empty mapping --
+        every category's is_publishable() call then sees `None` for
+        that symbol, which evaluate_publication's own docstring
+        documents as "correctly reports NOT_EVALUATED rather than
+        fabricating a calibration." Pass the real mapping (see
+        src.ai_evolution.confidence_calibration.compute_calibrated_
+        confidences, called once by src.api.routes.market with the
+        Session it already holds) to actually activate the
+        confidence_calibration gate for every ranking category that
+        gates on is_publishable()."""
         generated_at = datetime.now(timezone.utc)
         top_n = get_ranking_top_n()
         by_symbol = {o.symbol: o for o in outcomes}
+        calibrated_confidences = calibrated_confidences or {}
 
         rankings: Dict[RankingCategory, RankingList] = {}
         for category, rule in _FILTER_SORT_RULES.items():
-            rankings[category] = self._build_from_rule(category, outcomes, rule, top_n, generated_at)
+            rankings[category] = self._build_from_rule(category, outcomes, rule, top_n, generated_at, calibrated_confidences)
 
         for category in (
             RankingCategory.MOST_IMPROVED_TODAY,
@@ -188,7 +210,7 @@ class RankingEngine:
             rankings[category] = self._build_from_changes(category, change_result, by_symbol, top_n, generated_at)
 
         rankings[RankingCategory.NEW_OPPORTUNITIES] = self._build_new_opportunities(
-            change_result, by_symbol, top_n, generated_at
+            change_result, by_symbol, top_n, generated_at, calibrated_confidences
         )
         rankings[RankingCategory.REMOVED_OPPORTUNITIES] = self._build_removed_opportunities(
             change_result, top_n, generated_at
@@ -202,8 +224,9 @@ class RankingEngine:
         rule: _FilterSortRule,
         top_n: int,
         generated_at: datetime,
+        calibrated_confidences: Dict[str, float],
     ) -> RankingList:
-        matching = [o for o in outcomes if rule.predicate(o)]
+        matching = [o for o in outcomes if rule.predicate(o, calibrated_confidences)]
         matching.sort(key=rule.key_fn, reverse=rule.reverse)
         entries = [_to_entry(o, _scalar_rank_value(rule.key_fn(o))) for o in matching[:top_n]]
         return RankingList(category=category, entries=entries, generated_at=generated_at)
@@ -237,6 +260,7 @@ class RankingEngine:
         by_symbol: Dict[str, SymbolScanOutcome],
         top_n: int,
         generated_at: datetime,
+        calibrated_confidences: Dict[str, float],
     ) -> RankingList:
         """A symbol whose recommendation just became BUY/STRONG_BUY --
         either newly seen this scan and already BUY/STRONG_BUY, or
@@ -247,7 +271,10 @@ class RankingEngine:
         candidates = set()
         for symbol in change_result.new_symbols:
             outcome = by_symbol.get(symbol)
-            if outcome is not None and _successful(outcome) and outcome.recommendation in _BUY_LIKE and is_publishable(outcome):
+            if (
+                outcome is not None and _successful(outcome) and outcome.recommendation in _BUY_LIKE
+                and is_publishable(outcome, calibrated_confidences.get(symbol))
+            ):
                 candidates.add(symbol)
         for event in change_result.events:
             if event.change_type is not ChangeType.RECOMMENDATION_CHANGE:
@@ -255,7 +282,10 @@ class RankingEngine:
             new_is_buy = event.new_value in {r.value for r in _BUY_LIKE}
             previous_was_buy = event.previous_value in {r.value for r in _BUY_LIKE}
             candidate_outcome = by_symbol.get(event.symbol)
-            if new_is_buy and not previous_was_buy and candidate_outcome is not None and is_publishable(candidate_outcome):
+            if (
+                new_is_buy and not previous_was_buy and candidate_outcome is not None
+                and is_publishable(candidate_outcome, calibrated_confidences.get(event.symbol))
+            ):
                 candidates.add(event.symbol)
 
         matching = [by_symbol[s] for s in candidates if s in by_symbol]
