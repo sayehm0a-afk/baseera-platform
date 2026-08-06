@@ -66,6 +66,28 @@ class RecommendationOutcome(Base):
     hit_target = Column(Boolean, nullable=True)
     hit_stop = Column(Boolean, nullable=True)
 
+    # Per-target(1/2/3) tracking -- `hit_target` above only ever
+    # tracked the single legacy target_price. Each `_reached` flag is
+    # set the first time the forward price path touches that target
+    # within this horizon; `_reached_at` is that bar's real timestamp,
+    # never a later re-evaluation time, so time-to-target is accurate.
+    target_1_reached = Column(Boolean, nullable=True)
+    target_1_reached_at = Column(DateTime(timezone=True), nullable=True)
+    target_2_reached = Column(Boolean, nullable=True)
+    target_2_reached_at = Column(DateTime(timezone=True), nullable=True)
+    target_3_reached = Column(Boolean, nullable=True)
+    target_3_reached_at = Column(DateTime(timezone=True), nullable=True)
+
+    # MFE/MAE: the best/worst the position's real forward price path
+    # ever looked, as a percent of entry price, across the whole
+    # horizon window -- independent of whether target/stop was
+    # actually touched. `time_to_target_days` is the elapsed real days
+    # from publication to the first target reached (any of the three),
+    # null when none was reached within this horizon.
+    max_favorable_excursion_pct = Column(Numeric(9, 4), nullable=True)
+    max_adverse_excursion_pct = Column(Numeric(9, 4), nullable=True)
+    time_to_target_days = Column(Integer, nullable=True)
+
     evaluated_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(

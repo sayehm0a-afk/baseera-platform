@@ -24,9 +24,11 @@ from sqlalchemy.orm import Session
 
 from src.ai_evolution.agents.orchestrator import AgentPanelOrchestrator
 from src.ai_evolution.config import is_agent_panel_enabled, is_paper_trading_enabled
+from src.ai_evolution.confidence_calibration import get_effective_confidence
 from src.ai_evolution.outcome_evaluation import create_pending_outcomes
 from src.ai_evolution.paper_trading import generate_challenger_snapshot, get_latest_challenger_config
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
+from src.analysis.decision.types import TimeHorizon
 from src.analysis.decision_v2.types import gates_to_dicts, sub_scores_to_dict
 from src.domain.models import (
     ChangeType as DomainChangeType,
@@ -45,6 +47,13 @@ from src.domain.models import (
 )
 from src.analysis.decision.types import DecisionFactorBreakdown
 from src.analysis.recommendation.types import Signal
+from src.market_intelligence.config import (
+    get_duplicate_suppression_price_tolerance_pct,
+    get_duplicate_suppression_window_hours,
+    get_expiration_days_long_term,
+    get_expiration_days_medium_term,
+    get_expiration_days_short_term,
+)
 from src.market_intelligence.types import Alert, ChangeEvent, MarketBreadthSummary, SectorSummary, SymbolScanOutcome
 
 logger = logging.getLogger(__name__)
@@ -98,6 +107,70 @@ def _f(value: Optional[float]) -> Optional[float]:
     every multi-row scan-result insert against real Postgres. `float()`
     is a no-op for values that are already plain floats."""
     return None if value is None else float(value)
+
+
+_EXPIRATION_DAYS_BY_HORIZON = {
+    TimeHorizon.SHORT_TERM: get_expiration_days_short_term,
+    TimeHorizon.MEDIUM_TERM: get_expiration_days_medium_term,
+    TimeHorizon.LONG_TERM: get_expiration_days_long_term,
+}
+
+
+def _compute_expires_at(evaluated_at: datetime, time_horizon: TimeHorizon) -> datetime:
+    """A recommendation's price plan is only meant to be actionable for
+    roughly its own stated time horizon -- a SHORT_TERM call from six
+    weeks ago that a newer scan hasn't superseded is stale, not still a
+    live trade idea. Days-per-horizon are a disclosed policy choice
+    (see get_expiration_days_*'s own docstrings), not an empirically
+    derived value."""
+    days_fn = _EXPIRATION_DAYS_BY_HORIZON.get(time_horizon, get_expiration_days_short_term)
+    return evaluated_at + timedelta(days=days_fn())
+
+
+def _prices_within_tolerance(prior: Optional[float], new: Optional[float], tolerance_fraction: float) -> bool:
+    """Both `None` (e.g. a HOLD with no target/stop) counts as "the
+    same" for duplicate-suppression purposes; exactly one `None` means
+    the price plan materially changed (a target appeared/disappeared)
+    and must never be suppressed."""
+    if prior is None and new is None:
+        return True
+    if prior is None or new is None:
+        return False
+    if prior == 0:
+        return new == 0
+    return abs(new - prior) / abs(prior) <= tolerance_fraction
+
+
+def _is_duplicate_recommendation(
+    session: Session, symbol: str, recommendation: RecommendationLabel, decision, evaluated_at: datetime,
+) -> bool:
+    """True when the most recent prior live-scan snapshot for this
+    symbol, within get_duplicate_suppression_window_hours(), already
+    says materially the same thing (same recommendation direction,
+    target/stop within get_duplicate_suppression_price_tolerance_pct())
+    -- see that config function's own docstring for why this exists
+    (Live Market Mode's frequent polling would otherwise write a
+    near-identical RecommendationSnapshot every cycle). A call whose
+    direction or price plan actually changed is never suppressed."""
+    cutoff = evaluated_at - timedelta(hours=get_duplicate_suppression_window_hours())
+    prior = (
+        session.query(RecommendationSnapshot)
+        .filter(
+            RecommendationSnapshot.symbol == symbol,
+            RecommendationSnapshot.source == _LIVE_SCAN_SOURCE,
+            RecommendationSnapshot.evaluated_at >= cutoff,
+            RecommendationSnapshot.evaluated_at <= evaluated_at,
+        )
+        .order_by(RecommendationSnapshot.evaluated_at.desc())
+        .first()
+    )
+    if prior is None or prior.recommendation != recommendation:
+        return False
+    tolerance_fraction = get_duplicate_suppression_price_tolerance_pct() / 100.0
+    return (
+        _prices_within_tolerance(_f(prior.target_price), _f(decision.target_price), tolerance_fraction)
+        and _prices_within_tolerance(_f(prior.stop_loss), _f(decision.stop_loss), tolerance_fraction)
+    )
 
 
 class MarketIntelligenceRepository:
@@ -213,13 +286,14 @@ class MarketIntelligenceRepository:
             if stock_id is None:
                 continue
             decision = outcome.report.decision
+            recommendation_label = RecommendationLabel(decision.recommendation.value)
             session.add(
                 SymbolIntelligenceRecord(
                     scan_run_id=run_id,
                     stock_id=stock_id,
                     symbol=outcome.symbol,
                     sector=outcome.sector,
-                    recommendation=RecommendationLabel(decision.recommendation.value),
+                    recommendation=recommendation_label,
                     confidence=_f(decision.confidence),
                     final_score=_f(decision.final_score),
                     target_price=_f(decision.target_price),
@@ -241,52 +315,95 @@ class MarketIntelligenceRepository:
                     engine_version=outcome.report.engine_version,
                 )
             )
-            snapshot = RecommendationSnapshot(
-                run_id=None,
-                stock_id=stock_id,
-                symbol=outcome.symbol,
-                evaluated_at=decision.generated_at,
-                market_price_at_evaluation=_f(outcome.latest_price),
-                recommendation=RecommendationLabel(decision.recommendation.value),
-                total_score=_f(decision.final_score),
-                confidence_score=_f(decision.confidence),
-                technical_score=_f(outcome.technical_score),
-                fundamental_score=_f(outcome.fundamental_score),
-                momentum_score=_f(outcome.category_score(CATEGORY_LABELS["momentum"])),
-                volume_score=_f(outcome.category_score(CATEGORY_LABELS["volume"])),
-                risk_score=_f(outcome.category_score(CATEGORY_LABELS["risk"])),
-                contributor_breakdown=_serialize_breakdown(decision.breakdown),
-                signals=_serialize_signals(decision.signals),
-                reasons=list(decision.reasons),
-                target_price=_f(decision.target_price),
-                stop_loss=_f(decision.stop_loss),
-                expected_return_pct=_f(decision.expected_return_pct),
-                time_horizon=decision.time_horizon.value,
-                risk_level=decision.risk_level.value,
-                position_size=decision.position_size.value,
-                engine_version=outcome.report.engine_version,
-                source=_LIVE_SCAN_SOURCE,
-                is_paper_trade=False,
-            )
-            session.add(snapshot)
-            # E2: issue PENDING RecommendationOutcome rows (one per
-            # evaluation horizon) now, so OutcomeEvaluationScheduler has
-            # known rows to score once real forward price data exists.
-            create_pending_outcomes(session, snapshot)
-            # E7: real multi-agent panel -- opt-in (AGENT_PANEL_ENABLED),
-            # never raises (see AgentPanelOrchestrator.run_panel's own
-            # docstring), commits its own work when it runs.
-            if is_agent_panel_enabled():
-                await AgentPanelOrchestrator().run_panel(session, snapshot, decision, outcome.symbol)
-            # E8: champion/challenger paper trading -- opt-in
-            # (PAPER_TRADING_ENABLED), reuses this same already-built
-            # AnalysisContext (no re-fetch) to score a second, VALIDATED
-            # calibration candidate, never touching the champion
-            # decision or production weights (see paper_trading.py).
-            if is_paper_trading_enabled() and outcome.context is not None:
-                challenger_config = get_latest_challenger_config(session)
-                if challenger_config is not None:
-                    generate_challenger_snapshot(session, snapshot, outcome.context, challenger_config)
+            # Duplicate suppression: a materially identical call to the
+            # most recent prior live-scan RecommendationSnapshot for
+            # this symbol (see get_duplicate_suppression_window_hours's
+            # docstring) is not written as a second audit/tracking row --
+            # SymbolIntelligenceRecord above (this scan run's own
+            # display record) and DecisionV2Snapshot below (an
+            # unconstrained append-only request log by design) are
+            # unaffected; only the outcome-tracked, calibration-training
+            # RecommendationSnapshot table is deduplicated.
+            if not _is_duplicate_recommendation(
+                session, outcome.symbol, recommendation_label, decision, decision.generated_at,
+            ):
+                context = outcome.context
+                bars_used = context.extra.get("bars_used") if context is not None else None
+                likely_suspended = context.extra.get("likely_suspended") if context is not None else None
+                quote = (context.extra.get("quote") or {}) if context is not None else {}
+                bid, ask = quote.get("bid"), quote.get("ask")
+                spread_pct = (ask - bid) / bid * 100.0 if bid is not None and ask is not None and bid > 0 else None
+
+                target_price_2 = target_price_3 = None
+                if outcome.decision_v2 is not None:
+                    target_price_2 = _f(outcome.decision_v2.target_2)
+                    target_price_3 = _f(outcome.decision_v2.target_3)
+
+                # Confidence calibration: the one real integration point
+                # with ConfidenceCalibrationEngine (see get_effective_
+                # confidence's own docstring) -- (None, None) whenever
+                # no model is active yet, never a fabricated value.
+                calibrated_confidence, calibration_model_version = get_effective_confidence(
+                    session, decision.confidence,
+                )
+
+                snapshot = RecommendationSnapshot(
+                    run_id=None,
+                    stock_id=stock_id,
+                    symbol=outcome.symbol,
+                    evaluated_at=decision.generated_at,
+                    market_price_at_evaluation=_f(outcome.latest_price),
+                    recommendation=recommendation_label,
+                    total_score=_f(decision.final_score),
+                    confidence_score=_f(decision.confidence),
+                    technical_score=_f(outcome.technical_score),
+                    fundamental_score=_f(outcome.fundamental_score),
+                    momentum_score=_f(outcome.category_score(CATEGORY_LABELS["momentum"])),
+                    volume_score=_f(outcome.category_score(CATEGORY_LABELS["volume"])),
+                    risk_score=_f(outcome.category_score(CATEGORY_LABELS["risk"])),
+                    contributor_breakdown=_serialize_breakdown(decision.breakdown),
+                    signals=_serialize_signals(decision.signals),
+                    reasons=list(decision.reasons),
+                    target_price=_f(decision.target_price),
+                    stop_loss=_f(decision.stop_loss),
+                    expected_return_pct=_f(decision.expected_return_pct),
+                    time_horizon=decision.time_horizon.value,
+                    risk_level=decision.risk_level.value,
+                    position_size=decision.position_size.value,
+                    engine_version=outcome.report.engine_version,
+                    source=_LIVE_SCAN_SOURCE,
+                    is_paper_trade=False,
+                    target_price_2=target_price_2,
+                    target_price_3=target_price_3,
+                    expires_at=_compute_expires_at(decision.generated_at, decision.time_horizon),
+                    bars_used=bars_used,
+                    spread_pct=_f(spread_pct),
+                    likely_suspended=likely_suspended,
+                    calibrated_confidence_score=_f(calibrated_confidence),
+                    calibration_version=calibration_model_version,
+                )
+                session.add(snapshot)
+                # E2: issue PENDING RecommendationOutcome rows (one per
+                # evaluation horizon) now, so OutcomeEvaluationScheduler
+                # has known rows to score once real forward price data
+                # exists.
+                create_pending_outcomes(session, snapshot)
+                # E7: real multi-agent panel -- opt-in
+                # (AGENT_PANEL_ENABLED), never raises (see
+                # AgentPanelOrchestrator.run_panel's own docstring),
+                # commits its own work when it runs.
+                if is_agent_panel_enabled():
+                    await AgentPanelOrchestrator().run_panel(session, snapshot, decision, outcome.symbol)
+                # E8: champion/challenger paper trading -- opt-in
+                # (PAPER_TRADING_ENABLED), reuses this same already-built
+                # AnalysisContext (no re-fetch) to score a second,
+                # VALIDATED calibration candidate, never touching the
+                # champion decision or production weights (see
+                # paper_trading.py).
+                if is_paper_trading_enabled() and outcome.context is not None:
+                    challenger_config = get_latest_challenger_config(session)
+                    if challenger_config is not None:
+                        generate_challenger_snapshot(session, snapshot, outcome.context, challenger_config)
             # Phase 3A: this symbol's Decision Engine V2 result
             # (computed by MarketScanner alongside the V1 decision
             # above, from the same InvestmentDecision -- see

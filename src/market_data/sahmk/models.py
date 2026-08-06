@@ -13,7 +13,13 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class SahmkQuote:
-    """A live price quote from GET /quote/{symbol}/."""
+    """A live price quote from GET /quote/{symbol}/.
+
+    `bid`/`ask` are real fields on SAHMK's raw quote response (see
+    docs/SAHMK_INTEGRATION.md's verified field list) that were
+    previously parsed but discarded -- now carried through so the
+    publication gate layer can compute a real bid/ask spread instead
+    of having no spread signal at all."""
 
     symbol: str
     price: float
@@ -21,6 +27,8 @@ class SahmkQuote:
     change_percent: Optional[float]
     volume: Optional[int]
     timestamp: datetime
+    bid: Optional[float] = None
+    ask: Optional[float] = None
 
 
 @dataclass(frozen=True)

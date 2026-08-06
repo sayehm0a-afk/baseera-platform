@@ -57,6 +57,8 @@ def _make_snapshot(
     target_price=110.0,
     stop_loss=90.0,
     evaluated_at=None,
+    target_price_2=None,
+    target_price_3=None,
 ):
     evaluated_at = evaluated_at or datetime(2026, 1, 1, tzinfo=timezone.utc)
     snapshot = RecommendationSnapshot(
@@ -68,6 +70,8 @@ def _make_snapshot(
         total_score=65.0,
         confidence_score=70.0,
         target_price=target_price,
+        target_price_2=target_price_2,
+        target_price_3=target_price_3,
         stop_loss=stop_loss,
         engine_version="1.0.0",
         source="live_scan",
@@ -302,3 +306,133 @@ class TestEvaluateDueOutcomes:
         assert due_statuses[3] is not RecommendationOutcomeStatus.PENDING
         assert due_statuses[7] is not RecommendationOutcomeStatus.PENDING
         assert due_statuses[14] is RecommendationOutcomeStatus.PENDING
+
+
+class TestMfeMaeAndPerTargetTracking:
+    """Recommendation-engine hardening: MFE/MAE and target_1/2/3
+    per-target hit tracking, computed from the same real horizon_df
+    already loaded for hit_target/hit_stop -- see
+    _first_target_touch/_max_favorable_adverse_excursion."""
+
+    def test_bullish_call_computes_mfe_mae_and_target_1_hit(self, session, stock):
+        evaluated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        snapshot = _make_snapshot(
+            session, stock, recommendation=RecommendationLabel.BUY,
+            entry_price=100.0, target_price=110.0, target_price_2=115.0, target_price_3=120.0,
+            stop_loss=90.0, evaluated_at=evaluated_at,
+        )
+        create_pending_outcomes(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=1), high=112.0, low=99.0, close=111.0)
+        session.commit()
+
+        evaluate_due_outcomes(session, now=evaluated_at + timedelta(days=2))
+
+        row = session.query(RecommendationOutcome).filter_by(snapshot_id=snapshot.id, evaluation_horizon_days=1).one()
+        assert row.max_favorable_excursion_pct == pytest.approx(12.0)
+        assert row.max_adverse_excursion_pct == pytest.approx(-1.0)
+        assert row.target_1_reached is True
+        assert row.target_1_reached_at is not None
+        assert row.target_2_reached is False
+        assert row.target_2_reached_at is None
+        assert row.target_3_reached is False
+        assert row.target_3_reached_at is None
+        assert row.time_to_target_days == 1
+
+    def test_target_2_reached_a_day_after_target_1(self, session, stock):
+        evaluated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        snapshot = _make_snapshot(
+            session, stock, recommendation=RecommendationLabel.BUY,
+            entry_price=100.0, target_price=105.0, target_price_2=110.0, target_price_3=120.0,
+            stop_loss=90.0, evaluated_at=evaluated_at,
+        )
+        create_pending_outcomes(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=1), high=104.0, low=99.0, close=103.0)
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=2), high=106.0, low=101.0, close=105.0)
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=3), high=111.0, low=104.0, close=110.0)
+        for offset in range(4, 8):
+            _add_bar(session, stock, evaluated_at.date() + timedelta(days=offset), high=112.0, low=105.0, close=108.0)
+        session.commit()
+
+        evaluate_due_outcomes(session, now=evaluated_at + timedelta(days=8))
+
+        row = session.query(RecommendationOutcome).filter_by(snapshot_id=snapshot.id, evaluation_horizon_days=7).one()
+        assert row.target_1_reached is True
+        assert row.target_2_reached is True
+        assert row.target_3_reached is False
+        assert row.target_3_reached_at is None
+        # target_1 touched day 2 (before target_2's day 3) -- time_to_target
+        # measures the *first* target reached, not the last.
+        assert row.time_to_target_days == 2
+        assert row.max_favorable_excursion_pct == pytest.approx(12.0)  # best high (112) vs entry (100)
+        assert row.max_adverse_excursion_pct == pytest.approx(-1.0)  # worst low (99) vs entry (100)
+
+    def test_bearish_call_flips_favorable_adverse_direction(self, session, stock):
+        """For a SELL, the position gains when price falls -- MFE must
+        come from the low (bigger drop = more favorable) and MAE from
+        the high (bigger rise = more adverse), the mirror image of a
+        BUY."""
+        evaluated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        snapshot = _make_snapshot(
+            session, stock, recommendation=RecommendationLabel.SELL,
+            entry_price=100.0, target_price=90.0, stop_loss=110.0, evaluated_at=evaluated_at,
+        )
+        create_pending_outcomes(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=1), high=105.0, low=88.0, close=90.0)
+        session.commit()
+
+        evaluate_due_outcomes(session, now=evaluated_at + timedelta(days=2))
+
+        row = session.query(RecommendationOutcome).filter_by(snapshot_id=snapshot.id, evaluation_horizon_days=1).one()
+        assert row.max_favorable_excursion_pct == pytest.approx(12.0)  # (100-88)/100*100
+        assert row.max_adverse_excursion_pct == pytest.approx(-5.0)  # (100-105)/100*100
+        assert row.target_1_reached is True  # low (88) <= target (90)
+
+    def test_hold_recommendation_leaves_mfe_mae_and_targets_null(self, session, stock):
+        """A HOLD implies no position -- MFE/MAE and per-target hit
+        tracking are undefined, not False/0, matching hit_target/
+        hit_stop's own existing convention for this case."""
+        evaluated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        snapshot = _make_snapshot(
+            session, stock, recommendation=RecommendationLabel.HOLD,
+            entry_price=100.0, target_price=None, stop_loss=None, evaluated_at=evaluated_at,
+        )
+        create_pending_outcomes(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=1), high=101.0, low=99.0, close=100.5)
+        session.commit()
+
+        evaluate_due_outcomes(session, now=evaluated_at + timedelta(days=2))
+
+        row = session.query(RecommendationOutcome).filter_by(snapshot_id=snapshot.id, evaluation_horizon_days=1).one()
+        assert row.max_favorable_excursion_pct is None
+        assert row.max_adverse_excursion_pct is None
+        assert row.target_1_reached is None
+        assert row.target_2_reached is None
+        assert row.target_3_reached is None
+        assert row.time_to_target_days is None
+
+    def test_no_target_reached_leaves_time_to_target_days_null(self, session, stock):
+        evaluated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        snapshot = _make_snapshot(
+            session, stock, recommendation=RecommendationLabel.BUY,
+            entry_price=100.0, target_price=110.0, stop_loss=90.0, evaluated_at=evaluated_at,
+        )
+        create_pending_outcomes(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=1), high=103.0, low=98.0, close=102.0)
+        session.commit()
+
+        evaluate_due_outcomes(session, now=evaluated_at + timedelta(days=2))
+
+        row = session.query(RecommendationOutcome).filter_by(snapshot_id=snapshot.id, evaluation_horizon_days=1).one()
+        assert row.target_1_reached is False
+        assert row.target_1_reached_at is None
+        assert row.time_to_target_days is None

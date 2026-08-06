@@ -122,18 +122,25 @@ def test_case_09_extreme_recent_price_move_is_flagged_before_chasing():
 
 
 # 10. Conflicting technical and fundamental evidence -> disclosed and downgraded.
-@pytest.mark.xfail(
-    reason="No conflict-detection stage exists between independent technical/fundamental conclusions -- "
-    "AIDecisionEngine blends them into a single weighted score before any conflict can be surfaced. "
-    "Disclosed gap (Phase 6 Stages 2-3 of the intelligence-core mandate, not yet implemented).",
-    strict=True,
-)
-def test_case_10_conflicting_technical_and_fundamental_evidence_is_downgraded():
+# No longer a disclosed gap: publication_gate.py's fundamental_conflict
+# gate (see test_publication_gate.py::TestFundamentalConflictGate)
+# rejects a BUY resting on technical/momentum strength while the
+# fundamental contributor is actively bearish, instead of silently
+# blending the two into one score.
+def test_case_10_conflicting_technical_and_fundamental_evidence_is_rejected():
+    from src.analysis.decision.types import DecisionFactorBreakdown
+
     outcome = make_outcome(decision=make_decision(
         recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0,
+        breakdown=[
+            DecisionFactorBreakdown(category="Technical Analysis", points=15.0, weight=0.25, confidence=90.0, available=True),
+            DecisionFactorBreakdown(category="Fundamental Analysis", points=-20.0, weight=0.25, confidence=90.0, available=True),
+        ],
     ))
     evaluation = evaluate_publication(outcome)
-    assert any("conflict" in g.name for g in evaluation.gates)
+    assert evaluation.status is PublicationStatus.REJECTED
+    conflict_gate = next(g for g in evaluation.gates if g.name == "fundamental_conflict")
+    assert conflict_gate.status is GateStatus.FAIL
 
 
 # 11. Strong score but poor risk/reward -> rejected.

@@ -3,7 +3,7 @@ ORM against an in-memory SQLite DB, no mocking of the persistence
 layer itself.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
@@ -468,6 +468,233 @@ async def test_save_symbol_records_paper_trading_enabled_but_no_validated_config
     snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").all()
     assert len(snapshots) == 1
     assert snapshots[0].variant is None
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_populates_expires_at_from_time_horizon(session, repo):
+    """Repository hardening: RecommendationSnapshot.expires_at is
+    computed from the decision's own TimeHorizon at write time (see
+    get_expiration_days_short_term/_medium_term/_long_term)."""
+    from src.analysis.decision.types import TimeHorizon
+
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    decision = make_decision(symbol="2222", time_horizon=TimeHorizon.SHORT_TERM)
+    outcome = make_outcome(symbol="2222", decision=decision)
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshot = session.query(RecommendationSnapshot).filter_by(symbol="2222").one()
+    assert snapshot.expires_at is not None
+    delta_days = (snapshot.expires_at - snapshot.evaluated_at).days
+    assert delta_days == 14  # get_expiration_days_short_term() default
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_populates_target_price_2_and_3_from_decision_v2(session, repo):
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    decision_v2 = make_decision_v2_result(symbol="2222")
+    outcome = make_outcome(symbol="2222", decision_v2=decision_v2)
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshot = session.query(RecommendationSnapshot).filter_by(symbol="2222").one()
+    assert float(snapshot.target_price_2) == pytest.approx(28.3)
+    assert float(snapshot.target_price_3) == pytest.approx(29.0)
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_leaves_target_price_2_and_3_null_without_decision_v2(session, repo):
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", decision_v2=None)
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshot = session.query(RecommendationSnapshot).filter_by(symbol="2222").one()
+    assert snapshot.target_price_2 is None
+    assert snapshot.target_price_3 is None
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_threads_bars_used_spread_and_suspension_from_context(session, repo):
+    """`context.extra`'s bars_used/likely_suspended/quote(bid/ask) --
+    populated by context_builder.py's real quality-gate signals -- are
+    persisted alongside the recommendation they gated, for later audit
+    (see the migration's own docstring)."""
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    context = AnalysisContext(
+        symbol="2222",
+        extra={"bars_used": 120, "likely_suspended": False, "quote": {"bid": 100.0, "ask": 100.5}},
+    )
+    outcome = make_outcome(symbol="2222", context=context)
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshot = session.query(RecommendationSnapshot).filter_by(symbol="2222").one()
+    assert snapshot.bars_used == 120
+    assert snapshot.likely_suspended is False
+    assert float(snapshot.spread_pct) == pytest.approx(0.5, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_without_context_leaves_gate_signal_columns_null(session, repo):
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222", context=None)
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshot = session.query(RecommendationSnapshot).filter_by(symbol="2222").one()
+    assert snapshot.bars_used is None
+    assert snapshot.likely_suspended is None
+    assert snapshot.spread_pct is None
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_applies_active_confidence_calibration(session, repo):
+    """When an active ConfidenceCalibrationEngine model exists,
+    get_effective_confidence's output is persisted on the snapshot --
+    the one real wiring point between E3's calibration engine and the
+    live pipeline."""
+    import random
+    from datetime import date, timedelta
+
+    from src.ai_evolution.confidence_calibration import ConfidenceCalibrationEngine
+    from src.domain.models import RecommendationOutcome, RecommendationOutcomeStatus
+
+    stock = _seed_stock(session, "2222")
+    rng = random.Random(42)
+    for i in range(100):
+        evaluated_at = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(days=i)
+        seed_snapshot = RecommendationSnapshot(
+            stock_id=stock.id, symbol="2222", evaluated_at=evaluated_at,
+            market_price_at_evaluation=100.0, recommendation=RecommendationLabel.BUY,
+            total_score=60.0, confidence_score=85.0, target_price=110.0, stop_loss=90.0,
+            engine_version="1.0.0", source="live_scan",
+        )
+        session.add(seed_snapshot)
+        session.flush()
+        session.add(
+            RecommendationOutcome(
+                snapshot_id=seed_snapshot.id, symbol="2222", evaluation_horizon_days=7,
+                due_at=evaluated_at + timedelta(days=7),
+                status=RecommendationOutcomeStatus.SUCCESSFUL if rng.random() < 0.5 else RecommendationOutcomeStatus.FAILED,
+                evaluated_at=evaluated_at + timedelta(days=7),
+            )
+        )
+    session.commit()
+
+    engine = ConfidenceCalibrationEngine()
+    model = engine.propose(session, date(2026, 1, 1), date(2026, 12, 31), min_sample_size=30)
+    engine.test(session, model.version)
+    engine.activate(session, model.version)
+
+    run = repo.create_scan_run(session, symbols_requested=1)
+    decision = make_decision(symbol="2222", confidence=85.0)
+    outcome = make_outcome(symbol="2222", decision=decision)
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshot = (
+        session.query(RecommendationSnapshot)
+        .filter_by(symbol="2222", run_id=None)
+        .order_by(RecommendationSnapshot.id.desc())
+        .first()
+    )
+    assert snapshot.calibrated_confidence_score is not None
+    assert 0.0 <= float(snapshot.calibrated_confidence_score) <= 1.0
+    assert snapshot.calibration_version == model.version
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_no_active_calibration_leaves_calibrated_score_null(session, repo):
+    _seed_stock(session, "2222")
+    run = repo.create_scan_run(session, symbols_requested=1)
+    outcome = make_outcome(symbol="2222")
+
+    await repo.save_symbol_records(session, run.id, [outcome])
+
+    snapshot = session.query(RecommendationSnapshot).filter_by(symbol="2222").one()
+    assert snapshot.calibrated_confidence_score is None
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_suppresses_a_materially_identical_duplicate(session, repo):
+    """Duplicate suppression: a second live scan for the same symbol,
+    within the suppression window, with the same direction and
+    target/stop within tolerance, does not write a second
+    RecommendationSnapshot -- prevents Live Market Mode's frequent
+    polling from flooding the outcome-tracked audit table with
+    near-identical rows (see get_duplicate_suppression_window_hours)."""
+    _seed_stock(session, "2222")
+    run_1 = repo.create_scan_run(session, symbols_requested=1)
+    now = datetime.now(timezone.utc)
+    decision_1 = make_decision(symbol="2222", target_price=105.0, stop_loss=97.0)
+    object.__setattr__(decision_1, "generated_at", now)
+    outcome_1 = make_outcome(symbol="2222", decision=decision_1)
+    await repo.save_symbol_records(session, run_1.id, [outcome_1])
+
+    run_2 = repo.create_scan_run(session, symbols_requested=1)
+    decision_2 = make_decision(symbol="2222", target_price=105.2, stop_loss=97.1)  # within 0.5% tolerance
+    object.__setattr__(decision_2, "generated_at", now + timedelta(hours=1))
+    outcome_2 = make_outcome(symbol="2222", decision=decision_2)
+    await repo.save_symbol_records(session, run_2.id, [outcome_2])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").all()
+    assert len(snapshots) == 1
+
+    # SymbolIntelligenceRecord (this run's own display row) is still
+    # written every scan, unaffected by RecommendationSnapshot dedup.
+    from src.domain.models import SymbolIntelligenceRecord
+
+    assert session.query(SymbolIntelligenceRecord).filter_by(symbol="2222").count() == 2
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_does_not_suppress_a_materially_different_call(session, repo):
+    """A call whose direction or price plan actually changed is never
+    suppressed, regardless of how recently the prior one was
+    published."""
+    _seed_stock(session, "2222")
+    run_1 = repo.create_scan_run(session, symbols_requested=1)
+    now = datetime.now(timezone.utc)
+    decision_1 = make_decision(symbol="2222", target_price=105.0, stop_loss=97.0)
+    object.__setattr__(decision_1, "generated_at", now)
+    outcome_1 = make_outcome(symbol="2222", decision=decision_1)
+    await repo.save_symbol_records(session, run_1.id, [outcome_1])
+
+    run_2 = repo.create_scan_run(session, symbols_requested=1)
+    decision_2 = make_decision(symbol="2222", target_price=120.0, stop_loss=97.0)  # target moved well beyond tolerance
+    object.__setattr__(decision_2, "generated_at", now + timedelta(hours=1))
+    outcome_2 = make_outcome(symbol="2222", decision=decision_2)
+    await repo.save_symbol_records(session, run_2.id, [outcome_2])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").order_by(RecommendationSnapshot.id).all()
+    assert len(snapshots) == 2
+
+
+@pytest.mark.asyncio
+async def test_save_symbol_records_does_not_suppress_outside_the_window(session, repo, monkeypatch):
+    monkeypatch.setattr(repository_module, "get_duplicate_suppression_window_hours", lambda: 24.0)
+    _seed_stock(session, "2222")
+    run_1 = repo.create_scan_run(session, symbols_requested=1)
+    now = datetime.now(timezone.utc)
+    decision_1 = make_decision(symbol="2222", target_price=105.0, stop_loss=97.0)
+    object.__setattr__(decision_1, "generated_at", now - timedelta(hours=25))
+    outcome_1 = make_outcome(symbol="2222", decision=decision_1)
+    await repo.save_symbol_records(session, run_1.id, [outcome_1])
+
+    run_2 = repo.create_scan_run(session, symbols_requested=1)
+    decision_2 = make_decision(symbol="2222", target_price=105.0, stop_loss=97.0)
+    object.__setattr__(decision_2, "generated_at", now)
+    outcome_2 = make_outcome(symbol="2222", decision=decision_2)
+    await repo.save_symbol_records(session, run_2.id, [outcome_2])
+
+    snapshots = session.query(RecommendationSnapshot).filter_by(symbol="2222").order_by(RecommendationSnapshot.id).all()
+    assert len(snapshots) == 2
 
 
 def test_save_and_read_back_sector_summaries(session, repo):

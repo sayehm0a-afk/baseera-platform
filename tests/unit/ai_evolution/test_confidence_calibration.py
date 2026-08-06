@@ -16,6 +16,7 @@ from src.ai_evolution.confidence_calibration import (
     DEFAULT_REFERENCE_HORIZON_DAYS,
     ConfidenceCalibrationEngine,
     apply_calibration,
+    get_effective_confidence,
 )
 from src.core.db.database import Base
 from src.domain.models import (
@@ -242,3 +243,51 @@ class TestApplyCalibration:
 
         calibrated = apply_calibration(row, 85.0)
         assert 0.0 <= calibrated <= 1.0
+
+
+class TestGetEffectiveConfidence:
+    """get_effective_confidence -- the one real integration point
+    between this engine and the live recommendation pipeline (see its
+    own docstring for why every existing publication-gate/ranking call
+    site can't call it directly)."""
+
+    def test_no_active_model_returns_none_none(self, session, stock):
+        calibrated, version = get_effective_confidence(session, 80.0)
+        assert calibrated is None
+        assert version is None
+
+    def test_active_model_calibrates_and_returns_its_version(self, session, stock):
+        _seed_overconfident_dataset(session, stock, n=100)
+        engine = ConfidenceCalibrationEngine()
+        row = engine.propose(session, date(2026, 1, 1), date(2026, 12, 31), min_sample_size=30)
+        engine.test(session, row.version)
+        engine.activate(session, row.version)
+
+        calibrated, version = get_effective_confidence(session, 85.0)
+        assert calibrated is not None
+        assert 0.0 <= calibrated <= 1.0
+        assert version == row.version
+        # Overconfident dataset: matches TestApplyCalibration's own assertion.
+        assert calibrated < 0.85
+
+    def test_matches_calling_apply_calibration_directly(self, session, stock):
+        _seed_overconfident_dataset(session, stock, n=100)
+        engine = ConfidenceCalibrationEngine()
+        row = engine.propose(session, date(2026, 1, 1), date(2026, 12, 31), min_sample_size=30)
+        engine.test(session, row.version)
+        engine.activate(session, row.version)
+
+        calibrated, _ = get_effective_confidence(session, 70.0)
+        assert calibrated == apply_calibration(row, 70.0)
+
+    def test_rolled_back_model_is_no_longer_applied(self, session, stock):
+        _seed_overconfident_dataset(session, stock, n=100)
+        engine = ConfidenceCalibrationEngine()
+        row = engine.propose(session, date(2026, 1, 1), date(2026, 12, 31), min_sample_size=30)
+        engine.test(session, row.version)
+        engine.activate(session, row.version)
+        engine.rollback(session)
+
+        calibrated, version = get_effective_confidence(session, 80.0)
+        assert calibrated is None
+        assert version is None

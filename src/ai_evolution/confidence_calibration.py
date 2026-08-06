@@ -173,6 +173,28 @@ def apply_calibration(model_row: ConfidenceCalibrationModel, raw_confidence: flo
     return y_thresholds[-1]  # pragma: no cover -- unreachable given the bounds checks above
 
 
+def get_effective_confidence(session: Session, raw_confidence: float) -> Tuple[Optional[float], Optional[str]]:
+    """The one real integration point between this engine and the live
+    recommendation pipeline: looks up whichever ConfidenceCalibrationModel
+    is currently ACTIVE and, if one exists, applies it to `raw_confidence`
+    (0-100), returning the calibrated success probability (0-1) and that
+    model's version string. When no model is active yet -- the honest,
+    expected state until enough real outcome history accumulates (see
+    DEFAULT_MIN_SAMPLE_SIZE) -- returns `(None, None)` rather than
+    fabricating a calibration that was never actually fit.
+
+    Called from MarketIntelligenceRepository.save_symbol_records (the
+    one place in the live scan pipeline that already holds an open
+    Session) to populate RecommendationSnapshot.calibrated_confidence_score/
+    calibration_version, and to feed publication_gate.evaluate_publication's
+    optional `calibrated_success_probability` parameter.
+    """
+    active_model = ConfidenceCalibrationEngine().get_active_model(session)
+    if active_model is None:
+        return None, None
+    return apply_calibration(active_model, raw_confidence), active_model.version
+
+
 class ConfidenceCalibrationEngine:
     def get_active_model(self, session: Session) -> Optional[ConfidenceCalibrationModel]:
         return (

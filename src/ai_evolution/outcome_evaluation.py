@@ -114,6 +114,54 @@ def _hit_target_and_stop(
     return hit_target, hit_stop
 
 
+def _first_target_touch(
+    recommendation: str, target_price: Optional[float], horizon_df: pd.DataFrame,
+) -> Tuple[Optional[bool], Optional[datetime]]:
+    """True + the real bar timestamp of the first intraday touch of
+    `target_price` within `horizon_df` -- high >= target for a bullish
+    call, low <= target for a bearish one, the same convention
+    `_hit_target_and_stop` already uses. `(None, None)` for a HOLD (no
+    position to reach a target) or when this particular target was
+    never set (e.g. target_2/target_3 on a call Decision Engine V2
+    didn't compute for)."""
+    if target_price is None or horizon_df is None or horizon_df.empty:
+        return None, None
+    bullish = recommendation in _BULLISH
+    bearish = recommendation in _BEARISH
+    if not bullish and not bearish:
+        return None, None
+    touched = horizon_df["high"] >= target_price if bullish else horizon_df["low"] <= target_price
+    touched_at = horizon_df.index[touched]
+    if len(touched_at) == 0:
+        return False, None
+    return True, _as_utc(pd.Timestamp(touched_at[0]).to_pydatetime())
+
+
+def _max_favorable_adverse_excursion(
+    recommendation: str, entry_price: Optional[float], horizon_df: pd.DataFrame,
+) -> Tuple[Optional[float], Optional[float]]:
+    """MFE/MAE: the best/worst the position's real forward price path
+    ever looked across the whole horizon window, as a percent of entry
+    price -- independent of whether target/stop was actually touched.
+    MFE is always >= 0 (an excursion starts at exactly 0 the instant a
+    position opens); MAE is always <= 0. `(None, None)` for a HOLD (no
+    position to measure an excursion for) or a missing/invalid entry
+    price."""
+    if entry_price is None or entry_price <= 0 or horizon_df is None or horizon_df.empty:
+        return None, None
+    bullish = recommendation in _BULLISH
+    bearish = recommendation in _BEARISH
+    if not bullish and not bearish:
+        return None, None
+    if bullish:
+        best_gain_pct = (horizon_df["high"] - entry_price) / entry_price * 100.0
+        worst_gain_pct = (horizon_df["low"] - entry_price) / entry_price * 100.0
+    else:
+        best_gain_pct = (entry_price - horizon_df["low"]) / entry_price * 100.0
+        worst_gain_pct = (entry_price - horizon_df["high"]) / entry_price * 100.0
+    return max(float(best_gain_pct.max()), 0.0), min(float(worst_gain_pct.min()), 0.0)
+
+
 def _classify_status(
     target_price: Optional[float],
     stop_loss: Optional[float],
@@ -204,11 +252,31 @@ def evaluate_due_outcomes(
             (exit_price - entry_price) / entry_price * 100.0 if entry_price is not None and entry_price > 0 else None
         )
 
+        recommendation_value = snapshot.recommendation.value
+        target_1_reached, target_1_reached_at = _first_target_touch(recommendation_value, target_price, horizon_df)
+        target_price_2 = float(snapshot.target_price_2) if snapshot.target_price_2 is not None else None
+        target_price_3 = float(snapshot.target_price_3) if snapshot.target_price_3 is not None else None
+        target_2_reached, target_2_reached_at = _first_target_touch(recommendation_value, target_price_2, horizon_df)
+        target_3_reached, target_3_reached_at = _first_target_touch(recommendation_value, target_price_3, horizon_df)
+        mfe, mae = _max_favorable_adverse_excursion(recommendation_value, entry_price, horizon_df)
+
+        reached_ats = [t for t in (target_1_reached_at, target_2_reached_at, target_3_reached_at) if t is not None]
+        time_to_target_days = (min(reached_ats) - _as_utc(snapshot.evaluated_at)).days if reached_ats else None
+
         row.status = _classify_status(target_price, stop_loss, hit_target, hit_stop)
         row.price_at_evaluation = exit_price
         row.return_pct = return_pct
         row.hit_target = hit_target
         row.hit_stop = hit_stop
+        row.target_1_reached = target_1_reached
+        row.target_1_reached_at = target_1_reached_at
+        row.target_2_reached = target_2_reached
+        row.target_2_reached_at = target_2_reached_at
+        row.target_3_reached = target_3_reached
+        row.target_3_reached_at = target_3_reached_at
+        row.max_favorable_excursion_pct = mfe
+        row.max_adverse_excursion_pct = mae
+        row.time_to_target_days = time_to_target_days
         row.evaluated_at = now
         evaluated += 1
 
