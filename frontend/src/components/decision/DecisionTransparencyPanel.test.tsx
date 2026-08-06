@@ -60,8 +60,21 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
       data_quality_score: 90,
     },
     gates: [
-      { name: "data_freshness", passed: true, detail: "بيانات حديثة", blocking: true },
-      { name: "risk_reward_minimum", passed: false, detail: "العائد إلى المخاطرة غير كافٍ", blocking: true },
+      { name: "data_freshness", status: "PASS", passed: true, detail: "بيانات حديثة", blocking: true },
+      {
+        name: "risk_reward_minimum",
+        status: "FAIL",
+        passed: false,
+        detail: "العائد إلى المخاطرة غير كافٍ",
+        blocking: true,
+      },
+      {
+        name: "stale_recommendation",
+        status: "NOT_EVALUATED",
+        passed: true,
+        detail: "فحص التكرار غير مطبّق بعد",
+        blocking: false,
+      },
     ],
     is_real_data: true,
     quote_timestamp: "2026-08-04T11:55:00Z",
@@ -185,9 +198,17 @@ describe("DecisionTransparencyPanel", () => {
 
   it("renders every publication gate with its real Arabic detail text", () => {
     render(<DecisionTransparencyPanel decision={buildDecision()} />);
-    expect(screen.getByText("بوابات النشر (2)")).toBeInTheDocument();
+    expect(screen.getByText("بوابات النشر (3)")).toBeInTheDocument();
     expect(screen.getByText("بيانات حديثة")).toBeInTheDocument();
     expect(screen.getByText("العائد إلى المخاطرة غير كافٍ")).toBeInTheDocument();
+  });
+
+  it("marks a NOT_EVALUATED gate with a neutral indicator, never a pass checkmark", () => {
+    render(<DecisionTransparencyPanel decision={buildDecision()} />);
+    const notEvaluatedRow = screen.getByText("فحص التكرار غير مطبّق بعد").closest("li");
+    expect(notEvaluatedRow).not.toBeNull();
+    expect(notEvaluatedRow).toHaveTextContent("○");
+    expect(notEvaluatedRow).not.toHaveTextContent("✓");
   });
 
   it("omits the publication-gates section entirely when there are no gates", () => {

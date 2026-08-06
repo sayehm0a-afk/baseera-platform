@@ -60,7 +60,7 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
       market_context_score: 60,
       data_quality_score: 90,
     },
-    gates: [{ name: "data_freshness", passed: true, detail: "بيانات حديثة", blocking: true }],
+    gates: [{ name: "data_freshness", status: "PASS", passed: true, detail: "بيانات حديثة", blocking: true }],
     is_real_data: true,
     quote_timestamp: "2026-08-04T11:55:00Z",
     technical_confidence: 80,

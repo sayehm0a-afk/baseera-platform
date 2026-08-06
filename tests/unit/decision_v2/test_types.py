@@ -6,7 +6,7 @@ plain dict/list that reaches a JSON column.
 
 import numpy as np
 
-from src.analysis.decision_v2.types import GateOutcome, SubScores, gates_to_dicts, sub_scores_to_dict
+from src.analysis.decision_v2.types import GateOutcome, GateStatus, SubScores, gates_to_dicts, sub_scores_to_dict
 
 
 def test_sub_scores_to_dict_coerces_numpy_floats_to_plain_floats():
@@ -40,10 +40,12 @@ def test_gates_to_dicts_coerces_numpy_bool_to_plain_bool():
     comparison against a numpy-typed threshold (e.g. `price > numpy_atr`),
     which yields numpy.bool_ -- not JSON serializable by the stdlib
     encoder even though it prints identically to a plain bool."""
-    gates = [GateOutcome(name="real_data_source", passed=np.bool_(True), detail="ok", blocking=np.bool_(False))]
+    gates = [GateOutcome(name="real_data_source", status=GateStatus.PASS, detail="ok", blocking=np.bool_(False))]
 
     result = gates_to_dicts(gates)
 
-    assert result == [{"name": "real_data_source", "passed": True, "detail": "ok", "blocking": False}]
+    assert result == [
+        {"name": "real_data_source", "status": "PASS", "passed": True, "detail": "ok", "blocking": False}
+    ]
     assert type(result[0]["passed"]) is bool
     assert type(result[0]["blocking"]) is bool
