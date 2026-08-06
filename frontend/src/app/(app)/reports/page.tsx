@@ -1,26 +1,30 @@
+"use client";
+
 import { EmptyState } from "@/components/patterns/EmptyState";
+import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { PortfolioReportLink } from "@/components/reports/PortfolioReportLink";
-import { ApiError } from "@/lib/api/client";
 import { getRankings } from "@/lib/api/market";
 import { RunScanButton } from "@/components/dashboard/RunScanButton";
+import { useCategoryFetch } from "@/lib/hooks/useCategoryFetch";
 import type { RankingEntry } from "@/lib/api/types";
 
-async function loadTopSymbols(): Promise<
-  { available: true; entries: RankingEntry[] } | { available: false }
-> {
-  try {
-    const result = await getRankings("TOP_BUY");
-    return { available: true, entries: result.rankings[0]?.entries.slice(0, 8) ?? [] };
-  } catch (error) {
-    if (error instanceof ApiError && error.code === "no_market_scan_data") {
-      return { available: false };
-    }
-    throw error;
-  }
+// Client Component: same reason as /opportunities and /dashboard --
+// apiFetch depends on the browser's httpOnly session cookie, which a
+// Next.js Server Component fetch never receives. This page was
+// previously an async Server Component that called getRankings()
+// server-side; confirmed in production (2026-08-06) that every real
+// login crashed it with "An error occurred in the Server Components
+// render" because the server-side request had no session cookie to
+// send, got a 401 back, and loadTopSymbols() only caught the
+// no_market_scan_data error code -- any other error (including this
+// one) was re-thrown, crashing the whole page.
+async function loadTopSymbols(category: string): Promise<RankingEntry[]> {
+  const result = await getRankings(category);
+  return result.rankings[0]?.entries.slice(0, 8) ?? [];
 }
 
-export default async function ReportsPage() {
-  const topSymbols = await loadTopSymbols();
+export default function ReportsPage() {
+  const topSymbols = useCategoryFetch("TOP_BUY", loadTopSymbols);
 
   return (
     <div className="flex flex-col gap-bsr-6">
@@ -30,12 +34,16 @@ export default async function ReportsPage() {
         <h2 className="mb-bsr-4 text-base font-semibold text-bsr-text-primary">
           تقارير تحليل الأسهم
         </h2>
-        {!topSymbols.available ? (
+        {topSymbols.status === "loading" ? (
+          <LoadingScreen />
+        ) : topSymbols.status === "unavailable" ? (
           <EmptyState
             title="لا توجد بيانات مسح للسوق بعد"
             description="شغّل أول مسح ذكي للسوق لعرض تقارير الأسهم الأعلى تقييماً."
             action={<RunScanButton />}
           />
+        ) : topSymbols.status === "error" ? (
+          <EmptyState title="تعذّر تحميل الأسهم المرشحة" description="حاول تحديث الصفحة." />
         ) : topSymbols.entries.length === 0 ? (
           <EmptyState title="لا توجد أسهم مرشحة حالياً" />
         ) : (

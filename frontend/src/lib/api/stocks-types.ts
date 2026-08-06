@@ -11,11 +11,17 @@ export interface Stock {
 
 export interface Quote {
   symbol: string;
-  open: number;
-  high: number;
-  low: number;
+  // null when the only source available is a real-time price tick
+  // and SAHMK has not yet finalized a daily OHLCV bar for the current
+  // session -- see get_quote()'s docstring in routes/stocks.py.
+  // `close` always carries a real price when this route succeeds at
+  // all, live when available, otherwise the most recent settled
+  // bar's close.
+  open: number | null;
+  high: number | null;
+  low: number | null;
   close: number;
-  volume: number;
+  volume: number | null;
   timestamp: string;
   source: string;
   is_synthetic: boolean;
