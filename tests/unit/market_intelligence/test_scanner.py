@@ -8,9 +8,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.analysis.decision_v2.engine import DecisionEngineV2
 from src.core.db.database import Base
 from src.domain.models import PriceBar, Stock, Timeframe
 from src.market_intelligence.scanner import MarketScanner
+from src.market_intelligence.types import MarketBreadthSummary
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 
 
@@ -58,6 +60,44 @@ async def test_scan_produces_a_successful_outcome_with_snapshots(factory):
     assert outcome.recommendation is not None
     assert outcome.technical_snapshot is not None
     assert outcome.latest_price is not None
+    # Phase 3A: Decision Engine V2 is computed alongside V1 from the
+    # exact same InvestmentDecision, not a second/duplicated pipeline.
+    assert outcome.decision_v2 is not None
+    assert outcome.decision_v2.symbol == "2222"
+
+
+@pytest.mark.asyncio
+async def test_scan_passes_market_breadth_through_to_decision_v2(factory):
+    _add_stock_with_bars(factory, "2222")
+    scanner = MarketScanner(session_factory=factory, market_provider=DevMarketDataProvider())
+    breadth = MarketBreadthSummary(
+        scan_run_id=1, generated_at=datetime.now(timezone.utc),
+        symbols_scanned=42, buy_count=10, sell_count=5, average_confidence=61.5,
+    )
+
+    outcomes = await scanner.scan(["2222"], market_breadth=breadth)
+
+    assert outcomes[0].decision_v2 is not None
+    assert outcomes[0].decision_v2.market_breadth_symbols_scanned == 42
+
+
+@pytest.mark.asyncio
+async def test_decision_v2_failure_is_swallowed_and_scan_continues(factory, monkeypatch):
+    """Best-effort: a Decision Engine V2 computation failure for one
+    symbol must never fail the scan's own V1 outcome for that symbol."""
+    _add_stock_with_bars(factory, "2222")
+    scanner = MarketScanner(session_factory=factory, market_provider=DevMarketDataProvider())
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(DecisionEngineV2, "decide", _raise)
+
+    outcomes = await scanner.scan(["2222"])
+
+    assert outcomes[0].success is True
+    assert outcomes[0].report is not None
+    assert outcomes[0].decision_v2 is None
 
 
 @pytest.mark.asyncio
@@ -110,11 +150,11 @@ async def test_scan_retries_a_transient_failure_and_eventually_succeeds(factory,
     calls = {"n": 0}
     real_scan_one = scanner._scan_one
 
-    async def _flaky_scan_one(symbol):
+    async def _flaky_scan_one(symbol, market_breadth=None):
         calls["n"] += 1
         if calls["n"] < 2:
             raise RuntimeError("transient failure")
-        return await real_scan_one(symbol)
+        return await real_scan_one(symbol, market_breadth)
 
     scanner._scan_one = _flaky_scan_one
 
@@ -130,7 +170,7 @@ async def test_scan_records_failure_after_exhausting_retries(factory, monkeypatc
     monkeypatch.setenv("MARKET_SCAN_RETRY_BASE_DELAY_SECONDS", "0.001")
     scanner = MarketScanner(session_factory=factory, market_provider=DevMarketDataProvider())
 
-    async def _always_fails(symbol):
+    async def _always_fails(symbol, market_breadth=None):
         raise RuntimeError("permanent failure")
 
     scanner._scan_one = _always_fails
@@ -157,7 +197,7 @@ async def test_a_hung_symbol_is_bounded_by_the_per_symbol_timeout(factory, monke
     monkeypatch.setenv("MARKET_SCAN_RETRY_BASE_DELAY_SECONDS", "0.001")
     scanner = MarketScanner(session_factory=factory, market_provider=DevMarketDataProvider())
 
-    async def _hangs_forever(symbol):
+    async def _hangs_forever(symbol, market_breadth=None):
         await asyncio.sleep(10)
 
     scanner._scan_one = _hangs_forever

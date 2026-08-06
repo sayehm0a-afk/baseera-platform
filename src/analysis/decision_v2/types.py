@@ -325,3 +325,40 @@ class DecisionResult:
     market_breadth_sell_count: Optional[int] = None
     market_breadth_symbols_scanned: Optional[int] = None
     market_breadth_average_confidence: Optional[float] = None
+
+
+def parse_quote_timestamp(raw: Optional[str]) -> Optional[datetime]:
+    """Parses the ISO-8601 timestamp string a quote payload carries
+    into the `datetime` `DecisionEngineV2.decide()` needs for its
+    `quote_timestamp` parameter -- shared by every caller that builds
+    that parameter (the `/decision-v2` route, the market scan pipeline)
+    so they can never silently drift into two different parsing rules."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def sub_scores_to_dict(sub_scores: SubScores) -> Dict[str, Optional[float]]:
+    """Flattens a `SubScores` into a plain dict -- the one place this
+    happens, reused by every caller that persists a `DecisionResult`
+    (the `/decision-v2` route's audit row, the market scan pipeline's
+    `DecisionV2Snapshot` writes) so the two representations can never
+    silently drift apart from each other."""
+    return {
+        "trend_score": sub_scores.trend_score,
+        "momentum_score": sub_scores.momentum_score,
+        "volume_score": sub_scores.volume_score,
+        "liquidity_score": sub_scores.liquidity_score,
+        "volatility_score": sub_scores.volatility_score,
+        "risk_reward_score": sub_scores.risk_reward_score,
+        "market_context_score": sub_scores.market_context_score,
+        "data_quality_score": sub_scores.data_quality_score,
+    }
+
+
+def gates_to_dicts(gates: List[GateOutcome]) -> List[Dict[str, Any]]:
+    """Same reasoning as `sub_scores_to_dict`, for `DecisionResult.gates`."""
+    return [{"name": g.name, "passed": g.passed, "detail": g.detail, "blocking": g.blocking} for g in gates]

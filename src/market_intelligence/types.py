@@ -23,12 +23,20 @@ consumer). No indicator or ratio is recomputed to populate them.
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.analysis.analyst.types import AnalystReport
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.analysis.decision.types import PositionSize, RiskLevel, TimeHorizon
 from src.analysis.recommendation.types import AnalysisContext, Recommendation
+
+if TYPE_CHECKING:
+    # Import-time only: src.analysis.decision_v2's package __init__ eagerly
+    # imports engine.py -> market_risk.py, which imports MarketBreadthSummary
+    # from *this* module -- a real circular import if this were a runtime
+    # import instead of a string-quoted forward reference (see
+    # SymbolScanOutcome.decision_v2's annotation below).
+    from src.analysis.decision_v2.types import DecisionResult
 
 
 class RankingCategory(str, Enum):
@@ -173,6 +181,17 @@ class SymbolScanOutcome:
     # Not persisted anywhere -- purely an in-process handoff from
     # `MarketScanner` to `MarketIntelligenceRepository.save_symbol_records`.
     context: Optional[AnalysisContext] = None
+    # Phase 3A: this symbol's Decision Engine V2 result, computed by
+    # `MarketScanner` alongside `report` from the exact same already-
+    # computed `InvestmentDecision` (see `DecisionEngineV2.decide()` --
+    # zero extra indicators, zero extra I/O). `None` whenever V2
+    # computation itself failed for this symbol (best-effort -- never
+    # aborts the scan) or for outcomes that were skipped/failed before
+    # reaching that step. Persisted by
+    # `MarketIntelligenceRepository.save_symbol_records` as a
+    # `DecisionV2Snapshot` row alongside the existing V1 writes; not a
+    # replacement for `report.decision` -- both are written.
+    decision_v2: Optional["DecisionResult"] = None
 
     @property
     def recommendation(self) -> Optional[Recommendation]:

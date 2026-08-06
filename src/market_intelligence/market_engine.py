@@ -81,11 +81,34 @@ class MarketIntelligenceEngine:
         finally:
             selection_session.close()
 
+        # Phase 3A: the previous completed run's market breadth, read
+        # once per scan (not once per symbol) and handed to every
+        # symbol's Decision Engine V2 computation -- the same "most
+        # recent completed run" semantics /decision-v2's own
+        # _latest_market_breadth already uses for a single symbol.
+        # Best-effort: a missing/failed lookup degrades to None, which
+        # classify_market_risk already handles honestly as
+        # INSUFFICIENT_DATA rather than failing the whole scan.
+        breadth_session = self._session_factory()
+        try:
+            latest_run = self._repository.get_latest_successful_run(breadth_session)
+            market_breadth = (
+                self._repository.get_market_breadth(breadth_session, latest_run.id)
+                if latest_run is not None
+                else None
+            )
+        except Exception as exc:  # noqa: BLE001 -- best-effort, matches _latest_market_breadth's pattern
+            logger.info("Could not read latest market breadth for this scan's Decision V2 pass: %s", exc)
+            market_breadth = None
+        finally:
+            breadth_session.close()
+
         outcomes = await self._scanner.scan(
             resolved_symbols,
             on_symbol_start=on_symbol_start,
             on_symbol_complete=on_symbol_complete,
             on_retry=on_retry,
+            market_breadth=market_breadth,
         )
 
         try:
