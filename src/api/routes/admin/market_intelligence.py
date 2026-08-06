@@ -221,6 +221,7 @@ async def trigger_diagnostic_scan(
         sahmk_key_present=final_health["sahmk_key_present"],
         run_id=run.id if run else None,
         run_status=run.status.value if run else None,
+        run_error_summary=run.error_summary if run else None,
         symbols_requested=run.symbols_requested if run else 0,
         symbols_succeeded=run.symbols_succeeded if run else 0,
         symbols_failed=run.symbols_failed if run else 0,
