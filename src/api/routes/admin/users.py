@@ -83,6 +83,29 @@ def unsuspend_user(
     return AdminUserOut.model_validate(_get_user_or_404(session, user_id))
 
 
+@router.post("/{user_id}/verify-email", response_model=AdminUserOut)
+def verify_user_email(
+    user_id: int,
+    request: Request,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> AdminUserOut:
+    """Manually marks a user's email verified -- the support rescue
+    path for an account stuck behind email verification because no
+    real mail provider is configured (SMTP_HOST unset -- confirmed in
+    production 2026-08-06 to leave a real signup with no way to ever
+    receive its verification token; ConsoleEmailSender only logs it).
+    Idempotent: verifying an already-verified user is a no-op, not an
+    error, since a support agent re-running this after a stuck signup
+    reports back in should not need to check state first."""
+    user = _get_user_or_404(session, user_id)
+    _repository.set_email_verified(session, user.id)
+    record_admin_action(
+        session, current_user.id, "user.verify_email", "user", target_id=user.id, ip_address=_client_ip(request)
+    )
+    return AdminUserOut.model_validate(_get_user_or_404(session, user_id))
+
+
 @router.post("/{user_id}/staff-role", response_model=AdminUserOut)
 def set_staff_role(
     user_id: int,

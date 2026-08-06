@@ -40,11 +40,17 @@ class StockSearchOut(BaseModel):
 
 class QuoteOut(BaseModel):
     symbol: str
-    open: float
-    high: float
-    low: float
+    # open/high/low/volume are None when the only source available is
+    # a real-time price tick (GET /quote/{symbol}/) and SAHMK has not
+    # yet finalized a daily OHLCV bar for the current session -- see
+    # get_quote()'s docstring in routes/stocks.py. `close` always
+    # carries a real price when this route succeeds at all, live when
+    # available, otherwise the most recent settled bar's close.
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
     close: float
-    volume: int
+    volume: Optional[int] = None
     timestamp: datetime
     source: str
     is_synthetic: bool

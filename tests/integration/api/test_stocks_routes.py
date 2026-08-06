@@ -154,6 +154,72 @@ def test_get_quote_503_when_provider_unavailable(client, db_session, monkeypatch
     assert response.json()["error"]["code"] == "provider_unavailable"
 
 
+class _DailyBarUnavailableButLiveQuoteWorksProvider(IMarketDataProvider):
+    """Regression for the real production defect (confirmed 2026-08-06):
+    SAHMK does not finalize a session's own daily bar until after that
+    session closes, so get_stock_data() (which requires *today's*
+    specific bar) raised for every symbol, at every hour, until end-
+    of-day data landed -- even though SAHMK's real-time quote endpoint
+    had live data the entire time. This provider models exactly that
+    split: get_stock_data() fails like the real SAHMK provider did,
+    get_latest_quote() (opportunistic, matching context_builder.py's
+    own getattr(provider, "get_latest_quote", None) pattern) succeeds."""
+
+    async def authenticate(self):
+        return True
+
+    async def get_stock_data(self, symbol):
+        raise CircuitBreakerOpenError()
+
+    async def get_latest_quote(self, symbol):
+        return {
+            "symbol": symbol,
+            "price": 26.68,
+            "change": 0.12,
+            "change_percent": 0.45,
+            "volume": 500_000,
+            "timestamp": datetime(2026, 8, 6, 9, 30, tzinfo=timezone.utc).isoformat(),
+            "source": "sahmk",
+            "is_synthetic": False,
+        }
+
+    async def get_historical_ohlcv(self, symbol, start, end, interval="1d"):
+        raise CircuitBreakerOpenError()
+
+    async def get_index_data(self, index_name):
+        raise NotImplementedError
+
+    async def get_market_news(self, limit=10):
+        raise NotImplementedError
+
+    async def health_check(self):
+        return ProviderHealth.HEALTHY
+
+    async def disconnect(self):
+        pass
+
+
+def test_get_quote_falls_back_to_live_quote_when_daily_bar_not_yet_finalized(client, db_session):
+    import main
+    from src.api.dependencies import get_market_provider
+
+    main.app.dependency_overrides[get_market_provider] = lambda: _DailyBarUnavailableButLiveQuoteWorksProvider()
+    try:
+        response = client.get("/api/v1/stocks/2222/quote")
+    finally:
+        del main.app.dependency_overrides[get_market_provider]
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == "2222"
+    assert body["close"] == 26.68
+    assert body["open"] is None
+    assert body["high"] is None
+    assert body["low"] is None
+    assert body["source"] == "sahmk"
+    assert body["is_synthetic"] is False
+
+
 # --- GET /api/v1/stocks/{symbol}/history --------------------------------
 
 
