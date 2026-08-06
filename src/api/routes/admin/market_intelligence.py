@@ -199,6 +199,57 @@ async def trigger_diagnostic_scan(
                 data_is_fresh = age_seconds < 900
                 freshness_note = f"oldest of {len(records)} record(s) evaluated {age_seconds:.0f}s ago"
 
+    # Evidence of the most recent *completed* scheduled/diagnostic scan
+    # (V1 SymbolIntelligenceRecord + Phase 3A's DecisionV2Snapshot),
+    # looked up regardless of whether this call itself triggered a new
+    # scan -- this is the only reliable way to observe real V1/V2
+    # output from the Live Market Mode scheduler's own runs, since a
+    # diagnostic scan dispatched while a scheduled scan is RUNNING is
+    # correctly skipped by the overlap guard above and would otherwise
+    # report nothing at all. Clearly a separate, explicitly-labeled
+    # "latest completed run" block -- never conflated with this call's
+    # own (possibly skipped) run_id/run_status fields above.
+    latest_completed_run = _repository.get_latest_successful_run(session)
+    latest_completed_run_v1_rows_written = 0
+    latest_completed_run_v1_sample_symbols: List[DiagnosticSampleSymbolOut] = []
+    latest_completed_run_decision_v2_rows_written = 0
+    latest_completed_run_decision_v2_sample: List[DiagnosticDecisionV2SampleOut] = []
+    if latest_completed_run is not None:
+        latest_v1_records = (
+            session.query(SymbolIntelligenceRecord)
+            .filter(SymbolIntelligenceRecord.scan_run_id == latest_completed_run.id)
+            .all()
+        )
+        latest_completed_run_v1_rows_written = len(latest_v1_records)
+        latest_completed_run_v1_sample_symbols = [
+            DiagnosticSampleSymbolOut(
+                symbol=r.symbol,
+                recommendation=r.recommendation.value,
+                latest_price=float(r.latest_price) if r.latest_price is not None else None,
+                evaluated_at=r.evaluated_at,
+            )
+            for r in latest_v1_records[:5]
+        ]
+        latest_v2_records = (
+            session.query(DecisionV2Snapshot)
+            .filter(DecisionV2Snapshot.scan_run_id == latest_completed_run.id)
+            .all()
+        )
+        latest_completed_run_decision_v2_rows_written = len(latest_v2_records)
+        latest_completed_run_decision_v2_sample = [
+            DiagnosticDecisionV2SampleOut(
+                symbol=r.symbol,
+                decision=r.decision,
+                decision_label_ar=r.decision_label_ar,
+                confidence_score=float(r.confidence_score),
+                entry_zone_low=float(r.entry_zone_low) if r.entry_zone_low is not None else None,
+                entry_zone_high=float(r.entry_zone_high) if r.entry_zone_high is not None else None,
+                scan_run_id=r.scan_run_id,
+                decision_timestamp=r.decision_timestamp,
+            )
+            for r in latest_v2_records[:5]
+        ]
+
     # Re-read health after the scan: run_market_scan_job's own preflight
     # (or the scan itself) may have updated last_connectivity_status.
     final_health = get_market_data_health()
@@ -232,4 +283,9 @@ async def trigger_diagnostic_scan(
         freshness_note=freshness_note,
         decision_v2_rows_written=decision_v2_rows_written,
         decision_v2_sample=decision_v2_sample,
+        latest_completed_run_id=latest_completed_run.id if latest_completed_run else None,
+        latest_completed_run_v1_rows_written=latest_completed_run_v1_rows_written,
+        latest_completed_run_v1_sample_symbols=latest_completed_run_v1_sample_symbols,
+        latest_completed_run_decision_v2_rows_written=latest_completed_run_decision_v2_rows_written,
+        latest_completed_run_decision_v2_sample=latest_completed_run_decision_v2_sample,
     )
