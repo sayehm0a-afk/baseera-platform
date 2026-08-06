@@ -292,6 +292,50 @@ class IngestionJobStatusOut(BaseModel):
     error_summary: Optional[str] = None
 
 
+class SectorCoverageOut(BaseModel):
+    """One Saudi sector's coverage: how many Stock rows carry this
+    sector value, how many of those are eligible/active, and how many
+    of the active ones actually have price history to scan. `sector`
+    is the raw value stored on Stock.sector (SAHMK-reported); `None`
+    means the sector field is unresolved for those rows (a disclosed
+    SAHMK data-source gap, not an ingestion bug -- see
+    universe_policy.py's module docstring)."""
+
+    sector: Optional[str] = None
+    total_stocks: int
+    active_stocks: int
+    stocks_with_price_history: int
+    coverage_pct: Optional[float] = None
+
+
+class DbConsistencyOut(BaseModel):
+    """Direct counts of Stock rows whose stored fields are internally
+    inconsistent -- e.g. an active stock with no instrument_bucket
+    recorded, or an inactive stock with no exclusion_reason recorded.
+    All zero means every discovered symbol's eligibility/classification
+    state is fully and consistently persisted."""
+
+    active_stocks_missing_instrument_bucket: int
+    active_stocks_missing_sector: int
+    active_stocks_missing_exchange: int
+    inactive_stocks_missing_exclusion_reason: int
+    active_stocks_with_exclusion_reason_set: int
+
+
+class PipelineStageOut(BaseModel):
+    """One stage of the Discovery -> OHLCV -> Fundamentals ->
+    Dividends -> Decision Engine -> Recommendation Engine pipeline,
+    measured against the total discovered-symbol count. `dropped` is
+    `relative_to - output`, not necessarily a sequential filter --
+    each stage's real gating condition is documented in `reason`."""
+
+    stage: str
+    output_count: int
+    relative_to: int
+    dropped: int
+    reason: str
+
+
 class MarketCoverageOut(BaseModel):
     """GET /api/v1/admin/market-intelligence/coverage -- real,
     SQL-backed evidence of how much of the Saudi market Basirah
@@ -310,6 +354,36 @@ class MarketCoverageOut(BaseModel):
     latest_ingestion_runs: List[IngestionJobStatusOut]
     latest_scan_run: Optional[MarketScanRunOut] = None
     coverage_pct: Optional[float] = None
+
+    # Main Market vs Nomu split, derived from instrument_bucket prefix
+    # (MAIN_MARKET_EQUITY*/NOMU_EQUITY*) -- universe_policy.classify_universe
+    # already distinguishes these; unclassified_market_segment_stocks
+    # covers rows whose bucket doesn't positively match either segment
+    # (never-classified rows, or a non-equity bucket).
+    main_market_stocks: int
+    nomu_market_stocks: int
+    unclassified_market_segment_stocks: int
+
+    # Non-equity exclusion breakdown -- the subset of
+    # instrument_bucket_counts whose bucket is a confirmed exclusion
+    # reason (ETF_FUND/REIT/SUKUK_BOND/RIGHTS_ISSUE/SUSPENDED/
+    # INACTIVE_DELISTED), plus the total excluded for a quick top-line
+    # number.
+    excluded_instrument_counts: List[UniverseBucketCountOut]
+    total_excluded_non_equity: int
+
+    stocks_with_fundamentals: int
+    stocks_without_fundamentals: int
+    stocks_with_dividends: int
+    stocks_without_dividends: int
+
+    sector_coverage: List[SectorCoverageOut]
+
+    latest_scan_symbols_entering_decision_engine: int
+    latest_scan_recommendations_generated: int
+
+    db_consistency: DbConsistencyOut
+    pipeline_funnel: List[PipelineStageOut]
 
 
 class MarketSummaryOut(BaseModel):
