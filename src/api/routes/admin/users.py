@@ -5,6 +5,8 @@ it is the one irreversible action in this file. Every mutating action
 is recorded to AuditLog.
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -37,10 +39,13 @@ def _get_user_or_404(session: Session, user_id: int) -> User:
 def list_users(
     limit: int = 50,
     offset: int = 0,
+    q: Optional[str] = None,
     session: Session = Depends(get_db),
     _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
 ) -> AdminUserListOut:
-    total, users = _repository.list_users(session, limit=limit, offset=offset)
+    """q, when given, searches by email or full name (case-insensitive
+    substring match) -- the admin user-search capability."""
+    total, users = _repository.list_users(session, limit=limit, offset=offset, query_text=q)
     return AdminUserListOut(total=total, users=[AdminUserOut.model_validate(u) for u in users])
 
 

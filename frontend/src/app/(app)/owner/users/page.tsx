@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { RequireStaff } from "@/components/auth/RequireStaff";
 import { OwnerNav } from "@/components/owner/OwnerNav";
 import { EmptyState } from "@/components/patterns/EmptyState";
@@ -25,10 +25,11 @@ type PageState =
 function UsersPageInner() {
   const [state, setState] = useState<PageState>({ status: "loading" });
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
 
-  async function load(offset: number) {
+  async function load(offset: number, q: string) {
     try {
-      const result = await listUsers(PAGE_SIZE, offset);
+      const result = await listUsers(PAGE_SIZE, offset, q);
       setState({ status: "ready", users: result.users, total: result.total, offset });
     } catch (error) {
       setState({
@@ -40,7 +41,7 @@ function UsersPageInner() {
 
   function reload(offset: number) {
     setState({ status: "loading" });
-    load(offset);
+    load(offset, query);
   }
 
   useEffect(() => {
@@ -64,11 +65,17 @@ function UsersPageInner() {
     };
   }, []);
 
+  function handleSearchSubmit(event: FormEvent) {
+    event.preventDefault();
+    setState({ status: "loading" });
+    load(0, query);
+  }
+
   async function withBusy(userId: number, action: () => Promise<unknown>) {
     setBusyUserId(userId);
     try {
       await action();
-      if (state.status === "ready") await load(state.offset);
+      if (state.status === "ready") await load(state.offset, query);
     } catch {
       // the list stays as-is; the user can retry the action
     } finally {
@@ -103,8 +110,24 @@ function UsersPageInner() {
         <span className="text-sm text-bsr-text-secondary">{total.toLocaleString("ar-SA")} مستخدم</span>
       </div>
 
+      <form onSubmit={handleSearchSubmit} className="flex gap-bsr-2">
+        <input
+          type="text"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="ابحث بالبريد الإلكتروني أو الاسم..."
+          className="flex-1 rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-overlay px-bsr-3 py-1.5 text-sm text-bsr-text-primary placeholder:text-bsr-text-muted"
+        />
+        <button
+          type="submit"
+          className="rounded-bsr-md border border-bsr-border-subtle px-bsr-3 py-1.5 text-sm text-bsr-text-secondary hover:bg-bsr-surface-overlay"
+        >
+          بحث
+        </button>
+      </form>
+
       {users.length === 0 ? (
-        <EmptyState title="لا يوجد مستخدمون" />
+        <EmptyState title={query ? "لا نتائج مطابقة" : "لا يوجد مستخدمون"} />
       ) : (
         <div className="overflow-x-auto rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised">
           <table className="w-full min-w-[720px] text-sm">

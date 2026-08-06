@@ -77,8 +77,20 @@ class AuthRepository:
         session.query(User).filter_by(id=user_id).update({"tokens_invalid_before": datetime.now(timezone.utc)})
         session.commit()
 
-    def list_users(self, session: Session, limit: int, offset: int) -> "tuple[int, List[User]]":
-        query = session.query(User).order_by(User.id)
+    def list_users(
+        self, session: Session, limit: int, offset: int, query_text: "str | None" = None
+    ) -> "tuple[int, List[User]]":
+        """query_text, when given, filters to users whose email or full
+        name contains it (case-insensitive substring match) -- the
+        admin user-search capability. None/empty behaves exactly as
+        before (no filter), so every existing caller is unaffected."""
+        query = session.query(User)
+        if query_text:
+            like_pattern = f"%{query_text.strip()}%"
+            query = query.filter(
+                sa.or_(User.email.ilike(like_pattern), User.full_name.ilike(like_pattern))
+            )
+        query = query.order_by(User.id)
         total = query.count()
         return total, query.offset(offset).limit(limit).all()
 

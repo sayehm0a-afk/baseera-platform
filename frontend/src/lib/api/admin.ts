@@ -31,8 +31,10 @@ export function getDashboardSummary(): Promise<AdminDashboardSummary> {
  * OWNER for staff-role changes / hard delete) server-side; this layer
  * adds no logic of its own. */
 
-export function listUsers(limit = 50, offset = 0): Promise<AdminUserList> {
-  return apiFetch<AdminUserList>(`/api/v1/admin/users?limit=${limit}&offset=${offset}`);
+export function listUsers(limit = 50, offset = 0, q?: string): Promise<AdminUserList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (q && q.trim()) params.set("q", q.trim());
+  return apiFetch<AdminUserList>(`/api/v1/admin/users?${params.toString()}`);
 }
 
 export function suspendUser(userId: number): Promise<AdminUser> {
