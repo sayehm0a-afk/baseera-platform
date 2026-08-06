@@ -159,6 +159,26 @@ class SubScores:
     data_quality_score: float
 
 
+class GateStatus(str, Enum):
+    """Mirrors src.market_intelligence.types.GateStatus's exact three
+    values without importing it (decision_v2 has no dependency on
+    market_intelligence -- the same "reuse the concept, not the import"
+    relationship domain/models' RecommendationLabel already has to
+    src.analysis.recommendation.types.Recommendation). NOT_EVALUATED is
+    the honest state for a gate whose underlying signal is genuinely
+    unavailable (e.g. average traded value not ingested for this
+    symbol) -- distinct from PASS, which asserts the evidence was
+    actually checked and cleared. A gate must never report PASS when
+    it has no evidence to check; three of gates.py's own gates
+    (duplicate_suppression, stale_recommendation, and liquidity when
+    unknown) previously encoded "not evaluated" as a fabricated PASS
+    (`passed=True`) for lack of a third state -- this enum is the fix."""
+
+    PASS = "PASS"
+    FAIL = "FAIL"
+    NOT_EVALUATED = "NOT_EVALUATED"
+
+
 @dataclass(frozen=True)
 class GateOutcome:
     """One publication-gate check (see gates.py). `blocking=True` means
@@ -170,9 +190,22 @@ class GateOutcome:
     analysis too."""
 
     name: str
-    passed: bool
+    status: GateStatus
     detail: str
     blocking: bool = True
+
+    @property
+    def passed(self) -> bool:
+        """Backward-compat for every existing consumer (reasoning.py's
+        `failed_blocking` filter, gates_to_dicts' JSON `passed` field,
+        the frontend's DecisionV2 type) that only ever needs the
+        binary "does this count as a failure" answer -- a gate that
+        could not be evaluated must never count as one, so both PASS
+        and NOT_EVALUATED read as `passed=True`; only FAIL is
+        `passed=False`. Callers that need the real three-way state
+        read `.status` directly (gates_to_dicts now emits it under a
+        `status` key alongside `passed`)."""
+        return self.status is not GateStatus.FAIL
 
 
 @dataclass(frozen=True)
@@ -372,10 +405,19 @@ def sub_scores_to_dict(sub_scores: SubScores) -> Dict[str, Optional[float]]:
 
 def gates_to_dicts(gates: List[GateOutcome]) -> List[Dict[str, Any]]:
     """Same reasoning as `sub_scores_to_dict`, for `DecisionResult.gates`
-    -- `passed`/`blocking` are coerced to plain `bool` for the same
-    JSON-serialization reason (a numpy.bool_ comparison result is not
-    JSON serializable even though it prints identically to `bool`)."""
+    -- `blocking` is coerced to plain `bool` for the same JSON-
+    serialization reason (a numpy.bool_ comparison result is not JSON
+    serializable even though it prints identically to `bool`).
+    `status` (PASS/FAIL/NOT_EVALUATED) is the real three-way state;
+    `passed` is kept alongside it, unchanged, for every existing
+    consumer (the frontend DecisionV2 type, older stored rows) that
+    only reads the binary form -- both PASS and NOT_EVALUATED report
+    `passed: true` there, exactly as GateOutcome.passed's own docstring
+    documents."""
     return [
-        {"name": g.name, "passed": bool(g.passed), "detail": g.detail, "blocking": bool(g.blocking)}
+        {
+            "name": g.name, "status": g.status.value, "passed": bool(g.passed),
+            "detail": g.detail, "blocking": bool(g.blocking),
+        }
         for g in gates
     ]

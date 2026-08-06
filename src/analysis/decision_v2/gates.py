@@ -39,7 +39,7 @@ from typing import List, Optional
 
 from src.analysis.decision.types import EntryQuality
 from src.analysis.decision_v2.config import DecisionV2Tuning
-from src.analysis.decision_v2.types import Decision, GateOutcome
+from src.analysis.decision_v2.types import Decision, GateOutcome, GateStatus
 from src.analysis.recommendation.types import Recommendation
 
 _BUY_LIKE = {Recommendation.BUY, Recommendation.STRONG_BUY}
@@ -110,23 +110,26 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
 
     # Gate 1a: data authenticity ------------------------------------------------
     if inputs.is_synthetic is True:
-        gates.append(GateOutcome("real_data_source", False, "بيانات تجريبية غير حقيقية -- لا يمكن نشر توصية.", True))
+        gates.append(GateOutcome("real_data_source", GateStatus.FAIL, "بيانات تجريبية غير حقيقية -- لا يمكن نشر توصية.", True))
         return GateEvaluation(Decision.REJECT, gates, warnings, disclosures)
     gates.append(GateOutcome(
-        "real_data_source", True,
+        "real_data_source", GateStatus.PASS,
         "مصدر بيانات حقيقي (SAHMK)" if inputs.is_synthetic is False else "مصدر البيانات غير مؤكد لهذا التحليل",
         False,
     ))
 
     # Data availability -----------------------------------------------------
     if not inputs.has_technical or inputs.recommendation is None:
-        gates.append(GateOutcome("data_availability", False, "لا تتوفر بيانات فنية كافية لهذا السهم.", True))
+        gates.append(GateOutcome("data_availability", GateStatus.FAIL, "لا تتوفر بيانات فنية كافية لهذا السهم.", True))
         return GateEvaluation(Decision.INSUFFICIENT_DATA, gates, warnings, disclosures)
-    gates.append(GateOutcome("data_availability", True, "تتوفر بيانات فنية كافية.", True))
+    gates.append(GateOutcome("data_availability", GateStatus.PASS, "تتوفر بيانات فنية كافية.", True))
 
     # Gate 2: current price valid and positive --------------------------------
     price_ok = inputs.price is not None and inputs.price > 0
-    gates.append(GateOutcome("price_validity", price_ok, "السعر الحالي صالح." if price_ok else "لا يتوفر سعر حالي صالح.", True))
+    gates.append(GateOutcome(
+        "price_validity", GateStatus.PASS if price_ok else GateStatus.FAIL,
+        "السعر الحالي صالح." if price_ok else "لا يتوفر سعر حالي صالح.", True,
+    ))
     if not price_ok:
         return GateEvaluation(Decision.INSUFFICIENT_DATA, gates, warnings, disclosures)
 
@@ -136,7 +139,7 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # the pass/fail boolean). ---------------------------------------
     is_stale = inputs.data_age_hours is not None and inputs.data_age_hours > inputs.max_age_hours
     gates.append(GateOutcome(
-        "data_freshness", not is_stale,
+        "data_freshness", GateStatus.FAIL if is_stale else GateStatus.PASS,
         f"عمر البيانات {inputs.data_age_hours:.1f} ساعة" if inputs.data_age_hours is not None else "عمر البيانات غير معروف",
         False,
     ))
@@ -144,7 +147,10 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         warnings.append("البيانات المستخدمة أقدم من الحد المسموح -- التحليل معروض للاطلاع فقط وليس للتنفيذ الفوري.")
 
     # Gate 11: market status known --------------------------------------------
-    gates.append(GateOutcome("market_status_known", inputs.market_status_known, "حالة السوق معروفة." if inputs.market_status_known else "حالة السوق غير مؤكدة.", False))
+    gates.append(GateOutcome(
+        "market_status_known", GateStatus.PASS if inputs.market_status_known else GateStatus.FAIL,
+        "حالة السوق معروفة." if inputs.market_status_known else "حالة السوق غير مؤكدة.", False,
+    ))
     if not inputs.market_status_known:
         warnings.append("حالة السوق (مفتوح/مغلق) غير مؤكدة حاليًا.")
 
@@ -152,7 +158,7 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # (above) already turns a *stale* timestamp into a fail; this gate
     # separately surfaces whether a timestamp exists at all.
     gates.append(GateOutcome(
-        "quote_timestamp_known", inputs.data_age_hours is not None,
+        "quote_timestamp_known", GateStatus.PASS if inputs.data_age_hours is not None else GateStatus.FAIL,
         "توقيت آخر تحديث للسعر معروف." if inputs.data_age_hours is not None else "توقيت آخر تحديث للسعر غير معروف.",
         False,
     ))
@@ -163,7 +169,7 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # weighted blend.
     if inputs.market_context_score is not None:
         gates.append(GateOutcome(
-            "market_context", inputs.market_context_score >= 50.0,
+            "market_context", GateStatus.PASS if inputs.market_context_score >= 50.0 else GateStatus.FAIL,
             f"سياق السوق العام: {inputs.market_context_score:.0f}/100.", False,
         ))
 
@@ -172,13 +178,13 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # verified per-instrument Tadawul limit band (not ingested).
     if inputs.change_percent is not None and abs(inputs.change_percent) >= inputs.price_limit_proximity_pct:
         gates.append(GateOutcome(
-            "price_limit_proximity", False,
+            "price_limit_proximity", GateStatus.FAIL,
             f"تغيّر السعر اليوم {inputs.change_percent:+.1f}٪ -- قريب من نطاق التحرك اليومي المعتاد بشدة.",
             False,
         ))
         warnings.append("السعر تحرك بنسبة كبيرة اليوم -- قد يقترب من حد التداول اليومي المعتاد.")
     else:
-        gates.append(GateOutcome("price_limit_proximity", True, "لا يوجد اقتراب غير معتاد من حدود التحرك اليومي.", False))
+        gates.append(GateOutcome("price_limit_proximity", GateStatus.PASS, "لا يوجد اقتراب غير معتاد من حدود التحرك اليومي.", False))
 
     # Gate 13: fundamentals/news disclosure (never blocking) -------------------
     if not inputs.fundamentals_available:
@@ -186,15 +192,19 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     if not inputs.news_available:
         disclosures.append("لا تتوفر بيانات إخبارية محللة لهذا السهم حاليًا.")
 
-    # Gate 14: duplicate suppression -- not implemented at single-stock
-    # level; deduplication exists at the market-scan layer (ChangeDetector).
-    gates.append(GateOutcome("duplicate_suppression", True, "غير مطبّق على مستوى تحليل السهم الفردي (متاح على مستوى المسح الشامل).", False))
+    # Gate 14: duplicate suppression -- genuinely NOT_EVALUATED, not a
+    # fabricated pass: not implemented at single-stock level:
+    # deduplication exists at the market-scan layer (ChangeDetector).
+    gates.append(GateOutcome(
+        "duplicate_suppression", GateStatus.NOT_EVALUATED,
+        "غير مطبّق على مستوى تحليل السهم الفردي (متاح على مستوى المسح الشامل).", False,
+    ))
 
     # Phase 2B, stale-recommendation gate: honestly NOT_EVALUATED here --
     # would require comparing against this symbol's previous stored
     # DecisionV2Snapshot, a route/DB-layer concern.
     gates.append(GateOutcome(
-        "stale_recommendation", True,
+        "stale_recommendation", GateStatus.NOT_EVALUATED,
         "غير مطبّق على مستوى هذا الاستدعاء الفردي -- يتطلب مقارنة بالتوصية السابقة المخزّنة لهذا السهم.", False,
     ))
 
@@ -203,11 +213,11 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # not only in the separate `warnings` array.
     if inputs.risk_level in ("HIGH", "VERY_HIGH"):
         gates.append(GateOutcome(
-            "risk_warning_disclosed", True,
+            "risk_warning_disclosed", GateStatus.PASS,
             "مستوى مخاطرة مرتفع لهذا السهم -- يُنصح بحجم مركز أصغر وإدارة مخاطر أكثر تحفظًا.", False,
         ))
     else:
-        gates.append(GateOutcome("risk_warning_disclosed", True, f"مستوى المخاطرة: {inputs.risk_level}.", False))
+        gates.append(GateOutcome("risk_warning_disclosed", GateStatus.PASS, f"مستوى المخاطرة: {inputs.risk_level}.", False))
 
     # Non-actionable base recommendations map directly, but a stale/
     # missing-data condition can never let SELL-side urgency (EXIT) be
@@ -232,33 +242,42 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         inputs.entry_zone_low is not None and inputs.entry_zone_high is not None
         and inputs.entry_zone_low <= inputs.entry_zone_high
     )
-    gates.append(GateOutcome("entry_zone_valid", entry_zone_ok, "نطاق الدخول متسق." if entry_zone_ok else "نطاق الدخول غير متاح أو غير متسق.", True))
+    gates.append(GateOutcome(
+        "entry_zone_valid", GateStatus.PASS if entry_zone_ok else GateStatus.FAIL,
+        "نطاق الدخول متسق." if entry_zone_ok else "نطاق الدخول غير متاح أو غير متسق.", True,
+    ))
     if not entry_zone_ok:
         return GateEvaluation(Decision.REJECT, gates, warnings, disclosures)
 
     # Gate 4: stop below entry zone (long) -------------------------------------
     stop_ok = inputs.stop_loss is not None and inputs.stop_loss < inputs.entry_zone_low
-    gates.append(GateOutcome("stop_below_entry", stop_ok, "وقف الخسارة أسفل نطاق الدخول." if stop_ok else "وقف الخسارة غير منطقي بالنسبة لنطاق الدخول.", True))
+    gates.append(GateOutcome(
+        "stop_below_entry", GateStatus.PASS if stop_ok else GateStatus.FAIL,
+        "وقف الخسارة أسفل نطاق الدخول." if stop_ok else "وقف الخسارة غير منطقي بالنسبة لنطاق الدخول.", True,
+    ))
     if not stop_ok:
         return GateEvaluation(Decision.REJECT, gates, warnings, disclosures)
 
     # Gate 5: target above entry zone ------------------------------------------
     target_ok = inputs.target_1 is not None and inputs.target_1 > inputs.entry_zone_high
-    gates.append(GateOutcome("target_above_entry", target_ok, "الهدف أعلى نطاق الدخول." if target_ok else "الهدف غير منطقي بالنسبة لنطاق الدخول.", True))
+    gates.append(GateOutcome(
+        "target_above_entry", GateStatus.PASS if target_ok else GateStatus.FAIL,
+        "الهدف أعلى نطاق الدخول." if target_ok else "الهدف غير منطقي بالنسبة لنطاق الدخول.", True,
+    ))
     if not target_ok:
         return GateEvaluation(Decision.REJECT, gates, warnings, disclosures)
 
     # Gate 15: price already ran past the entry zone --------------------------
     if inputs.price_missed_entry_zone:
-        gates.append(GateOutcome("entry_not_missed", False, "السعر تجاوز نطاق الدخول المحدد بالفعل.", True))
+        gates.append(GateOutcome("entry_not_missed", GateStatus.FAIL, "السعر تجاوز نطاق الدخول المحدد بالفعل.", True))
         warnings.append("السعر الحالي أعلى من نطاق الدخول المناسب -- يفضّل الانتظار بدل مطاردة السعر.")
         return GateEvaluation(Decision.WAIT_FOR_ENTRY, gates, warnings, disclosures)
-    gates.append(GateOutcome("entry_not_missed", True, "السعر لا يزال ضمن نطاق دخول معقول.", True))
+    gates.append(GateOutcome("entry_not_missed", GateStatus.PASS, "السعر لا يزال ضمن نطاق دخول معقول.", True))
 
     # Gate 6: risk/reward minimum -----------------------------------------------
     rr_ok = inputs.risk_reward_ratio is not None and inputs.risk_reward_ratio >= inputs.min_risk_reward_ratio
     gates.append(GateOutcome(
-        "risk_reward_minimum", rr_ok,
+        "risk_reward_minimum", GateStatus.PASS if rr_ok else GateStatus.FAIL,
         f"العائد إلى المخاطرة {inputs.risk_reward_ratio:.2f}" if inputs.risk_reward_ratio is not None else "تعذر حساب العائد إلى المخاطرة",
         True,
     ))
@@ -267,11 +286,11 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
 
     # Gate 8: liquidity (NOT_EVALUATED, not blocking, when unknown) -----------
     if inputs.average_traded_value is None:
-        gates.append(GateOutcome("liquidity", True, "متوسط قيمة التداول غير متاح.", False))
+        gates.append(GateOutcome("liquidity", GateStatus.NOT_EVALUATED, "متوسط قيمة التداول غير متاح.", False))
     else:
         liquidity_ok = inputs.average_traded_value >= inputs.min_average_traded_value
         gates.append(GateOutcome(
-            "liquidity", liquidity_ok,
+            "liquidity", GateStatus.PASS if liquidity_ok else GateStatus.FAIL,
             f"متوسط قيمة التداول اليومي ~{inputs.average_traded_value:,.0f} ريال", True,
         ))
         if not liquidity_ok:
@@ -279,10 +298,10 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
 
     # Gate 9: no excessive volatility/gap risk ----------------------------------
     if inputs.atr_pct is not None and inputs.atr_pct > inputs.excessive_volatility_pct:
-        gates.append(GateOutcome("volatility_acceptable", False, f"تقلب مرتفع جدًا (ATR% = {inputs.atr_pct * 100:.1f}%).", True))
+        gates.append(GateOutcome("volatility_acceptable", GateStatus.FAIL, f"تقلب مرتفع جدًا (ATR% = {inputs.atr_pct * 100:.1f}%).", True))
         warnings.append("تقلب السهم مرتفع بشكل غير معتاد حاليًا -- خطر فجوات سعرية حقيقي.")
         return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
-    gates.append(GateOutcome("volatility_acceptable", True, "مستوى التقلب مقبول.", False))
+    gates.append(GateOutcome("volatility_acceptable", GateStatus.PASS, "مستوى التقلب مقبول.", False))
 
     # Phase 2B, trend-consistency / contradiction gate: reuses
     # scoring.conflicting_indicators()'s already-computed note (the
@@ -291,10 +310,10 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # WATCH, since a positive decision should not publish on the
     # strength of a trend the momentum evidence contradicts.
     if inputs.trend_momentum_conflict:
-        gates.append(GateOutcome("trend_momentum_consistency", False, inputs.trend_momentum_conflict, True))
+        gates.append(GateOutcome("trend_momentum_consistency", GateStatus.FAIL, inputs.trend_momentum_conflict, True))
         warnings.append(inputs.trend_momentum_conflict)
         return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
-    gates.append(GateOutcome("trend_momentum_consistency", True, "الاتجاه والزخم متوافقان.", False))
+    gates.append(GateOutcome("trend_momentum_consistency", GateStatus.PASS, "الاتجاه والزخم متوافقان.", False))
 
     # Phase 2B, volume-quality gate: downgrades to WATCH only when
     # volume evidence actively CONTRADICTS the recommended direction
@@ -302,11 +321,16 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # reading (None, e.g. no OBV history yet) is not treated as a
     # contradiction.
     if inputs.volume_confirms_decision is False:
-        gates.append(GateOutcome("volume_quality", False, "حجم التداول لا يدعم اتجاه القرار الحالي.", True))
+        gates.append(GateOutcome("volume_quality", GateStatus.FAIL, "حجم التداول لا يدعم اتجاه القرار الحالي.", True))
         warnings.append("حجم التداول الحالي لا يؤكد الاتجاه المقترح -- يفضّل انتظار تأكيد حجمي.")
         return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
+    # `volume_confirms_decision is None` (no OBV/volume-trend history
+    # yet) is genuinely NOT_EVALUATED, not a fabricated pass -- the
+    # comment above already documented "not treated as a contradiction"
+    # but the status previously collapsed that into the same PASS as an
+    # actual confirming reading.
     gates.append(GateOutcome(
-        "volume_quality", True,
+        "volume_quality", GateStatus.PASS if inputs.volume_confirms_decision else GateStatus.NOT_EVALUATED,
         "حجم التداول يدعم اتجاه القرار." if inputs.volume_confirms_decision else "لا يوجد تأكيد أو تعارض حجمي واضح.",
         False,
     ))
@@ -320,7 +344,7 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # encourage, not discourage.
     if not inputs.market_risk_entry_permitted:
         gates.append(GateOutcome(
-            "market_risk_permits_entry", False,
+            "market_risk_permits_entry", GateStatus.FAIL,
             f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- يتم تعليق توصيات الدخول الجديدة مؤقتًا.",
             True,
         ))
@@ -330,14 +354,14 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         )
         return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
     gates.append(GateOutcome(
-        "market_risk_permits_entry", True,
+        "market_risk_permits_entry", GateStatus.PASS,
         f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- لا تمنع الدخول.", False,
     ))
 
     # Gate 12: confidence not based on a single indicator -----------------------
     multi_factor_ok = inputs.available_sub_score_count >= 3
     gates.append(GateOutcome(
-        "multi_factor_evidence", multi_factor_ok,
+        "multi_factor_evidence", GateStatus.PASS if multi_factor_ok else GateStatus.FAIL,
         f"{inputs.available_sub_score_count} من أصل 8 عناصر تحليل متاحة.", True,
     ))
     if not multi_factor_ok:
@@ -348,7 +372,10 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # (matches publication_gate.py's identical reasoning: the thesis
     # can still be sound even when *this specific price* is a bad entry).
     entry_quality_ok = inputs.entry_quality is not EntryQuality.POOR
-    gates.append(GateOutcome("entry_quality", entry_quality_ok, f"جودة نقطة الدخول: {inputs.entry_quality.value}", True))
+    gates.append(GateOutcome(
+        "entry_quality", GateStatus.PASS if entry_quality_ok else GateStatus.FAIL,
+        f"جودة نقطة الدخول: {inputs.entry_quality.value}", True,
+    ))
     if not entry_quality_ok:
         warnings.append("جودة نقطة الدخول الحالية ضعيفة -- يفضّل الانتظار.")
         return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
@@ -363,7 +390,7 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         full_coverage = inputs.available_sub_score_count >= 8
         confidence_ok = inputs.confidence_score >= inputs.strong_buy_minimum_confidence
         gates.append(GateOutcome(
-            "confidence_calibration_minimum", full_coverage and confidence_ok,
+            "confidence_calibration_minimum", GateStatus.PASS if (full_coverage and confidence_ok) else GateStatus.FAIL,
             (
                 f"تغطية الأدلة {inputs.available_sub_score_count}/8، الثقة {inputs.confidence_score:.0f}٪ "
                 f"(الحد الأدنى المطلوب لـ«شراء قوي»: تغطية كاملة وثقة {inputs.strong_buy_minimum_confidence:.0f}٪ فأكثر)."

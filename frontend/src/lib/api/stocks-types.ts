@@ -160,8 +160,11 @@ export interface SubScoresV2 {
   data_quality_score: number;
 }
 
+export type GateStatus = "PASS" | "FAIL" | "NOT_EVALUATED";
+
 export interface GateOutcome {
   name: string;
+  status: GateStatus;
   passed: boolean;
   detail: string;
   blocking: boolean;

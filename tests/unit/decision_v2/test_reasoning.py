@@ -9,7 +9,7 @@ from src.analysis.decision_v2.reasoning import (
     build_why_now,
     confidence_breakdown,
 )
-from src.analysis.decision_v2.types import Decision, EntryStatus, GateOutcome
+from src.analysis.decision_v2.types import Decision, EntryStatus, GateOutcome, GateStatus
 
 
 class TestConfidenceBreakdown:
@@ -62,7 +62,7 @@ class TestBuildWhyNotStronger:
         assert "أعلى مستوى" in text
 
     def test_failed_blocking_gate_is_named(self):
-        gates = [GateOutcome(name="risk_reward_minimum", passed=False, detail="نسبة العائد إلى المخاطرة غير كافية", blocking=True)]
+        gates = [GateOutcome(name="risk_reward_minimum", status=GateStatus.FAIL, detail="نسبة العائد إلى المخاطرة غير كافية", blocking=True)]
         text = build_why_not_stronger(Decision.REJECT, gates, [])
         assert "نسبة العائد إلى المخاطرة غير كافية" in text
 

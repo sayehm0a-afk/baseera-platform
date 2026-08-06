@@ -11,7 +11,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.analysis.decision_v2.types import DataFreshnessStatus, Decision, DecisionResult, GateOutcome, SubScores
+from src.analysis.decision_v2.types import (
+    DataFreshnessStatus, Decision, DecisionResult, GateOutcome, GateStatus, SubScores,
+)
 from src.analysis.recommendation.types import AnalysisContext, Recommendation
 from src.core.db.database import Base
 from src.domain.models import (
@@ -70,7 +72,7 @@ def make_decision_v2_result(symbol="2222", **numpy_overrides) -> DecisionResult:
             risk_reward_score=np.float64(64.75), market_context_score=np.float64(75.0),
             data_quality_score=np.float64(100.0),
         ),
-        gates=[GateOutcome(name="real_data_source", passed=np.bool_(True), detail="ok", blocking=np.bool_(True))],
+        gates=[GateOutcome(name="real_data_source", status=GateStatus.PASS, detail="ok", blocking=np.bool_(True))],
         **defaults,
     )
 

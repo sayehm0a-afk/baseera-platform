@@ -179,6 +179,7 @@ class SubScoresOut(BaseModel):
 
 class GateOutcomeOut(BaseModel):
     name: str
+    status: str
     passed: bool
     detail: str
     blocking: bool

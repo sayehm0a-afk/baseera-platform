@@ -7,7 +7,7 @@ test_engine.py)."""
 from src.analysis.decision.types import EntryQuality
 from src.analysis.decision_v2.config import DecisionV2Tuning
 from src.analysis.decision_v2.gates import GateInputs, evaluate_decision
-from src.analysis.decision_v2.types import Decision
+from src.analysis.decision_v2.types import Decision, GateStatus
 from src.analysis.recommendation.types import Recommendation
 
 TUNING = DecisionV2Tuning()
@@ -177,6 +177,8 @@ class TestRiskRewardAndLiquidity:
         inputs = _base_buy_inputs(average_traded_value=None)
         result = evaluate_decision(inputs, TUNING)
         assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "liquidity")
+        assert gate.status is GateStatus.NOT_EVALUATED
 
 
 class TestVolatilityAndEvidence:
@@ -243,6 +245,8 @@ class TestPhase2BVolumeQualityGate:
         inputs = _base_buy_inputs(volume_confirms_decision=None)
         result = evaluate_decision(inputs, TUNING)
         assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "volume_quality")
+        assert gate.status is GateStatus.NOT_EVALUATED
 
 
 class TestPhase2BConfidenceCalibrationGate:
@@ -319,6 +323,7 @@ class TestPhase2BInformationalGatesAlwaysPresent:
     def test_stale_recommendation_gate_is_honestly_not_evaluated(self):
         result = evaluate_decision(_base_buy_inputs(), TUNING)
         gate = next(g for g in result.gates if g.name == "stale_recommendation")
+        assert gate.status is GateStatus.NOT_EVALUATED
         assert gate.passed is True
         assert gate.blocking is False
         assert "غير مطبّق" in gate.detail
@@ -326,6 +331,7 @@ class TestPhase2BInformationalGatesAlwaysPresent:
     def test_duplicate_signal_gate_is_honestly_not_evaluated(self):
         result = evaluate_decision(_base_buy_inputs(), TUNING)
         gate = next(g for g in result.gates if g.name == "duplicate_suppression")
+        assert gate.status is GateStatus.NOT_EVALUATED
         assert gate.passed is True
         assert gate.blocking is False
 

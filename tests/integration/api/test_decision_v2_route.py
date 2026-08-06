@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 import numpy as np
 import pytest
 
-from src.analysis.decision_v2.types import DataFreshnessStatus, Decision, DecisionResult, GateOutcome, SubScores
+from src.analysis.decision_v2.types import (
+    DataFreshnessStatus, Decision, DecisionResult, GateOutcome, GateStatus, SubScores,
+)
 from src.analysis.recommendation.types import Recommendation
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.domain.models import (
@@ -138,7 +140,7 @@ def test_decision_v2_with_both_legs_available(client, db_session):
     assert isinstance(body["sub_scores"], dict)
     assert isinstance(body["gates"], list) and len(body["gates"]) > 0
     for gate in body["gates"]:
-        assert {"name", "passed", "detail", "blocking"} <= gate.keys()
+        assert {"name", "status", "passed", "detail", "blocking"} <= gate.keys()
 
     # A best-effort DecisionV2Snapshot row should have been inserted.
     # (The test fixture's staff user is an in-memory, never-persisted
@@ -178,7 +180,7 @@ def _make_numpy_laden_decision_v2_result(symbol: str) -> DecisionResult:
             risk_reward_score=np.float64(64.75), market_context_score=np.float64(75.0),
             data_quality_score=np.float64(100.0),
         ),
-        gates=[GateOutcome(name="real_data_source", passed=np.bool_(True), detail="ok", blocking=np.bool_(True))],
+        gates=[GateOutcome(name="real_data_source", status=GateStatus.PASS, detail="ok", blocking=np.bool_(True))],
     )
 
 

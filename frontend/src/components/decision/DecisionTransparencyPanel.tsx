@@ -234,11 +234,17 @@ export function DecisionTransparencyPanel({ decision }: { decision: DecisionV2 }
               <li
                 key={gate.name}
                 className={`flex items-start justify-between gap-bsr-2 ${
-                  gate.passed ? "text-bsr-text-secondary" : "text-bsr-action-sell"
+                  gate.status === "FAIL"
+                    ? "text-bsr-action-sell"
+                    : gate.status === "NOT_EVALUATED"
+                      ? "text-bsr-text-tertiary"
+                      : "text-bsr-text-secondary"
                 }`}
               >
                 <span>{gate.detail}</span>
-                <span className="shrink-0">{gate.passed ? "✓" : gate.blocking ? "✗" : "⚠"}</span>
+                <span className="shrink-0">
+                  {gate.status === "PASS" ? "✓" : gate.status === "NOT_EVALUATED" ? "○" : gate.blocking ? "✗" : "⚠"}
+                </span>
               </li>
             ))}
           </ul>
