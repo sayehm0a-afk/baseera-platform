@@ -10,8 +10,10 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
+import numpy as np
 import pytest
 
+from src.analysis.decision_v2.types import DataFreshnessStatus, Decision, DecisionResult, GateOutcome, SubScores
 from src.analysis.recommendation.types import Recommendation
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.domain.models import (
@@ -146,6 +148,93 @@ def test_decision_v2_with_both_legs_available(client, db_session):
     rows = db_session.query(DecisionV2Snapshot).filter(DecisionV2Snapshot.symbol == "2222").all()
     assert len(rows) == 1
     assert rows[0].decision == body["decision"]
+
+
+def _make_numpy_laden_decision_v2_result(symbol: str) -> DecisionResult:
+    """A real DecisionResult with every numeric field as numpy.float64
+    and every gate bool as numpy.bool_ -- matches exactly what
+    DecisionEngineV2.decide() actually returns in production (ATR/
+    entry-zone computations run over numpy-backed indicator arrays).
+    Used to prove this route's own DecisionV2Snapshot insert survives
+    real Postgres, not just SQLite (which silently tolerates numpy)."""
+    return DecisionResult(
+        symbol=symbol, company_name_ar="أرامكو السعودية", company_name_en="Saudi Aramco", sector_ar="الطاقة",
+        decision=Decision.BUY_CANDIDATE, decision_label_ar="شراء",
+        confidence_score=np.float64(78.2), opportunity_quality_score=np.float64(65.0),
+        risk_score=np.float64(40.0), data_quality_score=np.float64(100.0),
+        data_freshness_status=DataFreshnessStatus.LIVE,
+        current_price=np.float64(65.1), entry_zone_low=np.float64(64.79), entry_zone_high=np.float64(65.19),
+        stop_loss=np.float64(62.95), target_1=np.float64(66.31), target_2=np.float64(67.0), target_3=np.float64(68.0),
+        expected_return_target_1=np.float64(3.12), expected_return_target_2=np.float64(5.0),
+        downside_to_stop=np.float64(1.6), risk_reward_target_1=np.float64(1.49), risk_reward_target_2=np.float64(2.0),
+        expected_holding_period_min_days=1, expected_holding_period_max_days=15,
+        expected_holding_period_label_ar="من جلسة إلى 3 أسابيع", horizon_type="SHORT_TERM",
+        market_status="OPEN", decision_timestamp=datetime.now(timezone.utc),
+        invalidation_conditions=[], positive_reasons=[], negative_reasons=[], warnings=[],
+        recommendation_basis="test", analysis_version="2.0.0", data_source="SAHMK_REAL", scan_run_id=None,
+        sub_scores=SubScores(
+            trend_score=np.float64(50.0), momentum_score=np.float64(57.4), volume_score=np.float64(65.0),
+            liquidity_score=np.float64(70.0), volatility_score=np.float64(30.0),
+            risk_reward_score=np.float64(64.75), market_context_score=np.float64(75.0),
+            data_quality_score=np.float64(100.0),
+        ),
+        gates=[GateOutcome(name="real_data_source", passed=np.bool_(True), detail="ok", blocking=np.bool_(True))],
+    )
+
+
+def test_decision_v2_persists_a_real_numpy_laden_result_without_crashing(client, db_session, monkeypatch):
+    """Regression: production confirmed (2026-08-06) that this route's
+    single-row DecisionV2Snapshot insert crashes against real Postgres
+    with 'schema "np" does not exist' whenever DecisionEngineV2's real
+    numpy-backed computation reaches it -- the exact same failure mode
+    the scan-pipeline batch insert was fixed for (commit 8d8e4d0), which
+    this single-row insert had not been. SQLite (this test's own DB)
+    silently tolerates the un-coerced type, so this test instead spies
+    on session.add() to check the object's attribute types at insert
+    time (same technique as
+    test_market_intelligence_repository.py::test_save_symbol_records_coerces_numpy_types_in_decision_v2_snapshot),
+    which is what actually reaches the SQL layer."""
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    monkeypatch.setattr(
+        "src.api.routes.stocks.DecisionEngineV2.decide",
+        lambda self, *a, **kw: _make_numpy_laden_decision_v2_result("2222"),
+    )
+
+    numeric_fields = (
+        "confidence_score", "opportunity_quality_score", "risk_score", "data_quality_score",
+        "current_price", "entry_zone_low", "entry_zone_high", "stop_loss",
+        "target_1", "target_2", "target_3",
+        "expected_return_target_1", "expected_return_target_2", "downside_to_stop",
+        "risk_reward_target_1", "risk_reward_target_2",
+    )
+    captured = []
+    original_add = Session.add
+
+    def _spy_add(self, obj):
+        if type(obj).__name__ == "DecisionV2Snapshot":
+            captured.append({f: type(getattr(obj, f)) for f in numeric_fields})
+        return original_add(self, obj)
+
+    # The route's session comes from the `get_db` dependency override,
+    # which creates its own Session instance (see conftest.py's
+    # `_override_get_db`) -- a different object than the `db_session`
+    # fixture used to seed data here. Patching the class method (not
+    # the `db_session` instance) intercepts the route's own session too.
+    monkeypatch.setattr(Session, "add", _spy_add)
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+
+    assert len(captured) == 1
+    for field, field_type in captured[0].items():
+        assert field_type is float, f"DecisionV2Snapshot.{field} was {field_type!r}, expected plain float"
+
+    rows = db_session.query(DecisionV2Snapshot).filter(DecisionV2Snapshot.symbol == "2222").all()
+    assert len(rows) == 1
+    assert rows[0].decision == "BUY_CANDIDATE"
 
 
 _VALID_ENTRY_STATUSES = {
