@@ -189,6 +189,22 @@ class DiagnosticSampleSymbolOut(BaseModel):
     evaluated_at: datetime
 
 
+class DiagnosticDecisionV2SampleOut(BaseModel):
+    """Phase 3A evidence: one DecisionV2Snapshot row this diagnostic
+    scan itself just wrote -- proves the scheduled-scan pipeline (not
+    just the on-demand /decision-v2 route) now computes and persists a
+    real Decision Engine V2 result with `scan_run_id` populated."""
+
+    symbol: str
+    decision: str
+    decision_label_ar: str
+    confidence_score: float
+    entry_zone_low: Optional[float] = None
+    entry_zone_high: Optional[float] = None
+    scan_run_id: Optional[int] = None
+    decision_timestamp: datetime
+
+
 class DiagnosticScanOut(BaseModel):
     """Response for POST /api/v1/admin/market-intelligence/diagnostic-scan
     -- real evidence from one controlled SAHMK poll, never fabricated:
@@ -216,6 +232,8 @@ class DiagnosticScanOut(BaseModel):
     last_scan_source: Optional[str] = None
     data_is_fresh: Optional[bool] = None
     freshness_note: str = ""
+    decision_v2_rows_written: int = 0
+    decision_v2_sample: List[DiagnosticDecisionV2SampleOut] = Field(default_factory=list)
 
 
 class MarketStatusOut(BaseModel):

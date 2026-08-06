@@ -169,6 +169,14 @@ def test_happy_path_runs_the_real_scan_path_and_persists_rows(client, session_fa
     assert body["last_scan_source"] == "SAHMK_REAL"
     assert body["can_publish_recommendations"] is True
     assert body["data_is_fresh"] is True
+    # Phase 3A: the same scan run also computed and persisted a
+    # DecisionV2Snapshot for this symbol, with scan_run_id set to this
+    # diagnostic run -- proves the scheduled-scan pipeline (not just
+    # the on-demand /decision-v2 route) now produces V2 evidence.
+    assert body["decision_v2_rows_written"] == 1
+    assert body["decision_v2_sample"][0]["symbol"] == "2222"
+    assert body["decision_v2_sample"][0]["scan_run_id"] == body["run_id"]
+    assert body["decision_v2_sample"][0]["decision"]
 
 
 def test_secret_never_appears_in_the_response(client, session_factory, as_staff, monkeypatch):
