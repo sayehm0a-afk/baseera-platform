@@ -33,13 +33,21 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from src.api.schemas.market_intelligence import (
+    DiagnosticDecisionV2SampleOut,
     DiagnosticSampleSymbolOut,
     DiagnosticScanOut,
     MarketScanRequest,
 )
 from src.auth.rbac import require_staff_role
 from src.core.db.database import get_db
-from src.domain.models import MarketScanRun, MarketScanStatus, StaffRole, SymbolIntelligenceRecord, User
+from src.domain.models import (
+    DecisionV2Snapshot,
+    MarketScanRun,
+    MarketScanStatus,
+    StaffRole,
+    SymbolIntelligenceRecord,
+    User,
+)
 from src.market_data.strict_mode import StrictRealDataUnavailableError
 from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -99,6 +107,8 @@ async def trigger_diagnostic_scan(
     sample_symbols: List[DiagnosticSampleSymbolOut] = []
     data_is_fresh = None
     freshness_note = ""
+    decision_v2_rows_written = 0
+    decision_v2_sample: List[DiagnosticDecisionV2SampleOut] = []
 
     if provider_kind == "sahmk":
         symbols = request.symbols or list(_DEFAULT_DIAGNOSTIC_SYMBOLS)
@@ -142,6 +152,33 @@ async def trigger_diagnostic_scan(
                     evaluated_at=r.evaluated_at,
                 )
                 for r in records[:10]
+            ]
+            # Phase 3A evidence: the same scan just persisted a
+            # DecisionV2Snapshot row per successful symbol via
+            # MarketIntelligenceRepository.save_symbol_records -- read
+            # them back the same way SymbolIntelligenceRecord is read
+            # back above, so this diagnostic response is direct,
+            # unambiguous proof that the scheduled-scan pipeline (not
+            # just the on-demand /decision-v2 route) computes and
+            # persists Decision Engine V2 results with scan_run_id set.
+            v2_records = (
+                session.query(DecisionV2Snapshot)
+                .filter(DecisionV2Snapshot.scan_run_id == run.id)
+                .all()
+            )
+            decision_v2_rows_written = len(v2_records)
+            decision_v2_sample = [
+                DiagnosticDecisionV2SampleOut(
+                    symbol=r.symbol,
+                    decision=r.decision,
+                    decision_label_ar=r.decision_label_ar,
+                    confidence_score=float(r.confidence_score),
+                    entry_zone_low=float(r.entry_zone_low) if r.entry_zone_low is not None else None,
+                    entry_zone_high=float(r.entry_zone_high) if r.entry_zone_high is not None else None,
+                    scan_run_id=r.scan_run_id,
+                    decision_timestamp=r.decision_timestamp,
+                )
+                for r in v2_records[:10]
             ]
             if records:
                 now = datetime.now(timezone.utc)
@@ -192,4 +229,6 @@ async def trigger_diagnostic_scan(
         last_scan_source=last_scan_source,
         data_is_fresh=data_is_fresh,
         freshness_note=freshness_note,
+        decision_v2_rows_written=decision_v2_rows_written,
+        decision_v2_sample=decision_v2_sample,
     )
