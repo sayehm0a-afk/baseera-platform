@@ -81,6 +81,13 @@ jobs:
           curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
             "$BACKEND_URL/api/v1/market/status"
 
+      - name: Backend logs around the run's stall window (real Railway logs)
+        run: |
+          # `railway logs` streams indefinitely like `tail -f` -- bound it with
+          # `timeout` so this step can never hang the job even if the CLI ignores
+          # SIGPIPE from `tail`.
+          timeout 25 railway logs --service "$RAILWAY_BACKEND_SERVICE" 2>&1 | tail -n 500 || echo "(railway logs unavailable or timed out -- see exit status above)"
+
       - name: Clean up local session artifacts
         if: always()
         run: rm -f /tmp/cookies.txt /tmp/login_body.json
