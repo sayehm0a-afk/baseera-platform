@@ -235,13 +235,53 @@ async def get_quote(
     except InvalidSymbolError as exc:
         raise InvalidSymbolFormatError(str(exc)) from exc
 
+    # Real-time price (GET /quote/{symbol}/) first, matching the same
+    # opportunistic getattr pattern context_builder.py already uses --
+    # not part of IMarketDataProvider (DevMarketDataProvider has no
+    # live quote to serve). get_stock_data()'s *daily* bar is not a
+    # substitute here: SAHMK does not finalize a session's own bar
+    # until after that session closes, so requiring it made this route
+    # fail for the entire trading day until end-of-day data landed
+    # (confirmed in production 2026-08-06 -- every symbol 503'd with
+    # "no historical bar for '<symbol>' on <today>" while the live
+    # quote endpoint had real data the whole time). get_stock_data()
+    # itself is deliberately left untouched: ingestion, preflight, and
+    # context_builder's own fallback all depend on it staying a
+    # genuine, complete daily OHLCV bar.
+    live_price: Optional[float] = None
+    live_data: Dict[str, object] = {}
+    get_latest_quote = getattr(provider, "get_latest_quote", None)
+    if get_latest_quote is not None:
+        try:
+            live_data = await get_latest_quote(symbol)
+            live_price = live_data.get("price")
+        except (SahmkError, CircuitBreakerOpenError) as exc:
+            logger.info("Could not fetch a live quote for '%s': %s", symbol, exc)
+
+    bar: Optional[Dict[str, object]] = None
     try:
-        data = await provider.get_stock_data(symbol)
+        bar = await provider.get_stock_data(symbol)
     except InvalidSymbolError as exc:
         raise InvalidSymbolFormatError(str(exc)) from exc
     except (SahmkError, CircuitBreakerOpenError) as exc:
-        raise ProviderUnavailableError(f"Could not fetch a live quote for '{symbol}': {exc}") from exc
-    return QuoteOut(**data)
+        if live_price is None:
+            raise ProviderUnavailableError(f"Could not fetch a live quote for '{symbol}': {exc}") from exc
+        logger.info("No finalized daily bar for '%s' yet, using the live quote instead: %s", symbol, exc)
+
+    if bar is None and live_price is None:
+        raise ProviderUnavailableError(f"Could not fetch a live quote for '{symbol}': no data from any source.")
+
+    return QuoteOut(
+        symbol=symbol,
+        open=bar.get("open") if bar else None,
+        high=bar.get("high") if bar else None,
+        low=bar.get("low") if bar else None,
+        close=live_price if live_price is not None else bar.get("close"),
+        volume=(bar.get("volume") if bar else None) or live_data.get("volume"),
+        timestamp=(live_data.get("timestamp") if live_price is not None else None) or bar.get("timestamp"),
+        source=(bar.get("source") if bar else None) or live_data.get("source") or "sahmk",
+        is_synthetic=bool((bar.get("is_synthetic") if bar else None) or live_data.get("is_synthetic") or False),
+    )
 
 
 @router.get("/{symbol}/history", response_model=HistoryOut)

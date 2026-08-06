@@ -161,6 +161,69 @@ def test_suspend_and_unsuspend_user(client, admin, customer):
     assert unsuspend.json()["is_active"] is True
 
 
+def test_verify_email_marks_an_unverified_user_verified(client, admin, session):
+    """Regression: production confirmed (2026-08-06) that SMTP_HOST is
+    not configured, so ConsoleEmailSender only logs a real signup's
+    verification token instead of emailing it -- a real customer has
+    no way to ever receive it, and (before this route existed) neither
+    did staff, since no other endpoint could mark a user verified.
+    This is the support rescue path for exactly that."""
+    stuck_user = User(email="stuck-signup@example.com", password_hash="hashed", is_email_verified=False)
+    session.add(stuck_user)
+    session.commit()
+
+    _as(admin)
+    response = client.post(f"/api/v1/admin/users/{stuck_user.id}/verify-email")
+    assert response.status_code == 200
+    assert response.json()["is_email_verified"] is True
+
+    session.refresh(stuck_user)
+    assert stuck_user.is_email_verified is True
+
+
+def test_verify_email_is_idempotent_for_an_already_verified_user(client, admin, customer):
+    _as(admin)
+    response = client.post(f"/api/v1/admin/users/{customer.id}/verify-email")
+    assert response.status_code == 200
+    assert response.json()["is_email_verified"] is True
+
+
+def test_verify_email_404_for_unknown_user(client, admin):
+    _as(admin)
+    response = client.post("/api/v1/admin/users/999999/verify-email")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "user_not_found"
+
+
+def test_support_cannot_verify_email_only_admin_or_owner_can(client, session):
+    support_user = User(
+        email="support@example.com", password_hash="hashed", is_email_verified=True,
+        is_staff=True, staff_role=StaffRole.SUPPORT,
+    )
+    session.add(support_user)
+    session.commit()
+
+    target = User(email="target@example.com", password_hash="hashed", is_email_verified=False)
+    session.add(target)
+    session.commit()
+
+    _as(support_user)
+    response = client.post(f"/api/v1/admin/users/{target.id}/verify-email")
+    assert response.status_code == 403
+
+
+def test_verify_email_audit_logged(client, admin, session):
+    stuck_user = User(email="stuck2@example.com", password_hash="hashed", is_email_verified=False)
+    session.add(stuck_user)
+    session.commit()
+
+    _as(admin)
+    client.post(f"/api/v1/admin/users/{stuck_user.id}/verify-email")
+
+    logs = client.get("/api/v1/admin/audit-log").json()["logs"]
+    assert any(log["action"] == "user.verify_email" and log["target_id"] == stuck_user.id for log in logs)
+
+
 def test_owner_can_delete_a_user_with_no_related_records(client, owner, session):
     plain_user = User(email="deleteme@example.com", password_hash="hashed")
     session.add(plain_user)
