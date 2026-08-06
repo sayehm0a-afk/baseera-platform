@@ -336,6 +336,90 @@ class PipelineStageOut(BaseModel):
     reason: str
 
 
+class DecisionCountOut(BaseModel):
+    """One Decision Engine V2 value (e.g. BUY_CANDIDATE) -> how many
+    symbols' latest decision, within the reporting window, was that
+    value."""
+
+    decision: str
+    count: int
+
+
+class ConfidenceBucketCountOut(BaseModel):
+    """One 20-point confidence-score bucket ("0-20", ..., "80-100") ->
+    how many symbols' latest decision fell in it."""
+
+    bucket_label: str
+    count: int
+
+
+class RiskCountOut(BaseModel):
+    risk_level: Optional[str] = None
+    count: int
+
+
+class TopOpportunityOut(BaseModel):
+    """One of the current highest-confidence BUY_CANDIDATE/
+    STRONG_BUY_CANDIDATE symbols, most recent decision only."""
+
+    symbol: str
+    company_name_ar: Optional[str] = None
+    sector_ar: Optional[str] = None
+    decision: str
+    decision_label_ar: str
+    confidence_score: float
+    risk_level: Optional[str] = None
+    decision_timestamp: datetime
+
+
+class RejectedOpportunityOut(BaseModel):
+    """One of the most recent REJECT/INSUFFICIENT_DATA symbols, with the
+    real blocking-gate names that caused it -- never a guess."""
+
+    symbol: str
+    company_name_ar: Optional[str] = None
+    sector_ar: Optional[str] = None
+    decision: str
+    failed_gate_names: List[str]
+    decision_timestamp: datetime
+
+
+class RejectionReasonCountOut(BaseModel):
+    """How many of the window's REJECT/INSUFFICIENT_DATA/WAIT_FOR_ENTRY
+    symbols failed each named gate -- a real tally over `gates` JSON,
+    not a category label."""
+
+    gate_name: str
+    fail_count: int
+
+
+class SectorRankingOut(BaseModel):
+    sector_ar: Optional[str] = None
+    symbols_evaluated: int
+    average_confidence: Optional[float] = None
+    buy_candidate_count: int
+
+
+class DecisionIntelligenceOut(BaseModel):
+    """GET /api/v1/admin/market-intelligence/decision-intelligence --
+    real SQL-backed statistics over each symbol's most recent Decision
+    Engine V2 snapshot within the reporting window: decision/confidence/
+    risk distribution, top opportunities, rejected opportunities with
+    their real gate-failure reasons, and sector ranking. Every number is
+    a direct aggregate over decision_v2_snapshots, never estimated."""
+
+    generated_at: datetime
+    window_hours: int
+    total_symbols_evaluated: int
+    decision_distribution: List[DecisionCountOut]
+    confidence_buckets: List[ConfidenceBucketCountOut]
+    risk_distribution: List[RiskCountOut]
+    top_opportunities: List[TopOpportunityOut]
+    rejected_opportunities: List[RejectedOpportunityOut]
+    rejection_reason_counts: List[RejectionReasonCountOut]
+    sector_ranking: List[SectorRankingOut]
+
+
 class MarketCoverageOut(BaseModel):
     """GET /api/v1/admin/market-intelligence/coverage -- real,
     SQL-backed evidence of how much of the Saudi market Basirah

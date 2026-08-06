@@ -630,3 +630,190 @@ def test_coverage_handles_an_entirely_empty_database(client, session_factory, as
         "active_stocks_with_exclusion_reason_set": 0,
     }
     assert len(body["pipeline_funnel"]) == 7
+
+
+# --- GET /decision-intelligence -------------------------------------------
+
+
+def _seed_decision_v2(
+    session_factory,
+    symbol,
+    decision,
+    confidence_score,
+    risk_level=None,
+    sector_ar=None,
+    gates=None,
+    decision_timestamp=None,
+    company_name_ar=None,
+):
+    session = session_factory()
+    stock = session.query(Stock).filter(Stock.symbol == symbol).first()
+    if stock is None:
+        stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector=sector_ar)
+        session.add(stock)
+        session.commit()
+    session.add(
+        DecisionV2Snapshot(
+            stock_id=stock.id,
+            symbol=symbol,
+            company_name_ar=company_name_ar,
+            company_name_en=f"Stock {symbol}",
+            sector_ar=sector_ar,
+            decision=decision,
+            decision_label_ar="test",
+            confidence_score=Decimal(str(confidence_score)),
+            opportunity_quality_score=Decimal("50"),
+            risk_score=Decimal("50"),
+            data_quality_score=Decimal("100"),
+            data_freshness_status="LIVE",
+            market_status="OPEN",
+            decision_timestamp=decision_timestamp or datetime.now(timezone.utc),
+            analysis_version="2.0.0",
+            data_source="SAHMK_REAL",
+            risk_level=risk_level,
+            gates=gates or [],
+        )
+    )
+    session.commit()
+    session.close()
+
+
+def test_decision_intelligence_requires_staff_role(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+
+    response = client.get("/api/v1/admin/market-intelligence/decision-intelligence")
+
+    assert response.status_code == 403
+
+
+def test_decision_intelligence_reports_real_decision_and_confidence_distribution(client, session_factory, as_staff):
+    _seed_decision_v2(session_factory, "2222", "STRONG_BUY_CANDIDATE", 92.0, risk_level="LOW", sector_ar="الطاقة")
+    _seed_decision_v2(session_factory, "1120", "BUY_CANDIDATE", 78.0, risk_level="MEDIUM", sector_ar="البنوك")
+    _seed_decision_v2(session_factory, "1180", "HOLD", 55.0, risk_level="MEDIUM", sector_ar="البنوك")
+
+    response = client.get("/api/v1/admin/market-intelligence/decision-intelligence")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_symbols_evaluated"] == 3
+    decisions = {row["decision"]: row["count"] for row in body["decision_distribution"]}
+    assert decisions == {"STRONG_BUY_CANDIDATE": 1, "BUY_CANDIDATE": 1, "HOLD": 1}
+    buckets = {row["bucket_label"]: row["count"] for row in body["confidence_buckets"]}
+    assert buckets["80-100"] == 1  # 92.0
+    assert buckets["60-80"] == 1  # 78.0
+    assert buckets["40-60"] == 1  # 55.0
+    risk = {row["risk_level"]: row["count"] for row in body["risk_distribution"]}
+    assert risk == {"LOW": 1, "MEDIUM": 2}
+
+
+def test_decision_intelligence_collapses_repeat_requests_to_the_latest_snapshot(client, session_factory, as_staff):
+    """The same symbol decided twice within the window must count once,
+    using only the latest snapshot -- this table is an insert-only
+    request log, not a deduplicated state table."""
+    now = datetime.now(timezone.utc)
+    _seed_decision_v2(session_factory, "2222", "HOLD", 50.0, decision_timestamp=now - timedelta(hours=2))
+    _seed_decision_v2(session_factory, "2222", "BUY_CANDIDATE", 80.0, decision_timestamp=now - timedelta(minutes=5))
+
+    response = client.get("/api/v1/admin/market-intelligence/decision-intelligence")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_symbols_evaluated"] == 1
+    assert body["decision_distribution"] == [{"decision": "BUY_CANDIDATE", "count": 1}]
+
+
+def test_decision_intelligence_excludes_snapshots_outside_the_window(client, session_factory, as_staff):
+    stale = datetime.now(timezone.utc) - timedelta(hours=200)
+    _seed_decision_v2(session_factory, "2222", "BUY_CANDIDATE", 80.0, decision_timestamp=stale)
+
+    response = client.get("/api/v1/admin/market-intelligence/decision-intelligence?within_hours=72")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_symbols_evaluated"] == 0
+    assert body["decision_distribution"] == []
+
+
+def test_decision_intelligence_top_opportunities_are_sorted_by_confidence_not_alphabetically(
+    client, session_factory, as_staff
+):
+    _seed_decision_v2(session_factory, "9999", "BUY_CANDIDATE", 60.0)
+    _seed_decision_v2(session_factory, "1111", "STRONG_BUY_CANDIDATE", 95.0)
+    _seed_decision_v2(session_factory, "5555", "BUY_CANDIDATE", 80.0)
+    _seed_decision_v2(session_factory, "2222", "HOLD", 99.0)  # not a buy decision -- must be excluded
+
+    response = client.get("/api/v1/admin/market-intelligence/decision-intelligence")
+
+    assert response.status_code == 200
+    top = response.json()["top_opportunities"]
+    assert [row["symbol"] for row in top] == ["1111", "5555", "9999"]
+    assert [row["confidence_score"] for row in top] == [95.0, 80.0, 60.0]
+
+
+def test_decision_intelligence_reports_real_rejection_reasons_from_gates(client, session_factory, as_staff):
+    _seed_decision_v2(
+        session_factory,
+        "2222",
+        "REJECT",
+        20.0,
+        gates=[
+            {"name": "min_liquidity", "status": "FAIL", "passed": False, "detail": "low volume", "blocking": True},
+            {"name": "real_data_source", "status": "PASS", "passed": True, "detail": "ok", "blocking": True},
+        ],
+    )
+    _seed_decision_v2(
+        session_factory,
+        "1120",
+        "INSUFFICIENT_DATA",
+        10.0,
+        gates=[
+            {"name": "min_liquidity", "status": "FAIL", "passed": False, "detail": "low volume", "blocking": True},
+            {"name": "min_candles", "status": "FAIL", "passed": False, "detail": "too few bars", "blocking": True},
+        ],
+    )
+
+    response = client.get("/api/v1/admin/market-intelligence/decision-intelligence")
+
+    assert response.status_code == 200
+    body = response.json()
+    reasons = {row["gate_name"]: row["fail_count"] for row in body["rejection_reason_counts"]}
+    assert reasons == {"min_liquidity": 2, "min_candles": 1}
+    rejected_symbols = {row["symbol"]: row["failed_gate_names"] for row in body["rejected_opportunities"]}
+    assert rejected_symbols["2222"] == ["min_liquidity"]
+    assert set(rejected_symbols["1120"]) == {"min_liquidity", "min_candles"}
+
+
+def test_decision_intelligence_sector_ranking_reflects_real_average_confidence(client, session_factory, as_staff):
+    _seed_decision_v2(session_factory, "2222", "STRONG_BUY_CANDIDATE", 90.0, sector_ar="الطاقة")
+    _seed_decision_v2(session_factory, "1120", "BUY_CANDIDATE", 70.0, sector_ar="البنوك")
+    _seed_decision_v2(session_factory, "1180", "HOLD", 50.0, sector_ar="البنوك")
+
+    response = client.get("/api/v1/admin/market-intelligence/decision-intelligence")
+
+    assert response.status_code == 200
+    ranking = {row["sector_ar"]: row for row in response.json()["sector_ranking"]}
+    assert ranking["الطاقة"]["symbols_evaluated"] == 1
+    assert ranking["الطاقة"]["average_confidence"] == pytest.approx(90.0)
+    assert ranking["الطاقة"]["buy_candidate_count"] == 1
+    assert ranking["البنوك"]["symbols_evaluated"] == 2
+    assert ranking["البنوك"]["average_confidence"] == pytest.approx(60.0)
+    assert ranking["البنوك"]["buy_candidate_count"] == 1
+    # Must be ranked by confidence -- never alphabetically.
+    ranking_order = [row["sector_ar"] for row in response.json()["sector_ranking"]]
+    assert ranking_order == ["الطاقة", "البنوك"]
+
+
+def test_decision_intelligence_handles_an_entirely_empty_database(client, session_factory, as_staff):
+    response = client.get("/api/v1/admin/market-intelligence/decision-intelligence")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_symbols_evaluated"] == 0
+    assert body["decision_distribution"] == []
+    assert body["confidence_buckets"] == []
+    assert body["risk_distribution"] == []
+    assert body["top_opportunities"] == []
+    assert body["rejected_opportunities"] == []
+    assert body["rejection_reason_counts"] == []
+    assert body["sector_ranking"] == []

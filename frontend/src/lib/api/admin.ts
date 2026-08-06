@@ -9,6 +9,7 @@ import type {
   AnnouncementList,
   Announcement,
   AuditLogList,
+  DecisionIntelligence,
   FeatureFlag,
   FeatureFlagList,
   StaffRoleValue,
@@ -132,4 +133,10 @@ export function getAIUsageSummary(): Promise<AIUsageSummary> {
 
 export function getAnalytics(): Promise<Analytics> {
   return apiFetch<Analytics>("/api/v1/admin/analytics");
+}
+
+export function getDecisionIntelligence(withinHours = 72): Promise<DecisionIntelligence> {
+  return apiFetch<DecisionIntelligence>(
+    `/api/v1/admin/market-intelligence/decision-intelligence?within_hours=${withinHours}`
+  );
 }

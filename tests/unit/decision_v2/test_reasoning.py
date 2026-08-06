@@ -5,6 +5,7 @@ from src.analysis.decision_v2.reasoning import (
     build_decision_summary,
     build_entry_confirmation_conditions,
     build_watch_next_session,
+    build_why_not_buy_reasons,
     build_why_not_stronger,
     build_why_now,
     confidence_breakdown,
@@ -73,6 +74,41 @@ class TestBuildWhyNotStronger:
     def test_generic_sentence_when_nothing_failed_or_warned(self):
         text = build_why_not_stronger(Decision.BUY_CANDIDATE, [], [])
         assert text != ""
+
+
+class TestBuildWhyNotBuyReasons:
+    def test_empty_for_buy_side_decisions(self):
+        assert build_why_not_buy_reasons(Decision.STRONG_BUY_CANDIDATE, ["سبب"], []) == []
+        assert build_why_not_buy_reasons(Decision.BUY_CANDIDATE, ["سبب"], []) == []
+
+    def test_includes_real_failed_blocking_gate_details(self):
+        gates = [
+            GateOutcome(name="min_liquidity", status=GateStatus.FAIL, detail="سيولة غير كافية", blocking=True),
+            GateOutcome(name="real_data_source", status=GateStatus.PASS, detail="ok", blocking=True),
+        ]
+        reasons = build_why_not_buy_reasons(Decision.REJECT, [], gates)
+        assert reasons == ["سيولة غير كافية"]
+
+    def test_never_counts_a_non_blocking_failed_gate(self):
+        gates = [GateOutcome(name="news_conflict", status=GateStatus.FAIL, detail="تحذير فقط", blocking=False)]
+        reasons = build_why_not_buy_reasons(Decision.WATCH, [], gates)
+        assert "تحذير فقط" not in reasons
+
+    def test_includes_negative_reasons_after_gate_failures_deduplicated(self):
+        gates = [GateOutcome(name="g", status=GateStatus.FAIL, detail="سبب مشترك", blocking=True)]
+        reasons = build_why_not_buy_reasons(Decision.HOLD, ["سبب مشترك", "سبب آخر"], gates)
+        assert reasons == ["سبب مشترك", "سبب آخر"]
+
+    def test_falls_back_to_a_generic_sentence_when_nothing_failed(self):
+        reasons = build_why_not_buy_reasons(Decision.WATCH, [], [])
+        assert len(reasons) == 1 and reasons[0] != ""
+
+    def test_caps_at_four_reasons(self):
+        gates = [
+            GateOutcome(name=f"g{i}", status=GateStatus.FAIL, detail=f"سبب {i}", blocking=True) for i in range(6)
+        ]
+        reasons = build_why_not_buy_reasons(Decision.REJECT, [], gates)
+        assert len(reasons) == 4
 
 
 class TestBuildEntryConfirmationConditions:

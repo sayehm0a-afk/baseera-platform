@@ -32,7 +32,7 @@ application code.
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -100,6 +100,88 @@ class DecisionV2Snapshot(Base):
     scan_run_id = Column(Integer, nullable=True)
 
     requested_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    # ======================================================================
+    # Phase 2A/2C canonical extensions -- every field `DecisionResult`
+    # (src.analysis.decision_v2.types) carries beyond the base columns
+    # above. Previously computed by DecisionEngineV2 and returned to the
+    # caller but never persisted here, so a stored snapshot could not
+    # fully reproduce what the user actually saw. All nullable: rows
+    # written before this migration, or a future field DecisionResult
+    # doesn't populate, must not break inserts or reads.
+    # ======================================================================
+    is_real_data = Column(Boolean, nullable=True)
+    quote_timestamp = Column(DateTime(timezone=True), nullable=True)
+
+    technical_confidence = Column(Numeric(6, 2), nullable=True)
+    momentum_confidence = Column(Numeric(6, 2), nullable=True)
+    liquidity_confidence = Column(Numeric(6, 2), nullable=True)
+    market_context_confidence = Column(Numeric(6, 2), nullable=True)
+    data_quality_confidence = Column(Numeric(6, 2), nullable=True)
+
+    trade_type = Column(String(32), nullable=True)
+    trade_type_label_ar = Column(String(64), nullable=True)
+    time_horizon_rationale_ar = Column(Text, nullable=True)
+
+    best_entry_price = Column(Numeric(18, 4), nullable=True)
+    accumulation_zone_low = Column(Numeric(18, 4), nullable=True)
+    accumulation_zone_high = Column(Numeric(18, 4), nullable=True)
+    entry_quality = Column(String(16), nullable=True)
+    entry_quality_label_ar = Column(String(32), nullable=True)
+    entry_status = Column(String(32), nullable=True)
+    entry_status_label_ar = Column(String(64), nullable=True)
+
+    invalidation_price = Column(Numeric(18, 4), nullable=True)
+    risk_level = Column(String(16), nullable=True)
+    risk_level_label_ar = Column(String(32), nullable=True)
+
+    estimated_days_target_1 = Column(Integer, nullable=True)
+    estimated_days_target_2 = Column(Integer, nullable=True)
+    estimated_days_target_3 = Column(Integer, nullable=True)
+
+    nearest_support = Column(Numeric(18, 4), nullable=True)
+    major_support = Column(Numeric(18, 4), nullable=True)
+    nearest_resistance = Column(Numeric(18, 4), nullable=True)
+    major_resistance = Column(Numeric(18, 4), nullable=True)
+    breakout_level = Column(Numeric(18, 4), nullable=True)
+    breakdown_level = Column(Numeric(18, 4), nullable=True)
+    support_resistance_evidence_ar = Column(Text, nullable=True)
+
+    current_volume = Column(Numeric(20, 2), nullable=True)
+    average_volume = Column(Numeric(20, 2), nullable=True)
+    relative_volume = Column(Numeric(9, 4), nullable=True)
+    liquidity_quality_ar = Column(String(32), nullable=True)
+    accumulation_score = Column(Numeric(6, 2), nullable=True)
+    accumulation_assessment_ar = Column(Text, nullable=True)
+    volume_confirms_decision = Column(Boolean, nullable=True)
+    abnormal_volume = Column(Boolean, nullable=True)
+
+    technical_evidence = Column(JSON, nullable=True)
+    trend_direction_ar = Column(String(32), nullable=True)
+    trend_strength_label_ar = Column(String(32), nullable=True)
+
+    decision_summary_ar = Column(Text, nullable=True)
+    why_now_ar = Column(Text, nullable=True)
+    why_not_stronger_ar = Column(Text, nullable=True)
+    why_not_buy_reasons = Column(JSON, nullable=True)
+    entry_confirmation_conditions_ar = Column(JSON, nullable=True)
+    watch_next_session_ar = Column(JSON, nullable=True)
+
+    market_risk_state = Column(String(32), nullable=True)
+    market_risk_label_ar = Column(String(64), nullable=True)
+    market_risk_basis_ar = Column(Text, nullable=True)
+    market_risk_entry_permitted = Column(Boolean, nullable=True)
+    market_risk_is_live = Column(Boolean, nullable=True)
+    market_breadth_buy_count = Column(Integer, nullable=True)
+    market_breadth_sell_count = Column(Integer, nullable=True)
+    market_breadth_symbols_scanned = Column(Integer, nullable=True)
+    market_breadth_average_confidence = Column(Numeric(6, 2), nullable=True)
+
+    fundamental_summary = Column(JSON, nullable=True)
+    fundamental_summary_ar = Column(Text, nullable=True)
+
+    news_impact = Column(String(32), nullable=True)
+    news_impact_summary_ar = Column(Text, nullable=True)
 
     created_at = Column(
         DateTime(timezone=True),

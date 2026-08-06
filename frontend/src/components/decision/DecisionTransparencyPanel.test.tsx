@@ -120,6 +120,9 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
     decision_summary_ar: "مراقبة -- بثقة 66٪، مصنّف كـ«مضاربة أسبوعية».",
     why_now_ar: "السهم يستحق المتابعة لكن الأدلة الحالية غير كافية لاتخاذ قرار دخول.",
     why_not_stronger_ar: "لم يتحقق قرار أقوى بسبب: نسبة العائد إلى المخاطرة غير كافية.",
+    why_not_buy_reasons: [],
+    fundamental_summary: {},
+    fundamental_summary_ar: "",
     entry_confirmation_conditions_ar: ["اختراق حقيقي لمستوى 27.90 مدعوم بحجم تداول أعلى من المتوسط يعزز الفرضية."],
     watch_next_session_ar: ["رد فعل السعر عند مستوى المقاومة القريب (27.90)."],
     market_risk_state: "NEUTRAL",
@@ -237,6 +240,23 @@ describe("DecisionTransparencyPanel", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(7);
   });
 
+  it("renders the fundamental summary sentence when present", () => {
+    render(
+      <DecisionTransparencyPanel
+        decision={buildDecision({
+          fundamental_summary_ar: "الإيرادات في اتجاه تصاعدي واضح (+12.0%).",
+        })}
+      />
+    );
+    expect(screen.getByText("الملخص المالي الأساسي")).toBeInTheDocument();
+    expect(screen.getByText("الإيرادات في اتجاه تصاعدي واضح (+12.0%).")).toBeInTheDocument();
+  });
+
+  it("omits the fundamental summary section when unavailable", () => {
+    render(<DecisionTransparencyPanel decision={buildDecision({ fundamental_summary_ar: "" })} />);
+    expect(screen.queryByText("الملخص المالي الأساسي")).not.toBeInTheDocument();
+  });
+
   it("degrades sensibly for a REJECT decision with no opportunity at all", () => {
     /** 'no opportunity' is a valid, real result -- every list-backed
      * section (confirmation conditions, watch-next-session) must be
@@ -250,6 +270,7 @@ describe("DecisionTransparencyPanel", () => {
           entry_status: "NOT_SUITABLE",
           entry_status_label_ar: "غير مناسب",
           why_not_stronger_ar: "تم الرفض بسبب فشل بوابة نشر إلزامية: عدم كفاية بيانات السيولة.",
+          why_not_buy_reasons: ["عدم كفاية بيانات السيولة"],
           entry_confirmation_conditions_ar: [],
           watch_next_session_ar: [],
           invalidation_conditions: [],
@@ -259,7 +280,24 @@ describe("DecisionTransparencyPanel", () => {
     expect(
       screen.getByText("تم الرفض بسبب فشل بوابة نشر إلزامية: عدم كفاية بيانات السيولة.")
     ).toBeInTheDocument();
+    expect(screen.getByText("لماذا ليست هذه فرصة شراء؟")).toBeInTheDocument();
+    expect(screen.getByText("• عدم كفاية بيانات السيولة")).toBeInTheDocument();
     expect(screen.queryByText("شروط تأكيد الدخول")).not.toBeInTheDocument();
     expect(screen.queryByText("ما يجب مراقبته في الجلسة القادمة")).not.toBeInTheDocument();
+  });
+
+  it("omits the why-not-buy section for a genuine buy-side decision", () => {
+    render(
+      <DecisionTransparencyPanel
+        decision={buildDecision({
+          decision: "BUY_CANDIDATE",
+          decision_label_ar: "شراء",
+          why_not_buy_reasons: [],
+    fundamental_summary: {},
+    fundamental_summary_ar: "",
+        })}
+      />
+    );
+    expect(screen.queryByText("لماذا ليست هذه فرصة شراء؟")).not.toBeInTheDocument();
   });
 });

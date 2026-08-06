@@ -12,6 +12,8 @@ from typing import Optional
 
 from src.analysis.decision.types import EntryQuality, InvestmentDecision
 from src.analysis.decision_v2 import evidence, reasoning, scoring, structure, trade_classification
+from src.analysis.decision_v2.fundamental_summary import build_fundamental_summary
+from src.analysis.decision_v2.news_impact import build_news_impact
 from src.analysis.decision_v2.config import DecisionV2Tuning
 from src.analysis.decision_v2.gates import GateInputs, evaluate_decision
 from src.analysis.decision_v2.market_risk import classify_market_risk
@@ -294,6 +296,11 @@ class DecisionEngineV2:
         decision_summary_ar = reasoning.build_decision_summary(decision_label_ar, confidence, trade_type_label_ar)
         why_now_ar = reasoning.build_why_now(evaluation.decision, positive_reasons, entry_status_label_ar)
         why_not_stronger_ar = reasoning.build_why_not_stronger(evaluation.decision, evaluation.gates, warnings)
+        why_not_buy_reasons = reasoning.build_why_not_buy_reasons(
+            evaluation.decision, negative_reasons, evaluation.gates
+        )
+        fundamental_summary, fundamental_summary_ar = build_fundamental_summary(context.fundamental_result)
+        news_impact, news_impact_summary_ar = build_news_impact(context.extra.get("news_sentiment"))
         entry_confirmation_conditions_ar = reasoning.build_entry_confirmation_conditions(
             evaluation.decision, entry_status, sr_evidence.nearest_resistance, entry_high
         )
@@ -402,6 +409,7 @@ class DecisionEngineV2:
             decision_summary_ar=decision_summary_ar,
             why_now_ar=why_now_ar,
             why_not_stronger_ar=why_not_stronger_ar,
+            why_not_buy_reasons=why_not_buy_reasons,
             entry_confirmation_conditions_ar=entry_confirmation_conditions_ar,
             watch_next_session_ar=watch_next_session_ar,
             # --- Phase 2C: market risk -----------------------------------
@@ -410,6 +418,10 @@ class DecisionEngineV2:
             market_risk_basis_ar=market_risk.basis_ar,
             market_risk_entry_permitted=market_risk.entry_permitted,
             market_risk_is_live=market_risk.is_live,
+            fundamental_summary=fundamental_summary,
+            fundamental_summary_ar=fundamental_summary_ar,
+            news_impact=news_impact,
+            news_impact_summary_ar=news_impact_summary_ar,
             market_breadth_buy_count=market_risk.buy_count,
             market_breadth_sell_count=market_risk.sell_count,
             market_breadth_symbols_scanned=market_risk.symbols_scanned,
