@@ -185,6 +185,57 @@ class GateOutcomeOut(BaseModel):
     blocking: bool
 
 
+class CommitteeAgentOpinionOut(BaseModel):
+    """One Investment Committee agent's structured verdict -- see
+    src.ai_evolution.committee.agents for exactly how each field is
+    derived from real, already-computed Decision Engine V2 data."""
+
+    agent_name: str
+    role: str
+    stance: str
+    confidence: float
+    reasoning: str
+    evidence: List[str] = []
+    rejection_reasons: List[str] = []
+    used_llm: bool = False
+
+
+class RejectedAlternativeOut(BaseModel):
+    agent_name: str
+    role: str
+    stance: str
+    confidence: float
+    reasoning: str
+    rejection_reason: str
+
+
+class CommitteeConsensusOut(BaseModel):
+    """The Consensus Engine's full output -- see
+    src.ai_evolution.committee.consensus.build_consensus. Present only
+    when the committee actually ran (best-effort, alongside the
+    DecisionV2Snapshot audit row -- see the /decision-v2 route's own
+    docstring)."""
+
+    final_decision: str
+    final_confidence: float
+
+    participant_count: int
+    directional_count: int
+    agreement_pct: float
+    disagreement_pct: float
+    disagreement_score: float
+
+    most_optimistic_agent: Optional[str] = None
+    most_optimistic_stance: Optional[str] = None
+    most_conservative_agent: Optional[str] = None
+    most_conservative_stance: Optional[str] = None
+
+    consensus_reasoning_ar: str
+    rejected_alternatives: List[RejectedAlternativeOut] = []
+    weighted_votes: Dict[str, float] = {}
+    opinions: List[CommitteeAgentOpinionOut] = []
+
+
 class DecisionV2Out(BaseModel):
     """Decision Engine V2's Arabic-labeled, gate-checked action for one
     symbol -- see src/analysis/decision_v2/ for the full engine. Every
@@ -335,6 +386,12 @@ class DecisionV2Out(BaseModel):
     # src.analysis.decision_v2.news_impact), never fabricated.
     news_impact: str = "NO_RELEVANT_NEWS"
     news_impact_summary_ar: str = "لا توجد أخبار محلَّلة حديثة ذات صلة بهذا السهم."
+
+    # AI Multi-Agent Investment Committee -- present only on a
+    # successful, best-effort committee run (see
+    # src.ai_evolution.committee.orchestrator). `None` when the
+    # committee could not run (never a fabricated consensus).
+    committee: Optional[CommitteeConsensusOut] = None
 
 
 class AnalystReportOut(BaseModel):

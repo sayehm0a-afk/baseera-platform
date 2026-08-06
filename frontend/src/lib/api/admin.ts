@@ -9,6 +9,9 @@ import type {
   AnnouncementList,
   Announcement,
   AuditLogList,
+  CommitteeSessionDetail,
+  CommitteeSessionList,
+  CommitteeStats,
   DecisionIntelligence,
   FeatureFlag,
   FeatureFlagList,
@@ -139,4 +142,20 @@ export function getDecisionIntelligence(withinHours = 72): Promise<DecisionIntel
   return apiFetch<DecisionIntelligence>(
     `/api/v1/admin/market-intelligence/decision-intelligence?within_hours=${withinHours}`
   );
+}
+
+/** AI Multi-Agent Investment Committee -- direct, unmodified calls to
+ * the staff-gated /api/v1/admin/investment-committee/* routes. */
+export function listCommitteeSessions(symbol?: string, limit = 20): Promise<CommitteeSessionList> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (symbol && symbol.trim()) params.set("symbol", symbol.trim());
+  return apiFetch<CommitteeSessionList>(`/api/v1/admin/investment-committee/sessions?${params.toString()}`);
+}
+
+export function getCommitteeSession(sessionId: number): Promise<CommitteeSessionDetail> {
+  return apiFetch<CommitteeSessionDetail>(`/api/v1/admin/investment-committee/sessions/${sessionId}`);
+}
+
+export function getCommitteeStats(withinHours = 72): Promise<CommitteeStats> {
+  return apiFetch<CommitteeStats>(`/api/v1/admin/investment-committee/stats?within_hours=${withinHours}`);
 }

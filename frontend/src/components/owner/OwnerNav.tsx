@@ -19,6 +19,7 @@ const LINKS: { href: string; label: string }[] = [
   { href: "/owner/analytics", label: "التحليلات" },
   { href: "/owner/ai-usage", label: "استخدام الذكاء الاصطناعي" },
   { href: "/owner/decision-intelligence", label: "ذكاء القرار" },
+  { href: "/owner/investment-committee", label: "لجنة الاستثمار" },
 ];
 
 export function OwnerNav() {
