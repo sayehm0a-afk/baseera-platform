@@ -55,24 +55,28 @@ jobs:
       - name: Redeploy backend so it picks up the new variable (same as deploy-railway.yml)
         run: railway up --service "$RAILWAY_BACKEND_SERVICE" --detach
 
-      - name: Wait for backend to become healthy again
+      - name: Wait for the new deployment to actually roll out
+        run: |
+          # `railway up --detach` only enqueues the build and returns in
+          # ~1s; /health/live keeps returning 200 from the OLD, still-
+          # serving container throughout the build+rollout window
+          # (Railway's zero-downtime cutover), so a health-check loop
+          # started immediately after `--detach` reports "healthy"
+          # against the wrong instance (confirmed: run 31084423921
+          # dispatched the diagnostic scan 3s after `--detach` and it
+          # still saw the pre-fix, default 4h threshold). Wait on real
+          # elapsed wall-clock time instead -- this session's own
+          # deploy-railway.yml dispatches have consistently taken
+          # 1-3 minutes to go from `railway up` to new code actually
+          # serving.
+          echo "Waiting 150s for the build+rollout to complete..."
+          sleep 150
+
+      - name: Confirm backend is reachable post-rollout
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
         run: |
-          echo "Polling $BACKEND_URL/health/live ..."
-          for i in $(seq 1 20); do
-            CODE=$(curl -sS --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
-            echo "attempt $i: HTTP $CODE"
-            if [ "$CODE" = "200" ]; then
-              echo "Backend healthy."
-              break
-            fi
-            if [ "$i" = "20" ]; then
-              echo "::error::Backend did not become healthy in time."
-              exit 1
-            fi
-            sleep 5
-          done
+          curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live"
 
       - name: Log in as the staff account
         id: login
