@@ -224,6 +224,7 @@ class DiagnosticScanOut(BaseModel):
     sahmk_key_present: bool
     run_id: Optional[int] = None
     run_status: Optional[str] = None
+    run_error_summary: Optional[str] = None
     symbols_requested: int = 0
     symbols_succeeded: int = 0
     symbols_failed: int = 0
