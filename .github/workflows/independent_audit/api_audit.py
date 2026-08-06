@@ -259,6 +259,62 @@ record("GET /auth/me/export (staff, data-export feature)", "PASS" if export_has_
        f"status={code}, len={len(getattr(r, 'text', ''))}")
 
 # ---------------------------------------------------------------------------
+# 3b. NEW: admin verify-email endpoint (the actual code path added as the
+#     fix for "no rescue path when SMTP isn't configured") -- exercised
+#     directly, independent of whether the log-token-recovery path in
+#     section 2 happened to find a token this run.
+# ---------------------------------------------------------------------------
+print("\n=== 3b. Admin verify-email endpoint (real rescue path) ===")
+rescue_unique = uuid.uuid4().hex[:12]
+rescue_email = f"basirah-audit-rescue-{rescue_unique}@example.com"
+rescue_password = "AuditP@ssw0rd123"
+
+rescue_reg = requests.Session()
+r = call(rescue_reg, "POST", "/api/v1/auth/register",
+         json={"email": rescue_email, "password": rescue_password, "full_name": "Audit Rescue Bot"})
+code = getattr(r, "status_code", None)
+rescue_user_id = None
+if isinstance(r, requests.Response) and code == 201:
+    rescue_user_id = r.json().get("id")
+record("POST /auth/register (second throwaway user, for admin rescue test)",
+       "PASS" if code == 201 and rescue_user_id else "FAIL", f"status={code}, id={rescue_user_id}")
+
+if rescue_user_id:
+    # Confirm the account is genuinely unverified and genuinely blocked
+    # before the admin acts on it -- otherwise the "fix" test proves nothing.
+    r = call(rescue_reg, "POST", "/api/v1/auth/login", json={"email": rescue_email, "password": rescue_password})
+    code = getattr(r, "status_code", None)
+    record("Login blocked before admin verifies (baseline)", "PASS" if code in (401, 403) else "FAIL",
+           f"status={code}")
+
+    r = call(staff, "POST", f"/api/v1/admin/users/{rescue_user_id}/verify-email", csrf=staff_csrf)
+    code = getattr(r, "status_code", None)
+    verified_flag = isinstance(r, requests.Response) and code == 200 and r.json().get("is_email_verified") is True
+    record("POST /admin/users/{id}/verify-email (staff)", "PASS" if verified_flag else "FAIL",
+           f"status={code}, body={getattr(r, 'text', '')[:300]}")
+
+    r = call(rescue_reg, "POST", "/api/v1/auth/login", json={"email": rescue_email, "password": rescue_password})
+    code = getattr(r, "status_code", None)
+    record("Login succeeds after admin rescue verification (the actual fix, end to end)",
+           "PASS" if code == 200 else "FAIL", f"status={code}")
+
+    # Idempotency + audit trail sanity: calling it again on an already-
+    # verified user should still succeed cleanly, not error.
+    r = call(staff, "POST", f"/api/v1/admin/users/{rescue_user_id}/verify-email", csrf=staff_csrf)
+    code = getattr(r, "status_code", None)
+    record("POST /admin/users/{id}/verify-email is idempotent on an already-verified user",
+           "PASS" if code == 200 else "FAIL", f"status={code}")
+
+    # A non-staff caller must not be able to reach this route -- use the
+    # rescue user's own now-authenticated (non-staff) session.
+    r = call(rescue_reg, "POST", f"/api/v1/admin/users/{rescue_user_id}/verify-email")
+    code = getattr(r, "status_code", None)
+    record("POST /admin/users/{id}/verify-email rejects a non-staff caller",
+           "PASS" if code in (401, 403) else "FAIL", f"status={code}")
+else:
+    record("Admin verify-email rescue-path test", "WARN", "skipped -- could not register the throwaway user")
+
+# ---------------------------------------------------------------------------
 # 4. Customer-facing surface, exercised as staff (auth-satisfied, sub-
 #    scription-bypassed identically to how a paying customer would see it)
 # ---------------------------------------------------------------------------
