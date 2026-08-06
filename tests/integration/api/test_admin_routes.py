@@ -143,6 +143,45 @@ def test_list_and_get_user(client, admin, customer):
     assert response.json()["email"] == "customer@example.com"
 
 
+def test_list_users_search_by_email_substring(client, session, admin, customer):
+    _as(admin)
+    session.add(User(email="another-customer@example.com", password_hash="hashed"))
+    session.commit()
+
+    response = client.get("/api/v1/admin/users", params={"q": "customer@example.com"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    emails = {u["email"] for u in body["users"]}
+    assert emails == {"customer@example.com", "another-customer@example.com"}
+
+
+def test_list_users_search_by_full_name_case_insensitive(client, session, admin):
+    session.add(User(email="ahmed@example.com", password_hash="hashed", full_name="Ahmed Al-Otaibi"))
+    session.commit()
+    _as(admin)
+
+    response = client.get("/api/v1/admin/users", params={"q": "otaibi"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["users"][0]["email"] == "ahmed@example.com"
+
+
+def test_list_users_search_no_match_returns_empty_not_error(client, admin, customer):
+    _as(admin)
+    response = client.get("/api/v1/admin/users", params={"q": "no-such-user-at-all"})
+    assert response.status_code == 200
+    assert response.json() == {"total": 0, "users": []}
+
+
+def test_list_users_without_q_is_unaffected(client, admin, customer):
+    _as(admin)
+    response = client.get("/api/v1/admin/users")
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+
+
 def test_get_unknown_user_404s(client, admin):
     _as(admin)
     response = client.get("/api/v1/admin/users/999999")
