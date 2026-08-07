@@ -137,22 +137,22 @@ jobs:
             -o /tmp/rankings.json -w "\nHTTP %{http_code}\n"
           echo "=== Rankings (truncated) ==="
           python3 -c "
-import json
-d = json.load(open('/tmp/rankings.json'))
-seen_sectors = {}
-for rl in d.get('rankings', []):
-    for e in rl.get('entries', []):
-        sec = e.get('sector') or 'UNKNOWN'
-        if sec not in seen_sectors:
-            seen_sectors[sec] = e['symbol']
-        if len(seen_sectors) >= 8:
-            break
-symbols = list(seen_sectors.values())[:5]
-print('Discovered sector->symbol map:', seen_sectors)
-print('Selected symbols:', symbols)
-with open('/tmp/selected_symbols.json', 'w') as f:
-    json.dump(symbols, f)
-"
+          import json
+          d = json.load(open('/tmp/rankings.json'))
+          seen_sectors = {}
+          for rl in d.get('rankings', []):
+              for e in rl.get('entries', []):
+                  sec = e.get('sector') or 'UNKNOWN'
+                  if sec not in seen_sectors:
+                      seen_sectors[sec] = e['symbol']
+                  if len(seen_sectors) >= 8:
+                      break
+          symbols = list(seen_sectors.values())[:5]
+          print('Discovered sector->symbol map:', seen_sectors)
+          print('Selected symbols:', symbols)
+          with open('/tmp/selected_symbols.json', 'w') as f:
+              json.dump(symbols, f)
+          "
           SYMS=$(python3 -c "import json; print(','.join(json.load(open('/tmp/selected_symbols.json'))))")
           echo "symbols=$SYMS" >> "$GITHUB_OUTPUT"
           echo "Selected: $SYMS"
@@ -174,23 +174,23 @@ with open('/tmp/selected_symbols.json', 'w') as f:
               "$BACKEND_URL/api/v1/stocks/$SYM/decision-v2" \
               -o "/tmp/decisions/$SYM.json" -w "\nHTTP %{http_code}\n"
             python3 -c "
-import json, sys
-try:
-    d = json.load(open('/tmp/decisions/$SYM.json'))
-except Exception as e:
-    print('Could not parse response for $SYM:', e); sys.exit(0)
-print('symbol:', d.get('symbol'), '| company_name_ar:', d.get('company_name_ar'), '| decision:', d.get('decision'), '| confidence:', d.get('confidence_score'))
-c = d.get('committee')
-if c is None:
-    print('  committee: NONE (best-effort persistence may have failed or gate rejected before snapshot)')
-else:
-    print('  committee.final_decision:', c.get('final_decision'), '| final_confidence:', c.get('final_confidence'))
-    print('  committee.agreement_pct:', c.get('agreement_pct'), '| disagreement_pct:', c.get('disagreement_pct'))
-    print('  committee.most_optimistic_agent:', c.get('most_optimistic_agent'), '| most_conservative_agent:', c.get('most_conservative_agent'))
-    print('  committee.opinions count:', len(c.get('opinions', [])))
-    for op in c.get('opinions', []):
-        print('    -', op.get('role'), op.get('stance'), op.get('confidence'))
-"
+          import json, sys
+          try:
+              d = json.load(open('/tmp/decisions/$SYM.json'))
+          except Exception as e:
+              print('Could not parse response for $SYM:', e); sys.exit(0)
+          print('symbol:', d.get('symbol'), '| company_name_ar:', d.get('company_name_ar'), '| decision:', d.get('decision'), '| confidence:', d.get('confidence_score'))
+          c = d.get('committee')
+          if c is None:
+              print('  committee: NONE (best-effort persistence may have failed or gate rejected before snapshot)')
+          else:
+              print('  committee.final_decision:', c.get('final_decision'), '| final_confidence:', c.get('final_confidence'))
+              print('  committee.agreement_pct:', c.get('agreement_pct'), '| disagreement_pct:', c.get('disagreement_pct'))
+              print('  committee.most_optimistic_agent:', c.get('most_optimistic_agent'), '| most_conservative_agent:', c.get('most_conservative_agent'))
+              print('  committee.opinions count:', len(c.get('opinions', [])))
+              for op in c.get('opinions', []):
+                  print('    -', op.get('role'), op.get('stance'), op.get('confidence'))
+          "
           done
 
       - name: Confirm real committee sessions persisted (admin dashboard)
@@ -347,38 +347,38 @@ else:
         run: |
           mkdir -p /tmp/screenshots
           python3 - "$FRONTEND_URL" <<'PYEOF'
-import sys
-from playwright.sync_api import sync_playwright
+          import sys
+          from playwright.sync_api import sync_playwright
 
-frontend_url = sys.argv[1]
-viewports = {
-    "iphone_se": {"width": 375, "height": 667},
-    "iphone_14_pro_max": {"width": 430, "height": 932},
-    "desktop": {"width": 1440, "height": 900},
-}
-pages = ["/", "/login", "/register", "/dashboard", "/owner/investment-committee"]
+          frontend_url = sys.argv[1]
+          viewports = {
+              "iphone_se": {"width": 375, "height": 667},
+              "iphone_14_pro_max": {"width": 430, "height": 932},
+              "desktop": {"width": 1440, "height": 900},
+          }
+          pages = ["/", "/login", "/register", "/dashboard", "/owner/investment-committee"]
 
-with sync_playwright() as p:
-    browser = p.chromium.launch()
-    for vp_name, vp in viewports.items():
-        context = browser.new_context(viewport=vp, locale="ar-SA")
-        page = context.new_page()
-        for path in pages:
-            safe_name = path.strip("/").replace("/", "_") or "home"
-            try:
-                page.goto(frontend_url + path, wait_until="networkidle", timeout=20000)
-                page.wait_for_timeout(1000)
-                dir_attr = page.evaluate("document.documentElement.getAttribute('dir')")
-                scroll_width = page.evaluate("document.documentElement.scrollWidth")
-                client_width = page.evaluate("document.documentElement.clientWidth")
-                overflow = scroll_width - client_width
-                print(f"[{vp_name}] {path}: dir={dir_attr} scrollWidth={scroll_width} clientWidth={client_width} overflow_px={overflow}")
-                page.screenshot(path=f"/tmp/screenshots/{vp_name}__{safe_name}.png", full_page=True)
-            except Exception as e:
-                print(f"[{vp_name}] {path}: FAILED -- {e}")
-        context.close()
-    browser.close()
-PYEOF
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              for vp_name, vp in viewports.items():
+                  context = browser.new_context(viewport=vp, locale="ar-SA")
+                  page = context.new_page()
+                  for path in pages:
+                      safe_name = path.strip("/").replace("/", "_") or "home"
+                      try:
+                          page.goto(frontend_url + path, wait_until="networkidle", timeout=20000)
+                          page.wait_for_timeout(1000)
+                          dir_attr = page.evaluate("document.documentElement.getAttribute('dir')")
+                          scroll_width = page.evaluate("document.documentElement.scrollWidth")
+                          client_width = page.evaluate("document.documentElement.clientWidth")
+                          overflow = scroll_width - client_width
+                          print(f"[{vp_name}] {path}: dir={dir_attr} scrollWidth={scroll_width} clientWidth={client_width} overflow_px={overflow}")
+                          page.screenshot(path=f"/tmp/screenshots/{vp_name}__{safe_name}.png", full_page=True)
+                      except Exception as e:
+                          print(f"[{vp_name}] {path}: FAILED -- {e}")
+                  context.close()
+              browser.close()
+          PYEOF
           ls -la /tmp/screenshots
 
       - name: Upload evidence artifacts
