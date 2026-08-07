@@ -224,11 +224,11 @@ jobs:
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
         run: |
-          for PATH in "/api/v1/admin/investment-committee/sessions" "/api/v1/admin/investment-committee/stats" "/api/v1/admin/system/summary" "/api/v1/admin/market-intelligence/coverage"; do
-            CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL$PATH")
-            echo "Unauthenticated GET $PATH -> HTTP $CODE"
+          for ROUTE_PATH in "/api/v1/admin/investment-committee/sessions" "/api/v1/admin/investment-committee/stats" "/api/v1/admin/system/summary" "/api/v1/admin/market-intelligence/coverage"; do
+            CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL$ROUTE_PATH")
+            echo "Unauthenticated GET $ROUTE_PATH -> HTTP $CODE"
             if [ "$CODE" != "401" ] && [ "$CODE" != "403" ]; then
-              echo "::error::Expected 401/403 for unauthenticated access to $PATH, got $CODE"
+              echo "::error::Expected 401/403 for unauthenticated access to $ROUTE_PATH, got $CODE"
               exit 1
             fi
           done
