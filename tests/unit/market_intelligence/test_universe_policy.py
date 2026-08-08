@@ -53,6 +53,29 @@ class TestEligibleCommonEquity:
         assert result.classifications[0].eligible is True
         assert result.classifications[0].bucket == "NOMU_EQUITY"
 
+    def test_real_sahmk_tasi_equity_is_confidently_classified_main_market(self):
+        """Regression for the real production evidence (2026-08-08
+        universe-diagnostics run): SAHMK's live security_type/
+        market_segment values are literally "Equity"/"TASI", not the
+        originally-guessed "Common Share"/"Main Market". Before this
+        fix these 96 real production equities landed in
+        MAIN_MARKET_EQUITY_SEGMENT_UNCONFIRMED_TYPE_UNCONFIRMED
+        despite being ordinary Main Market common stock."""
+        result = classify_universe([_profile("7010", market_segment="TASI", security_type="Equity")])
+        c = result.classifications[0]
+        assert c.eligible is True
+        assert c.bucket == "MAIN_MARKET_EQUITY"
+
+    def test_real_sahmk_sukuk_market_segment_still_excluded_via_security_type(self):
+        """The real SUKUK market_segment value must never be
+        misclassified as a main-market equity just because it's now a
+        recognized segment marker -- security_type="Sukuk" excludes
+        it before market_segment is ever consulted."""
+        result = classify_universe([_profile("1113", market_segment="SUKUK", security_type="Sukuk")])
+        c = result.classifications[0]
+        assert c.eligible is False
+        assert c.bucket == "SUKUK_BOND"
+
 
 class TestExclusions:
     def test_etf_flag_excludes_regardless_of_security_type(self):
