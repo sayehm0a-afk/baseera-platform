@@ -37,7 +37,7 @@ only decides *when* to call them and *what happened* when it did.
 import asyncio
 import contextlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, List, Optional
 
 from sqlalchemy.orm import Session
@@ -205,6 +205,42 @@ async def run_ingestion_job(
         retry_count,
     )
     return run_log
+
+
+def reap_stale_ingestion_runs(session: Session, max_age_hours: float) -> List[IngestionRunLog]:
+    """Mirrors MarketIntelligenceRepository.reap_stale_runs for the same
+    failure mode: a process killed/restarted between run_ingestion_job's
+    RUNNING insert and its finished_at update leaves a row RUNNING
+    forever, indistinguishable from a genuinely in-progress job --
+    without this, POST /full-discovery's in-flight guard (matches on
+    finished_at IS NULL) would block every future trigger permanently.
+    Marks any such row older than max_age_hours as FAILED so a new
+    discovery pass can proceed. Returns the runs it reaped, for logging.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    candidates = (
+        session.query(IngestionRunLog).filter(IngestionRunLog.finished_at.is_(None)).all()
+    )
+    reaped = []
+    for run in candidates:
+        started_at = run.started_at
+        if started_at.tzinfo is None:
+            # Same SQLite naive-datetime pitfall documented in
+            # MarketIntelligenceRepository.reap_stale_runs -- started_at
+            # is always written as UTC, so a naive value read back is
+            # treated as UTC rather than compared against an aware "now."
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        if started_at < cutoff:
+            run.finished_at = datetime.now(timezone.utc)
+            run.status = IngestionJobStatus.FAILED
+            run.error_summary = (
+                f"Reaped: still RUNNING {max_age_hours:.1f}h+ after starting -- "
+                "treated as crashed/restarted, never reached run_ingestion_job's own finish step."
+            )
+            reaped.append(run)
+    if reaped:
+        session.commit()
+    return reaped
 
 
 class IngestionScheduler:
