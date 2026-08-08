@@ -981,3 +981,147 @@ def test_decision_intelligence_handles_an_entirely_empty_database(client, sessio
     assert body["rejected_opportunities"] == []
     assert body["rejection_reason_counts"] == []
     assert body["sector_ranking"] == []
+
+
+# --- GET /universe-diagnostics: pagination evidence ------------------------
+
+
+def test_universe_diagnostics_surfaces_real_pagination_evidence(client, session_factory, as_staff, monkeypatch):
+    """Real evidence for whether the SAHMK /companies/ directory's
+    ~100-instrument result is a pagination limit or the provider's
+    genuine result set: the route must surface
+    SahmkMarketDataService.last_directory_diagnostics (pages fetched,
+    whether a next/count/total signal was ever observed, the raw
+    envelope's own top-level keys) -- previously computed by the
+    service but silently discarded by every caller."""
+    from src.market_data import provider_factory
+    from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
+    from src.market_data.sahmk.models import SahmkCompanyProfile
+    from src.market_data.sahmk.service import _DirectoryDiagnostics
+
+    provider = SahmkMarketDataProvider(api_endpoint="https://sahmk.example.invalid", api_key="key")
+
+    async def _fake_get_company_directory():
+        provider._service.last_directory_diagnostics = _DirectoryDiagnostics(
+            pages_fetched=1,
+            total_fetched=1,
+            pagination_signal=None,
+            reported_total=None,
+            universe_verdict="UNIVERSE_NOT_VERIFIED",
+            first_page_keys=["companies"],
+            first_item_keys=["symbol", "market_segment"],
+            sector_populated_count=0,
+            name_ar_populated_count=0,
+        )
+        return [
+            SahmkCompanyProfile(
+                symbol="2222", name="Saudi Aramco", name_ar=None, sector=None, industry=None,
+                exchange=None, raw={"market_segment": "TASI", "security_type": "Equity"},
+            )
+        ]
+
+    provider._service.get_company_directory = _fake_get_company_directory
+
+    async def _fake_get_provider(force_refresh=False):
+        return provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+
+    response = client.get("/api/v1/admin/market-intelligence/universe-diagnostics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pagination"]["pages_fetched"] == 1
+    assert body["pagination"]["pagination_signal"] is None
+    assert body["pagination"]["reported_total"] is None
+    assert body["pagination"]["universe_verdict"] == "UNIVERSE_NOT_VERIFIED"
+    assert body["pagination"]["first_page_keys"] == ["companies"]
+    assert body["pagination"]["first_item_keys"] == ["symbol", "market_segment"]
+
+
+# --- GET /symbol-lookup-diagnostics: discovery-vs-data-coverage evidence ---
+
+
+def test_symbol_lookup_diagnostics_reports_real_per_symbol_call_outcomes(
+    client, session_factory, as_staff, monkeypatch
+):
+    """Real evidence for whether SAHMK's directory-discovery cap is a
+    discovery-only limitation or a genuine data-coverage limitation:
+    for a symbol the caller passes explicitly, the route must call the
+    real per-symbol quote/company-profile/historical/fundamentals/
+    dividends methods directly and report each real outcome -- success
+    for one symbol, a real exception for another -- never fabricating
+    either."""
+    from src.market_data import fundamental_provider_factory, provider_factory
+    from src.market_data.providers.sahmk_fundamental_data_provider import SahmkFundamentalDataProvider
+    from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
+
+    market_provider = SahmkMarketDataProvider(api_endpoint="https://sahmk.example.invalid", api_key="key")
+
+    async def _fake_get_symbol_directory():
+        return [{"symbol": "2222"}]
+
+    async def _fake_get_latest_quote(symbol):
+        if symbol == "9999":
+            raise ValueError("SahmkRequestError: 404 not found")
+        return {"symbol": symbol, "price": 42.0}
+
+    async def _fake_get_company_profile(symbol):
+        if symbol == "9999":
+            raise ValueError("SahmkRequestError: 404 not found")
+        return {"symbol": symbol, "name": "Example Co"}
+
+    async def _fake_get_stock_data(symbol):
+        if symbol == "9999":
+            raise ValueError("SahmkRequestError: 404 not found")
+        return {"symbol": symbol, "close": 42.0}
+
+    market_provider.get_symbol_directory = _fake_get_symbol_directory
+    market_provider.get_latest_quote = _fake_get_latest_quote
+    market_provider.get_company_profile = _fake_get_company_profile
+    market_provider.get_stock_data = _fake_get_stock_data
+
+    fundamental_provider = SahmkFundamentalDataProvider(api_endpoint="https://sahmk.example.invalid", api_key="key")
+
+    async def _fake_get_dividends(symbol):
+        if symbol == "9999":
+            raise ValueError("SahmkRequestError: 404 not found")
+        return []  # a real symbol that simply has no dividend history -- still "available"
+
+    async def _fake_get_fundamentals(symbol, period_type="annual"):
+        if symbol == "9999":
+            raise ValueError("SahmkRequestError: 404 not found")
+        return {"symbol": symbol}
+
+    fundamental_provider.get_dividends = _fake_get_dividends
+    fundamental_provider.get_fundamentals = _fake_get_fundamentals
+
+    async def _fake_get_market_provider(force_refresh=False):
+        return market_provider
+
+    async def _fake_get_fundamental_provider(force_refresh=False):
+        return fundamental_provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_market_provider)
+    monkeypatch.setattr(fundamental_provider_factory, "get_fundamental_data_provider", _fake_get_fundamental_provider)
+
+    response = client.get(
+        "/api/v1/admin/market-intelligence/symbol-lookup-diagnostics", params={"symbols": "2222,9999"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    by_symbol = {r["symbol"]: r for r in body["results"]}
+
+    real = by_symbol["2222"]
+    assert real["in_last_known_directory"] is True
+    assert real["quote"]["available"] is True
+    assert real["company_profile"]["available"] is True
+    assert real["historical_bar"]["available"] is True
+    assert real["dividends"]["available"] is True  # empty list is still a real, available answer
+    assert real["fundamentals"]["available"] is True
+
+    missing = by_symbol["9999"]
+    assert missing["in_last_known_directory"] is False
+    assert missing["quote"]["available"] is False
+    assert "404" in missing["quote"]["detail"]

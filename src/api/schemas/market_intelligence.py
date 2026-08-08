@@ -305,6 +305,30 @@ class UniverseSampleEntryOut(BaseModel):
     bucket: str
 
 
+class DirectoryPaginationDiagnosticsOut(BaseModel):
+    """Real evidence from SahmkMarketDataService.last_directory_
+    diagnostics -- answers, from the actual raw /companies/ response
+    envelope, whether the ~100-instrument result is a pagination limit
+    (a `next`/`count`/`total` signal was present but not fully
+    followed/reconciled), a fully-verified complete universe (a
+    reported total existed and was fully reconciled), or a response
+    that never carried any pagination signal at all (in which case a
+    single call's result-set size is not provable as a page limit from
+    the response shape alone -- it is either the true full universe or
+    a silent, unsignaled cap, and this field cannot by itself
+    distinguish those two)."""
+
+    pages_fetched: int = 0
+    total_fetched: int = 0
+    pagination_signal: Optional[str] = None
+    reported_total: Optional[int] = None
+    universe_verdict: str = "NOT_YET_RUN"
+    first_page_keys: List[str] = Field(default_factory=list)
+    first_item_keys: List[str] = Field(default_factory=list)
+    sector_populated_count: int = 0
+    name_ar_populated_count: int = 0
+
+
 class UniverseDiagnosticsOut(BaseModel):
     """Response for GET /api/v1/admin/market-intelligence/
     universe-diagnostics -- a fresh, live SAHMK /companies/ directory
@@ -313,7 +337,9 @@ class UniverseDiagnosticsOut(BaseModel):
     distinct-value breakdown surfaced. Exists to answer, with real
     evidence rather than a guess, whether SAHMK's real market_segment
     (or another field) values for Nomu-listed instruments are simply
-    not among the substrings universe_policy currently matches."""
+    not among the substrings universe_policy currently matches, and
+    (via `pagination`) whether the ~100-instrument total is a
+    pagination artifact or the provider's genuine result set."""
 
     generated_at: datetime
     provider_kind: Optional[str] = None
@@ -322,6 +348,7 @@ class UniverseDiagnosticsOut(BaseModel):
     bucket_counts: Dict[str, int] = Field(default_factory=dict)
     observed_fields: List[ObservedFieldOut] = Field(default_factory=list)
     sample_entries: List[UniverseSampleEntryOut] = Field(default_factory=list)
+    pagination: Optional[DirectoryPaginationDiagnosticsOut] = None
 
 
 class IngestionJobStatusOut(BaseModel):
@@ -548,3 +575,41 @@ class MarketSummaryOut(BaseModel):
     strongest_sectors: List[str]
     weakest_sectors: List[str]
     most_important_changes: List[ChangeEventOut]
+
+
+class SymbolLookupCheckOut(BaseModel):
+    """One real SAHMK API call's real outcome for a single symbol --
+    never a guess. `available` is only ever True when the call actually
+    returned usable data; any exception (including a clean 404/'not
+    found' business response) is captured verbatim in `detail` and
+    `available` stays False."""
+
+    available: bool
+    detail: Optional[str] = None
+
+
+class SymbolLookupDiagnosticOut(BaseModel):
+    """Real per-symbol evidence for whether SAHMK's directory-discovery
+    cap (see UniverseDiagnosticsOut.pagination) is a DISCOVERY-only
+    limitation or a genuine DATA-coverage limitation: for a symbol that
+    is NOT among the ~100 instruments the /companies/ directory
+    returns, does SAHMK's per-symbol quote/profile/historical/
+    fundamentals/dividends endpoints still serve real data when called
+    directly by symbol? If yes, the fix is symbol-discovery (e.g. a
+    static/official symbol seed list feeding the existing per-symbol
+    endpoints), not a data-provider replacement."""
+
+    symbol: str
+    in_last_known_directory: Optional[bool] = None
+    quote: SymbolLookupCheckOut
+    company_profile: SymbolLookupCheckOut
+    historical_bar: SymbolLookupCheckOut
+    dividends: SymbolLookupCheckOut
+    fundamentals: SymbolLookupCheckOut
+
+
+class SymbolLookupDiagnosticsOut(BaseModel):
+    generated_at: datetime
+    provider_kind: Optional[str] = None
+    sahmk_error: Optional[str] = None
+    results: List[SymbolLookupDiagnosticOut] = Field(default_factory=list)

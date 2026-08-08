@@ -57,6 +57,19 @@ class SahmkMarketDataProvider(IMarketDataProvider):
         self.authenticated = False
         self.last_universe_classification: Optional[UniverseClassificationResult] = None
 
+    @property
+    def last_directory_diagnostics(self):
+        """Proxies SahmkMarketDataService.last_directory_diagnostics --
+        real pagination evidence (pages fetched, whether a next/count/
+        total signal was ever present in the raw /companies/ response,
+        the raw envelope's top-level keys) from the last
+        get_company_directory() call. None until that has run at least
+        once. This was computed by the service since the pagination-
+        following fix but never read by any caller -- exposed here so
+        admin diagnostics can answer "is ~100 a pagination limit or the
+        real universe?" with real evidence instead of a guess."""
+        return self._service.last_directory_diagnostics
+
     async def authenticate(self) -> bool:
         """Verifies the configured key against the cheapest confirmed
         SAHMK endpoint (GET /market/summary/). SAHMK has no

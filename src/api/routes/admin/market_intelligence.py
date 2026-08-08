@@ -42,6 +42,7 @@ from src.api.schemas.market_intelligence import (
     DiagnosticDecisionV2SampleOut,
     DiagnosticSampleSymbolOut,
     DiagnosticScanOut,
+    DirectoryPaginationDiagnosticsOut,
     FullDiscoveryTriggerOut,
     IngestionJobStatusOut,
     MarketCoverageOut,
@@ -55,6 +56,9 @@ from src.api.schemas.market_intelligence import (
     RiskCountOut,
     SectorCoverageOut,
     SectorRankingOut,
+    SymbolLookupCheckOut,
+    SymbolLookupDiagnosticOut,
+    SymbolLookupDiagnosticsOut,
     TopOpportunityOut,
     UniverseBucketCountOut,
     UniverseDiagnosticsOut,
@@ -339,6 +343,22 @@ async def get_universe_diagnostics(
     from src.market_data.provider_factory import get_market_data_provider
     from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
 
+    def _pagination_diagnostics_out(provider: "SahmkMarketDataProvider") -> Optional[DirectoryPaginationDiagnosticsOut]:
+        diag = provider.last_directory_diagnostics
+        if diag is None:
+            return None
+        return DirectoryPaginationDiagnosticsOut(
+            pages_fetched=diag.pages_fetched,
+            total_fetched=diag.total_fetched,
+            pagination_signal=diag.pagination_signal,
+            reported_total=diag.reported_total,
+            universe_verdict=diag.universe_verdict,
+            first_page_keys=diag.first_page_keys,
+            first_item_keys=diag.first_item_keys,
+            sector_populated_count=diag.sector_populated_count,
+            name_ar_populated_count=diag.name_ar_populated_count,
+        )
+
     generated_at = datetime.now(timezone.utc)
 
     def _scrub(message: str) -> str:
@@ -376,7 +396,9 @@ async def get_universe_diagnostics(
 
     classification = provider.last_universe_classification
     if classification is None:
-        return UniverseDiagnosticsOut(generated_at=generated_at, provider_kind="sahmk")
+        return UniverseDiagnosticsOut(
+            generated_at=generated_at, provider_kind="sahmk", pagination=_pagination_diagnostics_out(provider)
+        )
 
     observed_fields = [
         ObservedFieldOut(
@@ -413,7 +435,126 @@ async def get_universe_diagnostics(
         bucket_counts=classification.bucket_counts,
         observed_fields=observed_fields,
         sample_entries=sample_entries,
+        pagination=_pagination_diagnostics_out(provider),
     )
+
+
+# Real, independently verified symbols (news citations, not guessed) used
+# only as a small representative TEST sample for symbol-lookup-diagnostics
+# -- never as a stand-in for the real market universe, and never written
+# to the Stock table. 1111 = Saudi Tadawul Group Holding Co (Main Market,
+# listed 2023 -- a plausible candidate for a symbol newer than SAHMK's
+# /companies/ directory snapshot). 9606 = Tharwah (Nomu Parallel Market).
+_DEFAULT_SYMBOL_LOOKUP_TEST_SYMBOLS = ["1111", "9606"]
+
+
+@router.get("/symbol-lookup-diagnostics", response_model=SymbolLookupDiagnosticsOut)
+async def get_symbol_lookup_diagnostics(
+    symbols: Optional[str] = None,
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> SymbolLookupDiagnosticsOut:
+    """Answers, with real evidence, whether SAHMK's ~100-instrument
+    /companies/ directory cap is a DISCOVERY-only limitation or a
+    genuine DATA-coverage limitation: for each symbol (default: a
+    small, real, independently-verified test set spanning Main Market
+    and Nomu -- see _DEFAULT_SYMBOL_LOOKUP_TEST_SYMBOLS), calls SAHMK's
+    per-symbol quote/company-profile/historical/fundamentals/dividends
+    endpoints directly, bypassing the directory entirely. If these
+    succeed for a symbol the directory never listed, the fix is
+    symbol-discovery (feeding a real official symbol list into these
+    already-working per-symbol endpoints), not a data-provider
+    replacement. Every result is a real API call outcome -- `available`
+    is never assumed true, and no price/fundamental value is ever
+    fabricated when a call fails."""
+    from src.market_data import config as market_data_config
+    from src.market_data.fundamental_provider_factory import get_fundamental_data_provider
+    from src.market_data.provider_factory import get_market_data_provider
+    from src.market_data.providers.sahmk_fundamental_data_provider import SahmkFundamentalDataProvider
+    from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
+
+    generated_at = datetime.now(timezone.utc)
+
+    def _scrub(message: str) -> str:
+        key = market_data_config.get_sahmk_api_key()
+        return message.replace(key, "***") if key else message
+
+    symbol_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else _DEFAULT_SYMBOL_LOOKUP_TEST_SYMBOLS
+
+    try:
+        market_provider = await get_market_data_provider(force_refresh=True)
+    except StrictRealDataUnavailableError as exc:
+        return SymbolLookupDiagnosticsOut(
+            generated_at=generated_at, sahmk_error=_scrub(f"{type(exc).__name__}: {exc}")
+        )
+
+    if not isinstance(market_provider, SahmkMarketDataProvider):
+        return SymbolLookupDiagnosticsOut(
+            generated_at=generated_at,
+            provider_kind="dev",
+            sahmk_error="A real SahmkMarketDataProvider is not currently selected -- no live calls were made.",
+        )
+
+    try:
+        fundamental_provider = await get_fundamental_data_provider(force_refresh=True)
+    except StrictRealDataUnavailableError:
+        fundamental_provider = None
+    if not isinstance(fundamental_provider, SahmkFundamentalDataProvider):
+        fundamental_provider = None
+
+    # A fresh directory fetch is already 24h-cached by the service, so
+    # this costs nothing extra beyond the first call -- used only to
+    # report whether each test symbol is a directory member, real
+    # evidence for the "discovery vs data" question, never to gate
+    # whether the per-symbol calls below are attempted.
+    known_symbols: Optional[set] = None
+    try:
+        directory = await market_provider.get_symbol_directory()
+        known_symbols = {c["symbol"] for c in directory}
+    except Exception:  # noqa: BLE001 -- directory membership is informational only
+        known_symbols = None
+
+    async def _check(coro) -> SymbolLookupCheckOut:
+        # Success means SAHMK answered with a real, non-error response --
+        # never that the payload happened to be non-empty. An empty
+        # dividend list for a real symbol that has simply never paid a
+        # dividend is a legitimate, available answer, not a failure; any
+        # genuine "no such symbol" case surfaces as an exception (a
+        # non-2xx SahmkRequestError/SahmkAuthenticationError), which is
+        # the only thing that marks this check unavailable.
+        try:
+            result = await coro
+        except Exception as exc:  # noqa: BLE001 -- report every failure mode, never crash this diagnostic route
+            return SymbolLookupCheckOut(available=False, detail=_scrub(f"{type(exc).__name__}: {exc}"))
+        if result is None:
+            return SymbolLookupCheckOut(available=False, detail="Empty response.")
+        return SymbolLookupCheckOut(available=True, detail=None)
+
+    results: List[SymbolLookupDiagnosticOut] = []
+    for symbol in symbol_list:
+        quote = await _check(market_provider.get_latest_quote(symbol))
+        company_profile = await _check(market_provider.get_company_profile(symbol))
+        historical_bar = await _check(market_provider.get_stock_data(symbol))
+        if fundamental_provider is not None:
+            dividends = await _check(fundamental_provider.get_dividends(symbol))
+            fundamentals = await _check(fundamental_provider.get_fundamentals(symbol))
+        else:
+            no_provider = SymbolLookupCheckOut(available=False, detail="No real fundamental provider selected.")
+            dividends = no_provider
+            fundamentals = no_provider
+
+        results.append(
+            SymbolLookupDiagnosticOut(
+                symbol=symbol,
+                in_last_known_directory=(symbol in known_symbols) if known_symbols is not None else None,
+                quote=quote,
+                company_profile=company_profile,
+                historical_bar=historical_bar,
+                dividends=dividends,
+                fundamentals=fundamentals,
+            )
+        )
+
+    return SymbolLookupDiagnosticsOut(generated_at=generated_at, provider_kind="sahmk", results=results)
 
 
 _INGESTION_JOB_NAMES = ["symbols", "historical_ohlcv", "fundamentals", "dividends"]
