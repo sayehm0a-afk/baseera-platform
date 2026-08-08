@@ -123,8 +123,13 @@ jobs:
           curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt \
             "$BACKEND_URL/api/v1/admin/system/summary" \
             -o /tmp/summary.json -w "\nHTTP %{http_code}\n"
-          echo "=== Admin dashboard summary ==="
-          python3 -m json.tool /tmp/summary.json
+          echo "=== Admin dashboard summary (key fields only -- full JSON is in the uploaded artifact) ==="
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/summary.json'))
+          for k in ['deployment_commit','environment','database_health','redis_health','market_data_provider','market_data_health','decision_engine_version','strict_real_data_enforced','last_scan_status','last_scan_finished_at']:
+              print(f'{k}:', d.get(k))
+          "
           RUNNING_COMMIT=$(python3 -c "import json; print(json.load(open('/tmp/summary.json')).get('deployment_commit') or '')")
           echo "deployment_commit reported: $RUNNING_COMMIT"
           if [ -n "$EXPECTED_COMMIT" ]; then
@@ -144,8 +149,7 @@ jobs:
           curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
             "$BACKEND_URL/api/v1/admin/market-intelligence/coverage" \
             -o /tmp/coverage.json -w "\nHTTP %{http_code}\n"
-          echo "=== Coverage ==="
-          python3 -m json.tool /tmp/coverage.json
+          echo "=== Coverage (key fields only -- full JSON is in the uploaded artifact) ==="
           python3 -c "
           import json
           d = json.load(open('/tmp/coverage.json'))
@@ -164,13 +168,14 @@ jobs:
           curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
             "$BACKEND_URL/api/v1/admin/users?limit=10" \
             -o /tmp/admin_users.json -w "\nHTTP %{http_code}\n"
-          echo "=== Users (first page) ==="
-          python3 -m json.tool /tmp/admin_users.json
+          echo "=== Users (key fields only -- full JSON is in the uploaded artifact) ==="
           python3 -c "
           import json
           d = json.load(open('/tmp/admin_users.json'))
           print('total users:', d.get('total'))
           print('returned:', len(d.get('users', [])))
+          for u in d.get('users', [])[:5]:
+              print(' -', u.get('email'), '| staff:', u.get('is_staff'), u.get('staff_role'), '| verified:', u.get('is_email_verified'), '| active:', u.get('is_active'))
           "
 
       - name: Owner/subscriptions -- real subscription rows
@@ -180,8 +185,14 @@ jobs:
           curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
             "$BACKEND_URL/api/v1/admin/subscriptions?limit=10" \
             -o /tmp/admin_subscriptions.json -w "\nHTTP %{http_code}\n"
-          echo "=== Subscriptions (first page) ==="
-          python3 -m json.tool /tmp/admin_subscriptions.json
+          echo "=== Subscriptions (key fields only -- full JSON is in the uploaded artifact) ==="
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/admin_subscriptions.json'))
+          print('total subscriptions:', d.get('total'))
+          for s in d.get('subscriptions', [])[:5]:
+              print(' -', 'user', s.get('user_id'), '|', s.get('plan'), '|', s.get('status'), '| trial_ends:', s.get('trial_ends_at'))
+          "
 
       - name: Discover real multi-sector symbols from rankings
         id: symbols
@@ -250,8 +261,14 @@ jobs:
           curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
             "$BACKEND_URL/api/v1/admin/recommendation-history?limit=10" \
             -o /tmp/admin_rec_history.json -w "\nHTTP %{http_code}\n"
-          echo "=== Admin recommendation history (first page) ==="
-          python3 -m json.tool /tmp/admin_rec_history.json
+          echo "=== Admin recommendation history (key fields only -- full JSON is in the uploaded artifact) ==="
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/admin_rec_history.json'))
+          print('total:', d.get('total'))
+          for r in (d.get('items') or d.get('records') or [])[:5]:
+              print(' -', r)
+          " || echo "(could not parse -- see artifact)"
 
       - name: RBAC -- unauthenticated access to staff routes must be denied
         env:
