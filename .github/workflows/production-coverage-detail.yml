@@ -86,9 +86,26 @@ jobs:
           for row in d.get('excluded_instrument_counts') or []:
               print(' ', row.get('bucket'), '->', row.get('count'))
           print('total_excluded_non_equity:', d.get('total_excluded_non_equity'))
-          sector = d.get('sector_breakdown')
-          if sector:
-              print('sector_breakdown:', json.dumps(sector, indent=2, ensure_ascii=False))
+          print()
+          print('=== fundamentals/dividends coverage ===')
+          print('stocks_with_fundamentals:', d.get('stocks_with_fundamentals'), '| stocks_without_fundamentals:', d.get('stocks_without_fundamentals'))
+          print('stocks_with_dividends:', d.get('stocks_with_dividends'), '| stocks_without_dividends:', d.get('stocks_without_dividends'))
+          print()
+          print('=== db_consistency (0 everywhere == no classification corruption) ===')
+          print(json.dumps(d.get('db_consistency'), indent=2, ensure_ascii=False))
+          print()
+          print('=== pipeline_funnel (discovery -> analysis-ready) ===')
+          for stage in d.get('pipeline_funnel') or []:
+              print(' ', json.dumps(stage, ensure_ascii=False))
+          print()
+          print('=== latest_scan_run ===')
+          print(json.dumps(d.get('latest_scan_run'), indent=2, ensure_ascii=False))
+          print('latest_scan_symbols_entering_decision_engine:', d.get('latest_scan_symbols_entering_decision_engine'))
+          print('latest_scan_recommendations_generated:', d.get('latest_scan_recommendations_generated'))
+          print()
+          print('=== sector_coverage ===')
+          for row in d.get('sector_coverage') or []:
+              print(' ', json.dumps(row, ensure_ascii=False))
           "
 
       - name: Upload evidence artifact
