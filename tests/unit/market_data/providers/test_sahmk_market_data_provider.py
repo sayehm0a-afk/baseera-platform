@@ -280,6 +280,48 @@ async def test_get_symbol_directory_excludes_a_confirmed_etf_via_is_eligible():
     assert provider.last_universe_classification.bucket_counts["ETF_FUND"] == 1
 
 
+@pytest.mark.asyncio
+async def test_last_directory_diagnostics_proxies_the_service_before_any_call():
+    """Before get_symbol_directory() has ever run, the pagination
+    diagnostics must read as None -- never a stale or fabricated
+    value."""
+    provider = _provider_with_mock_service()
+    provider._service.last_directory_diagnostics = None
+    assert provider.last_directory_diagnostics is None
+
+
+@pytest.mark.asyncio
+async def test_last_directory_diagnostics_proxies_the_service_after_a_call():
+    """Real evidence for whether ~100 results is a pagination limit:
+    the provider must expose exactly what SahmkMarketDataService
+    observed on the raw /companies/ response envelope (pages fetched,
+    whether a next/count/total signal was ever present, the envelope's
+    own top-level keys) -- this was computed by the service but never
+    read by any caller before this fix."""
+    from src.market_data.sahmk.service import _DirectoryDiagnostics
+
+    provider = _provider_with_mock_service()
+    provider._service.get_company_directory.return_value = []
+    real_diagnostics = _DirectoryDiagnostics(
+        pages_fetched=1,
+        total_fetched=100,
+        pagination_signal=None,
+        reported_total=None,
+        universe_verdict="UNIVERSE_NOT_VERIFIED",
+        first_page_keys=["companies"],
+        first_item_keys=["symbol", "name", "market_segment", "security_type"],
+        sector_populated_count=0,
+        name_ar_populated_count=0,
+    )
+    provider._service.last_directory_diagnostics = real_diagnostics
+
+    await provider.get_symbol_directory()
+
+    assert provider.last_directory_diagnostics is real_diagnostics
+    assert provider.last_directory_diagnostics.pagination_signal is None
+    assert provider.last_directory_diagnostics.first_page_keys == ["companies"]
+
+
 # --- get_company_profile() (extra, not part of IMarketDataProvider) --------
 
 
