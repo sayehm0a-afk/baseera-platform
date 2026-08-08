@@ -1,0 +1,165 @@
+name: Production Full-Market Discovery Trigger (temporary, one-shot)
+
+# The M6 production acceptance run (production-m6-acceptance.yml)
+# found the live database at only 5 tracked symbols with
+# main_market_stocks=0 / nomu_market_stocks=0 -- the cold-start seed,
+# not the real Tadawul/Nomu universe. This workflow triggers the
+# existing, already-built full-discovery/ingestion mechanism
+# (POST /api/v1/admin/market-intelligence/full-discovery --
+# src/api/routes/admin/market_intelligence.py) and polls GET /coverage
+# for real growth, rather than assuming the trigger alone is evidence
+# of population. Nothing here creates a new ingestion pipeline; it
+# only calls the one that already exists.
+#
+# The route dispatches via FastAPI BackgroundTasks (runs after the
+# HTTP response, in the same worker process) and its own docstring
+# states a full pass "can take many minutes" -- this workflow polls
+# for up to its own timeout rather than assuming a fixed duration.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  trigger_and_monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ] || [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::RAILWAY_TOKEN/STAFF_EMAIL/STAFF_PASSWORD not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend: $BACKEND_URL"
+
+      - name: Log in as the staff account
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Staff login failed."
+            exit 1
+          fi
+          CSRF=$(grep -i csrf_token /tmp/staff_cookies.txt | awk '{print $NF}')
+          echo "$CSRF" > /tmp/.staff_csrf
+
+      - name: Record coverage BEFORE triggering discovery
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/coverage" -o /tmp/coverage_before.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/coverage_before.json'))
+          print('BEFORE: total_stocks=%s active_stocks=%s main_market=%s nomu_market=%s' % (
+              d.get('total_stocks'), d.get('active_stocks'), d.get('main_market_stocks'), d.get('nomu_market_stocks')))
+          "
+
+      - name: Trigger full discovery/ingestion pass
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          STAFF_CSRF=$(cat /tmp/.staff_csrf)
+          CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt -o /tmp/trigger_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/admin/market-intelligence/full-discovery" \
+            -H "Content-Type: application/json" -H "x-csrf-token: $STAFF_CSRF")
+          echo "Trigger HTTP $CODE"
+          cat /tmp/trigger_body.json; echo ""
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Full-discovery trigger failed."
+            exit 1
+          fi
+          ACCEPTED=$(python3 -c "import json; print(json.load(open('/tmp/trigger_body.json')).get('accepted'))")
+          echo "accepted: $ACCEPTED"
+
+      - name: Poll coverage for real growth (up to 40 minutes, checking every 60s)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          BEFORE_TOTAL=$(python3 -c "import json; print(json.load(open('/tmp/coverage_before.json')).get('total_stocks') or 0)")
+          echo "Baseline total_stocks: $BEFORE_TOTAL"
+          for i in $(seq 1 40); do
+            sleep 60
+            curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+              "$BACKEND_URL/api/v1/admin/market-intelligence/coverage" -o /tmp/coverage_poll.json || continue
+            python3 -c "
+          import json
+          d = json.load(open('/tmp/coverage_poll.json'))
+          runs = d.get('latest_ingestion_runs') or []
+          running = [r for r in runs if r.get('status') == 'running']
+          print('[poll $i] total_stocks=%s active_stocks=%s main_market=%s nomu_market=%s with_price_history=%s | jobs_in_flight=%s' % (
+              d.get('total_stocks'), d.get('active_stocks'), d.get('main_market_stocks'), d.get('nomu_market_stocks'),
+              d.get('stocks_with_price_history'), [r.get('job_name') for r in running]))
+          for r in runs:
+              print('  -', r.get('job_name'), '|', r.get('status'), '| succeeded:', r.get('symbols_succeeded'), '| failed:', r.get('symbols_failed'), '| finished_at:', r.get('finished_at'))
+          "
+            CURRENT_TOTAL=$(python3 -c "import json; print(json.load(open('/tmp/coverage_poll.json')).get('total_stocks') or 0)")
+            ALL_DONE=$(python3 -c "
+          import json
+          d = json.load(open('/tmp/coverage_poll.json'))
+          runs = d.get('latest_ingestion_runs') or []
+          in_flight = [r for r in runs if r.get('status') == 'running']
+          print('yes' if not in_flight and runs else 'no')
+          ")
+            if [ "$ALL_DONE" = "yes" ] && [ "$CURRENT_TOTAL" -gt "$BEFORE_TOTAL" ]; then
+              echo "Discovery pass complete -- total_stocks grew from $BEFORE_TOTAL to $CURRENT_TOTAL and no jobs are in flight."
+              break
+            fi
+          done
+          cp /tmp/coverage_poll.json /tmp/coverage_final.json 2>/dev/null || cp /tmp/coverage_before.json /tmp/coverage_final.json
+
+      - name: Final coverage summary
+        run: |
+          python3 -c "
+          import json
+          before = json.load(open('/tmp/coverage_before.json'))
+          final = json.load(open('/tmp/coverage_final.json'))
+          print('=== FINAL RESULT ===')
+          print('BEFORE: total=%s active=%s main=%s nomu=%s with_history=%s' % (
+              before.get('total_stocks'), before.get('active_stocks'), before.get('main_market_stocks'), before.get('nomu_market_stocks'), before.get('stocks_with_price_history')))
+          print('AFTER:  total=%s active=%s main=%s nomu=%s with_history=%s' % (
+              final.get('total_stocks'), final.get('active_stocks'), final.get('main_market_stocks'), final.get('nomu_market_stocks'), final.get('stocks_with_price_history')))
+          for r in final.get('latest_ingestion_runs') or []:
+              print(' job:', r.get('job_name'), '| status:', r.get('status'), '| succeeded:', r.get('symbols_succeeded'), '| failed:', r.get('symbols_failed'))
+          "
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-discovery-trigger-evidence
+          path: |
+            /tmp/coverage_before.json
+            /tmp/coverage_final.json
+            /tmp/trigger_body.json
+          retention-days: 14
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: rm -f /tmp/.staff_csrf /tmp/staff_cookies.txt /tmp/login_body.json
