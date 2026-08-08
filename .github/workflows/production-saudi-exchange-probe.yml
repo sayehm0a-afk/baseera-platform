@@ -1,0 +1,36 @@
+name: Probe Saudi Exchange Public Page (temporary, one-shot, read-only)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch Saudi Exchange Main Market page (public, unauthenticated)
+        run: |
+          set +e
+          HTTP_CODE=$(curl -sS -L --connect-timeout 15 --max-time 30 \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            -o /tmp/main_market.html -w "%{http_code}" \
+            "https://www.saudiexchange.sa/wps/portal/saudiexchange/ourmarkets/main-market-watch?locale=en")
+          echo "Main Market page HTTP $HTTP_CODE"
+          echo "Bytes: $(wc -c < /tmp/main_market.html)"
+          echo "--- First 3000 chars ---"
+          head -c 3000 /tmp/main_market.html
+          echo ""
+          echo "--- grep for JSON/API hints ---"
+          grep -oE '(https?://[a-zA-Z0-9_./?=&%-]*api[a-zA-Z0-9_./?=&%-]*)' /tmp/main_market.html | sort -u | head -20 || true
+          grep -oE 'data-[a-z-]+=' /tmp/main_market.html | sort -u | head -20 || true
+
+      - name: Upload raw HTML artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: saudi-exchange-probe
+          path: /tmp/main_market.html
+          retention-days: 7
