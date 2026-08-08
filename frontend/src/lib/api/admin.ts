@@ -15,6 +15,8 @@ import type {
   DecisionIntelligence,
   FeatureFlag,
   FeatureFlagList,
+  FullDiscoveryTrigger,
+  MarketCoverage,
   StaffRoleValue,
   SystemHealth,
 } from "./admin-types";
@@ -158,4 +160,17 @@ export function getCommitteeSession(sessionId: number): Promise<CommitteeSession
 
 export function getCommitteeStats(withinHours = 72): Promise<CommitteeStats> {
   return apiFetch<CommitteeStats>(`/api/v1/admin/investment-committee/stats?within_hours=${withinHours}`);
+}
+
+/** Direct, unmodified calls to the staff-gated
+ * /api/v1/admin/market-intelligence/{coverage,full-discovery} routes
+ * (src/api/routes/admin/market_intelligence.py) -- real, SQL-backed
+ * evidence of Saudi market coverage, and the on-demand trigger for a
+ * full-market discovery/ingestion pass. */
+export function getMarketCoverage(): Promise<MarketCoverage> {
+  return apiFetch<MarketCoverage>("/api/v1/admin/market-intelligence/coverage");
+}
+
+export function triggerFullDiscovery(): Promise<FullDiscoveryTrigger> {
+  return apiFetch<FullDiscoveryTrigger>("/api/v1/admin/market-intelligence/full-discovery", { method: "POST" });
 }

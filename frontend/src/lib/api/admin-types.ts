@@ -294,3 +294,100 @@ export interface CommitteeStats {
   most_optimistic_agent_counts: Record<string, number>;
   most_conservative_agent_counts: Record<string, number>;
 }
+
+/** Mirrors src/api/schemas/market_intelligence.py's MarketCoverageOut and
+ * its nested types -- real, SQL-backed evidence of how much of the Saudi
+ * market Basirah actually tracks/scans/can recommend from right now. */
+
+export interface UniverseBucketCount {
+  bucket: string | null;
+  count: number;
+}
+
+export interface IngestionJobStatus {
+  job_name: string;
+  status: string | null;
+  symbols_requested: number;
+  symbols_succeeded: number;
+  symbols_failed: number;
+  rows_upserted: number;
+  retry_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+  error_summary: string | null;
+}
+
+export interface MarketScanRunSummary {
+  id: number;
+  status: string;
+  symbols_requested: number;
+  symbols_succeeded: number;
+  symbols_skipped: number;
+  symbols_failed: number;
+  error_summary: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+  created_at: string;
+}
+
+export interface SectorCoverage {
+  sector: string | null;
+  total_stocks: number;
+  active_stocks: number;
+  stocks_with_price_history: number;
+  coverage_pct: number | null;
+}
+
+export interface DbConsistency {
+  active_stocks_missing_instrument_bucket: number;
+  active_stocks_missing_sector: number;
+  active_stocks_missing_exchange: number;
+  inactive_stocks_missing_exclusion_reason: number;
+  active_stocks_with_exclusion_reason_set: number;
+}
+
+export interface PipelineStage {
+  stage: string;
+  output_count: number;
+  relative_to: number;
+  dropped: number;
+  reason: string;
+}
+
+export interface MarketCoverage {
+  generated_at: string;
+  total_stocks: number;
+  active_stocks: number;
+  inactive_stocks: number;
+  stocks_with_price_history: number;
+  stocks_without_price_history: number;
+  instrument_bucket_counts: UniverseBucketCount[];
+  ingestion_auto_discover_enabled: boolean;
+  ingestion_configured_seed_symbols: number;
+  latest_ingestion_runs: IngestionJobStatus[];
+  latest_scan_run: MarketScanRunSummary | null;
+  coverage_pct: number | null;
+  main_market_stocks: number;
+  nomu_market_stocks: number;
+  unclassified_market_segment_stocks: number;
+  excluded_instrument_counts: UniverseBucketCount[];
+  total_excluded_non_equity: number;
+  stocks_with_fundamentals: number;
+  stocks_without_fundamentals: number;
+  stocks_with_dividends: number;
+  stocks_without_dividends: number;
+  sector_coverage: SectorCoverage[];
+  latest_scan_symbols_entering_decision_engine: number;
+  latest_scan_recommendations_generated: number;
+  db_consistency: DbConsistency;
+  pipeline_funnel: PipelineStage[];
+}
+
+export interface FullDiscoveryTrigger {
+  triggered_at: string;
+  accepted: boolean;
+  message: string;
+  job_names: string[];
+}
