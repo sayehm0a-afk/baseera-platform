@@ -44,4 +44,8 @@ def reset_password(session: Session, raw_token: str, new_password: str) -> User:
     _repository.set_password_hash(session, token.user_id, hash_password(new_password))
     session_service.revoke_all_sessions(session, token.user_id)
 
-    return _repository.get_user_by_id(session, token.user_id)
+    user = _repository.get_user_by_id(session, token.user_id)
+    get_email_sender().send_security_alert_email(
+        user.email, "تم تغيير كلمة مرور حسابك في بصيرة AI، وتم تسجيل خروجك من جميع الأجهزة كإجراء احترازي."
+    )
+    return user

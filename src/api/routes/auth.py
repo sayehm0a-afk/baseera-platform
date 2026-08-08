@@ -30,6 +30,7 @@ from src.api.schemas.auth import (
     LoginRequest,
     MessageOut,
     RegisterRequest,
+    ResendVerificationRequest,
     ResetPasswordRequest,
     SessionOut,
     UserOut,
@@ -181,6 +182,18 @@ def register(request: Request, body: RegisterRequest, session: Session = Depends
 def verify_email(request: Request, body: VerifyEmailRequest, session: Session = Depends(get_db)) -> UserOut:
     user = email_verification_service.verify_email(session, body.token)
     return UserOut.model_validate(user)
+
+
+@router.post("/resend-verification", response_model=MessageOut)
+@limiter.limit("5/minute")
+def resend_verification(request: Request, body: ResendVerificationRequest, session: Session = Depends(get_db)) -> MessageOut:
+    # Same enumeration-safe posture as /forgot-password: always the same
+    # generic message, and silently a no-op for an unknown email or an
+    # already-verified account.
+    user = _repository.get_user_by_email(session, body.email.strip().lower())
+    if user is not None and user.is_active and not user.is_email_verified:
+        email_verification_service.issue_verification_token(session, user)
+    return MessageOut(message="If that email address is registered and not yet verified, a new verification link has been sent.")
 
 
 @router.post("/login", response_model=UserOut)

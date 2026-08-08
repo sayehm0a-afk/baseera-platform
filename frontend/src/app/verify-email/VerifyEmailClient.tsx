@@ -1,12 +1,65 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { AiStar } from "@/components/ai/AiStar";
-import { verifyEmail } from "@/lib/auth/auth-service";
+import { resendVerification, verifyEmail } from "@/lib/auth/auth-service";
 
 type Status = "verifying" | "success" | "error";
+
+function ResendVerificationForm() {
+  const [email, setEmail] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!email.trim()) {
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      // Enumeration-safe generic response either way (src/api/routes/auth.py) --
+      // never surface whether the email exists or was already verified.
+      await resendVerification(email.trim());
+    } finally {
+      setIsSubmitting(false);
+      setIsSubmitted(true);
+    }
+  }
+
+  if (isSubmitted) {
+    return (
+      <p className="text-sm leading-7 text-bsr-text-secondary">
+        إذا كان هذا البريد الإلكتروني مسجّلاً وغير مؤكَّد بعد، فستصلك رسالة تحتوي
+        على رابط تأكيد جديد.
+      </p>
+    );
+  }
+
+  return (
+    <form className="flex flex-col gap-bsr-3" onSubmit={handleSubmit} noValidate>
+      <label className="flex flex-col gap-bsr-1 text-start">
+        <span className="text-sm text-bsr-text-secondary">البريد الإلكتروني</span>
+        <input
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-3 py-bsr-2 text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
+        />
+      </label>
+      <button
+        type="submit"
+        disabled={isSubmitting}
+        className="rounded-bsr-md bg-bsr-gold-500 px-bsr-4 py-bsr-2 font-semibold text-bsr-navy-950 transition-colors hover:bg-bsr-gold-400 disabled:opacity-50"
+      >
+        {isSubmitting ? "جارٍ الإرسال..." : "إعادة إرسال رابط التأكيد"}
+      </button>
+    </form>
+  );
+}
 
 export function VerifyEmailClient() {
   const searchParams = useSearchParams();
@@ -61,6 +114,7 @@ export function VerifyEmailClient() {
             <p role="alert" className="text-sm leading-7 text-bsr-market-down">
               رابط التأكيد غير صالح أو منتهي الصلاحية.
             </p>
+            <ResendVerificationForm />
             <Link
               href="/login"
               className="text-sm text-bsr-gold-500 hover:text-bsr-gold-400"

@@ -19,6 +19,10 @@ _repository = AuthRepository()
 
 
 def issue_verification_token(session: Session, user: User) -> None:
+    """Also used by the /resend-verification route to reissue a fresh
+    token for an already-registered, not-yet-verified account -- that
+    route is responsible for the enumeration-safe generic response and
+    for only calling this when `not user.is_email_verified`."""
     raw_token = generate_token()
     expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.email_verification_token_expire_hours)
     _repository.create_email_verification_token(session, user.id, hash_token(raw_token), expires_at)
@@ -42,4 +46,5 @@ def verify_email(session: Session, raw_token: str) -> User:
     _repository.set_email_verified(session, token.user_id)
 
     user = _repository.get_user_by_id(session, token.user_id)
+    get_email_sender().send_welcome_email(user.email, user.full_name)
     return user
