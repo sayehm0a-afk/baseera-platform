@@ -48,7 +48,9 @@ def test_smtp_sender_builds_the_real_verify_email_link_and_sends(mock_smtp_cls):
     assert mock_smtp.send_message.call_count == 1
     sent_message = mock_smtp.send_message.call_args[0][0]
     assert sent_message["To"] == "user@example.com"
-    assert "https://app.basirah.ai/verify-email?token=tok-abc" in sent_message.get_content()
+    link = "https://app.basirah.ai/verify-email?token=tok-abc"
+    assert link in sent_message.get_body(preferencelist=("plain",)).get_content()
+    assert link in sent_message.get_body(preferencelist=("html",)).get_content()
 
 
 @patch("src.auth.email_sender.smtplib.SMTP")
@@ -63,7 +65,50 @@ def test_smtp_sender_builds_the_real_reset_password_link(mock_smtp_cls):
     sender.send_password_reset_email("user@example.com", "tok-xyz")
 
     sent_message = mock_smtp.send_message.call_args[0][0]
-    assert "https://app.basirah.ai/reset-password?token=tok-xyz" in sent_message.get_content()
+    link = "https://app.basirah.ai/reset-password?token=tok-xyz"
+    assert link in sent_message.get_body(preferencelist=("plain",)).get_content()
+    assert link in sent_message.get_body(preferencelist=("html",)).get_content()
+
+
+@patch("src.auth.email_sender.smtplib.SMTP")
+def test_smtp_sender_sends_a_branded_welcome_email(mock_smtp_cls):
+    mock_smtp = MagicMock()
+    mock_smtp_cls.return_value.__enter__.return_value = mock_smtp
+
+    sender = SmtpEmailSender(
+        host="smtp.example.com", port=587, username="u", password="p",
+        from_email="no-reply@basirah.ai", frontend_base_url="https://app.basirah.ai", use_tls=True,
+    )
+    sender.send_welcome_email("user@example.com", "أحمد")
+
+    sent_message = mock_smtp.send_message.call_args[0][0]
+    assert "أحمد" in sent_message.get_body(preferencelist=("plain",)).get_content()
+    assert "أحمد" in sent_message.get_body(preferencelist=("html",)).get_content()
+
+
+@patch("src.auth.email_sender.smtplib.SMTP")
+def test_smtp_sender_sends_a_security_alert_email(mock_smtp_cls):
+    mock_smtp = MagicMock()
+    mock_smtp_cls.return_value.__enter__.return_value = mock_smtp
+
+    sender = SmtpEmailSender(
+        host="smtp.example.com", port=587, username="u", password="p",
+        from_email="no-reply@basirah.ai", frontend_base_url="https://app.basirah.ai", use_tls=True,
+    )
+    sender.send_security_alert_email("user@example.com", "تم تغيير كلمة المرور")
+
+    sent_message = mock_smtp.send_message.call_args[0][0]
+    assert "تم تغيير كلمة المرور" in sent_message.get_body(preferencelist=("plain",)).get_content()
+    assert "تم تغيير كلمة المرور" in sent_message.get_body(preferencelist=("html",)).get_content()
+
+
+def test_console_sender_never_raises_for_welcome_and_security_alert(caplog):
+    sender = ConsoleEmailSender()
+    with caplog.at_level("WARNING"):
+        sender.send_welcome_email("user@example.com", "أحمد")
+        sender.send_security_alert_email("user@example.com", "تنبيه أمني")
+    assert "user@example.com" in caplog.text
+    assert "تنبيه أمني" in caplog.text
 
 
 @patch("src.auth.email_sender.smtplib.SMTP")

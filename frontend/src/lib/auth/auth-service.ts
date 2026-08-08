@@ -71,6 +71,13 @@ export async function verifyEmail(token: string): Promise<void> {
   });
 }
 
+export async function resendVerification(email: string): Promise<void> {
+  await apiFetch("/api/v1/auth/resend-verification", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
 export async function login(
   email: string,
   password: string

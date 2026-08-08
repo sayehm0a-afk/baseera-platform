@@ -566,6 +566,37 @@ def test_forgot_password_and_reset_changes_password_and_revokes_sessions(client:
     assert new_login.status_code == 200
 
 
+def test_resend_verification_for_unknown_email_returns_generic_message(client: TestClient, db_session):
+    response = client.post("/api/v1/auth/resend-verification", json={"email": "nobody@example.com"})
+    assert response.status_code == 200
+    assert "message" in response.json()
+
+
+def test_resend_verification_issues_a_working_token(client: TestClient, db_session):
+    client.post("/api/v1/auth/register", json={"email": "resend@example.com", "password": "s3cret-password"})
+
+    with patch("src.auth.email_verification_service.get_email_sender") as mock_sender:
+        response = client.post("/api/v1/auth/resend-verification", json={"email": "resend@example.com"})
+        assert response.status_code == 200
+        raw_token = mock_sender.return_value.send_verification_email.call_args[0][1]
+
+    verify_response = client.post("/api/v1/auth/verify-email", json={"token": raw_token})
+    assert verify_response.status_code == 200
+
+
+def test_resend_verification_is_a_silent_no_op_for_an_already_verified_account(client: TestClient, db_session):
+    _register_verify_and_login(client, "already-verified@example.com")
+
+    with patch("src.auth.email_verification_service.get_email_sender") as mock_sender:
+        response = client.post(
+            "/api/v1/auth/resend-verification",
+            json={"email": "already-verified@example.com"},
+            headers=_csrf_headers(client),
+        )
+        assert response.status_code == 200
+        mock_sender.return_value.send_verification_email.assert_not_called()
+
+
 def test_logout_all_revokes_every_session(client: TestClient, db_session):
     _register_verify_and_login(client, "logoutall@example.com")
     response = client.post("/api/v1/auth/logout-all", headers=_csrf_headers(client))

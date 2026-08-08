@@ -62,6 +62,15 @@ def test_reset_password_changes_the_password_hash(session, verified_user):
     assert verify_password("old-password", updated.password_hash) is False
 
 
+def test_reset_password_sends_a_security_alert_email(session, verified_user):
+    raw_token = _issue_and_capture_reset_token(session, verified_user)
+
+    with patch("src.auth.password_reset_service.get_email_sender") as mock_sender:
+        password_reset_service.reset_password(session, raw_token, "new-password")
+        mock_sender.return_value.send_security_alert_email.assert_called_once()
+        assert mock_sender.return_value.send_security_alert_email.call_args[0][0] == "reset-me@example.com"
+
+
 def test_reset_password_rejects_unknown_token(session):
     with pytest.raises(InvalidOrExpiredTokenError):
         password_reset_service.reset_password(session, "not-a-real-token", "new-password")

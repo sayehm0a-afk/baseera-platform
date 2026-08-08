@@ -43,6 +43,14 @@ def test_verify_email_marks_user_verified(session, user):
     assert verified_user.is_email_verified is True
 
 
+def test_verify_email_sends_a_welcome_email_on_success(session, user):
+    raw_token = _issue_and_capture_token(session, user)
+
+    with patch("src.auth.email_verification_service.get_email_sender") as mock_sender:
+        email_verification_service.verify_email(session, raw_token)
+        mock_sender.return_value.send_welcome_email.assert_called_once_with("verify@example.com", user.full_name)
+
+
 def test_verify_email_rejects_unknown_token(session):
     with pytest.raises(InvalidOrExpiredTokenError):
         email_verification_service.verify_email(session, "not-a-real-token")
