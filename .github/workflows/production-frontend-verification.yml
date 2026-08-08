@@ -100,6 +100,39 @@ jobs:
             // Try to find and use a login form -- selector-agnostic: look
             // for an email input anywhere on the page (RTL Arabic UI may
             // not have stable English test-ids).
+            //
+            // Diagnostic capture (added after run 31276687473 showed a
+            // real login failure in-browser despite curl-based staff
+            // logins succeeding all session): every network
+            // request/response touching /api/v1/auth/* is logged, plus
+            // any console error, plus the exact error text (if any)
+            // rendered on the page after submit -- so a real failure
+            // reason is captured instead of just "still on /login".
+            const authNetworkLog = [];
+            page.on('request', (req) => {
+              if (req.url().includes('/api/v1/auth/')) {
+                authNetworkLog.push({ type: 'request', method: req.method(), url: req.url(), headers: req.headers() });
+              }
+            });
+            page.on('response', async (res) => {
+              if (res.url().includes('/api/v1/auth/')) {
+                let bodySnippet = '';
+                try { bodySnippet = (await res.text()).slice(0, 500); } catch (e) { bodySnippet = `<unreadable: ${e}>`; }
+                authNetworkLog.push({
+                  type: 'response',
+                  status: res.status(),
+                  url: res.url(),
+                  headers: res.headers(),
+                  body: bodySnippet,
+                });
+              }
+            });
+            const consoleErrors = [];
+            page.on('console', (msg) => {
+              if (msg.type() === 'error') consoleErrors.push(msg.text());
+            });
+            page.on('pageerror', (err) => consoleErrors.push(String(err)));
+
             try {
               const emailInput = page.locator('input[type="email"], input[name="email"]').first();
               await emailInput.waitFor({ timeout: 10000 });
@@ -116,13 +149,28 @@ jobs:
               const bodyText = await page.textContent('body');
               const stillOnLoginForm = await page.locator('input[type="password"]').count() > 0
                 && (await page.url()).includes('login');
+              // Capture whatever Arabic/error text the login page itself
+              // is showing (ERROR_MESSAGES map in login/page.tsx renders
+              // into a visible element) -- this is the real, in-app
+              // explanation for the failure, not an inference.
+              let visibleErrorText = null;
+              try {
+                const errorLocator = page.locator('[role="alert"], .error, [data-testid="login-error"]').first();
+                if (await errorLocator.count() > 0) {
+                  visibleErrorText = await errorLocator.textContent();
+                }
+              } catch (e) { /* no error element found -- fine */ }
               record(
                 'login_flow_reaches_authenticated_area',
                 !stillOnLoginForm,
-                `Post-login URL: ${page.url()}`
+                `Post-login URL: ${page.url()} | visible_error_text: ${JSON.stringify(visibleErrorText)}`
               );
+              fs.writeFileSync('/tmp/screenshots/auth_network_log.json', JSON.stringify(authNetworkLog, null, 2));
+              fs.writeFileSync('/tmp/screenshots/console_errors.json', JSON.stringify(consoleErrors, null, 2));
             } catch (e) {
               record('login_flow_reaches_authenticated_area', false, String(e));
+              fs.writeFileSync('/tmp/screenshots/auth_network_log.json', JSON.stringify(authNetworkLog, null, 2));
+              fs.writeFileSync('/tmp/screenshots/console_errors.json', JSON.stringify(consoleErrors, null, 2));
             }
 
             // Real market-coverage evidence check: the page body must not
