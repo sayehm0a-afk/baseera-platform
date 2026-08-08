@@ -226,6 +226,47 @@ jobs:
             // text -- count distinct 4-digit Tadawul-style symbol tokens
             // visible anywhere on the current page as a rough breadth
             // signal (not a strict assertion, since layout varies).
+            //
+            // Deterministic wait: the dashboard's own four data calls
+            // (summary/sectors/alerts/rankings, see dashboard/page.tsx's
+            // useDashboardData) are async and fire after the page has
+            // already navigated -- networkidle can resolve before React
+            // has committed their results to the DOM. Rather than guess,
+            // capture the real responses for every /api/v1/market/* call
+            // this page makes, so the actual data (or its absence) is
+            // known instead of inferred from a symbol-count heuristic
+            // alone.
+            const marketApiLog = [];
+            page.on('response', async (res) => {
+              if (res.url().includes('/api/v1/market/')) {
+                let snippet = '';
+                try { snippet = (await res.text()).slice(0, 800); } catch (e) { snippet = `<unreadable: ${e}>`; }
+                marketApiLog.push({ status: res.status(), url: res.url(), body: snippet });
+              }
+            });
+            // Force a fresh navigation to /dashboard so the four calls
+            // above are guaranteed to fire fresh under this listener
+            // (they may have already fired once during the post-login
+            // redirect, before the listener was attached).
+            try {
+              await page.goto(`${FRONTEND_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
+              await Promise.all([
+                page.waitForResponse((r) => r.url().includes('/api/v1/market/summary'), { timeout: 15000 }).catch(() => null),
+                page.waitForResponse((r) => r.url().includes('/api/v1/market/sectors'), { timeout: 15000 }).catch(() => null),
+                page.waitForResponse((r) => r.url().includes('/api/v1/market/alerts'), { timeout: 15000 }).catch(() => null),
+                page.waitForResponse((r) => r.url().includes('/api/v1/market/rankings'), { timeout: 15000 }).catch(() => null),
+              ]);
+              // One extra tick for React to commit state -> DOM after the
+              // last awaited fetch resolves (Promise.all above resolves
+              // the instant headers/body are readable, not after React's
+              // subsequent render commit).
+              await page.waitForTimeout(500);
+            } catch (e) {
+              console.log('Dashboard data-wait error:', String(e));
+            }
+            console.log('\n=== DASHBOARD MARKET API RESPONSES (/api/v1/market/*) ===');
+            console.log(JSON.stringify(marketApiLog, null, 2));
+
             try {
               const bodyText = await page.textContent('body');
               const symbolMatches = new Set((bodyText.match(/\b\d{4}\b/g) || []));
