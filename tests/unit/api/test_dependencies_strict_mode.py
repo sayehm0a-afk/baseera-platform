@@ -21,6 +21,9 @@ class _FakeSahmkProvider:
     async def authenticate(self):
         return False
 
+    async def check_connectivity(self):
+        return False
+
     async def disconnect(self):
         pass
 
@@ -34,6 +37,7 @@ def _reset(monkeypatch):
     monkeypatch.setenv("STRICT_REAL_DATA", "true")
     monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
     monkeypatch.setenv("SAHMK_PROBE_TIMEOUT_SECONDS", "0.1")
+    monkeypatch.setenv("SAHMK_PROBE_MAX_ATTEMPTS", "1")
     yield
     provider_factory.reset_provider_cache()
     fundamental_provider_factory.reset_fundamental_provider_cache()

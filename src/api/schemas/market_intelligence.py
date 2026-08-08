@@ -3,7 +3,7 @@ conventions as src/api/schemas/backtesting.py and stocks.py.
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -272,6 +272,56 @@ class UniverseBucketCountOut(BaseModel):
 
     bucket: Optional[str] = None
     count: int
+
+
+class ObservedFieldValueOut(BaseModel):
+    """One distinct literal value SAHMK's /companies/ directory actually
+    returned for a given field (market/market_segment/security_type/
+    status/is_etf), and how many instruments carried it -- the real
+    evidence universe_policy.classify_universe's marker lists are
+    checked against, surfaced instead of silently discarded."""
+
+    value: str
+    count: int
+
+
+class ObservedFieldOut(BaseModel):
+    field: str
+    distinct_values: List[ObservedFieldValueOut]
+
+
+class UniverseSampleEntryOut(BaseModel):
+    """One raw /companies/ directory entry's real classification-relevant
+    fields, for a human to eyeball against `observed_fields` -- e.g.
+    confirming a specific symbol/name is a known Nomu-listed company
+    lines up with a specific market_segment literal."""
+
+    symbol: str
+    name_en: Optional[str] = None
+    market: Optional[str] = None
+    market_segment: Optional[str] = None
+    security_type: Optional[str] = None
+    status: Optional[str] = None
+    bucket: str
+
+
+class UniverseDiagnosticsOut(BaseModel):
+    """Response for GET /api/v1/admin/market-intelligence/
+    universe-diagnostics -- a fresh, live SAHMK /companies/ directory
+    call (cached 24h, so cheap to repeat) run through
+    universe_policy.classify_universe, with its full per-field
+    distinct-value breakdown surfaced. Exists to answer, with real
+    evidence rather than a guess, whether SAHMK's real market_segment
+    (or another field) values for Nomu-listed instruments are simply
+    not among the substrings universe_policy currently matches."""
+
+    generated_at: datetime
+    provider_kind: Optional[str] = None
+    sahmk_error: Optional[str] = None
+    total_instruments: int = 0
+    bucket_counts: Dict[str, int] = Field(default_factory=dict)
+    observed_fields: List[ObservedFieldOut] = Field(default_factory=list)
+    sample_entries: List[UniverseSampleEntryOut] = Field(default_factory=list)
 
 
 class IngestionJobStatusOut(BaseModel):

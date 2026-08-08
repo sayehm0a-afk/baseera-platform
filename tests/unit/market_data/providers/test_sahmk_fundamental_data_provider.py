@@ -11,7 +11,11 @@ from src.market_data.providers.fundamental_data_provider import (
     ProviderHealth,
 )
 from src.market_data.providers.sahmk_fundamental_data_provider import SahmkFundamentalDataProvider
-from src.market_data.sahmk.exceptions import SahmkEntitlementError, SahmkResponseValidationError
+from src.market_data.sahmk.exceptions import (
+    SahmkAuthenticationError,
+    SahmkEntitlementError,
+    SahmkResponseValidationError,
+)
 from src.market_data.sahmk.models import SahmkCompanyProfile, SahmkDividend, SahmkFinancials
 
 
@@ -60,6 +64,33 @@ async def test_authenticate_treats_entitlement_error_as_valid_key():
     provider = _provider_with_mock_service()
     provider._service.get_index_snapshot.side_effect = SahmkEntitlementError("plan limit")
     assert await provider.authenticate() is True
+
+
+# --- check_connectivity() -- raises instead of swallowing, unlike
+# authenticate() above; used by fundamental_provider_factory's
+# connectivity-probe retry. ------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_connectivity_succeeds():
+    provider = _provider_with_mock_service()
+    provider._service.get_index_snapshot.return_value = None
+    assert await provider.check_connectivity() is True
+
+
+@pytest.mark.asyncio
+async def test_check_connectivity_treats_entitlement_error_as_valid_key():
+    provider = _provider_with_mock_service()
+    provider._service.get_index_snapshot.side_effect = SahmkEntitlementError("plan limit")
+    assert await provider.check_connectivity() is True
+
+
+@pytest.mark.asyncio
+async def test_check_connectivity_raises_on_rejected_key():
+    provider = _provider_with_mock_service()
+    provider._service.get_index_snapshot.side_effect = SahmkAuthenticationError("bad key")
+    with pytest.raises(SahmkAuthenticationError):
+        await provider.check_connectivity()
 
 
 # --- get_fundamentals() -----------------------------------------------------

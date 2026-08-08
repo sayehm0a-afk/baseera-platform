@@ -33,6 +33,10 @@ from typing import Optional, Tuple
 
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.market_data import config as market_data_config
+from src.market_data.provider_connectivity_retry import (
+    ProviderProbeTimeoutError,
+    probe_connectivity_with_retry,
+)
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
@@ -248,18 +252,18 @@ async def _select_provider(
             await provider.disconnect()
 
     try:
-        reachable = await asyncio.wait_for(
-            provider.authenticate(),
-            timeout=market_data_config.get_provider_probe_timeout_seconds(),
+        reachable = await probe_connectivity_with_retry(
+            provider.check_connectivity, provider_label="SahmkMarketDataProvider"
         )
-    except asyncio.TimeoutError:
+    except ProviderProbeTimeoutError:
         await _cleanup_on_failure()
         if strict:
-            raise StrictRealDataUnavailableError("SAHMK connectivity probe timed out.")
+            raise StrictRealDataUnavailableError("SAHMK connectivity probe timed out after retrying.")
         logger.warning(
-            "SAHMK connectivity probe timed out -- falling back to DevMarketDataProvider "
-            "(synthetic data) for this process. This is expected in network-restricted "
-            "environments; SAHMK is used automatically once network access is available."
+            "SAHMK connectivity probe timed out after retrying -- falling back to "
+            "DevMarketDataProvider (synthetic data) for this process. This is expected in "
+            "network-restricted environments; SAHMK is used automatically once network "
+            "access is available."
         )
         return DevMarketDataProvider(), "dev"
     except (SahmkError, CircuitBreakerOpenError) as exc:

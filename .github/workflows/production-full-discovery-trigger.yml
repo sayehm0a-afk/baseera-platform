@@ -15,6 +15,18 @@ name: Production Full-Market Discovery Trigger (temporary, one-shot)
 # HTTP response, in the same worker process) and its own docstring
 # states a full pass "can take many minutes" -- this workflow polls
 # for up to its own timeout rather than assuming a fixed duration.
+#
+# Completion detection is based on each of the 4 ingestion jobs'
+# (symbols/historical_ohlcv/fundamentals/dividends) own started_at/
+# status reaching a terminal state (success/failed/partial) for a run
+# that started at or after this workflow's own trigger -- NOT on
+# total_stocks growing past its pre-trigger baseline. That growth
+# check was correct the first time this workflow ran against an
+# empty/cold-start universe, but is permanently false afterwards: once
+# the universe is already populated, a fully successful re-run (e.g.
+# retrying a job that failed on SAHMK connectivity) legitimately
+# leaves total_stocks unchanged, and the old check would burn its
+# entire 40-minute budget waiting for growth that will never come.
 
 on:
   workflow_dispatch: {}
@@ -79,6 +91,15 @@ jobs:
           d = json.load(open('/tmp/coverage_before.json'))
           print('BEFORE: total_stocks=%s active_stocks=%s main_market=%s nomu_market=%s' % (
               d.get('total_stocks'), d.get('active_stocks'), d.get('main_market_stocks'), d.get('nomu_market_stocks')))
+          # Per-job baseline started_at, keyed by job_name -- completion
+          # detection below requires each job's started_at to move past
+          # this baseline, so a stale prior run's terminal status can
+          # never be mistaken for the new run's completion.
+          baseline_started_at = {
+              r.get('job_name'): r.get('started_at') for r in (d.get('latest_ingestion_runs') or [])
+          }
+          json.dump(baseline_started_at, open('/tmp/baseline_started_at.json', 'w'))
+          print('Baseline per-job started_at:', baseline_started_at)
           "
 
       - name: Trigger full discovery/ingestion pass
@@ -98,12 +119,11 @@ jobs:
           ACCEPTED=$(python3 -c "import json; print(json.load(open('/tmp/trigger_body.json')).get('accepted'))")
           echo "accepted: $ACCEPTED"
 
-      - name: Poll coverage for real growth (up to 40 minutes, checking every 60s)
+      - name: Poll each ingestion job's real status (up to 40 minutes, checking every 60s)
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
         run: |
-          BEFORE_TOTAL=$(python3 -c "import json; print(json.load(open('/tmp/coverage_before.json')).get('total_stocks') or 0)")
-          echo "Baseline total_stocks: $BEFORE_TOTAL"
+          EXPECTED_JOBS='["symbols","historical_ohlcv","fundamentals","dividends"]'
           for i in $(seq 1 40); do
             sleep 60
             curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
@@ -117,18 +137,34 @@ jobs:
               d.get('total_stocks'), d.get('active_stocks'), d.get('main_market_stocks'), d.get('nomu_market_stocks'),
               d.get('stocks_with_price_history'), [r.get('job_name') for r in running]))
           for r in runs:
-              print('  -', r.get('job_name'), '|', r.get('status'), '| succeeded:', r.get('symbols_succeeded'), '| failed:', r.get('symbols_failed'), '| finished_at:', r.get('finished_at'))
+              print('  -', r.get('job_name'), '|', r.get('status'), '| succeeded:', r.get('symbols_succeeded'), '| failed:', r.get('symbols_failed'), '| started_at:', r.get('started_at'), '| finished_at:', r.get('finished_at'))
           "
-            CURRENT_TOTAL=$(python3 -c "import json; print(json.load(open('/tmp/coverage_poll.json')).get('total_stocks') or 0)")
             ALL_DONE=$(python3 -c "
           import json
+          expected_jobs = json.loads('$EXPECTED_JOBS')
+          baseline = json.load(open('/tmp/baseline_started_at.json'))
           d = json.load(open('/tmp/coverage_poll.json'))
-          runs = d.get('latest_ingestion_runs') or []
-          in_flight = [r for r in runs if r.get('status') == 'running']
-          print('yes' if not in_flight and runs else 'no')
+          by_name = {r.get('job_name'): r for r in (d.get('latest_ingestion_runs') or [])}
+          # Complete only once every expected job has (a) a started_at
+          # strictly newer than its pre-trigger baseline -- proving
+          # this is the run this workflow itself triggered, not a
+          # stale earlier one -- and (b) a terminal status (never
+          # 'running'). A job missing from the response at all is
+          # treated as not yet done.
+          done_jobs = []
+          for name in expected_jobs:
+              run = by_name.get(name)
+              if run is None:
+                  continue
+              started_at = run.get('started_at')
+              is_new_run = started_at is not None and started_at != baseline.get(name)
+              is_terminal = run.get('status') in ('success', 'failed', 'partial')
+              if is_new_run and is_terminal:
+                  done_jobs.append(name)
+          print('yes' if set(done_jobs) == set(expected_jobs) else 'no')
           ")
-            if [ "$ALL_DONE" = "yes" ] && [ "$CURRENT_TOTAL" -gt "$BEFORE_TOTAL" ]; then
-              echo "Discovery pass complete -- total_stocks grew from $BEFORE_TOTAL to $CURRENT_TOTAL and no jobs are in flight."
+            if [ "$ALL_DONE" = "yes" ]; then
+              echo "Discovery pass complete -- all 4 ingestion jobs (symbols/historical_ohlcv/fundamentals/dividends) reached a terminal status for this run."
               break
             fi
           done
@@ -158,6 +194,7 @@ jobs:
             /tmp/coverage_before.json
             /tmp/coverage_final.json
             /tmp/trigger_body.json
+            /tmp/baseline_started_at.json
           retention-days: 14
 
       - name: Clean up local session artifacts

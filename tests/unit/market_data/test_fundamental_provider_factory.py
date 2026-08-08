@@ -22,6 +22,9 @@ class _FakeSahmkFundamentalProvider:
     async def authenticate(self):
         raise NotImplementedError
 
+    async def check_connectivity(self):
+        raise NotImplementedError
+
     async def disconnect(self):
         self.disconnected = True
 
@@ -36,6 +39,10 @@ def _reset(monkeypatch):
     monkeypatch.delenv("MARKET_DATA_PROVIDER", raising=False)
     monkeypatch.delenv("SAHMK_API_KEY", raising=False)
     monkeypatch.setenv("SAHMK_PROBE_TIMEOUT_SECONDS", "0.1")
+    # 1 attempt, no retry: these tests exercise the *fallback* behavior
+    # on an unreachable/timed-out probe, not the retry mechanics
+    # themselves -- see test_provider_connectivity_retry.py for those.
+    monkeypatch.setenv("SAHMK_PROBE_MAX_ATTEMPTS", "1")
     monkeypatch.setenv("MARKET_DATA_PROVIDER_CACHE_SECONDS", "60")
     monkeypatch.setenv("MARKET_DATA_PROVIDER_DISCONNECT_GRACE_SECONDS", "0")
     yield
@@ -63,7 +70,7 @@ async def test_auto_with_credentials_and_reachable_sahmk_returns_sahmk_provider(
     async def _ok():
         return True
 
-    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+    _FakeSahmkFundamentalProvider.check_connectivity = lambda self: _ok()
 
     provider = await fundamental_provider_factory.get_fundamental_data_provider()
     assert isinstance(provider, _FakeSahmkFundamentalProvider)
@@ -77,7 +84,7 @@ async def test_auto_with_credentials_but_unreachable_host_falls_back_to_dev(monk
     async def _network_error():
         raise SahmkRequestError("Network error calling SAHMK API: connection refused")
 
-    _FakeSahmkFundamentalProvider.authenticate = lambda self: _network_error()
+    _FakeSahmkFundamentalProvider.check_connectivity = lambda self: _network_error()
 
     provider = await fundamental_provider_factory.get_fundamental_data_provider()
     assert isinstance(provider, DevFundamentalDataProvider)
@@ -92,7 +99,7 @@ async def test_auto_with_credentials_probe_timeout_falls_back_to_dev(monkeypatch
         await asyncio.sleep(10)
         return True
 
-    _FakeSahmkFundamentalProvider.authenticate = lambda self: _hangs()
+    _FakeSahmkFundamentalProvider.check_connectivity = lambda self: _hangs()
 
     provider = await fundamental_provider_factory.get_fundamental_data_provider()
     assert isinstance(provider, DevFundamentalDataProvider)
@@ -105,7 +112,7 @@ async def test_selection_is_cached_across_calls(monkeypatch):
     async def _ok():
         return True
 
-    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+    _FakeSahmkFundamentalProvider.check_connectivity = lambda self: _ok()
 
     await fundamental_provider_factory.get_fundamental_data_provider()
     await fundamental_provider_factory.get_fundamental_data_provider()
@@ -124,7 +131,7 @@ async def test_force_refresh_reuses_the_same_instance_when_sahmk_stays_healthy(m
     async def _ok():
         return True
 
-    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+    _FakeSahmkFundamentalProvider.check_connectivity = lambda self: _ok()
 
     first = await fundamental_provider_factory.get_fundamental_data_provider()
     second = await fundamental_provider_factory.get_fundamental_data_provider(force_refresh=True)
@@ -141,7 +148,7 @@ async def test_repeated_healthy_refreshes_never_create_a_new_instance_or_disconn
     async def _ok():
         return True
 
-    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+    _FakeSahmkFundamentalProvider.check_connectivity = lambda self: _ok()
 
     for _ in range(5):
         await fundamental_provider_factory.get_fundamental_data_provider(force_refresh=True)
@@ -157,14 +164,14 @@ async def test_kind_change_still_eventually_disconnects_the_superseded_provider(
     async def _ok():
         return True
 
-    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+    _FakeSahmkFundamentalProvider.check_connectivity = lambda self: _ok()
     sahmk_provider = await fundamental_provider_factory.get_fundamental_data_provider()
     assert sahmk_provider.disconnected is False
 
     async def _now_unreachable():
         raise SahmkRequestError("Network error calling SAHMK API: connection refused")
 
-    _FakeSahmkFundamentalProvider.authenticate = lambda self: _now_unreachable()
+    _FakeSahmkFundamentalProvider.check_connectivity = lambda self: _now_unreachable()
     dev_provider = await fundamental_provider_factory.get_fundamental_data_provider(force_refresh=True)
 
     assert isinstance(dev_provider, DevFundamentalDataProvider)
@@ -181,7 +188,7 @@ async def test_cache_hit_does_not_disconnect_the_still_current_provider(monkeypa
     async def _ok():
         return True
 
-    _FakeSahmkFundamentalProvider.authenticate = lambda self: _ok()
+    _FakeSahmkFundamentalProvider.check_connectivity = lambda self: _ok()
 
     provider = await fundamental_provider_factory.get_fundamental_data_provider()
     same_provider = await fundamental_provider_factory.get_fundamental_data_provider()

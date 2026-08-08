@@ -24,6 +24,9 @@ class _FakeSahmkProvider:
     async def authenticate(self):
         raise NotImplementedError  # each test overrides this on the instance
 
+    async def check_connectivity(self):
+        raise NotImplementedError  # each test overrides this on the instance
+
     async def disconnect(self):
         self.disconnected = True
 
@@ -36,6 +39,10 @@ def _reset(monkeypatch):
     monkeypatch.delenv("MARKET_DATA_PROVIDER", raising=False)
     monkeypatch.delenv("SAHMK_API_KEY", raising=False)
     monkeypatch.setenv("SAHMK_PROBE_TIMEOUT_SECONDS", "0.1")
+    # 1 attempt, no retry: these tests exercise the *fallback* behavior
+    # on an unreachable/timed-out probe, not the retry mechanics
+    # themselves -- see test_provider_connectivity_retry.py for those.
+    monkeypatch.setenv("SAHMK_PROBE_MAX_ATTEMPTS", "1")
     monkeypatch.setenv("MARKET_DATA_PROVIDER_CACHE_SECONDS", "60")
     # Near-instant so tests can observe a genuine-kind-change disconnect
     # without a real 90s wait -- see the grace-delay tests below.
@@ -75,7 +82,7 @@ async def test_auto_with_credentials_and_reachable_sahmk_returns_sahmk_provider(
     async def _ok():
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
 
     provider = await provider_factory.get_market_data_provider()
     assert isinstance(provider, _FakeSahmkProvider)
@@ -89,7 +96,7 @@ async def test_auto_with_credentials_but_rejected_key_falls_back_to_dev(monkeypa
     async def _rejected():
         return False
 
-    _FakeSahmkProvider.authenticate = lambda self: _rejected()
+    _FakeSahmkProvider.check_connectivity = lambda self: _rejected()
 
     provider = await provider_factory.get_market_data_provider()
     assert isinstance(provider, DevMarketDataProvider)
@@ -105,7 +112,7 @@ async def test_auto_with_credentials_but_unreachable_host_falls_back_to_dev(monk
     async def _network_error():
         raise SahmkRequestError("Network error calling SAHMK API: connection refused")
 
-    _FakeSahmkProvider.authenticate = lambda self: _network_error()
+    _FakeSahmkProvider.check_connectivity = lambda self: _network_error()
 
     provider = await provider_factory.get_market_data_provider()
     assert isinstance(provider, DevMarketDataProvider)
@@ -120,7 +127,7 @@ async def test_auto_with_credentials_probe_timeout_falls_back_to_dev(monkeypatch
         await asyncio.sleep(10)
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _hangs()
+    _FakeSahmkProvider.check_connectivity = lambda self: _hangs()
 
     provider = await provider_factory.get_market_data_provider()
     assert isinstance(provider, DevMarketDataProvider)
@@ -133,7 +140,7 @@ async def test_selection_is_cached_across_calls(monkeypatch):
     async def _ok():
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
 
     await provider_factory.get_market_data_provider()
     await provider_factory.get_market_data_provider()
@@ -146,7 +153,7 @@ async def test_force_refresh_bypasses_cache(monkeypatch):
     genuinely re-verify reachability -- but, per the concurrency fix
     below, that re-verification reuses the existing healthy instance
     rather than always constructing a new one. Observed here via a real
-    authenticate() call count, not instance count."""
+    check_connectivity() call count, not instance count."""
     monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
 
     call_count = 0
@@ -156,7 +163,7 @@ async def test_force_refresh_bypasses_cache(monkeypatch):
         call_count += 1
         return True
 
-    _FakeSahmkProvider.authenticate = _ok
+    _FakeSahmkProvider.check_connectivity = _ok
 
     await provider_factory.get_market_data_provider()
     await provider_factory.get_market_data_provider(force_refresh=True)
@@ -197,7 +204,7 @@ async def test_force_refresh_reuses_the_same_instance_when_sahmk_stays_healthy(m
     async def _ok():
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
 
     first = await provider_factory.get_market_data_provider()
     second = await provider_factory.get_market_data_provider(force_refresh=True)
@@ -217,7 +224,7 @@ async def test_repeated_healthy_refreshes_never_create_a_new_instance_or_disconn
     async def _ok():
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
 
     for _ in range(5):
         await provider_factory.get_market_data_provider(force_refresh=True)
@@ -239,14 +246,14 @@ async def test_kind_change_still_eventually_disconnects_the_superseded_provider(
     async def _ok():
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
     sahmk_provider = await provider_factory.get_market_data_provider()
     assert sahmk_provider.disconnected is False
 
     async def _now_unreachable():
         raise SahmkRequestError("Network error calling SAHMK API: connection refused")
 
-    _FakeSahmkProvider.authenticate = lambda self: _now_unreachable()
+    _FakeSahmkProvider.check_connectivity = lambda self: _now_unreachable()
     dev_provider = await provider_factory.get_market_data_provider(force_refresh=True)
 
     assert isinstance(dev_provider, DevMarketDataProvider)
@@ -273,7 +280,7 @@ async def test_a_provider_still_mid_request_survives_a_concurrent_kind_change(mo
     async def _ok():
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
     held_provider = await provider_factory.get_market_data_provider()
 
     request_started = asyncio.Event()
@@ -294,7 +301,7 @@ async def test_a_provider_still_mid_request_survives_a_concurrent_kind_change(mo
     async def _now_unreachable():
         raise SahmkRequestError("Network error calling SAHMK API: connection refused")
 
-    _FakeSahmkProvider.authenticate = lambda self: _now_unreachable()
+    _FakeSahmkProvider.check_connectivity = lambda self: _now_unreachable()
     await provider_factory.get_market_data_provider(force_refresh=True)
 
     # The swap has happened, but the held provider must still be alive
@@ -314,7 +321,7 @@ async def test_cache_hit_does_not_disconnect_the_still_current_provider(monkeypa
     async def _ok():
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
 
     provider = await provider_factory.get_market_data_provider()
     same_provider = await provider_factory.get_market_data_provider()
@@ -340,7 +347,7 @@ async def test_switching_from_dev_to_sahmk_does_not_attempt_to_disconnect_dev_in
     async def _ok():
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
 
     sahmk_provider = await provider_factory.get_market_data_provider(force_refresh=True)
 

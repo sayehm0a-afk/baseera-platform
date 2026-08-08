@@ -35,6 +35,9 @@ class _FakeSahmkProvider:
     async def authenticate(self):
         return True
 
+    async def check_connectivity(self):
+        return True
+
     async def disconnect(self):
         self.disconnected = True
 
@@ -53,6 +56,7 @@ def _reset(monkeypatch):
     monkeypatch.delenv("SAHMK_API_KEY", raising=False)
     monkeypatch.delenv("STRICT_REAL_DATA", raising=False)
     monkeypatch.setenv("SAHMK_PROBE_TIMEOUT_SECONDS", "0.1")
+    monkeypatch.setenv("SAHMK_PROBE_MAX_ATTEMPTS", "1")
     monkeypatch.setenv("MARKET_DATA_PROVIDER_CACHE_SECONDS", "60")
     yield
     provider_factory.reset_provider_cache()
@@ -118,7 +122,7 @@ async def test_to_dict_and_reason_never_contain_the_api_key(factory, monkeypatch
     async def _rejected(self):
         return False
 
-    _FakeSahmkProvider.authenticate = _rejected
+    _FakeSahmkProvider.check_connectivity = _rejected
 
     result = await run_sahmk_preflight(factory)
     assert result.ready is False
