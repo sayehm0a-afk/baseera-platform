@@ -10,6 +10,7 @@ a refactor) -- both ingest_ohlcv.py and ingest_historical_ohlcv.py need
 the identical single-bar upsert.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -21,6 +22,36 @@ from sqlalchemy.orm import Session
 from src.domain.models import PriceBar, Stock, Timeframe
 
 logger = logging.getLogger(__name__)
+
+_MAX_RATE_LIMIT_PAUSE_SECONDS = 30.0
+
+
+async def sleep_if_rate_limited(exc: Exception) -> None:
+    """If `exc` carries a real, server-provided Retry-After hint
+    (SahmkRateLimitError.retry_after, set once SahmkClient's own
+    3-attempt retry is exhausted on a 429), sleeps for that long --
+    capped at _MAX_RATE_LIMIT_PAUSE_SECONDS so a large or malformed
+    value can never stall a job for an unbounded time -- before the
+    caller's per-symbol loop moves on to the next symbol.
+
+    Without this, a genuine SAHMK rate-limit response was followed
+    immediately by the very next symbol's request, with nothing in any
+    ingestion job actually backing off at the job level -- fine at
+    ~100 symbols, but exactly the kind of gap that turns one real 429
+    into dozens of consecutive symbol failures once a run covers ~400
+    symbols. A no-op for any other exception (no retry_after
+    attribute, or None)."""
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after is None:
+        return
+    delay = min(max(float(retry_after), 0.0), _MAX_RATE_LIMIT_PAUSE_SECONDS)
+    if delay > 0:
+        logger.warning(
+            "Rate-limited by SAHMK (retry_after=%.1fs) -- pausing %.1fs before the next symbol.",
+            retry_after,
+            delay,
+        )
+        await asyncio.sleep(delay)
 
 
 @dataclass

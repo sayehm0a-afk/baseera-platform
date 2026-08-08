@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from src.domain.models import Stock
-from src.market_data.ingestion._common import IngestionResult, get_or_create_stock
+from src.market_data.ingestion._common import IngestionResult, get_or_create_stock, sleep_if_rate_limited
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,7 @@ async def sync_symbols(
             result.symbols_failed += 1
             result.errors[symbol] = str(exc)
             logger.error("Failed to sync symbol '%s': %s", symbol, exc)
+            await sleep_if_rate_limited(exc)
         finally:
             session.close()
 

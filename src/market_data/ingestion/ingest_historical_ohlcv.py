@@ -25,7 +25,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.domain.models import PriceBar, Timeframe
-from src.market_data.ingestion._common import IngestionResult, get_or_create_stock, upsert_price_bar
+from src.market_data.ingestion._common import (
+    IngestionResult,
+    get_or_create_stock,
+    sleep_if_rate_limited,
+    upsert_price_bar,
+)
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 
 logger = logging.getLogger(__name__)
@@ -88,6 +93,7 @@ async def ingest_historical_ohlcv(
             result.symbols_failed += 1
             result.errors[symbol] = str(exc)
             logger.error("Failed to ingest historical OHLCV for symbol '%s': %s", symbol, exc)
+            await sleep_if_rate_limited(exc)
         finally:
             session.close()
 
