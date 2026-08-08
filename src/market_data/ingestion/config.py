@@ -82,3 +82,16 @@ def get_ingestion_job_max_attempts() -> int:
 
 def get_ingestion_job_retry_base_delay_seconds() -> float:
     return float(os.getenv("INGESTION_JOB_RETRY_BASE_DELAY_SECONDS", "5"))
+
+
+def get_max_ingestion_job_run_duration_hours() -> float:
+    """Mirrors src.market_intelligence.config.get_max_scan_run_duration_hours's
+    reap_stale_runs pattern for the same underlying failure mode: a
+    process killed/restarted between run_ingestion_job's RUNNING insert
+    and its finished_at update leaves an IngestionRunLog row RUNNING
+    forever, which would otherwise permanently block every future
+    POST /full-discovery (its in-flight guard matches on
+    finished_at IS NULL with no staleness check). A full discovery
+    pass can legitimately run for "many minutes" per that route's own
+    docstring, so this default is generous, not tight."""
+    return float(os.getenv("INGESTION_MAX_JOB_RUN_DURATION_HOURS", "6"))

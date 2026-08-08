@@ -363,6 +363,10 @@ async def trigger_full_discovery(
     """
     triggered_at = datetime.now(timezone.utc)
 
+    from src.market_data.ingestion.scheduler import reap_stale_ingestion_runs
+
+    reap_stale_ingestion_runs(session, ingestion_config.get_max_ingestion_job_run_duration_hours())
+
     in_flight = (
         session.query(IngestionRunLog)
         .filter(IngestionRunLog.job_name.in_(_INGESTION_JOB_NAMES))

@@ -723,6 +723,79 @@ def test_full_discovery_reports_overlap_when_a_job_is_already_running(client, se
     assert "already running" in body["message"]
 
 
+def test_full_discovery_reaps_a_stale_running_row_instead_of_blocking_forever(
+    client, session_factory, as_staff, monkeypatch
+):
+    """A process killed/restarted mid-run leaves an IngestionRunLog row
+    RUNNING with no finished_at forever -- indistinguishable from a
+    genuinely in-progress job to the naive in-flight check. Without the
+    reap_stale_ingestion_runs call, one such row (as was found in
+    production, stuck since a container restart days earlier) would
+    permanently block every future full-discovery trigger. A row older
+    than the configured max age must be reaped (marked FAILED) so a
+    fresh trigger is accepted."""
+    from src.domain.models import IngestionJobStatus, IngestionRunLog
+    from src.market_data.providers.dev_fundamental_data_provider import DevFundamentalDataProvider
+
+    monkeypatch.setenv("INGESTION_MAX_JOB_RUN_DURATION_HOURS", "6")
+
+    session = session_factory()
+    stale_started_at = datetime.now(timezone.utc) - timedelta(hours=100)
+    session.add(
+        IngestionRunLog(job_name="symbols", started_at=stale_started_at, status=IngestionJobStatus.RUNNING)
+    )
+    session.commit()
+    stale_row_id = session.query(IngestionRunLog).filter_by(job_name="symbols").first().id
+    session.close()
+
+    async def _get_dev_market_provider():
+        return DevMarketDataProvider()
+
+    async def _get_dev_fundamental_provider():
+        return DevFundamentalDataProvider()
+
+    monkeypatch.setattr("src.market_data.ingestion.scheduler.get_market_data_provider", _get_dev_market_provider)
+    monkeypatch.setattr(
+        "src.market_data.ingestion.scheduler.get_fundamental_data_provider", _get_dev_fundamental_provider
+    )
+
+    response = client.post("/api/v1/admin/market-intelligence/full-discovery")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["job_names"] == ["symbols", "historical_ohlcv", "fundamentals", "dividends"]
+
+    session = session_factory()
+    stale_row = session.query(IngestionRunLog).filter_by(id=stale_row_id).one()
+    assert stale_row.status == IngestionJobStatus.FAILED
+    assert stale_row.finished_at is not None
+    assert "Reaped" in stale_row.error_summary
+    session.close()
+
+
+def test_full_discovery_still_blocks_on_a_genuinely_recent_running_row(client, session_factory, as_staff):
+    """The reap only clears rows older than the configured max age --
+    a job that started moments ago must still be treated as in-flight."""
+    from src.domain.models import IngestionJobStatus, IngestionRunLog
+
+    session = session_factory()
+    session.add(
+        IngestionRunLog(
+            job_name="historical_ohlcv", started_at=datetime.now(timezone.utc), status=IngestionJobStatus.RUNNING
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.post("/api/v1/admin/market-intelligence/full-discovery")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert "already running" in body["message"]
+
+
 # --- GET /decision-intelligence -------------------------------------------
 
 

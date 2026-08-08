@@ -4,6 +4,7 @@ monkeypatched to a fast no-op throughout, matching the established
 test_client.py convention)."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -15,6 +16,7 @@ from src.market_data.ingestion._common import IngestionResult
 from src.market_data.ingestion.scheduler import (
     IngestionScheduler,
     _NonDisconnectingProviderProxy,
+    reap_stale_ingestion_runs,
     run_ingestion_job,
 )
 
@@ -515,3 +517,74 @@ async def test_run_all_jobs_once_records_a_failed_job_but_still_runs_the_rest(se
     # symbols was retried up to the configured max, then the other three ran once each
     assert call_order.count("symbols") >= 1
     assert call_order[-3:] == ["historical_ohlcv", "fundamentals", "dividends"]
+
+
+def test_reap_stale_ingestion_runs_marks_an_old_running_row_as_failed(session_factory):
+    """Production found a 'symbols' IngestionRunLog row stuck RUNNING
+    for 4+ days (a container restart mid-run) -- permanently blocking
+    POST /full-discovery's in-flight guard, which matches on
+    finished_at IS NULL with no staleness check. Mirrors
+    MarketIntelligenceRepository.reap_stale_runs's already-proven fix
+    for the identical failure mode on MarketScanRun."""
+    session = session_factory()
+    stale = IngestionRunLog(
+        job_name="symbols",
+        started_at=datetime.now(timezone.utc) - timedelta(hours=100),
+        status=IngestionJobStatus.RUNNING,
+    )
+    session.add(stale)
+    session.commit()
+    stale_id = stale.id
+
+    reaped = reap_stale_ingestion_runs(session, max_age_hours=6.0)
+    assert [r.job_name for r in reaped] == ["symbols"]
+    session.close()
+
+    session = session_factory()
+    row = session.query(IngestionRunLog).filter_by(id=stale_id).one()
+    assert row.status == IngestionJobStatus.FAILED
+    assert row.finished_at is not None
+    assert "Reaped" in row.error_summary
+    session.close()
+
+
+def test_reap_stale_ingestion_runs_leaves_a_recent_running_row_alone(session_factory):
+    session = session_factory()
+    recent = IngestionRunLog(
+        job_name="historical_ohlcv", started_at=datetime.now(timezone.utc), status=IngestionJobStatus.RUNNING
+    )
+    session.add(recent)
+    session.commit()
+    recent_id = recent.id
+    session.close()
+
+    session = session_factory()
+    reaped = reap_stale_ingestion_runs(session, max_age_hours=6.0)
+    session.close()
+
+    assert reaped == []
+
+    session = session_factory()
+    row = session.query(IngestionRunLog).filter_by(id=recent_id).one()
+    assert row.status == IngestionJobStatus.RUNNING
+    assert row.finished_at is None
+    session.close()
+
+
+def test_reap_stale_ingestion_runs_leaves_already_finished_rows_alone(session_factory):
+    session = session_factory()
+    finished = IngestionRunLog(
+        job_name="dividends",
+        started_at=datetime.now(timezone.utc) - timedelta(hours=100),
+        finished_at=datetime.now(timezone.utc) - timedelta(hours=99),
+        status=IngestionJobStatus.SUCCESS,
+    )
+    session.add(finished)
+    session.commit()
+    session.close()
+
+    session = session_factory()
+    reaped = reap_stale_ingestion_runs(session, max_age_hours=6.0)
+    session.close()
+
+    assert reaped == []
