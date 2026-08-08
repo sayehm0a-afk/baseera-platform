@@ -76,6 +76,16 @@ jobs:
               print('  started_at:', r.get('started_at'), '| finished_at:', r.get('finished_at'))
               print('  error_summary:', r.get('error_summary'))
               print()
+          print('unclassified_market_segment_stocks:', d.get('unclassified_market_segment_stocks'))
+          print()
+          print('=== instrument_bucket_counts (Stock.instrument_bucket -> count) ===')
+          for row in d.get('instrument_bucket_counts') or []:
+              print(' ', row.get('bucket'), '->', row.get('count'))
+          print()
+          print('=== excluded_instrument_counts ===')
+          for row in d.get('excluded_instrument_counts') or []:
+              print(' ', row.get('bucket'), '->', row.get('count'))
+          print('total_excluded_non_equity:', d.get('total_excluded_non_equity'))
           sector = d.get('sector_breakdown')
           if sector:
               print('sector_breakdown:', json.dumps(sector, indent=2, ensure_ascii=False))
