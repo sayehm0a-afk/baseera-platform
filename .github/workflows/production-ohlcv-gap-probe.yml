@@ -108,20 +108,8 @@ jobs:
               "$BACKEND_URL/api/v1/stocks/$SYM"
             echo "--- GET /stocks/$SYM/history (real ingested bar count) ---"
             curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt \
-              "$BACKEND_URL/api/v1/stocks/$SYM/history" -o /tmp/hist_$SYM.json
-            python3 -c "
-import json
-try:
-    d = json.load(open('/tmp/hist_$SYM.json'))
-    bars = d.get('bars') or []
-    print('bar_count:', len(bars))
-    if bars:
-        print('first_bar:', bars[0])
-        print('last_bar:', bars[-1])
-except Exception as e:
-    print('could not parse history response:', e)
-    print(open('/tmp/hist_$SYM.json').read()[:500])
-"
+              "$BACKEND_URL/api/v1/stocks/$SYM/history" -o "/tmp/hist_$SYM.json"
+            python3 "$GITHUB_WORKSPACE/.github/workflows/scripts/print_bar_summary.py" "/tmp/hist_$SYM.json"
             echo "--- GET /stocks/$SYM/fundamentals ---"
             curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt \
               -w "\nHTTP %{http_code}\n" \
