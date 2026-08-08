@@ -51,7 +51,7 @@ export interface AdminDashboardSummary {
  * and staff-role changes), so these types exist purely for UI
  * ergonomics, not as a security boundary. */
 
-export type StaffRoleValue = "OWNER" | "ADMIN" | "SUPPORT";
+export type StaffRoleValue = "OWNER" | "ADMIN" | "ANALYST" | "SUPPORT";
 
 export interface AdminUser {
   id: number;

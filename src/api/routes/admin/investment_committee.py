@@ -21,7 +21,7 @@ from src.api.schemas.investment_committee import (
     CommitteeStatsOut,
     RejectedAlternativeDetailOut,
 )
-from src.auth.rbac import require_staff_role
+from src.auth.rbac import require_any_staff_role
 from src.core.db.database import get_db
 from src.domain.models import CommitteeAgentOpinion, CommitteeConsensus, DecisionV2Snapshot, StaffRole, User
 
@@ -54,7 +54,7 @@ async def list_committee_sessions(
     symbol: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     session: Session = Depends(get_db),
-    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
 ) -> CommitteeSessionListOut:
     """The committee timeline -- most recent consensus sessions first,
     optionally filtered to one symbol."""
@@ -76,7 +76,7 @@ async def list_committee_sessions(
 async def get_committee_session(
     session_id: int,
     session: Session = Depends(get_db),
-    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
 ) -> CommitteeSessionDetailOut:
     """Full detail for one committee session -- agent cards, votes,
     evidence, and the consensus explanation, all sourced from the
@@ -139,7 +139,7 @@ async def get_committee_session(
 async def get_committee_stats(
     within_hours: int = Query(72, ge=1, le=24 * 30),
     session: Session = Depends(get_db),
-    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
 ) -> CommitteeStatsOut:
     """Aggregate committee behavior over a time window -- real SQL
     over `committee_sessions`, never an estimate."""

@@ -139,3 +139,29 @@ def test_stats_empty_window_returns_zero_sessions(client, db_session):
     body = response.json()
     assert body["total_sessions"] == 0
     assert body["average_agreement_pct"] is None
+
+
+def test_sessions_are_accessible_to_an_analyst_account(client, db_session):
+    from src.api.dependencies import get_current_user
+    from src.domain.models import StaffRole, User
+    import main
+
+    analyst = User(email="analyst@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ANALYST)
+    main.app.dependency_overrides[get_current_user] = lambda: analyst
+
+    response = client.get("/api/v1/admin/investment-committee/sessions")
+    assert response.status_code == 200
+
+
+def test_sessions_reject_a_support_account(client, db_session):
+    from src.api.dependencies import get_current_user
+    from src.domain.models import StaffRole, User
+    import main
+
+    support_staff = User(
+        email="support@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.SUPPORT
+    )
+    main.app.dependency_overrides[get_current_user] = lambda: support_staff
+
+    response = client.get("/api/v1/admin/investment-committee/sessions")
+    assert response.status_code == 403

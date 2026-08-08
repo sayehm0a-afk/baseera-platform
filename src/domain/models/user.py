@@ -27,6 +27,11 @@ from src.core.db.database import Base
 class StaffRole(str, enum.Enum):
     OWNER = "OWNER"
     ADMIN = "ADMIN"
+    # ANALYST is deliberately outside the OWNER > ADMIN > SUPPORT rank
+    # ladder in src/auth/rbac.py -- see require_any_staff_role. It is
+    # granted access to specific read-only AI/market-intelligence audit
+    # routes only, never inherited from or into SUPPORT/ADMIN/OWNER.
+    ANALYST = "ANALYST"
     SUPPORT = "SUPPORT"
 
 

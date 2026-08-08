@@ -56,7 +56,7 @@ from src.api.schemas.market_intelligence import (
     TopOpportunityOut,
     UniverseBucketCountOut,
 )
-from src.auth.rbac import require_staff_role
+from src.auth.rbac import require_any_staff_role, require_staff_role
 from src.core.db.database import get_db
 from src.domain.models import (
     DecisionV2Snapshot,
@@ -396,7 +396,7 @@ async def trigger_full_discovery(
 @router.get("/coverage", response_model=MarketCoverageOut)
 async def get_market_coverage(
     session: Session = Depends(get_db),
-    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
 ) -> MarketCoverageOut:
     """Real, SQL-backed evidence of how much of the Saudi market Basirah
     actually tracks and scans right now -- direct query results, never
@@ -701,7 +701,7 @@ def _confidence_bucket_label(score: float) -> str:
 async def get_decision_intelligence(
     within_hours: int = Query(72, ge=1, le=24 * 30),
     session: Session = Depends(get_db),
-    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
 ) -> DecisionIntelligenceOut:
     """Real, SQL-backed statistics over each symbol's most recent
     Decision Engine V2 snapshot within the last `within_hours` hours --

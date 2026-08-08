@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.auth.exceptions import InsufficientPermissionError, SubscriptionRequiredError
-from src.auth.rbac import require_active_subscription, require_staff_role
+from src.auth.rbac import require_active_subscription, require_any_staff_role, require_staff_role
 from src.core.db.database import Base
 from src.domain.models import StaffRole, SubscriptionPlan, SubscriptionStatus, User
 from src.subscriptions.repository import SubscriptionRepository
@@ -55,6 +55,43 @@ def test_owner_passes_a_support_or_admin_gate():
     user = _user(is_staff=True, staff_role=StaffRole.OWNER)
     assert require_staff_role(StaffRole.SUPPORT)(current_user=user) is user
     assert require_staff_role(StaffRole.ADMIN)(current_user=user) is user
+
+
+def test_analyst_never_satisfies_a_rank_based_minimum():
+    # ANALYST is deliberately outside _ROLE_RANK -- must not silently
+    # KeyError, and must never pass a SUPPORT/ADMIN/OWNER gate.
+    user = _user(is_staff=True, staff_role=StaffRole.ANALYST)
+    with pytest.raises(InsufficientPermissionError):
+        require_staff_role(StaffRole.SUPPORT)(current_user=user)
+    with pytest.raises(InsufficientPermissionError):
+        require_staff_role(StaffRole.ADMIN)(current_user=user)
+
+
+def test_require_any_staff_role_admits_an_explicitly_listed_role():
+    dependency = require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)
+    user = _user(is_staff=True, staff_role=StaffRole.ANALYST)
+    assert dependency(current_user=user) is user
+
+
+def test_require_any_staff_role_rejects_an_unlisted_role():
+    dependency = require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)
+    with pytest.raises(InsufficientPermissionError):
+        dependency(current_user=_user(is_staff=True, staff_role=StaffRole.SUPPORT))
+
+
+def test_require_any_staff_role_rejects_non_staff():
+    dependency = require_any_staff_role(StaffRole.ANALYST)
+    with pytest.raises(InsufficientPermissionError):
+        dependency(current_user=_user(is_staff=False, staff_role=None))
+
+
+def test_analyst_does_not_gain_support_gated_calibration_power():
+    # The specific risk this design avoids: inserting ANALYST into the
+    # rank ladder above SUPPORT would have silently granted it
+    # calibration-activation power. It must not.
+    user = _user(is_staff=True, staff_role=StaffRole.ANALYST)
+    with pytest.raises(InsufficientPermissionError):
+        require_staff_role(StaffRole.SUPPORT)(current_user=user)
 
 
 def _create_user(session) -> User:

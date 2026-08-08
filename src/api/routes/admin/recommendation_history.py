@@ -22,7 +22,7 @@ from src.api.schemas.recommendation_history import (
     RecommendationHistoryAuditItemOut,
     RecommendationHistoryAuditListOut,
 )
-from src.auth.rbac import require_staff_role
+from src.auth.rbac import require_any_staff_role
 from src.core.db.database import get_db
 from src.domain.models import RecommendationOutcome, RecommendationSnapshot, StaffRole, Stock, User
 
@@ -75,7 +75,7 @@ def get_admin_recommendation_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_db),
-    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
 ) -> RecommendationHistoryAuditListOut:
     rows = fetch_snapshots_with_context(session, symbol, limit, offset)
     items = [audit_item_out(snapshot, stock, outcomes) for snapshot, stock, outcomes in rows]
