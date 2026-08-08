@@ -328,10 +328,14 @@ def get_market_intelligence_scan_interval() -> ScheduleInterval:
 def is_live_market_mode_enabled() -> bool:
     """Gates LiveMarketModeScheduler (see live_market_mode.py). Meant
     as an alternative to, not additive with, the standalone
-    MARKET_INTELLIGENCE_SCHEDULER_ENABLED/INGESTION_SCHEDULER_ENABLED
-    flags -- see main.py's startup wiring, which starts Live Market
-    Mode's own internal instances of those two schedulers instead of
-    the always-on ones when this is true."""
+    MARKET_INTELLIGENCE_SCHEDULER_ENABLED flag -- see main.py's startup
+    wiring, which starts Live Market Mode's own internal market-scan
+    scheduler instead of the always-on one when this is true.
+    INGESTION_SCHEDULER_ENABLED is independent of this flag: the
+    ingestion scheduler (symbols/historical_ohlcv/fundamentals/
+    dividends backfill) always runs on its own schedule when enabled,
+    regardless of Live Market Mode or market hours -- see
+    live_market_mode.py's module docstring for why."""
     return os.getenv("LIVE_MARKET_MODE_ENABLED", "false").lower() == "true"
 
 

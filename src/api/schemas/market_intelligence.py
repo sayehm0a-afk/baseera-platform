@@ -611,6 +611,9 @@ class SymbolLookupCheckOut(BaseModel):
 
     available: bool
     detail: Optional[str] = None
+    raw_sector: Optional[str] = None
+    raw_industry: Optional[str] = None
+    raw_keys: Optional[List[str]] = None
 
 
 class SymbolLookupDiagnosticOut(BaseModel):

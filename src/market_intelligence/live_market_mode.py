@@ -1,40 +1,56 @@
 """Live Market Mode: a single top-level toggle that runs Basirah's
-existing ingestion + market-scan schedulers only while the Tadawul
-market is actually open (see trading_calendar.py), instead of on a
-fixed interval around the clock.
+market-scan scheduler only while the Tadawul market is actually open
+(see trading_calendar.py), instead of on a fixed interval around the
+clock.
 
 Deliberately a thin supervisor, not a third implementation of
-ingestion/scanning: `LiveMarketModeScheduler` owns one
-`IngestionScheduler` and one `IntervalMarketIntelligenceScheduler` --
-both already real, both already independently tested -- and only
-decides *when* to `start()`/`stop()` them. Every guarantee those two
-schedulers already provide carries over unchanged and is not
-reimplemented here:
+scanning: `LiveMarketModeScheduler` owns one
+`IntervalMarketIntelligenceScheduler` -- already real, already
+independently tested -- and only decides *when* to `start()`/`stop()`
+it. Every guarantee that scheduler already provides carries over
+unchanged and is not reimplemented here:
   - Storage is dedup-safe because `RecommendationSnapshot`'s and
     `SymbolIntelligenceRecord`'s own unique constraints are (E1's
-    `save_symbol_records` and each ingestion job's own upsert), not
-    anything this module adds.
-  - Job loops never overlap themselves (each scheduler's own
+    `save_symbol_records`), not anything this module adds.
+  - The job loop never overlaps itself (the scheduler's own
     "run then sleep" structure).
-  - Failures are retried/logged by each scheduler's own existing
+  - Failures are retried/logged by the scheduler's own existing
     machinery.
 
 This module's only new behavior is the market-hours gate: a cheap
 (no network I/O) supervisor tick, on `LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS`,
-that starts both inner schedulers the moment the Tadawul session opens
-and stops them the moment it closes -- so an unattended deployment
-never spends SAHMK requests or DB writes outside trading hours, and
+that starts the inner scan scheduler the moment the Tadawul session
+opens and stops it the moment it closes -- so an unattended deployment
+never runs a full-market scan against stale/closed-session prices, and
 resumes automatically at the next session open without an operator
 action.
+
+CORRECTION (production gap found 2026-08-08): this module previously
+also owned an `IngestionScheduler` instance (symbols/historical_ohlcv/
+fundamentals/dividends backfill) and gated it the same way -- but
+those four jobs are periodic *maintenance*, not live intraday
+quoting, and have no real reason to depend on the market being open;
+a symbol's fundamentals or dividend history doesn't change because
+Tadawul is closed. Gating them here meant that whenever
+LIVE_MARKET_MODE_ENABLED=true (as it is in production) and the market
+was closed (e.g. the Tadawul weekend), *zero* backfill ever ran
+automatically -- confirmed live via GET /admin/system/summary showing
+`ingestion_scheduler_running: false` with no scheduled runs, only ones
+this session triggered manually via the admin full-discovery route.
+`IngestionScheduler` is now started unconditionally by main.py
+whenever `INGESTION_SCHEDULER_ENABLED=true`, independent of both Live
+Market Mode and market hours -- see main.py's startup wiring. This
+module keeps gating only the market-scan scheduler, which genuinely is
+market-hours-sensitive (a scan is meant to reflect the live session).
 
 Disabled by default (`LIVE_MARKET_MODE_ENABLED=false`), the same
 secure/inert-by-default posture every other scheduler in this codebase
 uses. Deliberately NOT combined with the standalone
-`INGESTION_SCHEDULER_ENABLED`/`MARKET_INTELLIGENCE_SCHEDULER_ENABLED`
-flags in main.py's wiring -- Live Market Mode is meant to replace
-those two always-on schedulers, not run alongside them (running both
-would just double the API calls against the same symbols with no
-benefit).
+`MARKET_INTELLIGENCE_SCHEDULER_ENABLED` flag in main.py's wiring --
+Live Market Mode is meant to replace that always-on scan scheduler,
+not run alongside it (running both would just double the API calls
+against the same symbols with no benefit). `INGESTION_SCHEDULER_ENABLED`
+is independent of this flag entirely (see the correction above).
 """
 
 import asyncio
@@ -43,7 +59,6 @@ import logging
 from datetime import datetime, timezone
 from typing import Callable, Optional, Protocol, runtime_checkable
 
-from src.market_data.ingestion.scheduler import IngestionScheduler
 from src.market_intelligence.config import get_live_market_mode_poll_interval_seconds
 from src.market_intelligence.scheduler import IntervalMarketIntelligenceScheduler
 from src.market_intelligence.trading_calendar import is_market_open
@@ -53,10 +68,9 @@ logger = logging.getLogger(__name__)
 
 @runtime_checkable
 class _StartStoppable(Protocol):
-    """The three-member shape both `IngestionScheduler` and
-    `IntervalMarketIntelligenceScheduler` already satisfy -- lets
-    tests inject a lightweight fake instead of the real, DB/network-
-    touching schedulers."""
+    """The three-member shape `IntervalMarketIntelligenceScheduler`
+    already satisfies -- lets tests inject a lightweight fake instead
+    of the real, DB/network-touching scheduler."""
 
     def start(self) -> None:
         ...
@@ -72,12 +86,10 @@ class _StartStoppable(Protocol):
 class LiveMarketModeScheduler:
     def __init__(
         self,
-        ingestion_scheduler: Optional[_StartStoppable] = None,
         market_intelligence_scheduler: Optional[_StartStoppable] = None,
         clock: Optional[Callable[[], datetime]] = None,
         poll_interval_seconds: Optional[float] = None,
     ):
-        self._ingestion_scheduler: _StartStoppable = ingestion_scheduler or IngestionScheduler()
         self._market_intelligence_scheduler: _StartStoppable = (
             market_intelligence_scheduler or IntervalMarketIntelligenceScheduler()
         )
@@ -112,8 +124,6 @@ class LiveMarketModeScheduler:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
-        if self._ingestion_scheduler.is_running:
-            await self._ingestion_scheduler.stop()
         if self._market_intelligence_scheduler.is_running:
             await self._market_intelligence_scheduler.stop()
         self._market_was_open = False
@@ -132,11 +142,9 @@ class LiveMarketModeScheduler:
     async def _tick(self) -> None:
         open_now = is_market_open(self._clock())
         if open_now and not self._market_was_open:
-            logger.info("Live Market Mode: Tadawul session opened -- starting ingestion + scan schedulers.")
-            self._ingestion_scheduler.start()
+            logger.info("Live Market Mode: Tadawul session opened -- starting market-scan scheduler.")
             self._market_intelligence_scheduler.start()
         elif not open_now and self._market_was_open:
-            logger.info("Live Market Mode: Tadawul session closed -- stopping ingestion + scan schedulers.")
-            await self._ingestion_scheduler.stop()
+            logger.info("Live Market Mode: Tadawul session closed -- stopping market-scan scheduler.")
             await self._market_intelligence_scheduler.stop()
         self._market_was_open = open_now

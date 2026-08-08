@@ -528,7 +528,27 @@ async def get_symbol_lookup_diagnostics(
             return SymbolLookupCheckOut(available=False, detail=_scrub(f"{type(exc).__name__}: {exc}"))
         if result is None:
             return SymbolLookupCheckOut(available=False, detail="Empty response.")
-        return SymbolLookupCheckOut(available=True, detail=None)
+        # SahmkMarketDataProvider.get_company_profile() returns a plain
+        # dict with sector/industry already flattened (see its own
+        # docstring) -- surfacing those two real values here (never
+        # fabricated, straight passthrough) answers, with direct
+        # evidence, whether SAHMK's per-symbol /company/{symbol}/
+        # endpoint carries sector/industry data that the bulk
+        # /companies/ directory (see universe_policy.py's module
+        # docstring: no sector field for ~99% of directory entries)
+        # does not. Every other check type's result has no such keys,
+        # so this is a no-op for them.
+        raw_sector = None
+        raw_industry = None
+        raw_keys = None
+        if isinstance(result, dict):
+            raw_sector = result.get("sector")
+            raw_industry = result.get("industry")
+            if "sector" in result or "industry" in result:
+                raw_keys = sorted(result.keys())
+        return SymbolLookupCheckOut(
+            available=True, detail=None, raw_sector=raw_sector, raw_industry=raw_industry, raw_keys=raw_keys
+        )
 
     results: List[SymbolLookupDiagnosticOut] = []
     for symbol in symbol_list:
