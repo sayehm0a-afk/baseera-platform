@@ -22,6 +22,10 @@ from typing import Optional, Tuple
 
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.market_data import config as market_data_config
+from src.market_data.provider_connectivity_retry import (
+    ProviderProbeTimeoutError,
+    probe_connectivity_with_retry,
+)
 from src.market_data.providers.dev_fundamental_data_provider import DevFundamentalDataProvider
 from src.market_data.providers.fundamental_data_provider import IFundamentalDataProvider
 from src.market_data.providers.sahmk_fundamental_data_provider import SahmkFundamentalDataProvider
@@ -143,17 +147,18 @@ async def _select_provider(
             await provider.disconnect()
 
     try:
-        reachable = await asyncio.wait_for(
-            provider.authenticate(),
-            timeout=market_data_config.get_provider_probe_timeout_seconds(),
+        reachable = await probe_connectivity_with_retry(
+            provider.check_connectivity, provider_label="SahmkFundamentalDataProvider"
         )
-    except asyncio.TimeoutError:
+    except ProviderProbeTimeoutError:
         await _cleanup_on_failure()
         if strict:
-            raise StrictRealDataUnavailableError("SAHMK connectivity probe timed out.")
+            raise StrictRealDataUnavailableError(
+                "SAHMK connectivity probe timed out after retrying."
+            )
         logger.warning(
-            "SAHMK connectivity probe timed out -- falling back to DevFundamentalDataProvider "
-            "(synthetic data) for this process."
+            "SAHMK connectivity probe timed out after retrying -- falling back to "
+            "DevFundamentalDataProvider (synthetic data) for this process."
         )
         return DevFundamentalDataProvider(), "dev"
     except (SahmkError, CircuitBreakerOpenError) as exc:

@@ -88,6 +88,44 @@ async def test_authenticate_returns_false_when_circuit_breaker_open():
     assert result is False
 
 
+# --- check_connectivity() -- raises instead of swallowing, unlike
+# authenticate() above; used by provider_factory's connectivity-probe
+# retry, which needs the real exception type to tell a transient
+# failure apart from a permanent one. ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_connectivity_succeeds_on_valid_key():
+    provider = _provider_with_mock_service()
+    provider._service.get_index_snapshot.return_value = SahmkMarketSummary("TASI", 1.0, None, None, None)
+    result = await provider.check_connectivity()
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_check_connectivity_treats_entitlement_error_as_valid_key():
+    provider = _provider_with_mock_service()
+    provider._service.get_index_snapshot.side_effect = SahmkEntitlementError("plan limit")
+    result = await provider.check_connectivity()
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_check_connectivity_raises_on_rejected_key():
+    provider = _provider_with_mock_service()
+    provider._service.get_index_snapshot.side_effect = SahmkAuthenticationError("bad key")
+    with pytest.raises(SahmkAuthenticationError):
+        await provider.check_connectivity()
+
+
+@pytest.mark.asyncio
+async def test_check_connectivity_raises_when_circuit_breaker_open():
+    provider = _provider_with_mock_service()
+    provider._service.get_index_snapshot.side_effect = CircuitBreakerOpenError()
+    with pytest.raises(CircuitBreakerOpenError):
+        await provider.check_connectivity()
+
+
 # --- get_stock_data() -----------------------------------------------------
 
 

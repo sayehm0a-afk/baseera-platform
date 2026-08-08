@@ -29,6 +29,9 @@ class _FakeSahmkProvider:
     async def authenticate(self):
         raise NotImplementedError
 
+    async def check_connectivity(self):
+        raise NotImplementedError
+
     async def disconnect(self):
         self.disconnected = True
 
@@ -49,6 +52,10 @@ def _reset(monkeypatch):
     monkeypatch.delenv("STRICT_REAL_DATA", raising=False)
     monkeypatch.delenv("ALLOW_SYNTHETIC_DATA", raising=False)
     monkeypatch.setenv("SAHMK_PROBE_TIMEOUT_SECONDS", "0.1")
+    # 1 attempt, no retry: these tests exercise strict-mode's raise
+    # behavior on a failed probe, not the retry mechanics themselves --
+    # see test_provider_connectivity_retry.py for those.
+    monkeypatch.setenv("SAHMK_PROBE_MAX_ATTEMPTS", "1")
     monkeypatch.setenv("MARKET_DATA_PROVIDER_CACHE_SECONDS", "60")
     yield
     provider_factory.reset_provider_cache()
@@ -112,7 +119,7 @@ async def test_strict_mode_rejected_key_raises_instead_of_falling_back(monkeypat
     async def _rejected():
         return False
 
-    _FakeSahmkProvider.authenticate = lambda self: _rejected()
+    _FakeSahmkProvider.check_connectivity = lambda self: _rejected()
 
     with pytest.raises(StrictRealDataUnavailableError, match="authentication check did not succeed"):
         await provider_factory.get_market_data_provider()
@@ -127,7 +134,7 @@ async def test_strict_mode_401_raises_instead_of_falling_back(monkeypatch):
     async def _unauthorized():
         raise SahmkAuthenticationError("401 Unauthorized", status_code=401)
 
-    _FakeSahmkProvider.authenticate = lambda self: _unauthorized()
+    _FakeSahmkProvider.check_connectivity = lambda self: _unauthorized()
 
     with pytest.raises(StrictRealDataUnavailableError):
         await provider_factory.get_market_data_provider()
@@ -145,7 +152,7 @@ async def test_strict_mode_timeout_raises_instead_of_falling_back(monkeypatch):
         await asyncio.sleep(10)
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _hangs()
+    _FakeSahmkProvider.check_connectivity = lambda self: _hangs()
 
     with pytest.raises(StrictRealDataUnavailableError, match="timed out"):
         await provider_factory.get_market_data_provider()
@@ -162,7 +169,7 @@ async def test_strict_mode_rate_limit_raises_instead_of_falling_back(monkeypatch
     async def _rate_limited():
         raise SahmkRateLimitError("429 rate limited", status_code=429)
 
-    _FakeSahmkProvider.authenticate = lambda self: _rate_limited()
+    _FakeSahmkProvider.check_connectivity = lambda self: _rate_limited()
 
     with pytest.raises(StrictRealDataUnavailableError):
         await provider_factory.get_market_data_provider()
@@ -182,7 +189,7 @@ async def test_strict_mode_network_error_raises_instead_of_falling_back(monkeypa
     async def _network_error():
         raise SahmkRequestError("Network error calling SAHMK API: connection refused")
 
-    _FakeSahmkProvider.authenticate = lambda self: _network_error()
+    _FakeSahmkProvider.check_connectivity = lambda self: _network_error()
 
     with pytest.raises(StrictRealDataUnavailableError):
         await provider_factory.get_market_data_provider()
@@ -209,7 +216,7 @@ async def test_strict_mode_real_authenticated_data_succeeds(monkeypatch):
     async def _ok():
         return True
 
-    _FakeSahmkProvider.authenticate = lambda self: _ok()
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
 
     provider = await provider_factory.get_market_data_provider()
     assert isinstance(provider, _FakeSahmkProvider)
@@ -273,7 +280,7 @@ async def _authenticate_returning_false(self):
 async def test_strict_mode_error_never_contains_the_api_key(monkeypatch, authenticate_impl):
     monkeypatch.setenv("STRICT_REAL_DATA", "true")
     monkeypatch.setenv("SAHMK_API_KEY", _SECRET_MARKER)
-    _FakeSahmkProvider.authenticate = authenticate_impl
+    _FakeSahmkProvider.check_connectivity = authenticate_impl
 
     with pytest.raises(StrictRealDataUnavailableError) as excinfo:
         await provider_factory.get_market_data_provider()

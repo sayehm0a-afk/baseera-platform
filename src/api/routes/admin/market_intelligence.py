@@ -47,6 +47,8 @@ from src.api.schemas.market_intelligence import (
     MarketCoverageOut,
     MarketScanRequest,
     MarketScanRunOut,
+    ObservedFieldOut,
+    ObservedFieldValueOut,
     PipelineStageOut,
     RejectedOpportunityOut,
     RejectionReasonCountOut,
@@ -55,6 +57,8 @@ from src.api.schemas.market_intelligence import (
     SectorRankingOut,
     TopOpportunityOut,
     UniverseBucketCountOut,
+    UniverseDiagnosticsOut,
+    UniverseSampleEntryOut,
 )
 from src.auth.rbac import require_any_staff_role, require_staff_role
 from src.core.db.database import get_db
@@ -312,6 +316,103 @@ async def trigger_diagnostic_scan(
         latest_completed_run_v1_sample_symbols=latest_completed_run_v1_sample_symbols,
         latest_completed_run_decision_v2_rows_written=latest_completed_run_decision_v2_rows_written,
         latest_completed_run_decision_v2_sample=latest_completed_run_decision_v2_sample,
+    )
+
+
+@router.get("/universe-diagnostics", response_model=UniverseDiagnosticsOut)
+async def get_universe_diagnostics(
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> UniverseDiagnosticsOut:
+    """Real evidence for why nomu_market_stocks may read 0 despite a
+    large discovered universe: runs a fresh (cached 24h, so cheap)
+    SAHMK /companies/ directory call through
+    universe_policy.classify_universe and surfaces its full per-field
+    distinct-value breakdown -- the data that module's own docstring
+    always intended to be inspectable, but that nothing previously
+    exposed anywhere (classify_universe's `distinct_observed_values`
+    and SahmkMarketDataProvider.last_universe_classification were both
+    computed and then silently discarded). Never fabricates a verdict:
+    if SAHMK is unreachable or a non-SahmkMarketDataProvider is
+    currently selected, `sahmk_error`/`provider_kind` say so plainly
+    and every other field stays empty."""
+    from src.market_data import config as market_data_config
+    from src.market_data.provider_factory import get_market_data_provider
+    from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
+
+    generated_at = datetime.now(timezone.utc)
+
+    def _scrub(message: str) -> str:
+        key = market_data_config.get_sahmk_api_key()
+        return message.replace(key, "***") if key else message
+
+    try:
+        provider = await get_market_data_provider(force_refresh=True)
+    except StrictRealDataUnavailableError as exc:
+        return UniverseDiagnosticsOut(
+            generated_at=generated_at, sahmk_error=_scrub(f"{type(exc).__name__}: {exc}")
+        )
+
+    if not isinstance(provider, SahmkMarketDataProvider):
+        return UniverseDiagnosticsOut(
+            generated_at=generated_at,
+            provider_kind="dev",
+            sahmk_error="A real SahmkMarketDataProvider is not currently selected -- "
+            "no live directory call was made.",
+        )
+
+    try:
+        # Return value intentionally unused here -- get_symbol_directory()'s
+        # side effect (populating provider.last_universe_classification
+        # with the full bucket/distinct-value breakdown) is what this
+        # route actually needs; the per-entry dicts it returns are a
+        # differently-shaped, UI-facing view of the same classification.
+        await provider.get_symbol_directory()
+    except Exception as exc:  # noqa: BLE001 -- report every failure mode, never crash this diagnostic route
+        return UniverseDiagnosticsOut(
+            generated_at=generated_at,
+            provider_kind="sahmk",
+            sahmk_error=_scrub(f"{type(exc).__name__}: {exc}"),
+        )
+
+    classification = provider.last_universe_classification
+    if classification is None:
+        return UniverseDiagnosticsOut(generated_at=generated_at, provider_kind="sahmk")
+
+    observed_fields = [
+        ObservedFieldOut(
+            field=field_name,
+            distinct_values=[
+                ObservedFieldValueOut(value=value, count=count)
+                for value, count in sorted(values.items(), key=lambda kv: kv[1], reverse=True)
+            ],
+        )
+        for field_name, values in classification.distinct_observed_values.items()
+    ]
+
+    non_main_bucket_classifications = [
+        c for c in classification.classifications if not c.bucket.startswith("MAIN_MARKET_EQUITY")
+    ]
+    sample_source = non_main_bucket_classifications or classification.classifications
+    sample_entries = [
+        UniverseSampleEntryOut(
+            symbol=c.symbol,
+            name_en=c.name_en,
+            market=c.market,
+            market_segment=c.market_segment,
+            security_type=c.security_type,
+            status=c.status,
+            bucket=c.bucket,
+        )
+        for c in sample_source[:15]
+    ]
+
+    return UniverseDiagnosticsOut(
+        generated_at=generated_at,
+        provider_kind="sahmk",
+        total_instruments=classification.total_instruments,
+        bucket_counts=classification.bucket_counts,
+        observed_fields=observed_fields,
+        sample_entries=sample_entries,
     )
 
 

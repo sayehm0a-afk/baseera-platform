@@ -50,6 +50,43 @@ def get_provider_probe_timeout_seconds() -> float:
     return float(os.getenv("SAHMK_PROBE_TIMEOUT_SECONDS", "5"))
 
 
+def get_provider_probe_max_attempts() -> int:
+    """How many times provider_factory/fundamental_provider_factory retry
+    the connectivity probe (SahmkMarketDataProvider/
+    SahmkFundamentalDataProvider.check_connectivity()) on a transient
+    failure (probe timeout, an exhausted-but-recoverable 429, a
+    network-error-shaped SahmkRequestError) before giving up. Never
+    retries a deterministic permanent outcome (401, 403 is already
+    "authenticated", missing key, an open circuit breaker) regardless
+    of this value -- see provider_connectivity_retry.py.
+
+    Production evidence (2026-08-08): the fundamentals ingestion job
+    failed twice in a row with "SAHMK connectivity probe timed out"
+    immediately after the multi-minute historical_ohlcv job -- the
+    probe's own single asyncio.wait_for(..., timeout=
+    SAHMK_PROBE_TIMEOUT_SECONDS) had no retry of its own, so one slow
+    response right after a burst of prior SAHMK traffic was enough to
+    raise StrictRealDataUnavailableError with zero retries at this
+    layer, even though SahmkClient's own per-request retry (3 attempts)
+    never got the chance to run to completion."""
+    return int(os.getenv("SAHMK_PROBE_MAX_ATTEMPTS", "3"))
+
+
+def get_provider_probe_retry_base_delay_seconds() -> float:
+    """Base delay for the connectivity probe's exponential-backoff-with-
+    full-jitter retry (see provider_connectivity_retry._backoff_delay).
+    Attempt N waits a random value in [0, min(base * 2**(N-1), max)]."""
+    return float(os.getenv("SAHMK_PROBE_RETRY_BASE_DELAY_SECONDS", "1.0"))
+
+
+def get_provider_probe_retry_max_delay_seconds() -> float:
+    """Ceiling on any single connectivity-probe retry delay, including
+    one derived from a 429's Retry-After header -- a misbehaving or
+    unusually large Retry-After must never stall provider selection
+    for an unbounded time."""
+    return float(os.getenv("SAHMK_PROBE_RETRY_MAX_DELAY_SECONDS", "8.0"))
+
+
 def get_provider_selection_cache_seconds() -> float:
     """How long provider_factory's auto-selection result is cached
     before re-probing connectivity. 0 disables caching (always re-probe)."""

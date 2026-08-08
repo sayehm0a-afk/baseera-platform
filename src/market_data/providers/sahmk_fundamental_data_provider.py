@@ -74,7 +74,18 @@ class SahmkFundamentalDataProvider(IFundamentalDataProvider):
     async def authenticate(self) -> bool:
         """Same cheapest-confirmed-call check as SahmkMarketDataProvider
         (GET /market/summary/) -- financials/dividends are Starter+ and
-        cost real quota, so authentication does not call them."""
+        cost real quota, so authentication does not call them.
+
+        Swallows every SahmkError/CircuitBreakerOpenError into a plain
+        bool, matching this method's long-standing contract for its
+        other callers (ingest_symbols.py, ingest_ohlcv.py,
+        ingest_historical_ohlcv.py, ingest_dividends.py,
+        ingest_fundamentals.py, scheduler.py -- none of which need to
+        distinguish *why* authentication failed). fundamental_provider_
+        factory's connectivity-probe retry needs that distinction (a
+        timeout/429/network blip is worth retrying, a real 401 is not)
+        and calls check_connectivity() directly instead, which is why
+        the underlying probe logic lives there, not here."""
         if not self._service.has_credentials:
             logger.warning(
                 "SahmkFundamentalDataProvider.authenticate(): SAHMK_API_KEY is not configured."
@@ -83,10 +94,7 @@ class SahmkFundamentalDataProvider(IFundamentalDataProvider):
             return False
 
         try:
-            await self._service.get_index_snapshot("TASI")
-            self.authenticated = True
-        except SahmkEntitlementError:
-            self.authenticated = True
+            self.authenticated = await self.check_connectivity()
         except (SahmkAuthenticationError, SahmkConfigurationError) as exc:
             logger.error("SAHMK authentication failed: %s", exc)
             self.authenticated = False
@@ -95,6 +103,23 @@ class SahmkFundamentalDataProvider(IFundamentalDataProvider):
             self.authenticated = False
 
         return self.authenticated
+
+    async def check_connectivity(self) -> bool:
+        """Same underlying probe as authenticate() (GET
+        /market/summary/, the cheapest confirmed call), but *raises*
+        instead of swallowing SahmkError/CircuitBreakerOpenError --
+        used by fundamental_provider_factory's bounded connectivity-
+        probe retry (src.market_data.provider_connectivity_retry),
+        which needs the real exception type to tell a transient
+        failure (timeout, 429, 5xx, network) apart from a permanent one
+        (401, missing key) before deciding whether to retry.
+        authenticate() above keeps its existing swallow-and-return-bool
+        contract unchanged for its other five callers."""
+        try:
+            await self._service.get_index_snapshot("TASI")
+            return True
+        except SahmkEntitlementError:
+            return True
 
     async def get_fundamentals(self, symbol: str, period_type: str = "annual") -> Dict[str, Any]:
         financials = await self._service.get_financials(symbol, period_type=period_type)

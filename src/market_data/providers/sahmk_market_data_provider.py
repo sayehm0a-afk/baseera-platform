@@ -65,7 +65,12 @@ class SahmkMarketDataProvider(IMarketDataProvider):
         A confirmed-valid-but-plan-limited key (SahmkEntitlementError,
         403 PLAN_LIMIT) still counts as authenticated: the credential
         itself is correct, only a specific endpoint is out of plan.
-        """
+
+        Swallows every SahmkError/CircuitBreakerOpenError into a plain
+        bool -- provider_factory's connectivity-probe retry needs to
+        distinguish *why* this failed (transient vs. permanent) and
+        calls check_connectivity() directly instead; see that method's
+        docstring."""
         if not self._service.has_credentials:
             logger.warning(
                 "SahmkMarketDataProvider.authenticate(): SAHMK_API_KEY is not configured."
@@ -74,10 +79,7 @@ class SahmkMarketDataProvider(IMarketDataProvider):
             return False
 
         try:
-            await self._service.get_index_snapshot("TASI")
-            self.authenticated = True
-        except SahmkEntitlementError:
-            self.authenticated = True
+            self.authenticated = await self.check_connectivity()
         except (SahmkAuthenticationError, SahmkConfigurationError) as exc:
             logger.error("SAHMK authentication failed: %s", exc)
             self.authenticated = False
@@ -86,6 +88,20 @@ class SahmkMarketDataProvider(IMarketDataProvider):
             self.authenticated = False
 
         return self.authenticated
+
+    async def check_connectivity(self) -> bool:
+        """Same underlying probe as authenticate(), but *raises*
+        instead of swallowing SahmkError/CircuitBreakerOpenError --
+        used by provider_factory's bounded connectivity-probe retry
+        (src.market_data.provider_connectivity_retry), which needs the
+        real exception type to tell a transient failure (timeout, 429,
+        5xx, network) apart from a permanent one (401, missing key)
+        before deciding whether to retry."""
+        try:
+            await self._service.get_index_snapshot("TASI")
+            return True
+        except SahmkEntitlementError:
+            return True
 
     async def get_stock_data(self, symbol: str) -> Dict[str, Any]:
         """Today's OHLCV bar via GET /historical/{symbol}/ -- not
