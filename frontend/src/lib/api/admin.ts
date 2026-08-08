@@ -2,6 +2,7 @@ import { apiFetch } from "./client";
 import type {
   AdminDashboardSummary,
   AdminSessionList,
+  AdminSubscriptionList,
   AdminUser,
   AdminUserList,
   AIUsageSummary,
@@ -49,6 +50,10 @@ export function suspendUser(userId: number): Promise<AdminUser> {
 
 export function unsuspendUser(userId: number): Promise<AdminUser> {
   return apiFetch<AdminUser>(`/api/v1/admin/users/${userId}/unsuspend`, { method: "POST" });
+}
+
+export function verifyUserEmail(userId: number): Promise<AdminUser> {
+  return apiFetch<AdminUser>(`/api/v1/admin/users/${userId}/verify-email`, { method: "POST" });
 }
 
 export function setStaffRole(
@@ -173,4 +178,12 @@ export function getMarketCoverage(): Promise<MarketCoverage> {
 
 export function triggerFullDiscovery(): Promise<FullDiscoveryTrigger> {
   return apiFetch<FullDiscoveryTrigger>("/api/v1/admin/market-intelligence/full-discovery", { method: "POST" });
+}
+
+/** Direct, unmodified call to the staff-gated /api/v1/admin/subscriptions
+ * route (src/api/routes/admin/subscriptions.py) -- real Subscription rows.
+ * No payment gateway is integrated in this codebase (see src/billing/provider.py),
+ * so this only ever reflects trial/paid lifecycle state, never real transactions. */
+export function listSubscriptions(limit = 50, offset = 0): Promise<AdminSubscriptionList> {
+  return apiFetch<AdminSubscriptionList>(`/api/v1/admin/subscriptions?limit=${limit}&offset=${offset}`);
 }

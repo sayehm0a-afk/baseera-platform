@@ -391,3 +391,23 @@ export interface FullDiscoveryTrigger {
   message: string;
   job_names: string[];
 }
+
+/** Mirrors src/api/schemas/admin.py's AdminSubscriptionOut/AdminSubscriptionListOut
+ * -- src.domain.models.Subscription rows, real trial/paid lifecycle state.
+ * No payment gateway is integrated in this codebase yet (src/billing/provider.py
+ * is the seam for one) -- this page must never imply real payment processing. */
+export interface AdminSubscription {
+  id: number;
+  user_id: number;
+  plan: string;
+  status: string;
+  trial_ends_at: string | null;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+}
+
+export interface AdminSubscriptionList {
+  total: number;
+  subscriptions: AdminSubscription[];
+}

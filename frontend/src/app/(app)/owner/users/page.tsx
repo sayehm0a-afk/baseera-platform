@@ -6,7 +6,8 @@ import { OwnerNav } from "@/components/owner/OwnerNav";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { ApiError } from "@/lib/api/client";
-import { deleteUser, listUsers, setStaffRole, suspendUser, unsuspendUser } from "@/lib/api/admin";
+import { deleteUser, listUsers, setStaffRole, suspendUser, unsuspendUser, verifyUserEmail } from "@/lib/api/admin";
+import { resendVerification } from "@/lib/auth/auth-service";
 import type { AdminUser, StaffRoleValue } from "@/lib/api/admin-types";
 
 const PAGE_SIZE = 50;
@@ -27,6 +28,7 @@ function UsersPageInner() {
   const [state, setState] = useState<PageState>({ status: "loading" });
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
+  const [resendMessage, setResendMessage] = useState<string | null>(null);
 
   async function load(offset: number, q: string) {
     try {
@@ -84,6 +86,19 @@ function UsersPageInner() {
     }
   }
 
+  async function handleResendVerification(userId: number, email: string) {
+    setBusyUserId(userId);
+    setResendMessage(null);
+    try {
+      await resendVerification(email);
+      setResendMessage(`تم إرسال رابط تأكيد جديد إلى ${email} (إن كان الحساب غير مؤكَّد).`);
+    } catch {
+      setResendMessage("تعذّر إرسال رابط التأكيد.");
+    } finally {
+      setBusyUserId(null);
+    }
+  }
+
   if (state.status === "loading") {
     return (
       <div className="flex flex-col gap-bsr-4">
@@ -111,6 +126,8 @@ function UsersPageInner() {
         <span className="text-sm text-bsr-text-secondary">{total.toLocaleString("ar-SA")} مستخدم</span>
       </div>
 
+      {resendMessage ? <p className="text-xs text-bsr-text-secondary">{resendMessage}</p> : null}
+
       <form onSubmit={handleSearchSubmit} className="flex gap-bsr-2">
         <input
           type="text"
@@ -137,8 +154,10 @@ function UsersPageInner() {
                 <th className="p-bsr-3 font-medium">البريد الإلكتروني</th>
                 <th className="p-bsr-3 font-medium">الاسم</th>
                 <th className="p-bsr-3 font-medium">الحالة</th>
+                <th className="p-bsr-3 font-medium">تأكيد البريد</th>
                 <th className="p-bsr-3 font-medium">الدور الإداري</th>
                 <th className="p-bsr-3 font-medium">انضم في</th>
+                <th className="p-bsr-3 font-medium">آخر دخول</th>
                 <th className="p-bsr-3 font-medium">إجراءات</th>
               </tr>
             </thead>
@@ -154,11 +173,19 @@ function UsersPageInner() {
                         {user.is_active ? "نشط" : "موقوف"}
                       </span>
                     </td>
+                    <td className="p-bsr-3">
+                      <span className={user.is_email_verified ? "text-bsr-market-up" : "text-bsr-action-watch"}>
+                        {user.is_email_verified ? "مؤكَّد" : "غير مؤكَّد"}
+                      </span>
+                    </td>
                     <td className="p-bsr-3 text-bsr-text-secondary">
                       {user.is_staff && user.staff_role ? STAFF_ROLE_LABELS_AR[user.staff_role] : "—"}
                     </td>
                     <td className="bsr-numeric p-bsr-3 text-bsr-text-secondary">
                       {new Date(user.created_at).toLocaleDateString("ar-SA")}
+                    </td>
+                    <td className="bsr-numeric p-bsr-3 text-bsr-text-secondary">
+                      {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString("ar-SA") : "—"}
                     </td>
                     <td className="p-bsr-3">
                       <div className="flex flex-wrap gap-bsr-2">
@@ -174,6 +201,26 @@ function UsersPageInner() {
                         >
                           {user.is_active ? "إيقاف" : "إعادة تفعيل"}
                         </button>
+                        {!user.is_email_verified ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => withBusy(user.id, () => verifyUserEmail(user.id))}
+                              className="rounded-bsr-sm border border-bsr-border-subtle px-bsr-2 py-1 text-xs text-bsr-text-secondary hover:bg-bsr-surface-overlay disabled:opacity-50"
+                            >
+                              تأكيد يدوي
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleResendVerification(user.id, user.email)}
+                              className="rounded-bsr-sm border border-bsr-border-subtle px-bsr-2 py-1 text-xs text-bsr-text-secondary hover:bg-bsr-surface-overlay disabled:opacity-50"
+                            >
+                              إعادة إرسال التأكيد
+                            </button>
+                          </>
+                        ) : null}
                         <select
                           disabled={busy}
                           value={user.is_staff ? user.staff_role ?? "" : ""}
