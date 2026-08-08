@@ -13,6 +13,8 @@ import { ExecutiveDecisionCard } from "@/components/decision/ExecutiveDecisionCa
 import { CategoryTabs } from "@/components/patterns/CategoryTabs";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
+import { RecommendationHistoryPanel } from "@/components/recommendation-history/RecommendationHistoryPanel";
+import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
 import {
   getAnalystReport,
   getDecision,
@@ -27,7 +29,7 @@ import { useResource } from "@/lib/hooks/useResource";
 import { POSITION_SIZE_LABELS, RISK_LEVEL_LABELS, TIME_HORIZON_LABELS } from "@/lib/portfolio-labels";
 import { formatIndicatorValue, formatRatioValue } from "@/lib/stock-detail-format";
 
-const TABS = ["overview", "technical", "fundamental", "ai"] as const;
+const TABS = ["overview", "technical", "fundamental", "ai", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -35,6 +37,7 @@ const TAB_LABELS: Record<Tab, string> = {
   technical: "التحليل الفني",
   fundamental: "التحليل الأساسي",
   ai: "توصية الذكاء الاصطناعي",
+  history: "سجل التوصيات",
 };
 
 /** True indicator names -> Arabic display labels for the values
@@ -208,11 +211,14 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
               {sectorAr ? ` · ${sectorAr}` : stockData.sector ? ` · ${stockData.sector}` : ""}
             </p>
           </div>
-          {decisionV2.status === "ready" ? (
-            <DecisionBadge value={decisionV2.data.decision} labelAr={decisionV2.data.decision_label_ar} />
-          ) : decisionRec ? (
-            <RecommendationBadge value={decisionRec} />
-          ) : null}
+          <div className="flex items-center gap-bsr-3">
+            {decisionV2.status === "ready" ? (
+              <DecisionBadge value={decisionV2.data.decision} labelAr={decisionV2.data.decision_label_ar} />
+            ) : decisionRec ? (
+              <RecommendationBadge value={decisionRec} />
+            ) : null}
+            <AddToWatchlistButton symbol={symbol} />
+          </div>
         </div>
 
         {quote.status === "ready" ? (
@@ -387,6 +393,8 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <EmptyState title="لا يتوفر تقرير الذكاء الاصطناعي الكامل لهذا السهم بعد" />
         )
       ) : null}
+
+      {tab === "history" ? <RecommendationHistoryPanel symbol={symbol} /> : null}
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { PortfolioReportLink } from "@/components/reports/PortfolioReportLink";
+import { RecommendationHistoryPanel } from "@/components/recommendation-history/RecommendationHistoryPanel";
 import { getRankings } from "@/lib/api/market";
 import { RunScanButton } from "@/components/dashboard/RunScanButton";
 import { useCategoryFetch } from "@/lib/hooks/useCategoryFetch";
@@ -71,6 +72,15 @@ export default function ReportsPage() {
       <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 md:p-bsr-6">
         <h2 className="mb-bsr-4 text-base font-semibold text-bsr-text-primary">تقرير المحفظة</h2>
         <PortfolioReportLink />
+      </section>
+
+      <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 md:p-bsr-6">
+        <h2 className="mb-bsr-4 text-base font-semibold text-bsr-text-primary">سجل التوصيات</h2>
+        <p className="mb-bsr-4 text-xs text-bsr-text-secondary">
+          السجل الحقيقي الكامل لكل توصية أصدرتها المنصة ونتيجتها الفعلية — بما في ذلك التوصيات غير الموفقة، لا يتم
+          إخفاء أي نتيجة.
+        </p>
+        <RecommendationHistoryPanel />
       </section>
 
       <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 md:p-bsr-6">

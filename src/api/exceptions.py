@@ -128,3 +128,18 @@ class InvalidPortfolioConfigError(APIError):
 
     status_code = 422
     code = "invalid_portfolio_config"
+
+
+class WatchlistItemAlreadyExistsError(APIError):
+    """The requesting user's watchlist already contains this symbol --
+    a client-correctable 409, not a server failure."""
+
+    status_code = 409
+    code = "watchlist_item_already_exists"
+
+
+class WatchlistItemNotFoundError(APIError):
+    """The requesting user's watchlist has no entry for this symbol."""
+
+    status_code = 404
+    code = "watchlist_item_not_found"

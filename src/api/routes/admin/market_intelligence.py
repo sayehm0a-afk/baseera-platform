@@ -30,7 +30,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -42,6 +42,7 @@ from src.api.schemas.market_intelligence import (
     DiagnosticDecisionV2SampleOut,
     DiagnosticSampleSymbolOut,
     DiagnosticScanOut,
+    FullDiscoveryTriggerOut,
     IngestionJobStatusOut,
     MarketCoverageOut,
     MarketScanRequest,
@@ -317,6 +318,81 @@ async def trigger_diagnostic_scan(
 _INGESTION_JOB_NAMES = ["symbols", "historical_ohlcv", "fundamentals", "dividends"]
 
 
+def _ingestion_job_status_out(job_name: str, latest: Optional[IngestionRunLog]) -> IngestionJobStatusOut:
+    if latest is None:
+        return IngestionJobStatusOut(job_name=job_name, status=None)
+    return IngestionJobStatusOut(
+        job_name=job_name,
+        status=latest.status.value,
+        symbols_requested=latest.symbols_requested,
+        symbols_succeeded=latest.symbols_succeeded,
+        symbols_failed=latest.symbols_failed,
+        rows_upserted=latest.rows_upserted,
+        retry_count=latest.retry_count,
+        started_at=latest.started_at,
+        finished_at=latest.finished_at,
+        duration_seconds=float(latest.duration_seconds) if latest.duration_seconds is not None else None,
+        error_summary=latest.error_summary,
+    )
+
+
+@router.post("/full-discovery", response_model=FullDiscoveryTriggerOut)
+async def trigger_full_discovery(
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> FullDiscoveryTriggerOut:
+    """Staff-only: manually runs one full pass of the same four
+    ingestion jobs (symbols -> historical_ohlcv -> fundamentals ->
+    dividends) the recurring IngestionScheduler would eventually run on
+    its own schedule (see IngestionScheduler.run_all_jobs_once) --
+    without requiring INGESTION_SCHEDULER_ENABLED to be turned on.
+
+    When INGESTION_AUTO_DISCOVER_SYMBOLS is enabled (as it already is
+    in this deployment), the symbols job registers every symbol
+    SahmkMarketDataProvider.get_symbol_directory() reports, and the
+    other three jobs then pick up every newly discovered active Stock
+    row automatically (IngestionScheduler._resolve_target_symbols) --
+    this route is the one production-safe way to grow the tracked
+    universe past its cold-start seed on demand, since the diagnostic-
+    scan route deliberately never runs discovery (see its own
+    docstring). Dispatched as a background task -- a full-market
+    backfill can take many minutes -- so this call returns immediately;
+    poll GET /coverage's latest_ingestion_runs for real progress and
+    counts.
+    """
+    triggered_at = datetime.now(timezone.utc)
+
+    in_flight = (
+        session.query(IngestionRunLog)
+        .filter(IngestionRunLog.job_name.in_(_INGESTION_JOB_NAMES))
+        .filter(IngestionRunLog.finished_at.is_(None))
+        .first()
+    )
+    if in_flight is not None:
+        return FullDiscoveryTriggerOut(
+            triggered_at=triggered_at,
+            accepted=False,
+            message=(
+                f"Skipped: ingestion job '{in_flight.job_name}' (started {in_flight.started_at.isoformat()}) "
+                "is already running -- wait for it to finish before triggering another full discovery pass."
+            ),
+            job_names=[],
+        )
+
+    from src.market_data.ingestion.scheduler import IngestionScheduler
+
+    scheduler = IngestionScheduler()
+    background_tasks.add_task(scheduler.run_all_jobs_once)
+
+    return FullDiscoveryTriggerOut(
+        triggered_at=triggered_at,
+        accepted=True,
+        message="Full discovery/ingestion pass started in the background.",
+        job_names=list(_INGESTION_JOB_NAMES),
+    )
+
+
 @router.get("/coverage", response_model=MarketCoverageOut)
 async def get_market_coverage(
     session: Session = Depends(get_db),
@@ -361,24 +437,7 @@ async def get_market_coverage(
             .order_by(IngestionRunLog.started_at.desc())
             .first()
         )
-        if latest is None:
-            latest_ingestion_runs.append(IngestionJobStatusOut(job_name=job_name, status=None))
-        else:
-            latest_ingestion_runs.append(
-                IngestionJobStatusOut(
-                    job_name=job_name,
-                    status=latest.status.value,
-                    symbols_requested=latest.symbols_requested,
-                    symbols_succeeded=latest.symbols_succeeded,
-                    symbols_failed=latest.symbols_failed,
-                    rows_upserted=latest.rows_upserted,
-                    retry_count=latest.retry_count,
-                    started_at=latest.started_at,
-                    finished_at=latest.finished_at,
-                    duration_seconds=float(latest.duration_seconds) if latest.duration_seconds is not None else None,
-                    error_summary=latest.error_summary,
-                )
-            )
+        latest_ingestion_runs.append(_ingestion_job_status_out(job_name, latest))
 
     latest_scan = session.query(MarketScanRun).order_by(MarketScanRun.id.desc()).first()
     latest_scan_run = (

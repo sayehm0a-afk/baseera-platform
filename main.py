@@ -34,8 +34,10 @@ from src.api.routes.calibrations import router as calibrations_router  # noqa: E
 from src.api.routes.market import router as market_router  # noqa: E402
 from src.api.routes.news import router as news_router  # noqa: E402
 from src.api.routes.portfolio import router as portfolio_router  # noqa: E402
+from src.api.routes.recommendation_history import router as recommendation_history_router  # noqa: E402
 from src.api.routes.stocks import router as stocks_router  # noqa: E402
 from src.api.routes.subscriptions import router as subscriptions_router  # noqa: E402
+from src.api.routes.watchlist import router as watchlist_router  # noqa: E402
 from src.auth.rbac import require_staff_role  # noqa: E402
 from src.domain.models import StaffRole, User  # noqa: E402
 
@@ -134,6 +136,8 @@ app.include_router(market_router)
 app.include_router(news_router)
 app.include_router(portfolio_router)
 app.include_router(subscriptions_router)
+app.include_router(watchlist_router)
+app.include_router(recommendation_history_router)
 
 # Global runtime kernel
 kernel = None
