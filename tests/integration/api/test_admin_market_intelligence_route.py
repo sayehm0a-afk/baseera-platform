@@ -1197,3 +1197,77 @@ def test_symbol_lookup_diagnostics_reports_real_per_symbol_call_outcomes(
     assert missing["in_last_known_directory"] is False
     assert missing["quote"]["available"] is False
     assert "404" in missing["quote"]["detail"]
+
+
+def test_symbol_lookup_diagnostics_surfaces_real_sector_from_company_profile(
+    client, session_factory, as_staff, monkeypatch
+):
+    """Real evidence for whether SAHMK's per-symbol company-profile
+    endpoint carries sector/industry data the bulk directory doesn't:
+    the route must pass the profile dict's real sector/industry values
+    straight through, never fabricate or infer them."""
+    from src.market_data import fundamental_provider_factory, provider_factory
+    from src.market_data.providers.sahmk_fundamental_data_provider import SahmkFundamentalDataProvider
+    from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
+
+    market_provider = SahmkMarketDataProvider(api_endpoint="https://sahmk.example.invalid", api_key="key")
+
+    async def _fake_get_symbol_directory():
+        return [{"symbol": "2222"}]
+
+    async def _fake_get_latest_quote(symbol):
+        return {"symbol": symbol, "price": 42.0}
+
+    async def _fake_get_company_profile(symbol):
+        return {
+            "symbol": symbol,
+            "name": "Example Co",
+            "sector": "Materials",
+            "industry": "Chemicals",
+            "exchange": "TASI",
+        }
+
+    async def _fake_get_stock_data(symbol):
+        return {"symbol": symbol, "close": 42.0}
+
+    market_provider.get_symbol_directory = _fake_get_symbol_directory
+    market_provider.get_latest_quote = _fake_get_latest_quote
+    market_provider.get_company_profile = _fake_get_company_profile
+    market_provider.get_stock_data = _fake_get_stock_data
+
+    fundamental_provider = SahmkFundamentalDataProvider(api_endpoint="https://sahmk.example.invalid", api_key="key")
+
+    async def _fake_get_dividends(symbol):
+        return []
+
+    async def _fake_get_fundamentals(symbol, period_type="annual"):
+        return {"symbol": symbol}
+
+    fundamental_provider.get_dividends = _fake_get_dividends
+    fundamental_provider.get_fundamentals = _fake_get_fundamentals
+
+    async def _fake_get_market_provider(force_refresh=False):
+        return market_provider
+
+    async def _fake_get_fundamental_provider(force_refresh=False):
+        return fundamental_provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_market_provider)
+    monkeypatch.setattr(fundamental_provider_factory, "get_fundamental_data_provider", _fake_get_fundamental_provider)
+
+    response = client.get(
+        "/api/v1/admin/market-intelligence/symbol-lookup-diagnostics", params={"symbols": "2222"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    profile_check = body["results"][0]["company_profile"]
+    assert profile_check["raw_sector"] == "Materials"
+    assert profile_check["raw_industry"] == "Chemicals"
+    assert set(profile_check["raw_keys"]) >= {"sector", "industry", "name", "exchange"}
+
+    # A quote check has no sector/industry keys at all -- must stay None,
+    # never leak an unrelated value or fabricate one.
+    quote_check = body["results"][0]["quote"]
+    assert quote_check["raw_sector"] is None
+    assert quote_check["raw_industry"] is None

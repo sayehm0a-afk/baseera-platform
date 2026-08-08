@@ -173,13 +173,26 @@ async def startup_event():
     global outcome_evaluation_scheduler, pattern_discovery_scheduler, daily_reflection_scheduler
     global daily_intelligence_aggregation_scheduler, live_market_mode_scheduler
 
-    # Live Market Mode (LIVE_MARKET_MODE_ENABLED) supersedes the two
-    # standalone schedulers below -- it owns its own internal instances
-    # of IngestionScheduler/IntervalMarketIntelligenceScheduler and only
-    # runs them while the Tadawul market is actually open (see
+    # Live Market Mode (LIVE_MARKET_MODE_ENABLED) supersedes the
+    # standalone market-scan scheduler below -- it owns its own internal
+    # IntervalMarketIntelligenceScheduler and only runs it while the
+    # Tadawul market is actually open (see
     # src.market_intelligence.live_market_mode). Checked first so the
-    # two `if` guards below skip starting a second, redundant pair of
-    # always-on schedulers when Live Market Mode already owns that job.
+    # market-intelligence-scheduler `if` guard below skips starting a
+    # second, redundant scan scheduler when Live Market Mode already
+    # owns that job.
+    #
+    # CORRECTION (production gap found 2026-08-08): Live Market Mode
+    # previously also owned (and market-hours-gated) the ingestion
+    # scheduler below. Confirmed live via GET /admin/system/summary that
+    # this meant zero automatic symbols/OHLCV/fundamentals/dividends
+    # backfill ever ran whenever the market was closed (e.g. every
+    # Tadawul weekend) -- those four jobs are periodic maintenance, not
+    # live intraday quoting, and don't need the market open. The
+    # ingestion scheduler below is now started unconditionally (subject
+    # only to its own INGESTION_SCHEDULER_ENABLED flag), independent of
+    # Live Market Mode; only the market-scan scheduler remains
+    # market-hours-gated.
     live_market_mode_enabled = False
     try:
         from src.market_intelligence.config import is_live_market_mode_enabled
@@ -189,7 +202,7 @@ async def startup_event():
         if live_market_mode_enabled:
             live_market_mode_scheduler = LiveMarketModeScheduler()
             live_market_mode_scheduler.start()
-            logger.info("Live Market Mode started (Tadawul-hours-gated ingestion + scanning).")
+            logger.info("Live Market Mode started (Tadawul-hours-gated market scanning).")
         else:
             logger.info("Live Market Mode disabled (set LIVE_MARKET_MODE_ENABLED=true to enable).")
     except Exception as e:
@@ -200,15 +213,15 @@ async def startup_event():
     # own try/except, so a Redis/kernel outage (which the block below
     # depends on and can raise from) never prevents scheduled ingestion
     # from starting, and a scheduler problem never prevents the kernel
-    # from starting either. Skipped when Live Market Mode already owns
-    # an ingestion scheduler of its own (see above).
+    # from starting either. Always started when enabled, regardless of
+    # Live Market Mode/market hours (see the correction above) -- there
+    # is exactly one IngestionScheduler code path now, so this can never
+    # duplicate with Live Market Mode's own scheduling.
     try:
         from src.market_data.ingestion.config import is_ingestion_scheduler_enabled
         from src.market_data.ingestion.scheduler import IngestionScheduler
 
-        if live_market_mode_enabled:
-            logger.info("Ingestion scheduler: owned by Live Market Mode, not started standalone.")
-        elif is_ingestion_scheduler_enabled():
+        if is_ingestion_scheduler_enabled():
             ingestion_scheduler = IngestionScheduler()
             ingestion_scheduler.start()
             logger.info("Ingestion scheduler started.")
