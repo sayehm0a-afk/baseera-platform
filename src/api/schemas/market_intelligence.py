@@ -292,6 +292,22 @@ class IngestionJobStatusOut(BaseModel):
     error_summary: Optional[str] = None
 
 
+class FullDiscoveryTriggerOut(BaseModel):
+    """POST /api/v1/admin/market-intelligence/full-discovery -- ack for
+    a staff-triggered manual run of the same four ingestion jobs
+    (symbols -> historical_ohlcv -> fundamentals -> dividends) the
+    recurring scheduler would eventually run, dispatched as a
+    background task since a full-market backfill can take many
+    minutes. `accepted=False` means an equivalent run was already in
+    progress and this call was a no-op -- poll GET /coverage's
+    latest_ingestion_runs for real before/after counts."""
+
+    triggered_at: datetime
+    accepted: bool
+    message: str
+    job_names: List[str] = Field(default_factory=list)
+
+
 class SectorCoverageOut(BaseModel):
     """One Saudi sector's coverage: how many Stock rows carry this
     sector value, how many of those are eligible/active, and how many

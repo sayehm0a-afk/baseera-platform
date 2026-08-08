@@ -230,6 +230,28 @@ class IngestionScheduler:
     def is_running(self) -> bool:
         return len(self._tasks) > 0
 
+    async def run_all_jobs_once(self) -> List[IngestionRunLog]:
+        """Runs the same four jobs `start()`'s recurring loops would
+        eventually run, once, in dependency order -- symbols first (so
+        a freshly discovered symbol's Stock row exists before the
+        other three jobs resolve their target list via
+        `_resolve_target_symbols()`), then historical_ohlcv,
+        fundamentals, dividends. Used by the staff-only manual
+        full-discovery admin route so an operator can grow the
+        universe on demand without needing the always-on recurring
+        scheduler (INGESTION_SCHEDULER_ENABLED) turned on. Reuses
+        `run_ingestion_job` and the same private per-job wiring
+        `start()`'s loops use -- no parallel implementation."""
+        run_logs: List[IngestionRunLog] = []
+        for job_name, job_fn in (
+            ("symbols", self._run_symbols),
+            ("historical_ohlcv", self._run_historical_ohlcv),
+            ("fundamentals", self._run_fundamentals),
+            ("dividends", self._run_dividends),
+        ):
+            run_logs.append(await run_ingestion_job(job_name, job_fn, self._session_factory))
+        return run_logs
+
     def start(self) -> None:
         if self._tasks:
             logger.warning("IngestionScheduler.start() called while already running -- ignoring.")

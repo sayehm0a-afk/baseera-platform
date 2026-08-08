@@ -16,6 +16,7 @@ from src.api.routes.admin import (
     feature_flags,
     investment_committee,
     market_intelligence,
+    recommendation_history,
     sessions,
     subscriptions,
     system,
@@ -37,3 +38,4 @@ router.include_router(billing.router)
 router.include_router(ai_evolution.router)
 router.include_router(market_intelligence.router)
 router.include_router(investment_committee.router)
+router.include_router(recommendation_history.router)

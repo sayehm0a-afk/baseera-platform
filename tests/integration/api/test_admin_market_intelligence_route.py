@@ -632,6 +632,76 @@ def test_coverage_handles_an_entirely_empty_database(client, session_factory, as
     assert len(body["pipeline_funnel"]) == 7
 
 
+# --- POST /full-discovery ------------------------------------------------
+
+
+def test_full_discovery_requires_staff_role(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+
+    response = client.post("/api/v1/admin/market-intelligence/full-discovery")
+
+    assert response.status_code == 403
+
+
+def test_full_discovery_accepts_and_runs_the_real_ingestion_jobs(client, session_factory, as_staff, monkeypatch):
+    """DevMarketDataProvider is used throughout this test module's
+    fixtures -- has no get_symbol_directory support, so sync_symbols
+    logs "skip discovery" and succeeds with zero symbols requested;
+    the point of this test is that the route accepts the request, runs
+    the real IngestionScheduler.run_all_jobs_once() job sequence (not a
+    parallel implementation), and persists real IngestionRunLog rows
+    for all four jobs -- proving the wiring, independent of how many
+    real symbols a given provider happens to discover."""
+    from src.market_data.providers.dev_fundamental_data_provider import DevFundamentalDataProvider
+
+    async def _get_dev_market_provider():
+        return DevMarketDataProvider()
+
+    async def _get_dev_fundamental_provider():
+        return DevFundamentalDataProvider()
+
+    monkeypatch.setattr("src.market_data.ingestion.scheduler.get_market_data_provider", _get_dev_market_provider)
+    monkeypatch.setattr(
+        "src.market_data.ingestion.scheduler.get_fundamental_data_provider", _get_dev_fundamental_provider
+    )
+
+    response = client.post("/api/v1/admin/market-intelligence/full-discovery")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["job_names"] == ["symbols", "historical_ohlcv", "fundamentals", "dividends"]
+
+    session = session_factory()
+    from src.domain.models import IngestionRunLog
+
+    logged_jobs = {row.job_name for row in session.query(IngestionRunLog).all()}
+    session.close()
+    assert logged_jobs == {"symbols", "historical_ohlcv", "fundamentals", "dividends"}
+
+
+def test_full_discovery_reports_overlap_when_a_job_is_already_running(client, session_factory, as_staff):
+    from src.domain.models import IngestionJobStatus, IngestionRunLog
+
+    session = session_factory()
+    session.add(
+        IngestionRunLog(
+            job_name="symbols", started_at=datetime.now(timezone.utc), status=IngestionJobStatus.RUNNING
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.post("/api/v1/admin/market-intelligence/full-discovery")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert body["job_names"] == []
+    assert "already running" in body["message"]
+
+
 # --- GET /decision-intelligence -------------------------------------------
 
 

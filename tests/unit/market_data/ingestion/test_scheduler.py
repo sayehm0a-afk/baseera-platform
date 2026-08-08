@@ -446,3 +446,72 @@ async def test_scheduler_stop_cancels_all_tasks_cleanly(session_factory):
     assert scheduler._tasks == []
     for task in tasks:
         assert task.cancelled() or task.done()
+
+
+# --- run_all_jobs_once ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_all_jobs_once_runs_all_four_jobs_in_dependency_order(session_factory):
+    """The manual full-discovery admin route calls this -- symbols must
+    run (and be recorded) before the other three, since they resolve
+    their target list from Stock rows the symbols job may have just
+    discovered."""
+    call_order = []
+
+    async def _make_job(name):
+        async def _job():
+            call_order.append(name)
+            return IngestionResult(symbols_requested=1, symbols_succeeded=1)
+
+        return _job
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._run_symbols = await _make_job("symbols")
+    scheduler._run_historical_ohlcv = await _make_job("historical_ohlcv")
+    scheduler._run_fundamentals = await _make_job("fundamentals")
+    scheduler._run_dividends = await _make_job("dividends")
+
+    run_logs = await scheduler.run_all_jobs_once()
+
+    assert call_order == ["symbols", "historical_ohlcv", "fundamentals", "dividends"]
+    assert [log.job_name for log in run_logs] == ["symbols", "historical_ohlcv", "fundamentals", "dividends"]
+    assert all(log.status == IngestionJobStatus.SUCCESS for log in run_logs)
+
+    session = session_factory()
+    assert session.query(IngestionRunLog).count() == 4
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_run_all_jobs_once_records_a_failed_job_but_still_runs_the_rest(session_factory):
+    """A job that fails every retry attempt must not stop the other
+    three from running -- matches run_ingestion_job's own "never
+    raises" contract."""
+    call_order = []
+
+    async def _failing_symbols():
+        call_order.append("symbols")
+        raise RuntimeError("SAHMK directory unavailable")
+
+    async def _make_ok_job(name):
+        async def _job():
+            call_order.append(name)
+            return IngestionResult(symbols_requested=1, symbols_succeeded=1)
+
+        return _job
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._run_symbols = _failing_symbols
+    scheduler._run_historical_ohlcv = await _make_ok_job("historical_ohlcv")
+    scheduler._run_fundamentals = await _make_ok_job("fundamentals")
+    scheduler._run_dividends = await _make_ok_job("dividends")
+
+    run_logs = await scheduler.run_all_jobs_once()
+
+    assert [log.job_name for log in run_logs] == ["symbols", "historical_ohlcv", "fundamentals", "dividends"]
+    assert run_logs[0].status == IngestionJobStatus.FAILED
+    assert all(log.status == IngestionJobStatus.SUCCESS for log in run_logs[1:])
+    # symbols was retried up to the configured max, then the other three ran once each
+    assert call_order.count("symbols") >= 1
+    assert call_order[-3:] == ["historical_ohlcv", "fundamentals", "dividends"]
