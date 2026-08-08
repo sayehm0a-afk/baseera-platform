@@ -26,7 +26,7 @@ env:
 jobs:
   fetch_diagnostics:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
@@ -87,7 +87,15 @@ jobs:
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
         run: |
-          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 60 -b /tmp/staff_cookies.txt \
+          # 60s was not enough on a real dispatch after the directory grew
+          # to 517 instruments (run 31263530580: curl (28) timeout, 0 bytes
+          # received): this route does a fresh, uncached directory walk
+          # (2 sequential SAHMK calls) plus 5 sequential real per-symbol
+          # SAHMK calls per test symbol, with no concurrency -- legitimate
+          # cumulative real-API latency, not a bug. 180s gives real
+          # headroom without masking a genuine hang (job-level timeout is
+          # still a hard 8-minute backstop above).
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 180 -b /tmp/staff_cookies.txt \
             "$BACKEND_URL/api/v1/admin/market-intelligence/symbol-lookup-diagnostics" \
             -o /tmp/symbol_lookup_diagnostics.json -w "%{http_code}")
           echo "HTTP $HTTP_CODE"
