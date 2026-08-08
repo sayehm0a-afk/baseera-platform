@@ -1,0 +1,179 @@
+name: Production Full-Market Scan Trigger (temporary, one-shot)
+
+# The 2026-08-08 full-market discovery/ingestion run (dispatched via
+# production-full-discovery-trigger.yml) grew the DB to 517 discovered
+# instruments / 408 active equities / 393 with real OHLCV -- but
+# GET /coverage's own pipeline_funnel then showed the *latest market
+# scan* (the step that actually populates DecisionV2Snapshot /
+# SymbolIntelligenceRecord, i.e. what makes a symbol "analysis-ready")
+# still pinned at run id 97, 5 symbols, dated 2026-08-06 -- BEFORE the
+# ingestion run even started. Discovery coverage and analysis-ready
+# coverage are explicitly different measurements (per this mandate's
+# own instruction) and this proves they currently ARE very different:
+# 393 symbols have real price history, but only 5 have ever been
+# scanned by Decision Engine V2.
+#
+# This workflow closes that gap the production-safe way: POST
+# /api/v1/market/scan with no `symbols` (per MarketScanRequest's own
+# docstring: "omit to scan every active, price-history-eligible
+# symbol") on the staff account, which src/auth/rbac.py's
+# require_active_subscription() lets through via its staff-bypass
+# branch. This is the exact same production code path
+# (SymbolSelector -> run_market_scan_job -> MarketIntelligenceEngine
+# -> MarketScanner -> AIDecisionEngineV2/publication gates) the
+# scheduled Live Market Mode scan already uses -- nothing new is being
+# introduced, just triggered once, now, so real evidence can be
+# gathered on how much of the expanded universe is genuinely
+# analysis-ready.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  trigger_and_monitor:
+    runs-on: ubuntu-latest
+    # 393 symbols through the real SAHMK-backed scan pipeline, same
+    # shared 20 req/min rate limiter as the ingestion jobs -- a
+    # comparable pacing floor to historical_ohlcv's ~20-minute real run
+    # for 408 symbols. 90 minutes gives real headroom.
+    timeout-minutes: 90
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ] || [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::RAILWAY_TOKEN/STAFF_EMAIL/STAFF_PASSWORD not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as the staff account
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "${{ steps.urls.outputs.backend_url }}/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Staff login failed."
+            exit 1
+          fi
+          CSRF=$(grep -i csrf_token /tmp/staff_cookies.txt | awk '{print $NF}')
+          echo "$CSRF" > /tmp/.staff_csrf
+
+      - name: Trigger full-universe scan (no symbols = every active, price-history-eligible symbol)
+        id: trigger
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          STAFF_CSRF=$(cat /tmp/.staff_csrf)
+          CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt -o /tmp/trigger_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/market/scan" \
+            -H "Content-Type: application/json" -H "x-csrf-token: $STAFF_CSRF" \
+            -d '{}')
+          echo "Trigger HTTP $CODE"
+          cat /tmp/trigger_body.json; echo ""
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Full-market scan trigger failed."
+            exit 1
+          fi
+          RUN_ID=$(python3 -c "import json; print(json.load(open('/tmp/trigger_body.json'))['id'])")
+          SYMBOLS_REQUESTED=$(python3 -c "import json; print(json.load(open('/tmp/trigger_body.json'))['symbols_requested'])")
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Scan run $RUN_ID requested for $SYMBOLS_REQUESTED symbols."
+
+      - name: Poll scan progress until terminal (up to 85 minutes, checking every 60s)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          RUN_ID: ${{ steps.trigger.outputs.run_id }}
+        run: |
+          for i in $(seq 1 85); do
+            sleep 60
+            # Re-login every iteration: ACCESS_TOKEN_EXPIRE_MINUTES=15
+            # default is shorter than this scan can legitimately run.
+            curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+              -X POST "$BACKEND_URL/api/v1/auth/login" \
+              -H "Content-Type: application/json" \
+              -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}" \
+              > /tmp/relogin_http_code.txt || true
+            curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+              "$BACKEND_URL/api/v1/market/scan/$RUN_ID/progress" -o /tmp/progress.json || continue
+            python3 -c "
+          import json
+          try:
+              d = json.load(open('/tmp/progress.json'))
+          except Exception as e:
+              print('[poll $i] could not parse progress response:', e); raise SystemExit(0)
+          print('[poll $i] status=%s completed=%s/%s remaining=%s pct=%.1f success=%s failed=%s skipped=%s insufficient_data=%s published=%s rejected=%s watch_only=%s current=%s' % (
+              d.get('status'), d.get('completed_count'), d.get('eligible_discovered'), d.get('remaining_count'), d.get('progress_pct', 0.0),
+              d.get('success_count'), d.get('failed_count'), d.get('skipped_count'), d.get('insufficient_data_count'),
+              d.get('published_count'), d.get('rejected_count'), d.get('watch_only_count'), d.get('current_symbol')))
+          "
+            STATUS=$(python3 -c "import json; print(json.load(open('/tmp/progress.json')).get('status', ''))" 2>/dev/null || echo "")
+            if [ "$STATUS" = "SUCCESS" ] || [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "PARTIAL" ]; then
+              echo "Scan run $RUN_ID reached terminal status: $STATUS"
+              break
+            fi
+          done
+
+      - name: Final scan run status
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          RUN_ID: ${{ steps.trigger.outputs.run_id }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/market/scan/$RUN_ID" -o /tmp/final_run.json
+          echo "=== Final MarketScanRun ==="
+          python3 -m json.tool /tmp/final_run.json
+
+      - name: Re-fetch coverage after the scan (pipeline_funnel should now reflect real analysis-ready count)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/coverage" -o /tmp/coverage_after.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/coverage_after.json'))
+          print('total_stocks=%s active_stocks=%s stocks_with_price_history=%s' % (
+              d.get('total_stocks'), d.get('active_stocks'), d.get('stocks_with_price_history')))
+          print('latest_scan_symbols_entering_decision_engine:', d.get('latest_scan_symbols_entering_decision_engine'))
+          print('latest_scan_recommendations_generated:', d.get('latest_scan_recommendations_generated'))
+          print()
+          print('=== pipeline_funnel ===')
+          for stage in d.get('pipeline_funnel') or []:
+              print(' ', json.dumps(stage, ensure_ascii=False))
+          "
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-market-scan-trigger-evidence
+          path: |
+            /tmp/trigger_body.json
+            /tmp/final_run.json
+            /tmp/coverage_after.json
+          retention-days: 14
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: rm -f /tmp/.staff_csrf /tmp/staff_cookies.txt /tmp/login_body.json
