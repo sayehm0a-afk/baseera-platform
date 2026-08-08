@@ -130,6 +130,13 @@ async def get_dashboard_summary(
         market_intelligence_scheduler_running=(
             main.market_intelligence_scheduler is not None and main.market_intelligence_scheduler.is_running
         ),
+        live_market_mode_enabled=main.live_market_mode_scheduler is not None,
+        live_market_mode_running=(
+            main.live_market_mode_scheduler is not None and main.live_market_mode_scheduler.is_running
+        ),
+        live_market_mode_market_currently_open=(
+            main.live_market_mode_scheduler is not None and main.live_market_mode_scheduler.is_market_currently_open
+        ),
         market_data_provider=market_data_provider,
         market_data_health=market_data_health,
         new_users_last_24h=new_users_last_24h,

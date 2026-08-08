@@ -23,6 +23,7 @@ class MarketScanRunOut(BaseModel):
     symbols_skipped: int
     symbols_failed: int
     error_summary: Optional[str] = None
+    skipped_symbols_summary: Optional[str] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     duration_seconds: Optional[float] = None

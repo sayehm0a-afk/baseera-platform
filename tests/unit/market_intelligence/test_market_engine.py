@@ -89,6 +89,64 @@ async def test_execute_scan_persists_symbol_records_and_marks_success(factory):
 
 
 @pytest.mark.asyncio
+async def test_execute_scan_records_skipped_symbol_identities_and_reasons(factory):
+    """Root-caused in production (run 98, 393 symbols, 2 skipped, no
+    durable record of which or why): a skipped outcome must not be
+    silently discarded once the scan succeeds -- symbols_skipped's
+    aggregate count alone is not enough to root-cause a specific run."""
+    _seed_stock(factory, "2222")
+    _seed_stock(factory, "9999")
+    repo = MarketIntelligenceRepository()
+    outcomes = [
+        make_outcome(symbol="2222", decision=make_decision(symbol="2222")),
+        make_outcome(symbol="9999", success=False, report=None, skipped_reason="insufficient_data"),
+    ]
+
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner(outcomes), symbol_selector=_FakeSymbolSelector(["2222", "9999"]),
+    )
+
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=2)
+    run_id = run.id
+    session.close()
+
+    await engine.execute_scan(run_id)
+
+    session = factory()
+    run_row = repo.get_run(session, run_id)
+    assert run_row.status is MarketScanStatus.SUCCESS
+    assert run_row.symbols_skipped == 1
+    assert run_row.skipped_symbols_summary == "9999: insufficient_data"
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_execute_scan_leaves_skipped_symbols_summary_null_when_nothing_skipped(factory):
+    _seed_stock(factory, "2222")
+    repo = MarketIntelligenceRepository()
+    outcomes = [make_outcome(symbol="2222", decision=make_decision(symbol="2222"))]
+
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=_FakeScanner(outcomes), symbol_selector=_FakeSymbolSelector(["2222"]),
+    )
+
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    run_id = run.id
+    session.close()
+
+    await engine.execute_scan(run_id)
+
+    session = factory()
+    run_row = repo.get_run(session, run_id)
+    assert run_row.skipped_symbols_summary is None
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_execute_scan_persists_sector_summaries(factory):
     _seed_stock(factory, "2222", sector="Energy")
     repo = MarketIntelligenceRepository()

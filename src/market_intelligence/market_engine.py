@@ -159,10 +159,12 @@ class MarketIntelligenceEngine:
                 succeeded = sum(1 for o in outcomes if o.success)
                 failed = sum(1 for o in outcomes if not o.success and o.error is not None)
                 skipped = len(outcomes) - succeeded - failed
+                skipped_symbols_summary = self._build_skipped_symbols_summary(outcomes)
                 self._repository.finish_run(
                     write_session, run_id, MarketScanStatus.SUCCESS,
                     symbols_succeeded=succeeded, symbols_skipped=skipped, symbols_failed=failed,
                     started_at=started_at,
+                    skipped_symbols_summary=skipped_symbols_summary,
                 )
             finally:
                 write_session.close()
@@ -192,3 +194,18 @@ class MarketIntelligenceEngine:
             raise
 
         return outcomes
+
+    @staticmethod
+    def _build_skipped_symbols_summary(outcomes: List[SymbolScanOutcome]) -> Optional[str]:
+        """A "skipped" outcome (success=False, error=None, skipped_reason
+        set -- e.g. "insufficient_data"/"stock_not_registered") only
+        ever existed in-memory for the duration of this scan; without
+        capturing it here, the exact symbol/reason pair is unrecoverable
+        the moment this function returns, leaving only symbols_skipped's
+        aggregate count durable. Never fabricates a reason: only real
+        outcome.skipped_reason values, verbatim. None when nothing was
+        skipped, so a clean run's skipped_symbols_summary stays null."""
+        skipped = [o for o in outcomes if not o.success and o.error is None]
+        if not skipped:
+            return None
+        return "; ".join(f"{o.symbol}: {o.skipped_reason or 'unknown'}" for o in skipped)

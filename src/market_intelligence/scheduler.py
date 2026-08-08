@@ -26,7 +26,11 @@ from typing import Awaitable, Callable, List, Optional, Protocol, runtime_checka
 from sqlalchemy.orm import Session
 
 from src.market_data.providers.market_data_provider import IMarketDataProvider
-from src.market_intelligence.config import get_market_intelligence_scan_interval, schedule_interval_seconds
+from src.market_intelligence.config import (
+    get_market_intelligence_scan_interval,
+    get_max_scan_run_duration_hours,
+    schedule_interval_seconds,
+)
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.services.scan_job_runner import run_market_scan_job
 from src.market_intelligence.symbol_selector import SymbolSelector
@@ -90,8 +94,32 @@ class IntervalMarketIntelligenceScheduler:
         if self._task is not None:
             logger.warning("MarketIntelligenceScheduler.start() called while already running -- ignoring.")
             return
+        self._reap_stale_runs_once()
         self._task = asyncio.ensure_future(self._loop())
         logger.info("MarketIntelligenceScheduler started (interval=%s).", self._interval.value)
+
+    def _reap_stale_runs_once(self) -> None:
+        """A process kill (Railway restart, OOM) between a scan's
+        PENDING/RUNNING insert and its finish never reaches
+        finish_run(), leaving a MarketScanRun row stuck RUNNING forever
+        -- indistinguishable from a genuinely in-progress scan to
+        POST /market/scan's own overlap guard, which would then block
+        every future scan (scheduled or manual) permanently after a
+        crash. Reaping once here, right before this scheduler starts
+        scheduling new scans, closes that stale-lock window without
+        requiring an operator to notice and manually clear it."""
+        session = self._session_factory()
+        try:
+            reaped = self._repository.reap_stale_runs(session, get_max_scan_run_duration_hours())
+            if reaped:
+                logger.warning(
+                    "MarketIntelligenceScheduler.start(): reaped %d stale MarketScanRun row(s) "
+                    "(run id(s): %s) before scheduling.",
+                    len(reaped),
+                    [r.id for r in reaped],
+                )
+        finally:
+            session.close()
 
     async def stop(self) -> None:
         if self._task is None:
