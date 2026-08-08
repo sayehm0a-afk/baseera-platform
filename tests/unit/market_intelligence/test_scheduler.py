@@ -5,6 +5,7 @@ running a real scan (run_market_scan_job is monkeypatched to a stub).
 """
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -13,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 import src.market_intelligence.scheduler as scheduler_module
 from src.core.db.database import Base
-from src.domain.models import Stock
+from src.domain.models import MarketScanRun, MarketScanStatus, Stock
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scheduler import IMarketIntelligenceScheduler, IntervalMarketIntelligenceScheduler
 from src.market_intelligence.types import ScheduleInterval
@@ -68,6 +69,33 @@ async def test_start_and_stop_lifecycle(factory, monkeypatch):
 
     await scheduler.stop()
     assert scheduler.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_start_reaps_a_stale_running_scan_before_scheduling(factory):
+    """A process kill leaves a MarketScanRun stuck RUNNING forever,
+    which would otherwise permanently block POST /market/scan's overlap
+    guard after a crash -- start() must reap it, not just future
+    scheduled runs relying on someone noticing manually."""
+    session = factory()
+    stale_run = MarketScanRun(
+        status=MarketScanStatus.RUNNING,
+        symbols_requested=1,
+        created_at=datetime.now(timezone.utc) - timedelta(hours=48),
+    )
+    session.add(stale_run)
+    session.commit()
+    stale_run_id = stale_run.id
+    session.close()
+
+    scheduler = IntervalMarketIntelligenceScheduler(session_factory=factory, market_provider_getter=_fake_market_provider_getter)
+    scheduler.start()
+    await scheduler.stop()
+
+    session = factory()
+    reaped = session.query(MarketScanRun).filter_by(id=stale_run_id).one()
+    assert reaped.status == MarketScanStatus.FAILED
+    session.close()
 
 
 @pytest.mark.asyncio

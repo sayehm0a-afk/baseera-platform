@@ -612,6 +612,46 @@ def test_dashboard_summary(client, admin, customer):
     assert body["locked_accounts"] == 0
 
 
+def test_dashboard_summary_live_market_mode_fields_default_false(client, admin):
+    """Without Live Market Mode enabled (main.live_market_mode_scheduler
+    stays None), the three new status fields must report False, not
+    error or omit themselves -- the same "real state, never inferred"
+    contract as the two pre-existing scheduler flags."""
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["live_market_mode_enabled"] is False
+    assert body["live_market_mode_running"] is False
+    assert body["live_market_mode_market_currently_open"] is False
+
+
+def test_dashboard_summary_live_market_mode_fields_reflect_a_running_instance(client, admin, monkeypatch):
+    """Once Live Market Mode is enabled, it owns its own internal
+    ingestion/scan scheduler instances instead of the two standalone
+    globals (see main.py's startup wiring) -- so ingestion_scheduler_
+    running/market_intelligence_scheduler_running alone would silently
+    stay False forever. These three fields are what actually reflect
+    real Live Market Mode state."""
+    import main as main_module
+
+    class _FakeLiveMarketModeScheduler:
+        is_running = True
+        is_market_currently_open = True
+
+    monkeypatch.setattr(main_module, "live_market_mode_scheduler", _FakeLiveMarketModeScheduler())
+    try:
+        _as(admin)
+        response = client.get("/api/v1/admin/system/summary")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["live_market_mode_enabled"] is True
+        assert body["live_market_mode_running"] is True
+        assert body["live_market_mode_market_currently_open"] is True
+    finally:
+        monkeypatch.setattr(main_module, "live_market_mode_scheduler", None)
+
+
 def test_dashboard_summary_counts_locked_accounts(client, admin, customer, session):
     customer.locked_until = datetime.now(timezone.utc) + timedelta(minutes=15)
     session.commit()

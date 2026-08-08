@@ -293,6 +293,8 @@ class IngestionScheduler:
             logger.warning("IngestionScheduler.start() called while already running -- ignoring.")
             return
 
+        self._reap_stale_runs_once()
+
         job_specs = [
             ("symbols", ingestion_config.get_symbols_sync_interval_seconds, self._run_symbols),
             (
@@ -321,6 +323,28 @@ class IngestionScheduler:
                 await task
         self._tasks.clear()
         logger.info("IngestionScheduler stopped.")
+
+    def _reap_stale_runs_once(self) -> None:
+        """Mirrors MarketIntelligenceScheduler's own stale-lock reap: a
+        process kill between an IngestionRunLog's RUNNING insert and its
+        finish never reaches run_ingestion_job's own finish step,
+        leaving that row RUNNING forever -- indistinguishable from a
+        genuinely in-progress job to POST /full-discovery's in-flight
+        guard, which would then block every future discovery pass
+        (scheduled or manual) permanently after a crash. Reaped once
+        here, right before this scheduler starts its recurring loops."""
+        session = self._session_factory()
+        try:
+            reaped = reap_stale_ingestion_runs(session, ingestion_config.get_max_ingestion_job_run_duration_hours())
+            if reaped:
+                logger.warning(
+                    "IngestionScheduler.start(): reaped %d stale IngestionRunLog row(s) "
+                    "(run id(s): %s) before scheduling.",
+                    len(reaped),
+                    [r.id for r in reaped],
+                )
+        finally:
+            session.close()
 
     async def _loop(
         self,

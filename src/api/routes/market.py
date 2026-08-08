@@ -92,6 +92,7 @@ def _to_run_out(run: MarketScanRun) -> MarketScanRunOut:
         symbols_skipped=run.symbols_skipped,
         symbols_failed=run.symbols_failed,
         error_summary=run.error_summary,
+        skipped_symbols_summary=run.skipped_symbols_summary,
         started_at=run.started_at,
         finished_at=run.finished_at,
         duration_seconds=float(run.duration_seconds) if run.duration_seconds is not None else None,

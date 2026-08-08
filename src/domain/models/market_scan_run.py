@@ -33,6 +33,17 @@ class MarketScanRun(Base):
     symbols_failed = Column(Integer, nullable=False, default=0, server_default="0")
 
     error_summary = Column(Text, nullable=True)
+
+    # A "skipped" symbol (SymbolScanOutcome.skipped_reason set, e.g.
+    # "insufficient_data"/"stock_not_registered") is not an error and
+    # never populates error_summary -- but until this column existed,
+    # its exact identity was computed in-memory during the scan and
+    # then discarded, leaving only symbols_skipped's aggregate count
+    # durable. Root-caused in production: two symbols skipped in a real
+    # 393-symbol scan (run 98) had no way to be identified after the
+    # fact. Populated only when symbols_skipped > 0.
+    skipped_symbols_summary = Column(Text, nullable=True)
+
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
     duration_seconds = Column(Numeric(10, 3), nullable=True)

@@ -695,6 +695,7 @@ async def get_market_coverage(
             symbols_skipped=latest_scan.symbols_skipped,
             symbols_failed=latest_scan.symbols_failed,
             error_summary=latest_scan.error_summary,
+            skipped_symbols_summary=latest_scan.skipped_symbols_summary,
             started_at=latest_scan.started_at,
             finished_at=latest_scan.finished_at,
             duration_seconds=(

@@ -211,6 +211,7 @@ class MarketIntelligenceRepository:
         symbols_failed: int,
         started_at: Optional[datetime] = None,
         error_summary: Optional[str] = None,
+        skipped_symbols_summary: Optional[str] = None,
     ) -> None:
         run = session.query(MarketScanRun).filter_by(id=run_id).one()
         finished_at = datetime.now(timezone.utc)
@@ -219,6 +220,7 @@ class MarketIntelligenceRepository:
         run.symbols_skipped = symbols_skipped
         run.symbols_failed = symbols_failed
         run.error_summary = error_summary
+        run.skipped_symbols_summary = skipped_symbols_summary
         run.finished_at = finished_at
         if started_at is not None:
             run.duration_seconds = round((finished_at - started_at).total_seconds(), 3)

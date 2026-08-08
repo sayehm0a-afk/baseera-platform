@@ -225,6 +225,17 @@ class AdminDashboardSummaryOut(BaseModel):
     redis_health: str
     ingestion_scheduler_running: bool
     market_intelligence_scheduler_running: bool
+
+    # Live Market Mode owns its own internal ingestion/scan scheduler
+    # instances instead of the two standalone globals above (see
+    # main.py's startup wiring) -- without these fields, the two flags
+    # above would silently report False forever once Live Market Mode
+    # is enabled, even while it's actively scheduling real work. Real
+    # main.live_market_mode_scheduler state, never inferred.
+    live_market_mode_enabled: bool = False
+    live_market_mode_running: bool = False
+    live_market_mode_market_currently_open: bool = False
+
     market_data_provider: Optional[str] = None
     market_data_health: Optional[str] = None
     new_users_last_24h: int

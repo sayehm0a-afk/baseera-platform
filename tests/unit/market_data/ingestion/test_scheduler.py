@@ -439,6 +439,36 @@ async def test_ohlcv_fundamentals_dividends_jobs_use_resolved_symbols_not_just_c
 
 
 @pytest.mark.asyncio
+async def test_scheduler_start_reaps_a_stale_running_job_before_scheduling(session_factory):
+    """Mirrors the identical fix on MarketIntelligenceScheduler: a
+    process kill leaves an IngestionRunLog row stuck RUNNING forever,
+    which would otherwise permanently block POST /full-discovery's
+    in-flight guard after a crash -- start() must reap it."""
+    session = session_factory()
+    stale = IngestionRunLog(
+        job_name="symbols",
+        started_at=datetime.now(timezone.utc) - timedelta(hours=100),
+        status=IngestionJobStatus.RUNNING,
+    )
+    session.add(stale)
+    session.commit()
+    stale_id = stale.id
+    session.close()
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler.start()
+    try:
+        pass
+    finally:
+        await scheduler.stop()
+
+    session = session_factory()
+    reaped = session.query(IngestionRunLog).filter_by(id=stale_id).one()
+    assert reaped.status == IngestionJobStatus.FAILED
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_scheduler_stop_cancels_all_tasks_cleanly(session_factory):
     scheduler = IngestionScheduler(session_factory=session_factory)
     scheduler.start()
