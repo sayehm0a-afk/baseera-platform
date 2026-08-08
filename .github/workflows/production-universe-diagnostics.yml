@@ -63,7 +63,17 @@ jobs:
             exit 1
           fi
 
-      - name: Fetch universe diagnostics (real SAHMK /companies/ field values)
+      - name: Confirm exact deployed commit (GET /api/v1/admin/system/summary -- deployment_commit)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/system/summary" \
+            -o /tmp/system_summary.json -w "%{http_code}")
+          echo "HTTP $HTTP_CODE"
+          python3 -c "import json; d = json.load(open('/tmp/system_summary.json')); print('deployment_commit:', d.get('deployment_commit')); print('app_version:', d.get('app_version')); print('environment:', d.get('environment'))" || cat /tmp/system_summary.json
+
+      - name: Fetch universe diagnostics (real SAHMK /companies/ field values + pagination evidence)
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
         run: |
@@ -73,12 +83,25 @@ jobs:
           echo "HTTP $HTTP_CODE"
           python3 -m json.tool /tmp/universe_diagnostics.json
 
-      - name: Upload evidence artifact
+      - name: Fetch symbol-lookup diagnostics (real per-symbol SAHMK calls for symbols outside the ~100-instrument directory)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 60 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/symbol-lookup-diagnostics" \
+            -o /tmp/symbol_lookup_diagnostics.json -w "%{http_code}")
+          echo "HTTP $HTTP_CODE"
+          python3 -m json.tool /tmp/symbol_lookup_diagnostics.json
+
+      - name: Upload evidence artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: universe-diagnostics-evidence
-          path: /tmp/universe_diagnostics.json
+          path: |
+            /tmp/system_summary.json
+            /tmp/universe_diagnostics.json
+            /tmp/symbol_lookup_diagnostics.json
           retention-days: 14
 
       - name: Clean up local session artifacts
