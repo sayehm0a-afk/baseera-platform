@@ -557,6 +557,13 @@ class MarketCoverageOut(BaseModel):
     stocks_without_dividends: int
 
     sector_coverage: List[SectorCoverageOut]
+    # Distinguishes "no authoritative sector-classification source has
+    # ever been configured" (False -- the current, honest production
+    # state; SAHMK's /companies/ directory has no sector field for most
+    # symbols and no other legitimate source is wired up) from "a real
+    # source is configured but this particular symbol still has no
+    # sector" (True). See src.market_data.providers.sector_provider.
+    sector_provider_configured: bool = False
 
     latest_scan_symbols_entering_decision_engine: int
     latest_scan_recommendations_generated: int
