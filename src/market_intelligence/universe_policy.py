@@ -38,6 +38,18 @@ field mismatch still surfaces in a distinctly labeled, non-excluding
 strings become visible in the very next report and the deny-list can
 be tightened once they're known -- without ever having silently
 dropped real companies to get there.
+
+Real values confirmed 2026-08-08 via GET /api/v1/admin/
+market-intelligence/universe-diagnostics against the live production
+SAHMK /companies/ directory (100 real instruments, no synthetic
+data): every non-sukuk instrument has security_type="Equity" and
+market_segment="TASI"; every sukuk instrument has security_type=
+"Sukuk" and market_segment="SUKUK". No instrument in that real
+response carried any Nomu/Parallel-market indicator on any field
+(market, market_segment, security_type, or status) -- see
+docs/current-status.md for the full evidence and the resulting
+classification as an external SAHMK data/tier limitation, not a bug
+in this module.
 """
 
 from dataclasses import dataclass, field
@@ -48,8 +60,12 @@ from src.market_data.sahmk.models import SahmkCompanyProfile
 # Substrings matched case-insensitively against `security_type` to
 # positively identify a plain common-equity listing. Deliberately
 # narrow: an unmatched security_type is excluded (UNCLASSIFIED_TYPE),
-# never assumed eligible.
-_COMMON_EQUITY_TYPE_MARKERS = ("common", "ordinary", "equity share", "share")
+# never assumed eligible. "equity" confirmed live in production
+# (GET /api/v1/admin/market-intelligence/universe-diagnostics,
+# 2026-08-08): SAHMK's real security_type for all 96 non-sukuk
+# instruments in the /companies/ directory is the literal string
+# "Equity", not "Common Share"/"Ordinary Shares" as originally guessed.
+_COMMON_EQUITY_TYPE_MARKERS = ("common", "ordinary", "equity share", "share", "equity")
 # Substrings that positively identify instrument types this policy
 # always excludes, even if they also loosely match an equity marker
 # above (checked first).
@@ -59,7 +75,14 @@ _SUKUK_BOND_TYPE_MARKERS = ("sukuk", "bond")
 _RIGHTS_TYPE_MARKERS = ("right",)
 
 _NOMU_SEGMENT_MARKERS = ("nomu", "parallel")
-_MAIN_SEGMENT_MARKERS = ("main",)
+# "tasi" confirmed live in production (same universe-diagnostics run):
+# SAHMK's real market_segment for every one of those 96 equities is
+# the literal string "TASI" (Tadawul All Share Index -- the Main
+# Market index code), not the generic word "Main"/"Main Market" as
+# originally guessed. TASI is definitionally Main Market, never Nomu
+# Parallel Market (which trades under its own "Nomu" index), so this
+# is a safe, unambiguous positive marker.
+_MAIN_SEGMENT_MARKERS = ("main", "tasi")
 
 _ACTIVE_STATUS_MARKERS = ("active", "listed", "trading", "normal")
 _SUSPENDED_STATUS_MARKERS = ("suspend",)
