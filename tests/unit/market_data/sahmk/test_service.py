@@ -506,6 +506,65 @@ async def test_get_company_directory_records_diagnostics_when_sector_unresolved(
     assert "gics_industry_group" in diag.first_item_keys
 
 
+@pytest.mark.asyncio
+async def test_get_company_directory_prefers_total_over_count_as_reported_total():
+    """Regression for a real production bug found 2026-08-08: a direct
+    probe of the live SAHMK API showed GET /companies/ returns BOTH
+    `count` (this page's own size, e.g. 100) and `total` (the true
+    grand total, e.g. 517) -- and the previous version of this method
+    read `count` before `total`, so it always treated the page size as
+    the whole universe and stopped after one call. This is the exact,
+    proven cause of two earlier "full-market" runs both landing on
+    precisely 100 companies. `total` must win."""
+    client = AsyncMock()
+    client.get_companies.side_effect = [
+        {
+            "count": 2,
+            "limit": 2,
+            "offset": 0,
+            "total": 3,
+            "results": [{"symbol": "1010"}, {"symbol": "1020"}],
+        },
+        {
+            "count": 1,
+            "limit": 2,
+            "offset": 2,
+            "total": 3,
+            "results": [{"symbol": "1030"}],
+        },
+    ]
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert [c.symbol for c in directory] == ["1010", "1020", "1030"]
+    diag = service.last_directory_diagnostics
+    assert diag.reported_total == 3
+    assert diag.universe_verdict == "FULL_UNIVERSE_VERIFIED"
+
+
+@pytest.mark.asyncio
+async def test_get_company_directory_paginates_via_offset_and_limit():
+    """Regression for the same 2026-08-08 finding: `limit`/`offset` are
+    real, working pagination params against the live API (confirmed via
+    a direct probe: `?limit=500` returned 500 real results, `?offset=
+    100&limit=100` succeeded) -- this method must use them, not an
+    unverified bare `page` increment, once no `next` URL is present."""
+    client = AsyncMock()
+    client.get_companies.side_effect = [
+        {"total": 3, "results": [{"symbol": "1010"}, {"symbol": "1020"}]},
+        {"total": 3, "results": [{"symbol": "1030"}]},
+    ]
+    service = _service(client)
+    directory = await service.get_company_directory()
+    assert [c.symbol for c in directory] == ["1010", "1020", "1030"]
+
+    from src.market_data.sahmk.service import _DIRECTORY_PAGE_LIMIT
+
+    first_call_params = client.get_companies.await_args_list[0].kwargs["params"]
+    assert first_call_params == {"limit": _DIRECTORY_PAGE_LIMIT}
+    second_call_params = client.get_companies.await_args_list[1].kwargs["params"]
+    assert second_call_params == {"limit": _DIRECTORY_PAGE_LIMIT, "offset": 2}
+
+
 # --- get_financials ------------------------------------------------------
 
 
