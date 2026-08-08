@@ -126,6 +126,23 @@ jobs:
           EXPECTED_JOBS='["symbols","historical_ohlcv","fundamentals","dividends"]'
           for i in $(seq 1 40); do
             sleep 60
+            # ACCESS_TOKEN_EXPIRE_MINUTES defaults to 15 -- a discovery
+            # pass regularly runs longer than that (confirmed: a real
+            # run took ~16.5 minutes end to end), so the cookie from
+            # the one-time login step above goes stale mid-poll. Once
+            # that happens /coverage silently returns an
+            # unauthenticated-shaped body with none of the expected
+            # keys, done_jobs never fills, and the loop burns its
+            # entire 40-iteration budget instead of detecting
+            # completion within a minute of the jobs actually
+            # finishing. Re-authenticating every iteration keeps the
+            # cookie perpetually fresh; it's one cheap extra login
+            # call per poll.
+            curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+              -X POST "$BACKEND_URL/api/v1/auth/login" \
+              -H "Content-Type: application/json" \
+              -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}" \
+              > /tmp/relogin_http_code.txt || true
             curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
               "$BACKEND_URL/api/v1/admin/market-intelligence/coverage" -o /tmp/coverage_poll.json || continue
             python3 -c "
