@@ -48,6 +48,19 @@ DIVIDENDS_CACHE_TTL_SECONDS = 3600.0
 # market with a low-hundreds to low-thousands total listing count.
 _MAX_DIRECTORY_PAGES = 50
 
+# Page size requested on every /companies/ call. Real evidence
+# (2026-08-08, direct probe of production SAHMK credentials): a bare
+# `?limit=500` call returned exactly 500 results with no truncation or
+# error, while the endpoint's own `total` field read 517 -- so this
+# fetches the entire real directory in 2 requests instead of the
+# default page size of 100 (~6 requests). If a future response ever
+# returns fewer items than requested, the loop below still advances by
+# however many items it actually got back, never by this requested
+# size, so a silently smaller server-side max is still handled
+# correctly and this is not a hardcoded assumption about the true
+# total.
+_DIRECTORY_PAGE_LIMIT = 500
+
 # Field names tried, in order, when looking for a company's sector in
 # a /companies/ directory entry -- UNVERIFIED, see get_company_directory's
 # docstring. Includes both flat-string and Arabic-labeled candidates;
@@ -362,21 +375,29 @@ class SahmkMarketDataService:
     async def get_company_directory(self) -> List[SahmkCompanyProfile]:
         """The full Tadawul+Nomu symbol directory from GET /companies/.
 
-        Field names, and whether this endpoint paginates at all, are
-        UNVERIFIED -- no live confirmation exists (see
-        docs/SAHMK_INTEGRATION.md). Two prior full-universe runs both
-        returned exactly 100 companies via a single, unparameterized
-        call, which is consistent with either a true 100-company
-        universe or an unnoticed page-size cap; nothing in the response
-        was ever inspected for pagination metadata before this fix.
+        CONFIRMED live (2026-08-08, direct probe against production
+        SAHMK credentials, bypassing this client): the envelope's
+        top-level keys are `count`, `limit`, `offset`, `results`,
+        `total` -- `count` is this PAGE's own size (defaults to 100),
+        `total` is the true grand total (observed: 517 unfiltered, 126
+        for `?market=NOMU`). A prior version of this method read
+        `count` before `total` when looking for the grand total, so it
+        silently treated the page size as the whole universe and
+        stopped after one call -- this is exactly why two earlier
+        full-universe runs both returned precisely 100 companies. Both
+        `limit` (confirmed: `?limit=500` returns 500 real results in
+        one call, not truncated) and `offset` (confirmed:
+        `?offset=100&limit=100` succeeds) are real, working pagination
+        parameters, not guessed.
 
-        This method now follows pagination defensively across the
-        conventions real REST APIs commonly use (a `next` URL, or a
-        `count`/`total` field paired with `page`/`offset`+`limit`
-        params), bounded to `_MAX_DIRECTORY_PAGES` iterations so a
-        misread signal can never spin forever. If no pagination signal
-        is present at all, behavior is unchanged: one call, whatever it
-        returns is the universe. Either way, the outcome is recorded in
+        This method paginates via `limit`/`offset` using the server's
+        own reported `total`, bounded to `_MAX_DIRECTORY_PAGES`
+        iterations so a misread or adversarial total can never spin
+        forever. A `next` URL, if the server ever sends one (not
+        observed in practice), is still followed as an alternative
+        signal. If no pagination signal is present at all, behavior is
+        unchanged from before this fix: one call, whatever it returns
+        is the universe. Either way, the outcome is recorded in
         `self.last_directory_diagnostics` (see `_DirectoryDiagnostics`)
         with an explicit universe verdict -- FULL_UNIVERSE_VERIFIED is
         only ever set when a reported total was actually reconciled
@@ -386,6 +407,7 @@ class SahmkMarketDataService:
             result: List[SahmkCompanyProfile] = []
             seen_symbols: set = set()
             page_params: Optional[Dict[str, Any]] = None
+            offset = 0
             pages_fetched = 0
             reported_total: Optional[int] = None
             pagination_signal: Optional[str] = None
@@ -393,7 +415,14 @@ class SahmkMarketDataService:
             first_item_keys: List[str] = []
 
             while pages_fetched < _MAX_DIRECTORY_PAGES:
-                data = await self._client.get_companies(params=page_params)
+                if page_params is not None:
+                    request_params: Dict[str, Any] = dict(page_params)
+                else:
+                    request_params = {"limit": _DIRECTORY_PAGE_LIMIT}
+                    if offset:
+                        request_params["offset"] = offset
+
+                data = await self._client.get_companies(params=request_params)
                 pages_fetched += 1
                 if pages_fetched == 1 and isinstance(data, dict):
                     first_page_keys = sorted(data.keys())
@@ -428,9 +457,14 @@ class SahmkMarketDataService:
                         )
                     )
 
-                reported_total = _first_present(
-                    data, ["count", "total", "total_count", "totalCount", "total_results"]
-                ) or reported_total
+                # `total` (the true grand total) is checked before `count`
+                # (this page's own size) -- see the docstring above for the
+                # real-evidence reason this order matters.
+                page_total = _first_present(
+                    data, ["total", "count", "total_count", "totalCount", "total_results"]
+                )
+                if page_total is not None:
+                    reported_total = int(page_total)
 
                 next_url = data.get("next") if isinstance(data, dict) else None
                 if next_url:
@@ -444,9 +478,10 @@ class SahmkMarketDataService:
                         break
                     continue
 
-                if reported_total is not None and len(result) < int(reported_total) and new_this_page > 0:
+                page_params = None
+                offset += len(items)
+                if reported_total is not None and offset < reported_total and new_this_page > 0:
                     pagination_signal = pagination_signal or "count_total"
-                    page_params = {"page": pages_fetched + 1}
                     continue
 
                 break

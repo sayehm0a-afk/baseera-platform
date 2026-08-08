@@ -41,15 +41,25 @@ dropped real companies to get there.
 
 Real values confirmed 2026-08-08 via GET /api/v1/admin/
 market-intelligence/universe-diagnostics against the live production
-SAHMK /companies/ directory (100 real instruments, no synthetic
-data): every non-sukuk instrument has security_type="Equity" and
-market_segment="TASI"; every sukuk instrument has security_type=
-"Sukuk" and market_segment="SUKUK". No instrument in that real
-response carried any Nomu/Parallel-market indicator on any field
-(market, market_segment, security_type, or status) -- see
-docs/current-status.md for the full evidence and the resulting
-classification as an external SAHMK data/tier limitation, not a bug
-in this module.
+SAHMK /companies/ directory: every non-sukuk instrument seen so far
+has security_type="Equity" and market_segment="TASI"; every sukuk
+instrument has security_type="Sukuk" and market_segment="SUKUK".
+
+CORRECTION (same day, later): the "100 real instruments, no Nomu
+indicator anywhere" observation above was itself an artifact of a real
+bug in SahmkMarketDataService.get_company_directory() -- it read the
+response's `count` field (this page's own size) before `total` (the
+true grand total) when deciding whether more pages existed, so it
+silently stopped after one 100-item page every time. A direct probe of
+the same live API (bypassing that buggy logic) showed the endpoint's
+real unfiltered total is 517, and `GET /companies/?market=NOMU` is a
+real, working filter returning a total of 126 -- so Nomu-market
+instruments do exist in SAHMK's data and were never actually excluded
+by SAHMK; they were simply never fetched. That pagination bug is now
+fixed. This deny-list logic (_NOMU_SEGMENT_MARKERS/_MAIN_SEGMENT_MARKERS
+below) was already written to classify a real "nomu"/"parallel"
+market_segment value correctly and did not need to change -- it was
+only ever starved of the data to classify.
 """
 
 from dataclasses import dataclass, field
