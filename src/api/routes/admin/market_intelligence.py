@@ -80,6 +80,7 @@ from src.domain.models import (
     User,
 )
 from src.market_data.ingestion import config as ingestion_config
+from src.market_data.providers.sector_provider import get_sector_classification_provider
 from src.market_data.strict_mode import StrictRealDataUnavailableError
 from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -970,6 +971,7 @@ async def get_market_coverage(
         stocks_with_dividends=stocks_with_dividends,
         stocks_without_dividends=stocks_without_dividends,
         sector_coverage=sector_coverage,
+        sector_provider_configured=get_sector_classification_provider().is_configured,
         latest_scan_symbols_entering_decision_engine=latest_scan_symbols_entering_decision_engine,
         latest_scan_recommendations_generated=latest_scan_recommendations_generated,
         db_consistency=db_consistency,
