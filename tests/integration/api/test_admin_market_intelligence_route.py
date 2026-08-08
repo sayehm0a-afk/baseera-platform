@@ -328,6 +328,27 @@ def test_coverage_requires_staff_role(client, session_factory):
     assert response.status_code == 403
 
 
+def test_coverage_is_accessible_to_an_analyst_account(client, session_factory):
+    analyst = User(email="analyst@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ANALYST)
+    main.app.dependency_overrides[get_current_user] = lambda: analyst
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+
+
+def test_full_discovery_rejects_an_analyst_account(client, session_factory):
+    # Mutating/triggering routes stay ADMIN-only -- an analyst gaining
+    # read access to /coverage must not also gain the power to kick off
+    # a real ingestion pass.
+    analyst = User(email="analyst@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ANALYST)
+    main.app.dependency_overrides[get_current_user] = lambda: analyst
+
+    response = client.post("/api/v1/admin/market-intelligence/full-discovery")
+
+    assert response.status_code == 403
+
+
 def test_coverage_reports_real_stock_and_price_history_counts(client, session_factory, as_staff):
     """The direct evidence this endpoint exists for: exact active/
     inactive Stock counts and how many of the active ones actually have

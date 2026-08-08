@@ -15,7 +15,8 @@ combined role enum** (Phase 10 plan, decision 1):
 - **`User.is_staff` + `User.staff_role`** -- *who works at Baseerah*.
   Rare, hand-assigned, ranked `OWNER > ADMIN > SUPPORT`
   (`src/auth/rbac.py::_ROLE_RANK`). `require_staff_role(StaffRole.ADMIN)`
-  also admits an `OWNER`, never a `SUPPORT`.
+  also admits an `OWNER`, never a `SUPPORT`. A fourth role,
+  `ANALYST`, exists outside this ladder entirely -- see §6.
 - **`Subscription.status`** -- *what a customer's account currently is*.
   Automatic, time-driven: `TRIALING, ACTIVE, PAST_DUE, CANCELED, EXPIRED`.
 
@@ -183,3 +184,42 @@ audit this document's RBAC section builds on, and
 staff-privilege-escalation, is updated by this milestone from "not
 reachable" to "reachable only by an existing OWNER, self-modification
 blocked").
+
+## 6. `StaffRole.ANALYST` (M5)
+
+A fourth staff role for reviewing AI/market-intelligence output --
+investment committee sessions, market coverage, decision-intelligence
+distribution, recommendation-history audit trail -- without any of the
+customer/billing/production-config power `ADMIN` carries.
+
+**Deliberately not part of the `OWNER > ADMIN > SUPPORT` rank ladder.**
+Inserting it into that ladder (e.g. between `SUPPORT` and `ADMIN`)
+would have silently granted it every `SUPPORT`-gated route too --
+including `calibrations.py`'s calibration-activation/rollback power,
+a production-model-changing action with no analytical justification.
+Instead, `src/auth/rbac.py::require_any_staff_role(*roles)` checks
+exact role membership, not rank: a route lists exactly which roles
+may call it. `require_staff_role(...)` (the rank-based check) never
+admits `ANALYST` under any minimum -- `_ROLE_RANK` doesn't contain it,
+by design, so a route using the old rank-based dependency is
+unreachable by `ANALYST` unless explicitly migrated to
+`require_any_staff_role`.
+
+| Route | Access | Notes |
+|---|---|---|
+| `GET /admin/investment-committee/sessions[/{id}]`, `/stats` | ANALYST, ADMIN, OWNER | Read-only committee history/aggregates. |
+| `GET /admin/market-intelligence/coverage` | ANALYST, ADMIN, OWNER | Read-only market/DB coverage evidence. |
+| `GET /admin/market-intelligence/decision-intelligence` | ANALYST, ADMIN, OWNER | Read-only Decision Engine V2 distribution dashboard. |
+| `GET /admin/recommendation-history` | ANALYST, ADMIN, OWNER | Read-only audit view (contributor breakdown, signals, calibration version) over the real recommendation track record. |
+| `POST /admin/market-intelligence/diagnostic-scan`, `/full-discovery` | ADMIN, OWNER only | Mutating/triggering -- kicks off a real scan or ingestion pass; deliberately **not** opened to `ANALYST`. |
+| Every `users.py`/`subscriptions.py`/`sessions.py`/`billing.py`/`announcements.py`/`feature_flags.py`/`audit_log.py`/`usage.py`/`analytics.py`/`system.py` route (§2) | ADMIN/OWNER only, unreachable by `ANALYST` | Customer data, billing, and platform configuration are out of an analyst's remit entirely. |
+| `calibrations.py`/`news.py` (`require_staff_role(StaffRole.SUPPORT)`) | SUPPORT, ADMIN, OWNER only, unreachable by `ANALYST` | Confirms the rank-ladder gap this design closes: `ANALYST` gains none of `SUPPORT`'s calibration-activation power. |
+
+`tests/integration/api/test_admin_rbac_coverage.py`'s static route walk
+recognizes both `require_staff_role` and `require_any_staff_role` as
+valid staff gates, so a future route that forgets either still fails
+that test before reaching production.
+
+Assigning `ANALYST` to an account uses the same `POST
+/users/{id}/staff-role` route as every other role (§3) -- `OWNER`-only,
+unchanged.

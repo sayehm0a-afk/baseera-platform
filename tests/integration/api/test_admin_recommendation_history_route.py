@@ -94,10 +94,25 @@ def test_admin_history_non_admin_staff_role_is_rejected(client, db_session):
     from src.api.dependencies import get_current_user
     import main
 
-    analyst_like_staff = User(
+    support_staff = User(
         email="support@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.SUPPORT
     )
-    main.app.dependency_overrides[get_current_user] = lambda: analyst_like_staff
+    main.app.dependency_overrides[get_current_user] = lambda: support_staff
 
     response = client.get("/api/v1/admin/recommendation-history")
     assert response.status_code == 403
+
+
+def test_admin_history_is_accessible_to_an_analyst_account(client, db_session):
+    from src.api.dependencies import get_current_user
+    import main
+
+    analyst = User(email="analyst@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ANALYST)
+    main.app.dependency_overrides[get_current_user] = lambda: analyst
+
+    stock = _seed_stock(db_session)
+    _seed_snapshot(db_session, stock)
+
+    response = client.get("/api/v1/admin/recommendation-history")
+    assert response.status_code == 200
+    assert response.json()["total"] == 1

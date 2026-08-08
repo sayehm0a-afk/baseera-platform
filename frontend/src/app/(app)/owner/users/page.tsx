@@ -14,6 +14,7 @@ const PAGE_SIZE = 50;
 const STAFF_ROLE_LABELS_AR: Record<StaffRoleValue, string> = {
   OWNER: "مالك",
   ADMIN: "مسؤول",
+  ANALYST: "محلل",
   SUPPORT: "دعم فني",
 };
 
@@ -186,6 +187,7 @@ function UsersPageInner() {
                         >
                           <option value="">لا يوجد</option>
                           <option value="SUPPORT">دعم فني</option>
+                          <option value="ANALYST">محلل</option>
                           <option value="ADMIN">مسؤول</option>
                           <option value="OWNER">مالك</option>
                         </select>

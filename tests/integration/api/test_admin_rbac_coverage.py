@@ -42,7 +42,10 @@ def _iter_dependant_chain(dependant):
 def _requires_staff_role(route) -> bool:
     for dependant in _iter_dependant_chain(route.dependant):
         call = dependant.call
-        if call is not None and getattr(call, "__qualname__", "").startswith("require_staff_role"):
+        qualname = getattr(call, "__qualname__", "")
+        if call is not None and (
+            qualname.startswith("require_staff_role") or qualname.startswith("require_any_staff_role")
+        ):
             return True
     return False
 
