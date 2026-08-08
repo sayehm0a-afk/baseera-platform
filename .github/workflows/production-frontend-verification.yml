@@ -142,7 +142,32 @@ jobs:
               await page.screenshot({ path: '/tmp/screenshots/02_login_filled.png', fullPage: true });
 
               const submitButton = page.locator('button[type="submit"]').first();
+              // Deterministically capture the login POST's real response
+              // (status + body) instead of relying on the 'response' event
+              // handler above, whose async res.text() read is not
+              // guaranteed to finish before this script later reads
+              // authNetworkLog -- run 31278108648 showed exactly that race
+              // (the login POST *request* was logged, its response never
+              // was, even though networkidle had already resolved).
+              const loginResponsePromise = page
+                .waitForResponse(
+                  (res) => res.url().includes('/api/v1/auth/login') && res.request().method() === 'POST',
+                  { timeout: 15000 }
+                )
+                .catch((e) => ({ __wait_error__: String(e) }));
               await submitButton.click();
+              const loginResponse = await loginResponsePromise;
+              let loginResponseSummary;
+              if (loginResponse && loginResponse.__wait_error__) {
+                loginResponseSummary = { error: loginResponse.__wait_error__ };
+              } else {
+                let loginBody = '';
+                try { loginBody = (await loginResponse.text()).slice(0, 500); } catch (e) { loginBody = `<unreadable: ${e}>`; }
+                loginResponseSummary = { status: loginResponse.status(), body: loginBody };
+              }
+              console.log('\n=== LOGIN POST RESPONSE (deterministic capture) ===');
+              console.log(JSON.stringify(loginResponseSummary, null, 2));
+
               await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
               await page.screenshot({ path: '/tmp/screenshots/03_after_login.png', fullPage: true });
 
