@@ -86,6 +86,16 @@ async def ingest_historical_ohlcv(
             for bar in bars:
                 upsert_price_bar(session, stock, bar)
                 result.rows_upserted += 1
+            if not bars and latest is None:
+                # A genuinely new symbol (never had a single bar) whose
+                # backfill window came back empty -- worth recording by
+                # reason, since a bare "success" would otherwise hide
+                # this from every diagnostic. Not an error: the provider
+                # call itself succeeded, it just had nothing to report.
+                result.zero_progress[symbol] = (
+                    f"No OHLCV bars returned by provider for {start.isoformat()}..{today.isoformat()} "
+                    "(symbol still has zero total price bars)."
+                )
             session.commit()
             result.symbols_succeeded += 1
         except Exception as exc:

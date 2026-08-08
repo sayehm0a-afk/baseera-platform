@@ -63,24 +63,75 @@ class IngestionResult:
     symbols_failed: int = 0
     rows_upserted: int = 0
     errors: Dict[str, str] = field(default_factory=dict)
+    # A symbol counted in symbols_succeeded (no exception raised) whose
+    # provider call nonetheless returned zero usable rows -- distinct
+    # from `errors`, which is only ever populated on a raised exception.
+    # Currently only ingest_historical_ohlcv.py populates this.
+    zero_progress: Dict[str, str] = field(default_factory=dict)
 
     @property
     def success(self) -> bool:
         return self.symbols_failed == 0 and self.symbols_requested > 0
 
 
-def get_or_create_stock(session: Session, symbol: str) -> Stock:
+UNCLASSIFIED_BUCKET = "UNCLASSIFIED_UNRESOLVED"
+_UNCLASSIFIED_REASON = (
+    "Stock row created without classified-directory confirmation "
+    "(universe_policy.classify_universe never ran against this symbol); "
+    "not yet verified as an eligible common equity."
+)
+
+
+def get_or_create_stock(session: Session, symbol: str, trusted: bool = False) -> Stock:
+    """Ensures a Stock row exists for `symbol`, creating a placeholder if
+    not.
+
+    A newly created placeholder defaults to `is_active=False` /
+    `instrument_bucket=UNCLASSIFIED_UNRESOLVED` -- a security must never
+    silently become an ordinary tradeable Saudi equity merely because a
+    Stock row exists for it. The single real authority for `is_active`
+    is universe_policy.classify_universe(), applied via
+    ingest_symbols.sync_symbols()'s directory-classification pass
+    (src.market_intelligence.universe_policy).
+
+    `trusted=True` is the one deliberate exception: an operator's own
+    explicitly-configured INGESTION_SYMBOL_UNIVERSE seed list (see
+    ingest_symbols.sync_symbols) is a curated, human-reviewed decision,
+    not an unverified auto-discovered/referenced symbol, so it keeps the
+    prior default-active cold-start behavior. Every other caller --
+    OHLCV/fundamentals/dividends ingestion, and sync_symbols() itself for
+    any symbol reached only via provider discovery -- must never make
+    that trust call implicitly, which is exactly how sukuk/REIT/unknown
+    instruments previously leaked into the active-equity universe as
+    bare, unclassified stubs (root-caused 2026-08-08: symbols like
+    6000/6003/6005-6009/6011/6563 existed as `name_en="Stock <symbol>"`
+    placeholders, is_active=True by the old default, forever after)."""
     stock = session.query(Stock).filter_by(symbol=symbol).one_or_none()
     if stock is not None:
         return stock
 
-    logger.warning(
-        "Creating placeholder Stock row for symbol '%s' with no reference data "
-        "(name/sector) -- real reference data ingestion is a later milestone's "
-        "concern, not this one's.",
-        symbol,
-    )
-    stock = Stock(symbol=symbol, name_en=f"Stock {symbol}")
+    if trusted:
+        logger.warning(
+            "Creating placeholder Stock row for explicitly-configured symbol '%s' "
+            "with no reference data yet (name/sector) -- trusted active by operator "
+            "configuration until real reference data ingestion enriches it.",
+            symbol,
+        )
+        stock = Stock(symbol=symbol, name_en=f"Stock {symbol}")
+    else:
+        logger.warning(
+            "Creating UNCLASSIFIED placeholder Stock row for symbol '%s' -- "
+            "is_active=False until universe_policy.classify_universe() confirms "
+            "it is a real, eligible common equity.",
+            symbol,
+        )
+        stock = Stock(
+            symbol=symbol,
+            name_en=f"Stock {symbol}",
+            is_active=False,
+            instrument_bucket=UNCLASSIFIED_BUCKET,
+            exclusion_reason=_UNCLASSIFIED_REASON,
+        )
     session.add(stock)
     session.flush()  # assign stock.id without committing yet
     return stock

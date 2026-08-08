@@ -47,6 +47,16 @@ class IngestionRunLog(Base):
     retry_count = Column(Integer, nullable=False, default=0, server_default="0")
     status = Column(Enum(IngestionJobStatus), nullable=False, default=IngestionJobStatus.RUNNING)
     error_summary = Column(Text, nullable=True)
+    # Per-symbol "requested and succeeded, but the provider returned
+    # zero rows" reasons -- distinct from error_summary (a raised
+    # exception). Only historical_ohlcv currently populates this: a
+    # symbol that still has zero total PriceBar rows after a fetch that
+    # itself succeeded (no exception, just an empty response). Format
+    # matches error_summary's "SYMBOL: reason; SYMBOL2: reason2", capped
+    # the same way. Real evidence, not fabricated -- populated only from
+    # IngestionResult.zero_progress, which is only ever set when a
+    # provider call genuinely returned no bars.
+    zero_progress_summary = Column(Text, nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

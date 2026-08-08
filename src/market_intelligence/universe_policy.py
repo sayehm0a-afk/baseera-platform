@@ -84,6 +84,19 @@ _FUND_ETF_TYPE_MARKERS = ("etf", "fund", "mutual")
 _SUKUK_BOND_TYPE_MARKERS = ("sukuk", "bond")
 _RIGHTS_TYPE_MARKERS = ("right",)
 
+# Defense-in-depth beyond security_type: the real Arabic company name
+# itself spells out the instrument type for sukuk/REITs even when
+# security_type doesn't match one of the markers above (root-caused
+# 2026-08-08 in production -- symbols 5027/5388/5389 carry security_type
+# values that didn't match _SUKUK_BOND_TYPE_MARKERS, yet their real
+# name_ar is literally "صكوك ..." (sukuk ...); symbol 9300's real
+# name_ar is "الواحة ريت" (Al-Waha REIT) and likewise leaked past the
+# security_type check). These are real, already-present identity
+# fields -- not inferred or fabricated -- so checking them is a second,
+# independent confirmation signal, not a guess.
+_SUKUK_NAME_MARKERS_AR = ("صك",)  # matches صك/صكوك (sukuk/sukuks)
+_REIT_NAME_MARKERS_AR = ("ريت",)  # matches ريت (REIT)
+
 _NOMU_SEGMENT_MARKERS = ("nomu", "parallel")
 # "tasi" confirmed live in production (same universe-diagnostics run):
 # SAHMK's real market_segment for every one of those 96 equities is
@@ -179,6 +192,15 @@ def _classify_one(profile: SahmkCompanyProfile) -> InstrumentClassification:
         return _make(False, "SUKUK_BOND", f"security_type={security_type!r}")
     if _matches_any(security_type, _RIGHTS_TYPE_MARKERS):
         return _make(False, "RIGHTS_ISSUE", f"security_type={security_type!r}")
+
+    # Second, independent signal on the real Arabic name -- catches the
+    # real production leak where security_type alone didn't positively
+    # match for some sukuk/REIT entries (see the module-level marker
+    # comment above).
+    if _matches_any(name_ar, _SUKUK_NAME_MARKERS_AR):
+        return _make(False, "SUKUK_BOND", f"name_ar contains a sukuk marker: {name_ar!r}")
+    if _matches_any(name_ar, _REIT_NAME_MARKERS_AR):
+        return _make(False, "REIT", f"name_ar contains a REIT marker: {name_ar!r}")
 
     if _matches_any(status, _DELISTED_STATUS_MARKERS):
         return _make(False, "INACTIVE_DELISTED", f"status={status!r}")

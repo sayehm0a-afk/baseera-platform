@@ -257,6 +257,111 @@ async def test_missing_is_eligible_key_leaves_is_active_at_its_default(session_f
 
 
 @pytest.mark.asyncio
+async def test_explicit_symbol_without_directory_or_profile_data_defaults_inactive(session_factory):
+    """A symbol that's explicitly configured but the provider has no
+    get_company_profile support for (e.g. DevMarketDataProvider) still
+    gets the trusted cold-start default -- explicit configuration alone
+    is enough to trust it, per the module's documented `trusted`
+    contract."""
+    provider = DevMarketDataProvider()
+    await sync_symbols(["2222"], provider, session_factory)
+
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="2222").one()
+    assert stock.is_active is True
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_all_quarantines_a_stale_unclassified_stock_absent_from_the_directory(
+    session_factory,
+):
+    """Root-cause regression for the real production defect: a bare,
+    never-classified Stock row (created by some other ingestion job
+    referencing a symbol SAHMK's live directory doesn't currently know
+    about) must be quarantined -- not left silently active forever --
+    the next time a full directory discovery pass runs."""
+    session = session_factory()
+    session.add(Stock(symbol="6000", name_en="Stock 6000", is_active=True))
+    session.commit()
+    session.close()
+
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(
+        return_value=[
+            {
+                "symbol": "2222", "name": "Saudi Aramco", "sector": "Energy",
+                "is_eligible": True, "instrument_bucket": "MAIN_MARKET_EQUITY", "exclusion_reason": None,
+            },
+        ]
+    )
+
+    await sync_symbols([], provider, session_factory, discover_all=True)
+
+    session = session_factory()
+    stock_6000 = session.query(Stock).filter_by(symbol="6000").one()
+    assert stock_6000.is_active is False
+    assert stock_6000.instrument_bucket == "UNCLASSIFIED_UNRESOLVED"
+    assert stock_6000.exclusion_reason is not None
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_discover_all_does_not_quarantine_an_already_classified_stock(session_factory):
+    """A Stock row that WAS already properly classified (e.g. a genuine
+    sukuk correctly excluded by an earlier pass) must not be treated as
+    an unresolved stub just because a later pass didn't re-see it --
+    only never-classified rows are quarantined."""
+    session = session_factory()
+    session.add(
+        Stock(
+            symbol="1113", name_en="Some Sukuk", is_active=False,
+            instrument_bucket="SUKUK_BOND", exclusion_reason="security_type='Sukuk'",
+        )
+    )
+    session.commit()
+    session.close()
+
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(return_value=[])
+
+    await sync_symbols([], provider, session_factory, discover_all=True)
+
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="1113").one()
+    assert stock.instrument_bucket == "SUKUK_BOND"
+    assert stock.exclusion_reason == "security_type='Sukuk'"
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_directory_failure_does_not_trigger_quarantine(session_factory):
+    """A failed directory fetch must never be treated as 'this symbol
+    doesn't exist anymore' -- quarantine only runs after a real,
+    successful directory snapshot."""
+    session = session_factory()
+    session.add(Stock(symbol="6000", name_en="Stock 6000", is_active=True))
+    session.commit()
+    session.close()
+
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(side_effect=RuntimeError("SAHMK unreachable"))
+
+    await sync_symbols([], provider, session_factory, discover_all=True)
+
+    session = session_factory()
+    stock_6000 = session.query(Stock).filter_by(symbol="6000").one()
+    assert stock_6000.is_active is True
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_isolates_per_symbol_failures(session_factory):
     provider = AsyncMock()
     provider.authenticate = AsyncMock(return_value=True)

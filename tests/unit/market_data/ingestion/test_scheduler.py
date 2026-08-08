@@ -131,6 +131,20 @@ async def test_run_ingestion_job_records_partial_failure(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_run_ingestion_job_records_zero_progress_summary(session_factory):
+    async def job_fn():
+        return IngestionResult(
+            symbols_requested=1, symbols_succeeded=1, zero_progress={"9999": "no bars returned"}
+        )
+
+    run_log = await run_ingestion_job("test_job", job_fn, session_factory)
+
+    assert run_log.status == IngestionJobStatus.SUCCESS  # zero_progress alone isn't a failure
+    assert "9999" in run_log.zero_progress_summary
+    assert "no bars returned" in run_log.zero_progress_summary
+
+
+@pytest.mark.asyncio
 async def test_run_ingestion_job_records_total_failure_when_nothing_succeeds(session_factory):
     async def job_fn():
         return IngestionResult(symbols_requested=1, symbols_succeeded=0, symbols_failed=1)
