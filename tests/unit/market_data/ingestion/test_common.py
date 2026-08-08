@@ -3,8 +3,11 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-from src.market_data.ingestion._common import sleep_if_rate_limited
+from src.core.db.database import Base
+from src.market_data.ingestion._common import UNCLASSIFIED_BUCKET, get_or_create_stock, sleep_if_rate_limited
 
 
 @pytest.mark.asyncio
@@ -52,3 +55,57 @@ async def test_sleep_if_rate_limited_is_a_noop_when_retry_after_is_none():
         await sleep_if_rate_limited(_RateLimited())
 
     mock_sleep.assert_not_awaited()
+
+
+@pytest.fixture
+def session_factory():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    factory = sessionmaker(bind=engine)
+    yield factory
+    Base.metadata.drop_all(bind=engine)
+
+
+class TestGetOrCreateStockClassificationDefault:
+    """Root-cause regression for the real production defect (2026-08-08):
+    a bare Stock stub (created by an OHLCV/fundamentals/dividends job
+    referencing a symbol that was never classified) used to default to
+    is_active=True, silently becoming an ordinary tradeable equity with
+    no security-type confirmation at all. The single authority for
+    is_active is now universe_policy.classify_universe(), applied via
+    ingest_symbols.sync_symbols(); every other caller must get an
+    unclassified, inactive stub by default."""
+
+    def test_untrusted_new_stub_defaults_unclassified_and_inactive(self, session_factory):
+        session = session_factory()
+        stock = get_or_create_stock(session, "6000")
+        session.commit()
+
+        assert stock.is_active is False
+        assert stock.instrument_bucket == UNCLASSIFIED_BUCKET
+        assert stock.exclusion_reason is not None
+        session.close()
+
+    def test_trusted_new_stub_keeps_prior_active_default(self, session_factory):
+        """The operator's own explicitly-configured symbol seed list
+        (INGESTION_SYMBOL_UNIVERSE) is a deliberate, curated decision --
+        preserves the pre-fix cold-start behavior exactly."""
+        session = session_factory()
+        stock = get_or_create_stock(session, "2222", trusted=True)
+        session.commit()
+
+        assert stock.is_active is True
+        assert stock.instrument_bucket is None
+        session.close()
+
+    def test_existing_stock_row_is_returned_unchanged_regardless_of_trusted(self, session_factory):
+        session = session_factory()
+        first = get_or_create_stock(session, "1120", trusted=True)
+        session.commit()
+        first.instrument_bucket = "MAIN_MARKET_EQUITY"
+        session.commit()
+
+        second = get_or_create_stock(session, "1120", trusted=False)
+        assert second.id == first.id
+        assert second.instrument_bucket == "MAIN_MARKET_EQUITY"
+        session.close()

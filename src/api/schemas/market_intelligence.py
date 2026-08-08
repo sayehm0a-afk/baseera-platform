@@ -368,6 +368,7 @@ class IngestionJobStatusOut(BaseModel):
     finished_at: Optional[datetime] = None
     duration_seconds: Optional[float] = None
     error_summary: Optional[str] = None
+    zero_progress_summary: Optional[str] = None
 
 
 class FullDiscoveryTriggerOut(BaseModel):

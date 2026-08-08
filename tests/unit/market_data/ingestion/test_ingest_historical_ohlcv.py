@@ -138,3 +138,58 @@ async def test_empty_symbol_list_succeeds_trivially(session_factory):
     result = await ingest_historical_ohlcv([], provider, session_factory)
     assert result.symbols_requested == 0
     assert result.symbols_failed == 0
+
+
+@pytest.mark.asyncio
+async def test_records_zero_progress_reason_for_a_new_symbol_with_no_bars(session_factory):
+    """Root-cause regression for the real production gap (408/408
+    ingestion jobs reported 'success' but only 393 symbols had any
+    PriceBar rows): a provider call that succeeds (no exception) but
+    returns zero bars for a genuinely new symbol must be recorded by
+    reason, not silently folded into a bare 'success' count."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_historical_ohlcv = AsyncMock(return_value=[])
+
+    result = await ingest_historical_ohlcv(["9999"], provider, session_factory)
+
+    assert result.symbols_succeeded == 1
+    assert result.symbols_failed == 0
+    assert "9999" in result.zero_progress
+    assert "zero total price bars" in result.zero_progress["9999"]
+
+
+@pytest.mark.asyncio
+async def test_no_zero_progress_reason_when_bars_are_returned(session_factory):
+    provider = DevMarketDataProvider()
+    result = await ingest_historical_ohlcv(["1010"], provider, session_factory, backfill_days=5)
+    assert result.zero_progress == {}
+
+
+@pytest.mark.asyncio
+async def test_no_zero_progress_reason_for_an_already_caught_up_symbol(session_factory):
+    """A symbol with existing bars whose incremental catch-up window is
+    empty (already up to date) is a legitimate, uninteresting no-op --
+    must not be reported as a zero-progress gap."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_historical_ohlcv = AsyncMock(return_value=[])
+
+    session = session_factory()
+    stock = Stock(symbol="2222", name_en="Saudi Aramco")
+    session.add(stock)
+    session.flush()
+    session.add(
+        PriceBar(
+            stock_id=stock.id, timeframe=Timeframe.ONE_DAY,
+            timestamp=datetime.now(timezone.utc), open=Decimal("10"), high=Decimal("10"),
+            low=Decimal("10"), close=Decimal("10"), volume=100, source="sahmk", is_synthetic=False,
+        )
+    )
+    session.commit()
+    session.close()
+
+    result = await ingest_historical_ohlcv(["2222"], provider, session_factory)
+    assert result.zero_progress == {}

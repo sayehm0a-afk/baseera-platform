@@ -100,6 +100,38 @@ class TestExclusions:
         result = classify_universe([_profile("R001", security_type="Rights Issue")])
         assert result.classifications[0].bucket == "RIGHTS_ISSUE"
 
+    def test_sukuk_excluded_via_arabic_name_when_security_type_does_not_match(self):
+        """Regression for the real production leak (root-caused
+        2026-08-08): symbols 5027/5388/5389 carried a security_type
+        that did not contain 'sukuk'/'bond', yet their real name_ar
+        literally identifies them as sukuk. The Arabic name is a real,
+        already-present identity field -- checking it is a second
+        independent signal, not a guess."""
+        result = classify_universe(
+            [_profile("5027", security_type="Fixed Income", name_ar="صكوك بنك الرياض شريحة 1 6.50 دائمة")]
+        )
+        c = result.classifications[0]
+        assert c.eligible is False
+        assert c.bucket == "SUKUK_BOND"
+        assert "name_ar" in c.exclusion_reason
+
+    def test_reit_excluded_via_arabic_name_when_security_type_does_not_match(self):
+        """Regression for the real production leak: symbol 9300
+        (ALWAHA REIT) carried a security_type that did not match any
+        REIT marker, yet its real name_ar ("الواحة ريت") literally
+        says REIT."""
+        result = classify_universe([_profile("9300", security_type="Equity", name_ar="الواحة ريت")])
+        c = result.classifications[0]
+        assert c.eligible is False
+        assert c.bucket == "REIT"
+        assert "name_ar" in c.exclusion_reason
+
+    def test_ordinary_arabic_company_name_without_sukuk_or_reit_markers_stays_eligible(self):
+        result = classify_universe([_profile("2210", name_ar="نماء للكيماويات")])
+        c = result.classifications[0]
+        assert c.eligible is True
+        assert c.bucket == "MAIN_MARKET_EQUITY"
+
     def test_suspended_status_excluded(self):
         result = classify_universe([_profile("2210", status="Suspended")])
         c = result.classifications[0]

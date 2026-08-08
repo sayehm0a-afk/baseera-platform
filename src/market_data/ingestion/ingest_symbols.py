@@ -23,7 +23,12 @@ from typing import Any, Callable, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from src.domain.models import Stock
-from src.market_data.ingestion._common import IngestionResult, get_or_create_stock, sleep_if_rate_limited
+from src.market_data.ingestion._common import (
+    UNCLASSIFIED_BUCKET,
+    IngestionResult,
+    get_or_create_stock,
+    sleep_if_rate_limited,
+)
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 
 logger = logging.getLogger(__name__)
@@ -76,6 +81,47 @@ def _apply_entry(stock: Stock, entry: Dict[str, Any]) -> bool:
     return changed
 
 
+_QUARANTINE_REASON = (
+    "Unclassified Stock row absent from the most recent full SAHMK directory "
+    "discovery pass and not part of the explicitly configured symbol universe -- "
+    "identity/instrument-type could not be confirmed, so it is quarantined "
+    "(is_active=False) rather than left silently active."
+)
+
+
+def _quarantine_unresolved_stocks(session: Session, target_symbols: set) -> int:
+    """Part of the single-authority universe-classification policy: any
+    Stock row that was never classified by universe_policy.classify_
+    universe() (instrument_bucket is null or the UNCLASSIFIED_UNRESOLVED
+    placeholder bucket) and is absent from this full discovery pass's
+    target symbol set -- i.e. SAHMK's live directory doesn't currently
+    know it and it isn't an operator-curated explicit symbol either --
+    is marked inactive and quarantined instead of being left as a
+    silently-active, unverified stub. Only ever called with
+    discover_all=True and a non-empty directory_entries (a real,
+    successful directory fetch), so "absent from target_symbols" means
+    "absent from a real, current SAHMK snapshot," not "the fetch
+    failed."""
+    rows = (
+        session.query(Stock)
+        .filter(Stock.symbol.notin_(target_symbols))
+        .filter(Stock.is_active.is_(True))
+        .filter((Stock.instrument_bucket.is_(None)) | (Stock.instrument_bucket == UNCLASSIFIED_BUCKET))
+        .all()
+    )
+    for stock in rows:
+        stock.is_active = False
+        stock.instrument_bucket = UNCLASSIFIED_BUCKET
+        stock.exclusion_reason = _QUARANTINE_REASON
+        logger.warning(
+            "Quarantined unresolved Stock '%s' (name_en=%r): absent from SAHMK directory, never classified.",
+            stock.symbol, stock.name_en,
+        )
+    if rows:
+        session.commit()
+    return len(rows)
+
+
 async def sync_symbols(
     symbols: List[str],
     provider: IMarketDataProvider,
@@ -87,10 +133,18 @@ async def sync_symbols(
     symbol the provider's directory reports, if discover_all=True and
     supported). Each symbol is committed independently -- one symbol's
     failure does not roll back or block the others.
+
+    `symbols` (the operator's own explicitly-configured seed list, e.g.
+    INGESTION_SYMBOL_UNIVERSE) is the one trusted source that may create
+    a new Stock row as active-by-default before real classification
+    exists (see get_or_create_stock's `trusted` parameter) -- everything
+    else defaults unclassified/inactive until universe_policy.
+    classify_universe() (via the directory pass below) confirms it.
     """
     result = IngestionResult()
     await provider.authenticate()
 
+    explicit_symbols = set(symbols)
     directory_entries: Dict[str, Dict[str, Any]] = {}
     if discover_all:
         directory_fn = getattr(provider, "get_symbol_directory", None)
@@ -115,7 +169,7 @@ async def sync_symbols(
     for symbol in target_symbols:
         session = session_factory()
         try:
-            stock = get_or_create_stock(session, symbol)
+            stock = get_or_create_stock(session, symbol, trusted=symbol in explicit_symbols)
             entry: Optional[Dict[str, Any]] = directory_entries.get(symbol)
             if entry is None:
                 profile_fn = getattr(provider, "get_company_profile", None)
@@ -131,6 +185,15 @@ async def sync_symbols(
             result.errors[symbol] = str(exc)
             logger.error("Failed to sync symbol '%s': %s", symbol, exc)
             await sleep_if_rate_limited(exc)
+        finally:
+            session.close()
+
+    if discover_all and directory_entries:
+        session = session_factory()
+        try:
+            quarantined = _quarantine_unresolved_stocks(session, set(target_symbols))
+            if quarantined:
+                logger.warning("sync_symbols: quarantined %d unresolved Stock row(s) this pass.", quarantined)
         finally:
             session.close()
 

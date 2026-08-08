@@ -179,6 +179,10 @@ async def run_ingestion_job(
             if result.errors:
                 summarized = "; ".join(f"{k}: {v}" for k, v in list(result.errors.items())[:10])
                 run_log.error_summary = summarized
+            if result.zero_progress:
+                run_log.zero_progress_summary = "; ".join(
+                    f"{k}: {v}" for k, v in list(result.zero_progress.items())[:10]
+                )
         else:
             run_log.status = IngestionJobStatus.FAILED
             run_log.error_summary = error_summary
