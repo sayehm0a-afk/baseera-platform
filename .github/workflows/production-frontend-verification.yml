@@ -168,12 +168,26 @@ jobs:
               console.log('\n=== LOGIN POST RESPONSE (deterministic capture) ===');
               console.log(JSON.stringify(loginResponseSummary, null, 2));
 
+              // Wait for the client-side redirect itself (router.replace
+              // ("/dashboard") in login/page.tsx fires only after the
+              // login() call resolves) rather than inferring completion
+              // from networkidle -- run 31278202671 showed a real race
+              // where two separate later page.url() reads straddled the
+              // moment navigation actually completed: the first read
+              // (used for the pass/fail verdict) still said /login, the
+              // second read (used only in the log message) already said
+              // /dashboard, which produced a false FAIL against a login
+              // that had genuinely succeeded (POST /login -> 200 with a
+              // real user body, followed by GET /auth/me -> 200).
+              await page.waitForURL((url) => !url.pathname.includes('login'), { timeout: 15000 }).catch(() => {});
               await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
               await page.screenshot({ path: '/tmp/screenshots/03_after_login.png', fullPage: true });
 
-              const bodyText = await page.textContent('body');
-              const stillOnLoginForm = await page.locator('input[type="password"]').count() > 0
-                && (await page.url()).includes('login');
+              // Single snapshot, reused everywhere below, so the verdict
+              // and the logged detail can never disagree with each other.
+              const finalUrl = page.url();
+              const stillOnLoginForm = finalUrl.includes('login')
+                && (await page.locator('input[type="password"]').count()) > 0;
               // Capture whatever Arabic/error text the login page itself
               // is showing (ERROR_MESSAGES map in login/page.tsx renders
               // into a visible element) -- this is the real, in-app
@@ -188,7 +202,7 @@ jobs:
               record(
                 'login_flow_reaches_authenticated_area',
                 !stillOnLoginForm,
-                `Post-login URL: ${page.url()} | visible_error_text: ${JSON.stringify(visibleErrorText)}`
+                `Post-login URL: ${finalUrl} | visible_error_text: ${JSON.stringify(visibleErrorText)}`
               );
               fs.writeFileSync('/tmp/screenshots/auth_network_log.json', JSON.stringify(authNetworkLog, null, 2));
               fs.writeFileSync('/tmp/screenshots/console_errors.json', JSON.stringify(consoleErrors, null, 2));
