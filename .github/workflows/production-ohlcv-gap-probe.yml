@@ -8,10 +8,12 @@ name: Production OHLCV Gap Probe (one-shot, read-only)
 #    symbols. ingest_historical_ohlcv.py treats an empty provider
 #    response as a legitimate success (zero rows fetched is not an
 #    error -- e.g. a symbol fully caught up already), so "job
-#    succeeded" does not imply "bars were written". We call
-#    GET /stocks/{symbol} (DB identity/metadata) and
-#    GET /stocks/{symbol}/quote (a *live* SAHMK call) per symbol to
-#    determine whether SAHMK currently has any data for it at all.
+#    succeeded" does not imply "bars were written". Root-caused via
+#    GET /stocks/{symbol} (DB identity) in run 31274610839 -- the live
+#    GET /stocks/{symbol}/quote leg was dropped from this file after
+#    that run because SAHMK's live-quote path was down for every
+#    symbol on 2026-08-08 (weekend), so it produced no discriminating
+#    evidence and would just burn further SAHMK calls on rerun.
 #
 # 2. The 2 symbols the latest market scan (run 98) skipped.
 #    scanner.py's _scan_one() only skips for "stock_not_registered"
@@ -36,7 +38,6 @@ permissions:
 
 env:
   RAILWAY_BACKEND_SERVICE: backend
-  GAP_SYMBOLS: "2210 5027 5388 5389 6000 6003 6005 6006 6007 6008 6009 6011 6563 9593 9616"
   SKIPPED_SYMBOLS: "9300 9655"
 
 jobs:
@@ -48,6 +49,9 @@ jobs:
       STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
     steps:
+      - name: Checkout (for the print_bar_summary.py helper script)
+        uses: actions/checkout@v4
+
       - name: Fail fast if required secrets are not configured
         run: |
           if [ -z "$RAILWAY_TOKEN" ] || [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
@@ -78,23 +82,6 @@ jobs:
             echo "::error::Staff login failed."
             exit 1
           fi
-
-      - name: Probe each gap symbol (DB identity + live SAHMK quote)
-        env:
-          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
-        run: |
-          for SYM in $GAP_SYMBOLS; do
-            echo "=================== $SYM ==================="
-            echo "--- GET /stocks/$SYM (DB identity) ---"
-            curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt \
-              -w "\nHTTP %{http_code}\n" \
-              "$BACKEND_URL/api/v1/stocks/$SYM"
-            echo "--- GET /stocks/$SYM/quote (live SAHMK call) ---"
-            curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt \
-              -w "\nHTTP %{http_code}\n" \
-              "$BACKEND_URL/api/v1/stocks/$SYM/quote"
-            echo
-          done
 
       - name: Probe each skipped-scan symbol (bar count + fundamentals presence)
         env:
