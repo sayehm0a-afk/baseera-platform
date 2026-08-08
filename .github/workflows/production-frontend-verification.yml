@@ -172,6 +172,15 @@ jobs:
               fs.writeFileSync('/tmp/screenshots/auth_network_log.json', JSON.stringify(authNetworkLog, null, 2));
               fs.writeFileSync('/tmp/screenshots/console_errors.json', JSON.stringify(consoleErrors, null, 2));
             }
+            // Print to the job log directly too -- the artifact zip is
+            // hosted on Azure Blob Storage, which this session's sandbox
+            // cannot reach (same egress policy that blocks *.up.railway.app
+            // directly), so the job log is the only channel this session
+            // can actually read the captured evidence through.
+            console.log('\n=== AUTH NETWORK LOG (/api/v1/auth/*) ===');
+            console.log(JSON.stringify(authNetworkLog, null, 2));
+            console.log('\n=== CONSOLE/PAGE ERRORS ===');
+            console.log(JSON.stringify(consoleErrors, null, 2));
 
             // Real market-coverage evidence check: the page body must not
             // be showing only a tiny fixed handful of symbols/placeholder
