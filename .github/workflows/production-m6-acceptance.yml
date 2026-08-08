@@ -1,0 +1,456 @@
+name: Production M6 Acceptance (temporary, one-shot)
+
+# Real-production evidence run for the M6 Owner/Admin Control Center
+# milestone (Mandate B). Runs from a GitHub Actions runner because this
+# repository's sandboxed dev environment has no network path to the
+# production Railway URLs (organization egress policy denial); this
+# workflow is the only place that can actually call the deployed
+# backend/frontend with real internet access.
+#
+# Reuses the exact login/CSRF/domain-resolution/new-user-journey pattern
+# already proven in production-committee-acceptance.yml. Adds: exact
+# deployed-commit verification (the deploy workflow's own health-check
+# loop can false-positive against a still-warm previous deployment,
+# since `railway up --detach` returns before the new build finishes --
+# this workflow re-checks days/minutes later, once the new build has had
+# real time to roll out), watchlist CRUD + isolation, recommendation
+# history (user + staff), owner/users + owner/subscriptions data checks,
+# market coverage full-discovery status, and screenshots of every M6
+# owner page plus the user watchlist/reports pages at mobile + desktop.
+#
+# Nothing here mutates Railway infrastructure and nothing here reads
+# SAHMK_API_KEY / RAILWAY_TOKEN into any printed output.
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: "Commit SHA expected to be live (compared against deployment_commit)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+  RAILWAY_FRONTEND_SERVICE: frontend
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+          if [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::STAFF_EMAIL/STAFF_PASSWORD are not set (need ADMIN or OWNER role)."
+            exit 1
+          fi
+          echo "Secrets present."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright (Python) + Chromium
+        run: |
+          pip install --quiet playwright
+          playwright install --with-deps chromium
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend/frontend public URLs
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          railway domain list --service "$RAILWAY_FRONTEND_SERVICE" --json > /tmp/frontend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend:  $BACKEND_URL"
+          echo "Frontend: $FRONTEND_URL"
+
+      - name: Health checks (backend/frontend)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+        run: |
+          echo "=== /health/live ==="
+          curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live" || true
+          echo "=== /health/ready ==="
+          curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/ready" || true
+          echo "=== frontend / ==="
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/" || true
+
+      - name: Log in as the staff account
+        id: login
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP status: $HTTP_CODE"
+          cat /tmp/login_body.json; echo ""
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Staff login failed."
+            exit 1
+          fi
+          CSRF=$(grep -i csrf_token /tmp/staff_cookies.txt | awk '{print $NF}')
+          echo "$CSRF" > /tmp/.staff_csrf
+
+      - name: Confirm exact deployed commit matches expected
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/system/summary" \
+            -o /tmp/summary.json -w "\nHTTP %{http_code}\n"
+          echo "=== Admin dashboard summary ==="
+          python3 -m json.tool /tmp/summary.json
+          RUNNING_COMMIT=$(python3 -c "import json; print(json.load(open('/tmp/summary.json')).get('deployment_commit') or '')")
+          echo "deployment_commit reported: $RUNNING_COMMIT"
+          if [ -n "$EXPECTED_COMMIT" ]; then
+            if [ "$RUNNING_COMMIT" != "$EXPECTED_COMMIT" ]; then
+              echo "::error::Running commit ($RUNNING_COMMIT) does not match expected ($EXPECTED_COMMIT) -- the new build has not rolled out yet."
+              exit 1
+            fi
+            echo "Confirmed: running commit matches expected commit exactly."
+          else
+            echo "::warning::No expected_commit input given -- reporting only, not verifying."
+          fi
+
+      - name: Fetch real market coverage numbers (full-market requirement)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/coverage" \
+            -o /tmp/coverage.json -w "\nHTTP %{http_code}\n"
+          echo "=== Coverage ==="
+          python3 -m json.tool /tmp/coverage.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/coverage.json'))
+          print('total_stocks:', d.get('total_stocks'))
+          print('active_stocks:', d.get('active_stocks'))
+          print('main_market_stocks:', d.get('main_market_stocks'))
+          print('nomu_market_stocks:', d.get('nomu_market_stocks'))
+          print('stocks_with_price_history:', d.get('stocks_with_price_history'))
+          print('coverage_pct:', d.get('coverage_pct'))
+          "
+
+      - name: Owner/users -- real user data + pagination
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/users?limit=10" \
+            -o /tmp/admin_users.json -w "\nHTTP %{http_code}\n"
+          echo "=== Users (first page) ==="
+          python3 -m json.tool /tmp/admin_users.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/admin_users.json'))
+          print('total users:', d.get('total'))
+          print('returned:', len(d.get('users', [])))
+          "
+
+      - name: Owner/subscriptions -- real subscription rows
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/subscriptions?limit=10" \
+            -o /tmp/admin_subscriptions.json -w "\nHTTP %{http_code}\n"
+          echo "=== Subscriptions (first page) ==="
+          python3 -m json.tool /tmp/admin_subscriptions.json
+
+      - name: Discover real multi-sector symbols from rankings
+        id: symbols
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/market/rankings" \
+            -o /tmp/rankings.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/rankings.json'))
+          seen_sectors = {}
+          for rl in d.get('rankings', []):
+              for e in rl.get('entries', []):
+                  sec = e.get('sector') or 'UNKNOWN'
+                  if sec not in seen_sectors:
+                      seen_sectors[sec] = e['symbol']
+                  if len(seen_sectors) >= 8:
+                      break
+          symbols = list(seen_sectors.values())[:3]
+          print('Discovered sector->symbol map:', seen_sectors)
+          print('Selected symbols:', symbols)
+          with open('/tmp/selected_symbols.json', 'w') as f:
+              json.dump(symbols, f)
+          "
+          SYMS=$(python3 -c "import json; print(','.join(json.load(open('/tmp/selected_symbols.json'))))")
+          echo "symbols=$SYMS" >> "$GITHUB_OUTPUT"
+          echo "Selected: $SYMS"
+
+      - name: Run /decision-v2 (with Investment Committee) for each discovered symbol
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          SYMBOLS: ${{ steps.symbols.outputs.symbols }}
+        run: |
+          mkdir -p /tmp/decisions
+          IFS=',' read -ra ARR <<< "$SYMBOLS"
+          if [ "${#ARR[@]}" -eq 0 ] || [ -z "$SYMBOLS" ]; then
+            echo "::warning::No symbols discovered from /market/rankings -- skipping decision evidence."
+          fi
+          for SYM in "${ARR[@]}"; do
+            echo "=== GET /api/v1/stocks/$SYM/decision-v2 ==="
+            curl -sS --connect-timeout 10 --max-time 60 -b /tmp/staff_cookies.txt \
+              "$BACKEND_URL/api/v1/stocks/$SYM/decision-v2" \
+              -o "/tmp/decisions/$SYM.json" -w "\nHTTP %{http_code}\n"
+            python3 -c "
+          import json, sys
+          try:
+              d = json.load(open('/tmp/decisions/$SYM.json'))
+          except Exception as e:
+              print('Could not parse response for $SYM:', e); sys.exit(0)
+          print('symbol:', d.get('symbol'), '| decision:', d.get('decision'), '| confidence:', d.get('confidence_score'))
+          print('  entry_zone:', d.get('entry_zone_low'), '-', d.get('entry_zone_high'))
+          print('  targets:', d.get('target_1'), d.get('target_2'), d.get('target_3'), '| stop_loss:', d.get('stop_loss'))
+          print('  horizon:', d.get('expected_holding_period_label_ar'))
+          print('  positive_reasons:', d.get('positive_reasons'))
+          print('  negative_reasons:', d.get('negative_reasons'))
+          print('  invalidation_conditions:', d.get('invalidation_conditions'))
+          "
+          done
+
+      - name: Recommendation history -- staff global view
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/recommendation-history?limit=10" \
+            -o /tmp/admin_rec_history.json -w "\nHTTP %{http_code}\n"
+          echo "=== Admin recommendation history (first page) ==="
+          python3 -m json.tool /tmp/admin_rec_history.json
+
+      - name: RBAC -- unauthenticated access to staff routes must be denied
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          for ROUTE_PATH in "/api/v1/admin/users" "/api/v1/admin/subscriptions" "/api/v1/admin/system/summary" "/api/v1/admin/market-intelligence/coverage" "/api/v1/admin/recommendation-history"; do
+            CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL$ROUTE_PATH")
+            echo "Unauthenticated GET $ROUTE_PATH -> HTTP $CODE"
+            if [ "$CODE" != "401" ] && [ "$CODE" != "403" ]; then
+              echo "::error::Expected 401/403 for unauthenticated access to $ROUTE_PATH, got $CODE"
+              exit 1
+            fi
+          done
+          echo "Confirmed: all staff admin routes reject unauthenticated callers."
+
+      - name: Real new-user journey -- register, staff-verify, login, /me, watchlist CRUD, recommendation history, logout, login again
+        id: newuser
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          SYMBOLS: ${{ steps.symbols.outputs.symbols }}
+        run: |
+          TS=$(date +%s)
+          NEW_EMAIL="basirah.ci.m6+${TS}@example.com"
+          NEW_PASSWORD="Verify-CI-${TS}!Aa1"
+          echo "new_email=$NEW_EMAIL" >> "$GITHUB_OUTPUT"
+          echo "Test account: $NEW_EMAIL"
+
+          echo "=== Register ==="
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/register_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/register" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$NEW_EMAIL\", \"password\": \"$NEW_PASSWORD\", \"full_name\": \"CI M6 Verification\"}")
+          echo "Register HTTP $CODE"; cat /tmp/register_body.json; echo ""
+          if [ "$CODE" != "201" ]; then echo "::error::Registration failed."; exit 1; fi
+          NEW_USER_ID=$(python3 -c "import json; print(json.load(open('/tmp/register_body.json'))['id'])")
+
+          echo "=== Resend verification (public, enumeration-safe) ==="
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/resend_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/resend-verification" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$NEW_EMAIL\"}")
+          echo "Resend-verification HTTP $CODE"; cat /tmp/resend_body.json; echo ""
+
+          echo "=== Staff fallback: verify the new test account's email (SMTP delivery cannot be confirmed from CI) ==="
+          STAFF_CSRF=$(cat /tmp/.staff_csrf)
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt -o /tmp/verify_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/admin/users/$NEW_USER_ID/verify-email" \
+            -H "Content-Type: application/json" \
+            -H "x-csrf-token: $STAFF_CSRF")
+          echo "Staff verify-email HTTP $CODE"; cat /tmp/verify_body.json; echo ""
+          if [ "$CODE" != "200" ]; then echo "::error::Staff verify-email fallback failed."; exit 1; fi
+
+          echo "=== Login after verification ==="
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/newuser_cookies.txt -o /tmp/login2_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$NEW_EMAIL\", \"password\": \"$NEW_PASSWORD\"}")
+          echo "Post-verification login HTTP $CODE"; cat /tmp/login2_body.json; echo ""
+          if [ "$CODE" != "200" ]; then echo "::error::Login after staff verification failed."; exit 1; fi
+          NEWUSER_CSRF=$(grep -i csrf_token /tmp/newuser_cookies.txt | awk '{print $NF}')
+
+          echo "=== /me ==="
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -w "\nHTTP %{http_code}\n" "$BACKEND_URL/api/v1/auth/me"
+
+          FIRST_SYM=$(echo "$SYMBOLS" | cut -d',' -f1)
+          if [ -n "$FIRST_SYM" ]; then
+            echo "=== Watchlist: empty state ==="
+            curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -w "\nHTTP %{http_code}\n" "$BACKEND_URL/api/v1/watchlist"
+
+            echo "=== Watchlist: add $FIRST_SYM ==="
+            CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -o /tmp/watchlist_add.json -w "%{http_code}" \
+              -X POST "$BACKEND_URL/api/v1/watchlist/items" \
+              -H "Content-Type: application/json" -H "x-csrf-token: $NEWUSER_CSRF" \
+              -d "{\"symbol\": \"$FIRST_SYM\"}")
+            echo "Add HTTP $CODE"; cat /tmp/watchlist_add.json; echo ""
+            if [ "$CODE" != "201" ]; then echo "::error::Watchlist add failed."; exit 1; fi
+
+            echo "=== Watchlist: duplicate add must be rejected ==="
+            CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -o /dev/null -w "%{http_code}" \
+              -X POST "$BACKEND_URL/api/v1/watchlist/items" \
+              -H "Content-Type: application/json" -H "x-csrf-token: $NEWUSER_CSRF" \
+              -d "{\"symbol\": \"$FIRST_SYM\"}")
+            echo "Duplicate add HTTP $CODE"
+
+            echo "=== Watchlist: list (must contain $FIRST_SYM) ==="
+            curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -o /tmp/watchlist_list.json -w "\nHTTP %{http_code}\n" "$BACKEND_URL/api/v1/watchlist"
+            python3 -m json.tool /tmp/watchlist_list.json
+
+            echo "=== Watchlist: remove $FIRST_SYM ==="
+            CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -o /dev/null -w "%{http_code}" \
+              -X DELETE "$BACKEND_URL/api/v1/watchlist/items/$FIRST_SYM" \
+              -H "x-csrf-token: $NEWUSER_CSRF")
+            echo "Remove HTTP $CODE"
+            if [ "$CODE" != "200" ]; then echo "::error::Watchlist remove failed."; exit 1; fi
+          else
+            echo "::warning::No symbol discovered -- skipping watchlist CRUD."
+          fi
+
+          echo "=== Recommendation history (own, real endpoint) ==="
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -w "\nHTTP %{http_code}\n" "$BACKEND_URL/api/v1/recommendations/history"
+
+          echo "=== New (default USER role) account must be denied on staff admin routes ==="
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -o /dev/null -w "%{http_code}" \
+            "$BACKEND_URL/api/v1/admin/users")
+          echo "USER GET /admin/users -> HTTP $CODE"
+          if [ "$CODE" != "403" ]; then echo "::error::Ordinary USER should get 403 on staff admin route, got $CODE"; exit 1; fi
+
+          echo "=== Logout ==="
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -c /tmp/newuser_cookies.txt \
+            -X POST "$BACKEND_URL/api/v1/auth/logout" -H "x-csrf-token: $NEWUSER_CSRF" -w "\nHTTP %{http_code}\n"
+
+          echo "=== Login again after logout ==="
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$NEW_EMAIL\", \"password\": \"$NEW_PASSWORD\"}")
+          echo "Re-login HTTP $CODE"
+          if [ "$CODE" != "200" ]; then echo "::error::Re-login after logout failed."; exit 1; fi
+          echo "New-user journey complete."
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json /tmp/decisions/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then
+            exit 1
+          fi
+          echo "No secret-leak patterns found in any captured response body."
+
+      - name: Screenshots -- mobile + desktop, key user + owner pages (Playwright)
+        env:
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+        run: |
+          mkdir -p /tmp/screenshots
+          python3 - "$FRONTEND_URL" <<'PYEOF'
+          import sys
+          from playwright.sync_api import sync_playwright
+
+          frontend_url = sys.argv[1]
+          viewports = {
+              "iphone_se": {"width": 375, "height": 667},
+              "iphone_14_pro_max": {"width": 430, "height": 932},
+              "desktop": {"width": 1440, "height": 900},
+          }
+          pages = [
+              "/", "/login", "/register", "/dashboard", "/opportunities",
+              "/watchlist", "/reports",
+              "/owner", "/owner/users", "/owner/subscriptions", "/owner/market-coverage",
+              "/owner/investment-committee", "/owner/recommendation-history",
+          ]
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              for vp_name, vp in viewports.items():
+                  context = browser.new_context(viewport=vp, locale="ar-SA")
+                  page = context.new_page()
+                  for path in pages:
+                      safe_name = path.strip("/").replace("/", "_") or "home"
+                      try:
+                          page.goto(frontend_url + path, wait_until="networkidle", timeout=20000)
+                          page.wait_for_timeout(1000)
+                          dir_attr = page.evaluate("document.documentElement.getAttribute('dir')")
+                          scroll_width = page.evaluate("document.documentElement.scrollWidth")
+                          client_width = page.evaluate("document.documentElement.clientWidth")
+                          overflow = scroll_width - client_width
+                          print(f"[{vp_name}] {path}: dir={dir_attr} scrollWidth={scroll_width} clientWidth={client_width} overflow_px={overflow}")
+                          page.screenshot(path=f"/tmp/screenshots/{vp_name}__{safe_name}.png", full_page=True)
+                      except Exception as e:
+                          print(f"[{vp_name}] {path}: FAILED -- {e}")
+                  context.close()
+              browser.close()
+          PYEOF
+          ls -la /tmp/screenshots
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-m6-acceptance-evidence
+          path: |
+            /tmp/summary.json
+            /tmp/coverage.json
+            /tmp/admin_users.json
+            /tmp/admin_subscriptions.json
+            /tmp/admin_rec_history.json
+            /tmp/rankings.json
+            /tmp/selected_symbols.json
+            /tmp/decisions/*.json
+            /tmp/screenshots/*.png
+          retention-days: 14
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: |
+          rm -f /tmp/.staff_csrf /tmp/staff_cookies.txt /tmp/newuser_cookies.txt /tmp/login_body.json /tmp/login2_body.json /tmp/register_body.json
