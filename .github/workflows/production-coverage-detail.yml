@@ -1,12 +1,15 @@
-name: Production Coverage Detail (temporary, one-shot, read-only)
+name: Production Coverage Detail (read-only diagnostics)
 
-# Diagnostic-only: fetches GET /coverage from the live production
-# backend and prints each ingestion job's error_summary. Does NOT
-# trigger a new discovery/ingestion pass -- production-full-discovery-
-# trigger.yml already ran one and its polling loop doesn't surface
-# error_summary, which is needed to root-cause the "fundamentals" job
-# ending in status=failed with 0 succeeded/0 failed (a whole-job
-# error, not a per-symbol one).
+# Diagnostic-only, kept as a durable on-demand tool (not a one-shot):
+# fetches GET /coverage and GET /admin/system/summary from the live
+# production backend and prints real evidence -- per-ingestion-job
+# error_summary, exact symbols missing price history / skipped by the
+# latest scan, db_consistency, and (critically) the actual deployed
+# commit + Live Market Mode scheduler state, since `railway up
+# --detach` returns before the new build is actually serving traffic
+# and the deploy workflow's own health check can pass against the
+# still-running previous deployment. Never triggers a new discovery/
+# ingestion/scan pass -- read-only.
 
 on:
   workflow_dispatch: {}
@@ -57,6 +60,26 @@ jobs:
             exit 1
           fi
 
+      - name: Fetch admin system summary (real deployed commit + Live Market Mode state)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/system/summary" -o /tmp/summary.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/summary.json'))
+          print('deployment_commit:', d.get('deployment_commit'))
+          print('database_health:', d.get('database_health'), '| redis_health:', d.get('redis_health'))
+          print('ingestion_scheduler_running:', d.get('ingestion_scheduler_running'))
+          print('market_intelligence_scheduler_running:', d.get('market_intelligence_scheduler_running'))
+          print('live_market_mode_enabled:', d.get('live_market_mode_enabled'))
+          print('live_market_mode_running:', d.get('live_market_mode_running'))
+          print('live_market_mode_market_currently_open:', d.get('live_market_mode_market_currently_open'))
+          print('market_status:', d.get('market_status'), '|', d.get('market_status_label_ar'))
+          print('market_data_provider:', d.get('market_data_provider'), '| market_data_health:', d.get('market_data_health'))
+          "
+
       - name: Fetch coverage and print full ingestion job detail (including error_summary)
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
@@ -106,6 +129,12 @@ jobs:
           print('=== sector_coverage ===')
           for row in d.get('sector_coverage') or []:
               print(' ', json.dumps(row, ensure_ascii=False))
+          print()
+          print('=== symbols_missing_price_history (exact symbols, capped at 50) ===')
+          print(d.get('symbols_missing_price_history'))
+          print()
+          print('=== latest_scan_skipped_symbols (exact symbols) ===')
+          print(d.get('latest_scan_skipped_symbols'))
           "
 
       - name: Upload evidence artifact
@@ -113,7 +142,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-detail-evidence
-          path: /tmp/coverage.json
+          path: |
+            /tmp/coverage.json
+            /tmp/summary.json
           retention-days: 14
 
       - name: Clean up local session artifacts

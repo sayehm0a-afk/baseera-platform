@@ -779,8 +779,20 @@ async def get_market_coverage(
         )
     sector_coverage.sort(key=lambda s: s.total_stocks, reverse=True)
 
+    _MISSING_PRICE_HISTORY_CAP = 50
+    symbols_missing_price_history = [
+        row[0]
+        for row in session.query(Stock.symbol)
+        .filter(Stock.is_active.is_(True))
+        .filter(~Stock.id.in_(session.query(symbols_with_bars.c.stock_id)))
+        .order_by(Stock.symbol)
+        .limit(_MISSING_PRICE_HISTORY_CAP)
+        .all()
+    ]
+
     latest_scan_symbols_entering_decision_engine = 0
     latest_scan_recommendations_generated = 0
+    latest_scan_skipped_symbols: List[str] = []
     if latest_scan is not None:
         latest_scan_symbols_entering_decision_engine = (
             session.query(func.count(DecisionV2Snapshot.id))
@@ -794,6 +806,35 @@ async def get_market_coverage(
             .scalar()
             or 0
         )
+        if latest_scan.skipped_symbols_summary:
+            # The real per-symbol reason, written by
+            # MarketIntelligenceEngine._build_skipped_symbols_summary at
+            # scan time -- authoritative, not a guess.
+            latest_scan_skipped_symbols = [
+                entry.split(":", 1)[0].strip()
+                for entry in latest_scan.skipped_symbols_summary.split(";")
+                if entry.strip()
+            ]
+        elif latest_scan.symbols_skipped > 0:
+            # A scan that ran before skipped_symbols_summary existed
+            # (or otherwise left it null): best-effort retroactive diff,
+            # exact only if the universe hasn't changed since -- true
+            # whenever no ingestion has run between that scan and now.
+            scanned_symbols = (
+                session.query(SymbolIntelligenceRecord.symbol)
+                .filter(SymbolIntelligenceRecord.scan_run_id == latest_scan.id)
+                .distinct()
+                .subquery()
+            )
+            latest_scan_skipped_symbols = [
+                row[0]
+                for row in session.query(Stock.symbol)
+                .filter(Stock.is_active.is_(True))
+                .filter(Stock.id.in_(session.query(symbols_with_bars.c.stock_id)))
+                .filter(~Stock.symbol.in_(session.query(scanned_symbols.c.symbol)))
+                .order_by(Stock.symbol)
+                .all()
+            ]
 
     db_consistency = DbConsistencyOut(
         active_stocks_missing_instrument_bucket=(
@@ -932,6 +973,8 @@ async def get_market_coverage(
         latest_scan_recommendations_generated=latest_scan_recommendations_generated,
         db_consistency=db_consistency,
         pipeline_funnel=pipeline_funnel,
+        symbols_missing_price_history=symbols_missing_price_history,
+        latest_scan_skipped_symbols=latest_scan_skipped_symbols,
     )
 
 

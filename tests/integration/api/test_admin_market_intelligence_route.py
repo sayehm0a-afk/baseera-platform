@@ -573,6 +573,78 @@ def test_coverage_reports_decision_engine_entry_and_recommendation_counts_for_la
     assert body["latest_scan_recommendations_generated"] == 1
 
 
+def test_coverage_reports_exact_symbols_missing_price_history(client, session_factory, as_staff):
+    """Root-caused in production: 408/408 OHLCV syncs reported success
+    but only 393 stocks had real PriceBar rows -- the aggregate count
+    gave no way to find which 15. This is the exact-symbol fix."""
+    _seed_stock_with_bars(session_factory, "2222", count=5)  # has bars
+    session = session_factory()
+    session.add(Stock(symbol="1120", name_en="Al Rajhi Bank", is_active=True))  # active, no bars
+    session.add(Stock(symbol="4342", name_en="Some REIT", is_active=False))  # inactive, excluded regardless
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    assert response.json()["symbols_missing_price_history"] == ["1120"]
+
+
+def test_coverage_reports_latest_scan_skipped_symbols_from_the_authoritative_summary_column(
+    client, session_factory, as_staff
+):
+    """When skipped_symbols_summary was written by the scan itself
+    (MarketIntelligenceEngine._build_skipped_symbols_summary), that's
+    the real per-symbol reason -- use it directly, not a diff guess."""
+    session = session_factory()
+    session.add(
+        MarketScanRun(
+            status=MarketScanStatus.SUCCESS, symbols_requested=3, symbols_succeeded=1, symbols_skipped=2,
+            skipped_symbols_summary="9999: insufficient_data; 8888: stock_not_registered",
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    assert response.json()["latest_scan_skipped_symbols"] == ["9999", "8888"]
+
+
+def test_coverage_reconstructs_latest_scan_skipped_symbols_when_the_summary_predates_the_fix(
+    client, session_factory, as_staff
+):
+    """A scan run from before skipped_symbols_summary existed (e.g. the
+    real production run 98) has that column null -- falls back to a
+    real diff: active/price-history-eligible symbols minus symbols that
+    actually got a SymbolIntelligenceRecord for that run."""
+    _seed_stock_with_bars(session_factory, "2222", count=5)
+    _seed_stock_with_bars(session_factory, "1120", count=5)
+
+    session = session_factory()
+    scan = MarketScanRun(
+        status=MarketScanStatus.SUCCESS, symbols_requested=2, symbols_succeeded=1, symbols_skipped=1,
+    )
+    session.add(scan)
+    session.commit()
+    stock = session.query(Stock).filter_by(symbol="2222").one()
+    session.add(
+        SymbolIntelligenceRecord(
+            scan_run_id=scan.id, stock_id=stock.id, symbol="2222", recommendation=RecommendationLabel.BUY,
+            confidence=Decimal("70"), final_score=Decimal("65"), evaluated_at=datetime.now(timezone.utc),
+            engine_version="v1",
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    assert response.json()["latest_scan_skipped_symbols"] == ["1120"]
+
+
 def test_coverage_reports_db_consistency_gaps(client, session_factory, as_staff):
     session = session_factory()
     # Active but missing instrument_bucket/sector/exchange.
