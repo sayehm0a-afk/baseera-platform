@@ -563,6 +563,22 @@ class MarketCoverageOut(BaseModel):
     db_consistency: DbConsistencyOut
     pipeline_funnel: List[PipelineStageOut]
 
+    # Exact symbol identity, not just an aggregate count -- a real
+    # production gap found while root-causing why 408/408 OHLCV-sync
+    # "succeeded" but only 393 stocks actually carry PriceBar rows: the
+    # aggregate count alone gave no way to find which 15 symbols or why.
+    # Capped so a badly-degraded universe can't return an unbounded list.
+    symbols_missing_price_history: List[str] = []
+
+    # Retroactive diff-based reconstruction for the latest scan: active,
+    # price-history-eligible symbols with no SymbolIntelligenceRecord
+    # tied to latest_scan_run.id. Exact only if the universe hasn't
+    # changed since that scan ran (true whenever no ingestion has run
+    # since); a scan_run created after skipped_symbols_summary (see
+    # MarketScanRun) exists is reported from that column directly
+    # instead, since it's the real per-symbol reason, not a diff guess.
+    latest_scan_skipped_symbols: List[str] = []
+
 
 class MarketSummaryOut(BaseModel):
     scan_run_id: Optional[int] = None
