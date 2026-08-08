@@ -40,7 +40,15 @@ env:
 jobs:
   trigger_and_monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The 45-minute budget below was sized for the pre-fix ~101-symbol
+    # cold-start universe. The 2026-08-08 SAHMK pagination fix grew real
+    # discovery to 517 instruments (~396 real equities) -- at the shared
+    # rate limiter's default 20 req/min cap, historical_ohlcv +
+    # fundamentals + dividends alone (~396 symbols each, one request per
+    # symbol per job) is ~1,188 requests, a ~59-minute floor from pacing
+    # alone before any real per-request latency or retries. 180 minutes
+    # gives real headroom without masking a genuine hang.
+    timeout-minutes: 180
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
@@ -119,12 +127,12 @@ jobs:
           ACCEPTED=$(python3 -c "import json; print(json.load(open('/tmp/trigger_body.json')).get('accepted'))")
           echo "accepted: $ACCEPTED"
 
-      - name: Poll each ingestion job's real status (up to 40 minutes, checking every 60s)
+      - name: Poll each ingestion job's real status (up to 170 minutes, checking every 60s)
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
         run: |
           EXPECTED_JOBS='["symbols","historical_ohlcv","fundamentals","dividends"]'
-          for i in $(seq 1 40); do
+          for i in $(seq 1 170); do
             sleep 60
             # ACCESS_TOKEN_EXPIRE_MINUTES defaults to 15 -- a discovery
             # pass regularly runs longer than that (confirmed: a real
