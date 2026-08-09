@@ -143,11 +143,51 @@ def is_synthetic_data_allowed() -> bool:
 
 
 def get_sahmk_max_requests_per_day() -> Optional[int]:
-    """Optional calendar-day (UTC) request quota. None (the default) means
-    no daily cap is enforced client-side -- SAHMK's own daily quota (if
-    any, for this plan) still applies and is enforced server-side via
-    429s, which SahmkClient already retries/surfaces. Set this only if
-    the account's actual daily quota is known, to fail fast locally
-    instead of spending a request to discover the 429."""
-    raw = os.getenv("SAHMK_MAX_REQUESTS_PER_DAY", "")
+    """Calendar-day (UTC) request quota, enforced client-side by
+    SahmkRateLimiter so a spent quota fails fast locally (an ingestion
+    job sees SahmkRateLimitExceededError immediately) instead of
+    silently spending real requests to discover a 429, or -- worse --
+    a retry storm hammering an already-exhausted quota (see
+    src.market_data.sahmk.client's tenacity retry, which retries a 429
+    up to 3x per logical call with no awareness this is a quota, not a
+    transient failure).
+
+    Confirmed real account limit (2026-08-09 production evidence, from
+    SAHMK's own 429 body: "Daily rate limit exceeded (5000 requests/day)")
+    is 5000/day. Default here is 4500, not 5000 -- deliberate headroom
+    for: (a) this being a per-process counter (see rate_limiter.py's
+    module docstring -- a second process/worker/replica has its own
+    independent 4500 budget, so the true cross-process ceiling can only
+    be bounded, not hit exactly, without a shared Redis-backed counter,
+    which is a disclosed, not-yet-built limitation); (b) any request
+    made through a channel this limiter doesn't see (e.g. a manual
+    curl against the API using the same key, outside this application
+    entirely). Override with SAHMK_MAX_REQUESTS_PER_DAY once a
+    Redis-backed cross-process counter exists and/or the plan's true
+    quota is reconfirmed; set to "" (empty string) to disable the
+    client-side cap entirely and rely on SAHMK's own 429 only, as
+    before this default existed."""
+    raw = os.getenv("SAHMK_MAX_REQUESTS_PER_DAY", "4500")
     return int(raw) if raw.strip() else None
+
+
+def get_sahmk_reserved_for_critical_requests_per_day() -> Optional[int]:
+    """How many of get_sahmk_max_requests_per_day()'s requests are
+    reserved for priority=CRITICAL callers only (live Decision
+    Engine / market-scan quote lookups -- see
+    src.market_data.sahmk.request_priority) once background work
+    (ingestion backfills, admin diagnostics) has used up the rest.
+    None (the default when SAHMK_MAX_REQUESTS_PER_DAY is unset,
+    disabling the daily cap entirely) or 0 disables the reservation --
+    background and critical work then draw from the same undivided
+    daily budget, exactly as before this mechanism existed. Default
+    1000 (of the default 4500/day budget): sized to comfortably cover
+    one full market-scan cycle of the current ~384-symbol active
+    universe (1 request/symbol, see docs/SAHMK_INTEGRATION.md's
+    request-budget model) even on a day background jobs have already
+    spent the rest."""
+    raw = os.getenv("SAHMK_RESERVED_FOR_CRITICAL_REQUESTS_PER_DAY", "1000")
+    if not raw.strip():
+        return None
+    value = int(raw)
+    return value if value > 0 else None

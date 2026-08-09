@@ -52,6 +52,7 @@ from src.market_data.ingestion.ingest_historical_ohlcv import ingest_historical_
 from src.market_data.ingestion.ingest_symbols import sync_symbols
 from src.market_data.fundamental_provider_factory import get_fundamental_data_provider
 from src.market_data.provider_factory import get_market_data_provider
+from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
 
 logger = logging.getLogger(__name__)
 
@@ -404,36 +405,40 @@ class IngestionScheduler:
         return list(dict.fromkeys(list(configured) + discovered))
 
     async def _run_symbols(self) -> IngestionResult:
-        provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
-        symbols = ingestion_config.get_ingestion_symbol_universe()
-        return await sync_symbols(
-            symbols,
-            provider,
-            self._session_factory,
-            discover_all=ingestion_config.is_symbol_auto_discovery_enabled(),
-        )
+        with priority_scope(BACKGROUND):
+            provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
+            symbols = ingestion_config.get_ingestion_symbol_universe()
+            return await sync_symbols(
+                symbols,
+                provider,
+                self._session_factory,
+                discover_all=ingestion_config.is_symbol_auto_discovery_enabled(),
+            )
 
     async def _run_historical_ohlcv(self) -> IngestionResult:
-        provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
-        symbols = self._resolve_target_symbols()
-        return await ingest_historical_ohlcv(
-            symbols,
-            provider,
-            self._session_factory,
-            backfill_days=ingestion_config.get_ohlcv_backfill_days(),
-        )
+        with priority_scope(BACKGROUND):
+            provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
+            symbols = self._resolve_target_symbols()
+            return await ingest_historical_ohlcv(
+                symbols,
+                provider,
+                self._session_factory,
+                backfill_days=ingestion_config.get_ohlcv_backfill_days(),
+            )
 
     async def _run_fundamentals(self) -> IngestionResult:
-        provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
-        symbols = self._resolve_target_symbols()
-        return await ingest_fundamentals(
-            symbols,
-            provider,
-            self._session_factory,
-            period_type=ingestion_config.get_fundamentals_period_type(),
-        )
+        with priority_scope(BACKGROUND):
+            provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
+            symbols = self._resolve_target_symbols()
+            return await ingest_fundamentals(
+                symbols,
+                provider,
+                self._session_factory,
+                period_type=ingestion_config.get_fundamentals_period_type(),
+            )
 
     async def _run_dividends(self) -> IngestionResult:
-        provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
-        symbols = self._resolve_target_symbols()
-        return await ingest_dividends(symbols, provider, self._session_factory)
+        with priority_scope(BACKGROUND):
+            provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
+            symbols = self._resolve_target_symbols()
+            return await ingest_dividends(symbols, provider, self._session_factory)
