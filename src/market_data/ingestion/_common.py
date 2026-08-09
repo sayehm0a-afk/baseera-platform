@@ -20,10 +20,27 @@ from typing import Dict
 from sqlalchemy.orm import Session
 
 from src.domain.models import PriceBar, Stock, Timeframe
+from src.market_data.sahmk.rate_limiter import SahmkRateLimitExceededError
 
 logger = logging.getLogger(__name__)
 
 _MAX_RATE_LIMIT_PAUSE_SECONDS = 30.0
+
+
+def is_quota_exhausted_for_today(exc: Exception) -> bool:
+    """True for SahmkRateLimitExceededError and its subclass
+    SahmkQuotaReservedForCriticalError (see
+    src.market_data.sahmk.rate_limiter) -- both mean "today's quota (or
+    the background-eligible slice of it) is spent, right now, for
+    every remaining symbol in this run too," unlike every other
+    exception an ingestion job catches, which is per-symbol and worth
+    continuing past. A job's per-symbol loop should `break` on this,
+    not keep iterating: every remaining symbol would hit the identical,
+    already-known outcome at the rate limiter's acquire() call --
+    before it even reaches the network -- so continuing wastes loop
+    time and floods IngestionResult.errors/logs with N-1 duplicate
+    entries carrying zero new information."""
+    return isinstance(exc, SahmkRateLimitExceededError)
 
 
 async def sleep_if_rate_limited(exc: Exception) -> None:

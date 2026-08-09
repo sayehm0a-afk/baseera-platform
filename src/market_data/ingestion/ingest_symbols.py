@@ -27,6 +27,7 @@ from src.market_data.ingestion._common import (
     UNCLASSIFIED_BUCKET,
     IngestionResult,
     get_or_create_stock,
+    is_quota_exhausted_for_today,
     sleep_if_rate_limited,
 )
 from src.market_data.providers.market_data_provider import IMarketDataProvider
@@ -184,6 +185,14 @@ async def sync_symbols(
             result.symbols_failed += 1
             result.errors[symbol] = str(exc)
             logger.error("Failed to sync symbol '%s': %s", symbol, exc)
+            if is_quota_exhausted_for_today(exc):
+                logger.warning(
+                    "sync_symbols: stopping early -- %d of %d symbol(s) not attempted "
+                    "(SAHMK daily quota exhausted).",
+                    len(target_symbols) - target_symbols.index(symbol) - 1,
+                    len(target_symbols),
+                )
+                break
             await sleep_if_rate_limited(exc)
         finally:
             session.close()

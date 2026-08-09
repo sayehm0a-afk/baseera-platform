@@ -81,6 +81,7 @@ from src.domain.models import (
 )
 from src.market_data.ingestion import config as ingestion_config
 from src.market_data.providers.sector_provider import get_sector_classification_provider
+from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
 from src.market_data.strict_mode import StrictRealDataUnavailableError
 from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -126,7 +127,13 @@ async def trigger_diagnostic_scan(
         # force_refresh=True: a diagnostic endpoint whose entire purpose
         # is proving connectivity *right now* must never answer from a
         # stale cached selection (default cache window is 60s).
-        await get_market_data_provider(force_refresh=True)
+        # priority=BACKGROUND: this route is an admin diagnostic, not
+        # the live Decision Engine scan pipeline -- it must draw from
+        # the background-eligible portion of today's SAHMK quota, never
+        # the reserve set aside for live-market-critical operations
+        # (see src.market_data.sahmk.rate_limiter/request_priority).
+        with priority_scope(BACKGROUND):
+            await get_market_data_provider(force_refresh=True)
     except StrictRealDataUnavailableError as exc:
         sahmk_error = _scrub(f"{type(exc).__name__}: {exc}")
     except Exception as exc:  # noqa: BLE001 -- report every failure mode, never crash this diagnostic route itself
@@ -166,7 +173,8 @@ async def trigger_diagnostic_scan(
             # reasoning src/api/routes/market.py's create_scan documents.
             from src.core.db.database import get_session_factory
 
-            await run_market_scan_job(run.id, get_session_factory(), provider, symbols)
+            with priority_scope(BACKGROUND):
+                await run_market_scan_job(run.id, get_session_factory(), provider, symbols)
 
             session.expire_all()
             run = _repository.get_run(session, run.id)
@@ -367,7 +375,10 @@ async def get_universe_diagnostics(
         return message.replace(key, "***") if key else message
 
     try:
-        provider = await get_market_data_provider(force_refresh=True)
+        # priority=BACKGROUND: an admin diagnostic, not the live
+        # Decision Engine scan pipeline (see request_priority.py).
+        with priority_scope(BACKGROUND):
+            provider = await get_market_data_provider(force_refresh=True)
     except StrictRealDataUnavailableError as exc:
         return UniverseDiagnosticsOut(
             generated_at=generated_at, sahmk_error=_scrub(f"{type(exc).__name__}: {exc}")
@@ -387,7 +398,8 @@ async def get_universe_diagnostics(
         # with the full bucket/distinct-value breakdown) is what this
         # route actually needs; the per-entry dicts it returns are a
         # differently-shaped, UI-facing view of the same classification.
-        await provider.get_symbol_directory()
+        with priority_scope(BACKGROUND):
+            await provider.get_symbol_directory()
     except Exception as exc:  # noqa: BLE001 -- report every failure mode, never crash this diagnostic route
         return UniverseDiagnosticsOut(
             generated_at=generated_at,
@@ -482,7 +494,13 @@ async def get_symbol_lookup_diagnostics(
     symbol_list = [s.strip() for s in symbols.split(",") if s.strip()] if symbols else _DEFAULT_SYMBOL_LOOKUP_TEST_SYMBOLS
 
     try:
-        market_provider = await get_market_data_provider(force_refresh=True)
+        # priority=BACKGROUND: an admin diagnostic, not the live
+        # Decision Engine scan pipeline (see request_priority.py) --
+        # this route is also the single most expensive diagnostic call
+        # per invocation (~6 real requests/symbol), so it must never
+        # draw from the reserve set aside for live-market operations.
+        with priority_scope(BACKGROUND):
+            market_provider = await get_market_data_provider(force_refresh=True)
     except StrictRealDataUnavailableError as exc:
         return SymbolLookupDiagnosticsOut(
             generated_at=generated_at, sahmk_error=_scrub(f"{type(exc).__name__}: {exc}")
@@ -496,7 +514,8 @@ async def get_symbol_lookup_diagnostics(
         )
 
     try:
-        fundamental_provider = await get_fundamental_data_provider(force_refresh=True)
+        with priority_scope(BACKGROUND):
+            fundamental_provider = await get_fundamental_data_provider(force_refresh=True)
     except StrictRealDataUnavailableError:
         fundamental_provider = None
     if not isinstance(fundamental_provider, SahmkFundamentalDataProvider):
@@ -509,7 +528,8 @@ async def get_symbol_lookup_diagnostics(
     # whether the per-symbol calls below are attempted.
     known_symbols: Optional[set] = None
     try:
-        directory = await market_provider.get_symbol_directory()
+        with priority_scope(BACKGROUND):
+            directory = await market_provider.get_symbol_directory()
         known_symbols = {c["symbol"] for c in directory}
     except Exception:  # noqa: BLE001 -- directory membership is informational only
         known_symbols = None
@@ -591,18 +611,21 @@ async def get_symbol_lookup_diagnostics(
 
     results: List[SymbolLookupDiagnosticOut] = []
     for symbol in symbol_list:
-        quote = await _check(market_provider.get_latest_quote(symbol))
-        company_profile = await _check(market_provider.get_company_profile(symbol))
-        historical_bar = await _check(market_provider.get_stock_data(symbol))
-        if fundamental_provider is not None:
-            dividends = await _check(fundamental_provider.get_dividends(symbol))
-            dividends_raw = await _check_raw_dividends(symbol)
-            fundamentals = await _check(fundamental_provider.get_fundamentals(symbol))
-        else:
-            no_provider = SymbolLookupCheckOut(available=False, detail="No real fundamental provider selected.")
-            dividends = no_provider
-            dividends_raw = no_provider
-            fundamentals = no_provider
+        with priority_scope(BACKGROUND):
+            quote = await _check(market_provider.get_latest_quote(symbol))
+            company_profile = await _check(market_provider.get_company_profile(symbol))
+            historical_bar = await _check(market_provider.get_stock_data(symbol))
+            if fundamental_provider is not None:
+                dividends = await _check(fundamental_provider.get_dividends(symbol))
+                dividends_raw = await _check_raw_dividends(symbol)
+                fundamentals = await _check(fundamental_provider.get_fundamentals(symbol))
+            else:
+                no_provider = SymbolLookupCheckOut(
+                    available=False, detail="No real fundamental provider selected."
+                )
+                dividends = no_provider
+                dividends_raw = no_provider
+                fundamentals = no_provider
 
         results.append(
             SymbolLookupDiagnosticOut(

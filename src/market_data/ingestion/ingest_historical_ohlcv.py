@@ -28,6 +28,7 @@ from src.domain.models import PriceBar, Timeframe
 from src.market_data.ingestion._common import (
     IngestionResult,
     get_or_create_stock,
+    is_quota_exhausted_for_today,
     sleep_if_rate_limited,
     upsert_price_bar,
 )
@@ -103,6 +104,12 @@ async def ingest_historical_ohlcv(
             result.symbols_failed += 1
             result.errors[symbol] = str(exc)
             logger.error("Failed to ingest historical OHLCV for symbol '%s': %s", symbol, exc)
+            if is_quota_exhausted_for_today(exc):
+                logger.warning(
+                    "ingest_historical_ohlcv: stopping early -- SAHMK daily quota exhausted, "
+                    "remaining symbol(s) in this run not attempted."
+                )
+                break
             await sleep_if_rate_limited(exc)
         finally:
             session.close()

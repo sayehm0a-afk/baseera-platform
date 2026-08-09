@@ -120,6 +120,14 @@ async def get_dashboard_summary(
     )
     market_info = get_market_status()
 
+    try:
+        from src.market_data.sahmk.rate_limiter import get_default_rate_limiter
+
+        sahmk_quota_status = get_default_rate_limiter().get_status()
+    except Exception as exc:
+        logger.error("Admin dashboard summary: SAHMK quota status read failed: %s", exc)
+        sahmk_quota_status = None
+
     return AdminDashboardSummaryOut(
         app_version=main.app.version,
         deployment_commit=settings.deployment_commit,
@@ -165,4 +173,5 @@ async def get_dashboard_summary(
         market_status_label_ar=market_info.label_ar,
         strict_real_data_enforced=is_strict_real_data_enabled(),
         scan_lock_active=scan_lock_active,
+        sahmk_quota_status=sahmk_quota_status,
     )

@@ -45,6 +45,7 @@ from src.market_data.sahmk.exceptions import (
     SahmkRequestError,
 )
 from src.market_data.sahmk.rate_limiter import SahmkRateLimiter, get_default_rate_limiter
+from src.market_data.sahmk.request_priority import get_current_priority
 from src.market_data.validators.symbol_validator import validate_symbol_format
 
 logger = logging.getLogger(__name__)
@@ -158,7 +159,15 @@ class SahmkClient:
         # for the same reason: one throttle point for the whole
         # request, not one per retry attempt (tenacity's own backoff
         # already spaces retries of one request out).
-        await self._rate_limiter.acquire()
+        #
+        # priority comes from the current asyncio task's
+        # request_priority contextvar, not a parameter here -- every
+        # caller (ingestion jobs, diagnostics, live scans) shares this
+        # same client/rate-limiter, so a contextvar is what lets the
+        # limiter tell a background backfill's request apart from a
+        # live Decision Engine scan's, without changing every method's
+        # signature (see request_priority.py's module docstring).
+        await self._rate_limiter.acquire(priority=get_current_priority())
 
         @retry(
             reraise=True,

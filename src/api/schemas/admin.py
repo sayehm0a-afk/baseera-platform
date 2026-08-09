@@ -271,3 +271,10 @@ class AdminDashboardSummaryOut(BaseModel):
     market_status_label_ar: str
     strict_real_data_enforced: bool
     scan_lock_active: bool
+
+    # SAHMK request-budget visibility (this process's own tracked usage
+    # only -- see src.market_data.sahmk.rate_limiter.SahmkRateLimiter.
+    # get_status()'s docstring on why this is not cross-process
+    # coordinated). None only if the rate limiter itself could not be
+    # read, never a placeholder for "unknown."
+    sahmk_quota_status: Optional[Dict[str, Any]] = None
