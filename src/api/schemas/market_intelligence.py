@@ -633,6 +633,7 @@ class SymbolLookupDiagnosticOut(BaseModel):
     company_profile: SymbolLookupCheckOut
     historical_bar: SymbolLookupCheckOut
     dividends: SymbolLookupCheckOut
+    dividends_raw: Optional[SymbolLookupCheckOut] = None
     fundamentals: SymbolLookupCheckOut
 
 

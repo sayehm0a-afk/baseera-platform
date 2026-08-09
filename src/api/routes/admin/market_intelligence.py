@@ -544,11 +544,50 @@ async def get_symbol_lookup_diagnostics(
         if isinstance(result, dict):
             raw_sector = result.get("sector")
             raw_industry = result.get("industry")
-            if "sector" in result or "industry" in result:
-                raw_keys = sorted(result.keys())
+            # Always expose the real top-level key set for ANY dict result --
+            # not just when sector/industry happen to be present -- so this
+            # same generic passthrough also answers "what keys did SAHMK's
+            # raw dividends response actually use" (see dividends_raw below),
+            # never guessed or assumed.
+            raw_keys = sorted(result.keys())
         return SymbolLookupCheckOut(
             available=True, detail=None, raw_sector=raw_sector, raw_industry=raw_industry, raw_keys=raw_keys
         )
+
+    async def _check_raw_dividends(symbol: str) -> SymbolLookupCheckOut:
+        # Bypasses SahmkMarketDataService.get_dividends()'s
+        # `data.get("dividends", data.get("results", []))` key lookup and
+        # SahmkFundamentalDataProvider's further reshaping entirely --
+        # calls the SAHMK client directly so the true raw JSON shape is
+        # visible. Real evidence for why dividend coverage reads 0/384
+        # despite the ingestion job reporting per-symbol success: either
+        # SAHMK's actual top-level key differs from "dividends"/"results"
+        # (a parsing-code fix), or the raw response genuinely has zero
+        # entries for that symbol (a real, non-fabricated absence).
+        if not isinstance(fundamental_provider, SahmkFundamentalDataProvider):
+            return SymbolLookupCheckOut(available=False, detail="No real SAHMK fundamental provider selected.")
+        try:
+            raw = await fundamental_provider._service._client.get_dividends(symbol)  # noqa: SLF001 -- diagnostic-only, bypasses parsing on purpose
+        except Exception as exc:  # noqa: BLE001 -- report every failure mode, never crash this diagnostic route
+            return SymbolLookupCheckOut(available=False, detail=_scrub(f"{type(exc).__name__}: {exc}"))
+        if not isinstance(raw, dict):
+            return SymbolLookupCheckOut(available=True, detail=f"Non-dict raw response: {type(raw).__name__}")
+        keys = sorted(raw.keys())
+        items = None
+        matched_key = None
+        for candidate in ("dividends", "results", "data", "items", "dividend_history", "history"):
+            if isinstance(raw.get(candidate), list):
+                items = raw[candidate]
+                matched_key = candidate
+                break
+        if items is None:
+            detail = f"top_level_keys={keys}; no list found under any known key (dividends/results/data/items/dividend_history/history)"
+        else:
+            detail = f"top_level_keys={keys}; matched_key={matched_key!r}; item_count={len(items)}"
+            if items:
+                first = items[0]
+                detail += f"; first_item_keys={sorted(first.keys())}" if isinstance(first, dict) else f"; first_item_type={type(first).__name__}"
+        return SymbolLookupCheckOut(available=True, detail=detail, raw_keys=keys)
 
     results: List[SymbolLookupDiagnosticOut] = []
     for symbol in symbol_list:
@@ -557,10 +596,12 @@ async def get_symbol_lookup_diagnostics(
         historical_bar = await _check(market_provider.get_stock_data(symbol))
         if fundamental_provider is not None:
             dividends = await _check(fundamental_provider.get_dividends(symbol))
+            dividends_raw = await _check_raw_dividends(symbol)
             fundamentals = await _check(fundamental_provider.get_fundamentals(symbol))
         else:
             no_provider = SymbolLookupCheckOut(available=False, detail="No real fundamental provider selected.")
             dividends = no_provider
+            dividends_raw = no_provider
             fundamentals = no_provider
 
         results.append(
@@ -571,6 +612,7 @@ async def get_symbol_lookup_diagnostics(
                 company_profile=company_profile,
                 historical_bar=historical_bar,
                 dividends=dividends,
+                dividends_raw=dividends_raw,
                 fundamentals=fundamentals,
             )
         )
