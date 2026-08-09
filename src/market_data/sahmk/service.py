@@ -597,7 +597,14 @@ class SahmkMarketDataService:
     async def get_dividends(self, symbol: str) -> List[SahmkDividend]:
         async def _compute() -> List[SahmkDividend]:
             data = await self._client.get_dividends(symbol)
-            items = data.get("dividends", data.get("results", []))
+            # 2026-08-09 production evidence (symbol 1120, via
+            # symbol-lookup-diagnostics' dividends_raw check): SAHMK's
+            # real top-level key is "history", not "dividends"/"results"
+            # -- the prior guesses matched nothing, so get_dividends()
+            # always returned []. "dividends"/"results" kept as
+            # fallbacks in case another account tier/endpoint version
+            # differs.
+            items = data.get("history", data.get("dividends", data.get("results", [])))
             result: List[SahmkDividend] = []
             for item in items:
                 per_share = _first_present(item, ["dividend_per_share", "amount", "value"])
@@ -607,8 +614,11 @@ class SahmkMarketDataService:
                     SahmkDividend(
                         symbol=symbol,
                         dividend_per_share=float(per_share),
-                        ex_date=_first_present(item, ["ex_date", "ex_dividend_date"]),
-                        payment_date=_first_present(item, ["payment_date", "pay_date"]),
+                        # eligibility_date/distribution_date are the
+                        # confirmed real field names for this same
+                        # record (see docstring above).
+                        ex_date=_first_present(item, ["ex_date", "ex_dividend_date", "eligibility_date"]),
+                        payment_date=_first_present(item, ["payment_date", "pay_date", "distribution_date"]),
                         raw=item,
                     )
                 )
