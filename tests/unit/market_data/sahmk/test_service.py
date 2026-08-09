@@ -748,6 +748,38 @@ async def test_get_dividends_parses_dividends_key():
 
 
 @pytest.mark.asyncio
+async def test_get_dividends_parses_real_production_history_shape():
+    """2026-08-09 production evidence (symbol 1120, via
+    symbol-lookup-diagnostics' dividends_raw check): SAHMK's real
+    response nests the list under "history", with "eligibility_date"/
+    "distribution_date" instead of "ex_date"/"payment_date" -- this is
+    the exact shape that made get_dividends() return [] for every
+    symbol before this fix."""
+    item = {
+        "announcement_date": "2025-05-10",
+        "distribution_date": "2025-07-01",
+        "eligibility_date": "2025-06-01",
+        "fiscal_year": 2024,
+        "period": "annual",
+        "value": 1.25,
+        "value_percent": 12.5,
+    }
+    client = AsyncMock()
+    client.get_dividends.return_value = {
+        "current_price": 100.0,
+        "history": [item],
+        "payments_last_year": 1,
+        "symbol": "1120",
+        "trailing_12m_dividends": 1.25,
+        "trailing_12m_yield": 1.25,
+        "upcoming": [],
+    }
+    service = _service(client)
+    dividends = await service.get_dividends("1120")
+    assert dividends == [SahmkDividend("1120", 1.25, "2025-06-01", "2025-07-01", item)]
+
+
+@pytest.mark.asyncio
 async def test_get_dividends_falls_back_to_results_and_amount_field():
     client = AsyncMock()
     client.get_dividends.return_value = {"results": [{"amount": 2.0}]}
