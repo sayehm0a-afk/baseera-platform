@@ -62,9 +62,19 @@ jobs:
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
         run: |
+          # CSRFMiddleware (src/api/middleware/csrf.py) requires every
+          # non-GET /api/v1/* request made with a session cookie to echo
+          # the non-httpOnly csrf_token cookie back as X-CSRF-Token --
+          # read it straight out of curl's Netscape-format cookie jar.
+          CSRF_TOKEN=$(awk -F'\t' '$6 == "csrf_token" {print $7}' /tmp/staff_cookies.txt)
+          if [ -z "$CSRF_TOKEN" ]; then
+            echo "::error::No csrf_token cookie found after login."
+            exit 1
+          fi
           HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
             -X POST "$BACKEND_URL/api/v1/market/scan" \
             -H "Content-Type: application/json" \
+            -H "X-CSRF-Token: $CSRF_TOKEN" \
             -d '{}' \
             -o /tmp/scan_create.json -w "%{http_code}")
           echo "HTTP $HTTP_CODE"
