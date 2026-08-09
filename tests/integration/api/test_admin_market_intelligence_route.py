@@ -1271,3 +1271,93 @@ def test_symbol_lookup_diagnostics_surfaces_real_sector_from_company_profile(
     quote_check = body["results"][0]["quote"]
     assert quote_check["raw_sector"] is None
     assert quote_check["raw_industry"] is None
+
+
+def test_symbol_lookup_diagnostics_dividends_raw_surfaces_true_response_shape(
+    client, session_factory, as_staff, monkeypatch
+):
+    """Real evidence for the dividends-coverage investigation: the
+    diagnostic must call SAHMK's dividends endpoint directly (bypassing
+    SahmkMarketDataService.get_dividends()'s "dividends"/"results" key
+    lookup) and report the true top-level key SAHMK actually used, plus
+    the real item count -- so a parsing-code mismatch (wrong key name)
+    is directly distinguishable from a genuine zero-dividend response,
+    never guessed."""
+    from src.market_data import fundamental_provider_factory, provider_factory
+    from src.market_data.providers.sahmk_fundamental_data_provider import SahmkFundamentalDataProvider
+    from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
+
+    market_provider = SahmkMarketDataProvider(api_endpoint="https://sahmk.example.invalid", api_key="key")
+
+    async def _fake_get_symbol_directory():
+        return [{"symbol": "1120"}]
+
+    async def _fake_get_latest_quote(symbol):
+        return {"symbol": symbol, "price": 84.0}
+
+    async def _fake_get_company_profile(symbol):
+        return {"symbol": symbol, "name": "Al Rajhi Bank"}
+
+    async def _fake_get_stock_data(symbol):
+        return {"symbol": symbol, "close": 84.0}
+
+    market_provider.get_symbol_directory = _fake_get_symbol_directory
+    market_provider.get_latest_quote = _fake_get_latest_quote
+    market_provider.get_company_profile = _fake_get_company_profile
+    market_provider.get_stock_data = _fake_get_stock_data
+
+    fundamental_provider = SahmkFundamentalDataProvider(api_endpoint="https://sahmk.example.invalid", api_key="key")
+
+    async def _fake_get_dividends(symbol):
+        return []
+
+    async def _fake_get_fundamentals(symbol, period_type="annual"):
+        return {"symbol": symbol}
+
+    fundamental_provider.get_dividends = _fake_get_dividends
+    fundamental_provider.get_fundamentals = _fake_get_fundamentals
+
+    # The raw, unparsed client response -- deliberately uses a top-level
+    # key ("dividend_history") that service.py's real lookup does NOT
+    # check for, so this test proves the diagnostic surfaces the
+    # mismatch instead of silently agreeing with the (buggy) parsed
+    # empty-list answer above.
+    async def _fake_raw_get_dividends(symbol):
+        return {
+            "dividend_history": [
+                {"amount": 1.25, "ex_dividend_date": "2026-03-01", "pay_date": "2026-03-15"},
+            ]
+        }
+
+    fundamental_provider._service._client.get_dividends = _fake_raw_get_dividends
+
+    async def _fake_get_market_provider(force_refresh=False):
+        return market_provider
+
+    async def _fake_get_fundamental_provider(force_refresh=False):
+        return fundamental_provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_market_provider)
+    monkeypatch.setattr(fundamental_provider_factory, "get_fundamental_data_provider", _fake_get_fundamental_provider)
+
+    response = client.get(
+        "/api/v1/admin/market-intelligence/symbol-lookup-diagnostics", params={"symbols": "1120"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    result = body["results"][0]
+
+    # The parsed provider-level check still reports "available" with an
+    # empty list (service.py's key lookup missed "dividend_history").
+    assert result["dividends"]["available"] is True
+
+    # The raw check proves WHY: the true top-level key was
+    # "dividend_history", holding 1 real item -- never fabricated, a
+    # direct passthrough of what SAHMK actually returned.
+    raw = result["dividends_raw"]
+    assert raw["available"] is True
+    assert raw["raw_keys"] == ["dividend_history"]
+    assert "dividend_history" in raw["detail"]
+    assert "item_count=1" in raw["detail"]
+    assert "amount" in raw["detail"]

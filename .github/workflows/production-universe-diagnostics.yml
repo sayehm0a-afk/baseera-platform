@@ -15,7 +15,17 @@ name: Production Universe Diagnostics (temporary, one-shot, read-only)
 # ingestion pass -- read-only.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: >
+          Comma-separated symbols for symbol-lookup-diagnostics (defaults to
+          the route's own built-in discovery-test pair if left blank). Set
+          this to real, established dividend-paying symbols (e.g.
+          2222,1120,1180,2050,1211) to investigate the dividends-coverage
+          question instead of the discovery-cap question.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -86,6 +96,7 @@ jobs:
       - name: Fetch symbol-lookup diagnostics (real per-symbol SAHMK calls for symbols outside the ~100-instrument directory)
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          SYMBOLS_INPUT: ${{ inputs.symbols }}
         run: |
           # 60s was not enough on a real dispatch after the directory grew
           # to 517 instruments (run 31263530580: curl (28) timeout, 0 bytes
@@ -95,8 +106,12 @@ jobs:
           # cumulative real-API latency, not a bug. 180s gives real
           # headroom without masking a genuine hang (job-level timeout is
           # still a hard 8-minute backstop above).
+          SYMBOLS_QS=""
+          if [ -n "${SYMBOLS_INPUT:-}" ]; then
+            SYMBOLS_QS="?symbols=$(python3 -c "import urllib.parse,os; print(urllib.parse.quote(os.environ['SYMBOLS_INPUT']))")"
+          fi
           HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 180 -b /tmp/staff_cookies.txt \
-            "$BACKEND_URL/api/v1/admin/market-intelligence/symbol-lookup-diagnostics" \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/symbol-lookup-diagnostics$SYMBOLS_QS" \
             -o /tmp/symbol_lookup_diagnostics.json -w "%{http_code}")
           echo "HTTP $HTTP_CODE"
           python3 -m json.tool /tmp/symbol_lookup_diagnostics.json
