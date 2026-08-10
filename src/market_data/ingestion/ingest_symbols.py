@@ -18,11 +18,13 @@ constraint is the real duplicate-prevention backstop.
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
 from src.domain.models import Stock
+from src.market_data.ingestion import config as ingestion_config
 from src.market_data.ingestion._common import (
     UNCLASSIFIED_BUCKET,
     IngestionResult,
@@ -80,6 +82,43 @@ def _apply_entry(stock: Stock, entry: Dict[str, Any]) -> bool:
         stock.exchange = exchange
         changed = True
     return changed
+
+
+def _needs_sector_enrichment(stock: Stock, entry: Optional[Dict[str, Any]]) -> bool:
+    """True when a per-symbol get_company_profile() call is worth making
+    just for sector/industry enrichment.
+
+    2026-08-09 production evidence: SAHMK's bulk /companies/ directory
+    never carries sector data (0/518 real directory entries had one),
+    while the per-symbol /company/{symbol}/ endpoint does -- this is
+    the confirmed root cause of sector coverage sitting at 5/385 active
+    equities (exactly the symbols that happened to go through the
+    per-symbol fallback below before auto-discovery started reporting
+    them via the directory instead). Returns False once real sector
+    data exists (nothing to enrich -- also what makes this
+    quota-efficient on every run after the first: already-populated
+    symbols are never re-fetched), or when a real check already ran
+    recently and genuinely found nothing (bounded retry via
+    sector_checked_at + get_sector_recheck_days(), so a real provider
+    gap isn't hammered every single sync run forever). Always False for
+    an inactive/excluded instrument (REIT/ETF/SUKUK/etc.) -- those have
+    no sector to enrich and a per-symbol company-profile call for one
+    would be wasted quota."""
+    if not stock.is_active:
+        return False
+    if entry is None:
+        return True  # original fallback: no directory hit at all
+    if entry.get("sector"):
+        return False  # this call's own data already has it
+    if stock.sector:
+        return False  # already known from an earlier enrichment pass
+    if stock.sector_checked_at is None:
+        return True  # never checked per-symbol -- worth a real attempt
+    checked_at = stock.sector_checked_at
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=timezone.utc)
+    recheck_after = checked_at + timedelta(days=ingestion_config.get_sector_recheck_days())
+    return datetime.now(timezone.utc) >= recheck_after
 
 
 _QUARANTINE_REASON = (
@@ -172,12 +211,16 @@ async def sync_symbols(
         try:
             stock = get_or_create_stock(session, symbol, trusted=symbol in explicit_symbols)
             entry: Optional[Dict[str, Any]] = directory_entries.get(symbol)
-            if entry is None:
-                profile_fn = getattr(provider, "get_company_profile", None)
-                if profile_fn is not None:
-                    entry = await profile_fn(symbol)
             if entry is not None and _apply_entry(stock, entry):
                 result.rows_upserted += 1
+
+            if _needs_sector_enrichment(stock, entry):
+                profile_fn = getattr(provider, "get_company_profile", None)
+                if profile_fn is not None:
+                    profile_entry = await profile_fn(symbol)
+                    stock.sector_checked_at = datetime.now(timezone.utc)
+                    if _apply_entry(stock, profile_entry):
+                        result.rows_upserted += 1
             session.commit()
             result.symbols_succeeded += 1
         except Exception as exc:

@@ -128,6 +128,124 @@ async def test_skipped_entirely_when_provider_has_no_dividend_support(session_fa
 
 
 @pytest.mark.asyncio
+async def test_dedups_same_ex_date_revised_payment_date_without_crashing(session_factory):
+    """2026-08-09 production evidence (stock_id 21, ex_date 2024-08-11):
+    SAHMK's raw history returned two entries for the same ex_date, same
+    amount, differing payment_date -- a payment-date revision, not two
+    distinct dividends. Before the dedup fix this crashed the whole
+    symbol's commit with a uq_dividend_identity UniqueViolation."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_dividends = AsyncMock(
+        return_value=[
+            {
+                "dividend_per_share": 0.8,
+                "ex_date": "2024-08-11",
+                "payment_date": "2024-08-10",
+                "source": "sahmk",
+                "is_synthetic": False,
+            },
+            {
+                "dividend_per_share": 0.8,
+                "ex_date": "2024-08-11",
+                "payment_date": "2024-08-22",  # revised payment_date, same event
+                "source": "sahmk",
+                "is_synthetic": False,
+            },
+        ]
+    )
+
+    result = await ingest_dividends(["2222"], provider, session_factory)
+
+    assert result.symbols_succeeded == 1
+    assert result.symbols_failed == 0
+    assert result.rows_upserted == 1
+
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="2222").one()
+    dividends = session.query(Dividend).filter_by(stock_id=stock.id).all()
+    assert len(dividends) == 1
+    # Deterministic tie-break keeps the latest payment_date.
+    assert dividends[0].payment_date.isoformat() == "2024-08-22"
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_dedups_exact_duplicate_raw_entries(session_factory):
+    """2026-08-09 production evidence (stock_id 9633, ex_date 2025-10-02):
+    SAHMK's raw history contained the exact same entry twice (same
+    amount, same null payment_date) -- a genuine provider-side duplicate
+    payload, not a revision."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_dividends = AsyncMock(
+        return_value=[
+            {
+                "dividend_per_share": 1.5,
+                "ex_date": "2025-10-02",
+                "payment_date": None,
+                "source": "sahmk",
+                "is_synthetic": False,
+            },
+            {
+                "dividend_per_share": 1.5,
+                "ex_date": "2025-10-02",
+                "payment_date": None,
+                "source": "sahmk",
+                "is_synthetic": False,
+            },
+        ]
+    )
+
+    result = await ingest_dividends(["2222"], provider, session_factory)
+
+    assert result.symbols_succeeded == 1
+    assert result.rows_upserted == 1
+
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="2222").one()
+    assert session.query(Dividend).filter_by(stock_id=stock.id).count() == 1
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_dedup_keeps_distinct_ex_dates_separate(session_factory):
+    """Dedup must never collapse genuinely distinct dividend events --
+    only exact ex_date collisions are ever merged."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_dividends = AsyncMock(
+        return_value=[
+            {
+                "dividend_per_share": 0.5,
+                "ex_date": "2023-06-22",
+                "payment_date": "2023-07-19",
+                "source": "sahmk",
+                "is_synthetic": False,
+            },
+            {
+                "dividend_per_share": 0.75,
+                "ex_date": "2022-06-28",
+                "payment_date": "2022-07-14",
+                "source": "sahmk",
+                "is_synthetic": False,
+            },
+        ]
+    )
+
+    result = await ingest_dividends(["2222"], provider, session_factory)
+    assert result.rows_upserted == 2
+
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="2222").one()
+    assert session.query(Dividend).filter_by(stock_id=stock.id).count() == 2
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_isolates_per_symbol_failures(session_factory):
     provider = AsyncMock()
     provider.authenticate = AsyncMock(return_value=True)

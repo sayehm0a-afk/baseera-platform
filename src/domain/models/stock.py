@@ -42,6 +42,15 @@ class Stock(Base):
     instrument_bucket = Column(String(64), nullable=True)
     exclusion_reason = Column(String(255), nullable=True)
     listed_at = Column(DateTime(timezone=True), nullable=True)
+    # Set whenever a per-symbol company-profile fetch was attempted for
+    # sector/industry enrichment (sync_symbols.py), regardless of
+    # whether it actually found a sector -- lets that job skip retrying
+    # a symbol SAHMK genuinely has no sector data for on every run
+    # forever, while still rechecking it periodically in case the
+    # provider adds the data later. Never set for a symbol whose
+    # sector came straight from the bulk directory pass (no per-symbol
+    # call was made, nothing to bound).
+    sector_checked_at = Column(DateTime(timezone=True), nullable=True)
     # server_default (not just the Python-side `default=`) so any insert
     # that bypasses the SQLAlchemy ORM (raw SQL, a future async engine
     # path) still satisfies the NOT NULL constraint -- required for the
