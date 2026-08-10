@@ -238,6 +238,22 @@ class AdminDashboardSummaryOut(BaseModel):
 
     market_data_provider: Optional[str] = None
     market_data_health: Optional[str] = None
+
+    # Real-provider observability additions -- all read-only, zero-
+    # network-call snapshots of state some other real call already
+    # established (never a fresh SAHMK probe just to view this
+    # dashboard). market_data_status is the honest "can a user trust
+    # what's on screen right now" answer: LIVE | STALE | DEGRADED |
+    # UNAVAILABLE (see _classify_market_data_status in the route),
+    # never fabricated as healthy when SAHMK's own real quota-exhaustion
+    # evidence (sahmk_quota_status.upstream_confirmed_exhausted) or an
+    # OPEN circuit breaker say otherwise.
+    market_data_status: str = "UNAVAILABLE"
+    market_data_circuit_breaker_state: Optional[str] = None
+    market_data_last_connectivity_status: Optional[str] = None
+    market_data_last_connectivity_at: Optional[str] = None
+    market_data_last_real_data_at: Optional[str] = None
+
     new_users_last_24h: int
     new_users_last_7d: int
     logins_last_24h: int
@@ -272,9 +288,15 @@ class AdminDashboardSummaryOut(BaseModel):
     strict_real_data_enforced: bool
     scan_lock_active: bool
 
-    # SAHMK request-budget visibility (this process's own tracked usage
-    # only -- see src.market_data.sahmk.rate_limiter.SahmkRateLimiter.
-    # get_status()'s docstring on why this is not cross-process
-    # coordinated). None only if the rate limiter itself could not be
-    # read, never a placeholder for "unknown."
+    # SAHMK request-budget visibility -- see
+    # src.market_data.sahmk.rate_limiter.SahmkRateLimiter.get_status()'s
+    # docstring. Reconciled against real cross-worker Redis-persisted
+    # counts when Redis is reachable (quota_shared_across_workers=True
+    # in the payload), and against SAHMK's own real 429 evidence
+    # (upstream_confirmed_exhausted/upstream_reset_at_utc/
+    # upstream_exhaustion_evidence) -- remaining_today is forced to 0
+    # whenever that evidence says the account is exhausted, regardless
+    # of what the optimistic local count would otherwise show. None
+    # only if the rate limiter itself could not be read, never a
+    # placeholder for "unknown."
     sahmk_quota_status: Optional[Dict[str, Any]] = None

@@ -8,6 +8,7 @@ process reach its datastores."
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, text
@@ -23,6 +24,49 @@ from src.domain.models import StaffRole, User
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/system", tags=["admin"])
+
+
+def _classify_market_data_health(health_snapshot: Dict[str, Any], breaker_state: Optional[str]) -> str:
+    """"healthy" | "degraded" | "unhealthy" -- derived entirely from
+    already-known state (no network call). A quota-exhausted or
+    breaker-open condition is "degraded," not silently "healthy": the
+    provider itself may be fine, but this integration currently cannot
+    use it."""
+    if not health_snapshot.get("sahmk_key_present", True):
+        return "unhealthy"
+    if breaker_state == "OPEN":
+        return "degraded"
+    if health_snapshot.get("current_provider_kind") == "sahmk" and health_snapshot.get(
+        "last_connectivity_status"
+    ) == "SUCCESS":
+        return "healthy"
+    if health_snapshot.get("current_provider_kind") is None:
+        return "unhealthy"
+    return "degraded"
+
+
+def _classify_market_data_status(
+    health_snapshot: Dict[str, Any], quota_status: Optional[Dict[str, Any]], breaker_state: Optional[str]
+) -> str:
+    """"LIVE" | "STALE" | "DEGRADED" | "UNAVAILABLE" -- the honest,
+    evidence-based answer to "can a user trust the market data on
+    screen right now," never fabricated. Real SAHMK quota exhaustion
+    (provider truth, see SahmkRateLimiter.get_status()) always wins
+    over an optimistic last_connectivity_status."""
+    if quota_status and quota_status.get("upstream_confirmed_exhausted"):
+        return "DEGRADED"
+    if breaker_state == "OPEN":
+        return "DEGRADED"
+    kind = health_snapshot.get("current_provider_kind")
+    if kind is None:
+        return "UNAVAILABLE"
+    if kind != "sahmk":
+        return "DEGRADED"  # synthetic/dev fallback -- never presented as live real data
+    if health_snapshot.get("last_connectivity_status") == "SUCCESS":
+        return "LIVE"
+    if health_snapshot.get("last_real_data_at") is not None:
+        return "STALE"
+    return "UNAVAILABLE"
 
 
 @router.get("/health", response_model=SystemHealthOut)
@@ -75,16 +119,47 @@ async def get_dashboard_summary(
         logger.error("Admin dashboard summary: redis probe failed: %s", exc)
         redis_health = "unhealthy"
 
+    # Deliberately zero-network-call: this used to call
+    # get_market_data_provider() + provider.health_check() live, on
+    # every dashboard load -- each a real SAHMK connectivity probe
+    # (2026-08-10 production evidence: this endpoint was itself
+    # burning SAHMK quota just to be viewed, and under STRICT_REAL_DATA
+    # a probe failure raised StrictRealDataUnavailableError, silently
+    # swallowed by the bare except below into an uninformative None/
+    # None -- exactly when a real degraded state most needed to be
+    # visible). get_market_data_health() and the two accessors below
+    # only ever read state some *other* real call already established;
+    # they never touch the network themselves.
     market_data_provider = None
     market_data_health = None
+    market_data_status = "UNAVAILABLE"
+    market_data_circuit_breaker_state = None
     try:
-        from src.market_data.provider_factory import get_last_selected_provider_kind, get_market_data_provider
+        from src.market_data.provider_factory import (
+            get_cached_provider_circuit_breaker_state,
+            get_last_selected_provider_kind,
+            get_market_data_health,
+        )
 
-        market_provider = await get_market_data_provider()
+        health_snapshot = get_market_data_health()
         market_data_provider = get_last_selected_provider_kind()
-        market_data_health = (await market_provider.health_check()).value
+        market_data_circuit_breaker_state = get_cached_provider_circuit_breaker_state()
     except Exception as exc:
-        logger.error("Admin dashboard summary: market data provider probe failed: %s", exc)
+        logger.error("Admin dashboard summary: market data diagnostics read failed: %s", exc)
+        health_snapshot = {}
+
+    try:
+        from src.market_data.sahmk.rate_limiter import get_default_rate_limiter
+
+        sahmk_quota_status = get_default_rate_limiter().get_status()
+    except Exception as exc:
+        logger.error("Admin dashboard summary: SAHMK quota status read failed: %s", exc)
+        sahmk_quota_status = None
+
+    market_data_health = _classify_market_data_health(health_snapshot, market_data_circuit_breaker_state)
+    market_data_status = _classify_market_data_status(
+        health_snapshot, sahmk_quota_status, market_data_circuit_breaker_state
+    )
 
     now = datetime.now(timezone.utc)
     day_ago = now - timedelta(days=1)
@@ -120,14 +195,6 @@ async def get_dashboard_summary(
     )
     market_info = get_market_status()
 
-    try:
-        from src.market_data.sahmk.rate_limiter import get_default_rate_limiter
-
-        sahmk_quota_status = get_default_rate_limiter().get_status()
-    except Exception as exc:
-        logger.error("Admin dashboard summary: SAHMK quota status read failed: %s", exc)
-        sahmk_quota_status = None
-
     return AdminDashboardSummaryOut(
         app_version=main.app.version,
         deployment_commit=settings.deployment_commit,
@@ -147,6 +214,11 @@ async def get_dashboard_summary(
         ),
         market_data_provider=market_data_provider,
         market_data_health=market_data_health,
+        market_data_status=market_data_status,
+        market_data_circuit_breaker_state=market_data_circuit_breaker_state,
+        market_data_last_connectivity_status=health_snapshot.get("last_connectivity_status"),
+        market_data_last_connectivity_at=health_snapshot.get("last_connectivity_at"),
+        market_data_last_real_data_at=health_snapshot.get("last_real_data_at"),
         new_users_last_24h=new_users_last_24h,
         new_users_last_7d=new_users_last_7d,
         logins_last_24h=logins_last_24h,

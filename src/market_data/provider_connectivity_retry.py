@@ -38,11 +38,13 @@ from src.market_data import config as market_data_config
 from src.market_data.sahmk.exceptions import (
     SahmkAuthenticationError,
     SahmkConfigurationError,
+    SahmkDailyQuotaExhaustedError,
     SahmkEntitlementError,
     SahmkRateLimitError,
     SahmkRequestError,
     SahmkResponseValidationError,
 )
+from src.market_data.sahmk.rate_limiter import SahmkUpstreamQuotaExhaustedError
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +103,26 @@ async def probe_connectivity_with_retry(
             )
             delay = _backoff_delay(attempt, base_delay, max_delay)
             _log_retry_or_exhausted(provider_label, "timeout", attempt, max_attempts, delay)
+        except SahmkDailyQuotaExhaustedError:
+            # SAHMK's own real evidence says today's account-wide quota
+            # is spent for hours, not seconds -- retrying within this
+            # function's few-second backoff window would just be
+            # another wasted attempt against a known-exhausted budget
+            # (SahmkClient.record_upstream_daily_exhaustion has already
+            # recorded the real reset time by the time this is raised;
+            # acquire() will short-circuit every other caller, this
+            # process and every other worker, without even reaching the
+            # network). Never retried here, same as the other
+            # deterministic/permanent outcomes below.
+            raise
+        except SahmkUpstreamQuotaExhaustedError:
+            # The rate limiter itself refused before any network call
+            # was made, because a prior real 429 (this attempt or
+            # another caller/worker entirely) already recorded SAHMK's
+            # exhaustion evidence. Exactly as permanent as the case
+            # above for the remainder of the hold window -- never
+            # retried.
+            raise
         except SahmkRateLimitError as exc:
             last_exc = exc
             delay = min(exc.retry_after, max_delay) if exc.retry_after else _backoff_delay(

@@ -184,6 +184,25 @@ def get_last_selected_provider_kind() -> Optional[str]:
     return _cached_provider_kind
 
 
+def get_cached_provider_circuit_breaker_state() -> Optional[str]:
+    """"CLOSED" | "OPEN" | "HALF_OPEN" | None -- reads the *currently
+    cached* provider's own SahmkClient circuit breaker state, purely
+    from memory (no network call, no cache refresh). None when nothing
+    is cached yet or the cached provider isn't a SahmkMarketDataProvider
+    (e.g. DevMarketDataProvider, which has no breaker at all).
+
+    Deliberately defensive (getattr chains, never raises): this is a
+    diagnostics-only accessor reaching into another module's internals
+    across three layers (provider -> service -> client -> breaker) --
+    any of them being reshaped later should degrade this to None, not
+    break the admin dashboard.
+    """
+    client = getattr(getattr(_cached_provider, "_service", None), "_client", None)
+    breaker = getattr(client, "_circuit_breaker", None)
+    state = getattr(breaker, "state", None)
+    return state.value if state is not None else None
+
+
 async def _select_provider(
     previous_provider: Optional[IMarketDataProvider] = None,
 ) -> Tuple[IMarketDataProvider, str]:

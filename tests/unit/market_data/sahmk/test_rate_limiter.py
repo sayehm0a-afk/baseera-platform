@@ -5,17 +5,77 @@ the expected wait duration instead of actually waiting."""
 
 import asyncio
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import src.market_data.sahmk.rate_limiter as rate_limiter_module
 from src.market_data.sahmk.rate_limiter import (
     SahmkQuotaReservedForCriticalError,
     SahmkRateLimitExceededError,
     SahmkRateLimiter,
+    SahmkUpstreamQuotaExhaustedError,
     get_default_rate_limiter,
     reset_default_rate_limiter,
 )
 from src.market_data.sahmk.request_priority import BACKGROUND, CRITICAL
+
+
+class _FakeRedisPipeline:
+    """Minimal stand-in for redis-py's Pipeline, backed by the same
+    in-memory hash store the fake client itself uses -- just enough of
+    the real interface (hincrby/expire/execute) for
+    SahmkRateLimiter._persist_day_counts_increment."""
+
+    def __init__(self, hashes: dict):
+        self._hashes = hashes
+        self._ops = []
+
+    def hincrby(self, key, field, amount):
+        self._ops.append(("hincrby", key, field, amount))
+        return self
+
+    def expire(self, key, seconds):
+        self._ops.append(("expire", key, seconds))
+        return self
+
+    def execute(self):
+        results = []
+        for op in self._ops:
+            if op[0] == "hincrby":
+                _, key, field, amount = op
+                bucket = self._hashes.setdefault(key, {})
+                bucket[field] = int(bucket.get(field, 0)) + amount
+                results.append(bucket[field])
+            else:
+                results.append(True)
+        self._ops = []
+        return results
+
+
+class _FakeRedis:
+    """In-memory stand-in for redis.Redis, covering exactly the
+    operations SahmkRateLimiter uses (get/setex for the
+    upstream-exhaustion flag, hincrby/hgetall/pipeline for the
+    persisted day counters) -- enough to prove real cross-instance
+    sharing (two SahmkRateLimiter objects given the *same* _FakeRedis*
+    instance) without a real Redis server."""
+
+    def __init__(self):
+        self._kv: dict = {}
+        self._hashes: dict = {}
+
+    def get(self, key):
+        return self._kv.get(key)
+
+    def set(self, key, value, ex=None):
+        self._kv[key] = value
+
+    def hgetall(self, key):
+        return dict(self._hashes.get(key, {}))
+
+    def pipeline(self):
+        return _FakeRedisPipeline(self._hashes)
 
 
 def test_rejects_non_positive_max_per_minute():
@@ -246,3 +306,174 @@ def test_default_singleton_enforces_the_confirmed_real_daily_quota(monkeypatch):
     assert limiter._max_per_day < 5000
     assert limiter._reserved_for_critical == 1000
     reset_default_rate_limiter()
+
+
+# --- provider-truth reconciliation (2026-08-10 production evidence) --------
+# Root cause fixed here: SahmkRateLimiter's own optimistic day_count
+# reported a healthy budget while SAHMK's real account-wide quota was
+# already exhausted for hours. record_upstream_daily_exhaustion() +
+# acquire()'s pre-check are what make provider truth override this
+# limiter's own estimate, with no assumed reset timezone anywhere.
+
+
+@pytest.mark.asyncio
+async def test_acquire_raises_immediately_after_upstream_exhaustion_recorded():
+    limiter = SahmkRateLimiter(max_per_minute=100, max_per_day=4500, redis_client=None)
+    limiter.record_upstream_daily_exhaustion(
+        retry_after_seconds=54711,
+        raw_message="Daily rate limit exceeded (5000 requests/day). Expected available in 54711 seconds.",
+    )
+    with pytest.raises(SahmkUpstreamQuotaExhaustedError) as excinfo:
+        await limiter.acquire()
+    assert excinfo.value.evidence is not None
+    assert "Daily rate limit exceeded" in excinfo.value.evidence
+
+
+@pytest.mark.asyncio
+async def test_upstream_exhaustion_never_sleeps(monkeypatch):
+    async def _fail_if_called(seconds):
+        raise AssertionError(f"asyncio.sleep should never be called here (got {seconds})")
+
+    limiter = SahmkRateLimiter(max_per_minute=100, redis_client=None)
+    limiter.record_upstream_daily_exhaustion(retry_after_seconds=3600, raw_message="daily rate limit exceeded")
+
+    monkeypatch.setattr(asyncio, "sleep", _fail_if_called)
+    with pytest.raises(SahmkUpstreamQuotaExhaustedError):
+        await limiter.acquire()
+
+
+@pytest.mark.asyncio
+async def test_upstream_exhaustion_expires_after_its_own_evidence_based_reset_time():
+    """No local day_count involved at all here -- proves the exhaustion
+    flag itself is time-bounded by SAHMK's own reported figure, not a
+    fixed/hard-coded schedule."""
+    limiter = SahmkRateLimiter(max_per_minute=100, redis_client=None)
+    limiter.record_upstream_daily_exhaustion(retry_after_seconds=3600, raw_message="daily rate limit exceeded")
+    # Simulate the reset instant having already passed.
+    limiter._local_upstream_reset_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await limiter.acquire()  # must not raise -- the recorded window has elapsed
+
+
+def test_record_upstream_exhaustion_without_retry_after_uses_a_conservative_default_hold():
+    limiter = SahmkRateLimiter(max_per_minute=100, redis_client=None)
+    before = datetime.now(timezone.utc)
+    limiter.record_upstream_daily_exhaustion(retry_after_seconds=None, raw_message="daily rate limit exceeded")
+    assert limiter._local_upstream_reset_at is not None
+    hold_seconds = (limiter._local_upstream_reset_at - before).total_seconds()
+    assert 3000 < hold_seconds <= 3700  # ~1h default hold, not a guessed 24h
+
+
+def test_get_status_reports_upstream_exhaustion_and_forces_remaining_to_zero():
+    limiter = SahmkRateLimiter(max_per_minute=20, max_per_day=4500, reserved_for_critical=1000, redis_client=None)
+    limiter.record_upstream_daily_exhaustion(
+        retry_after_seconds=54711,
+        raw_message="Daily rate limit exceeded (5000 requests/day). Expected available in 54711 seconds.",
+    )
+    status = limiter.get_status()
+    assert status["upstream_confirmed_exhausted"] is True
+    assert status["upstream_reset_at_utc"] is not None
+    assert "Daily rate limit exceeded" in status["upstream_exhaustion_evidence"]
+    # The core regression this fixes: never claim thousands of
+    # requests remain once SAHMK's own evidence says otherwise.
+    assert status["remaining_today"] == 0
+    assert status["remaining_today_for_background"] == 0
+
+
+def test_get_status_without_any_exhaustion_evidence_reports_false():
+    limiter = SahmkRateLimiter(max_per_minute=20, max_per_day=4500, redis_client=None)
+    status = limiter.get_status()
+    assert status["upstream_confirmed_exhausted"] is False
+    assert status["upstream_reset_at_utc"] is None
+    assert status["upstream_exhaustion_evidence"] is None
+    assert status["remaining_today"] == 4500
+
+
+# --- Redis-backed cross-process/cross-worker sharing ------------------------
+
+
+@pytest.mark.asyncio
+async def test_upstream_exhaustion_is_shared_across_instances_via_redis():
+    """The actual production scenario: one worker's real 429 must stop
+    every other worker (a separate SahmkRateLimiter instance here,
+    standing in for a separate process) from independently believing
+    quota remains."""
+    shared_redis = _FakeRedis()
+    worker_a = SahmkRateLimiter(max_per_minute=100, max_per_day=4500, redis_client=shared_redis)
+    worker_b = SahmkRateLimiter(max_per_minute=100, max_per_day=4500, redis_client=shared_redis)
+
+    worker_a.record_upstream_daily_exhaustion(
+        retry_after_seconds=3600, raw_message="Daily rate limit exceeded (5000 requests/day)."
+    )
+
+    with pytest.raises(SahmkUpstreamQuotaExhaustedError):
+        await worker_b.acquire()
+
+
+def test_quota_shared_across_workers_flag_reflects_redis_availability():
+    with_redis = SahmkRateLimiter(max_per_minute=20, redis_client=_FakeRedis())
+    assert with_redis.get_status()["quota_shared_across_workers"] is True
+
+
+@pytest.mark.asyncio
+async def test_day_counts_reconcile_from_redis_across_instances():
+    """A fresh/restarted process (worker_b, zero local history) must
+    pick up real usage another worker already made today instead of
+    believing it has the full budget to itself."""
+    shared_redis = _FakeRedis()
+    worker_a = SahmkRateLimiter(max_per_minute=100, max_per_day=4500, redis_client=shared_redis)
+    worker_b = SahmkRateLimiter(max_per_minute=100, max_per_day=4500, redis_client=shared_redis)
+
+    for _ in range(3):
+        await worker_a.acquire(priority=CRITICAL)
+    await worker_a.acquire(priority=BACKGROUND)
+
+    status_b = worker_b.get_status()
+    assert status_b["requests_used_today"] >= 4
+    assert status_b["critical_requests_used_today"] >= 3
+    assert status_b["background_requests_used_today"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_redis_failure_degrades_to_in_process_tracking_without_raising(monkeypatch):
+    """Redis being unreachable (the common case in this test suite and
+    in any environment without Redis configured) must never itself
+    block or crash a legitimate SAHMK request."""
+
+    class _BrokenRedis:
+        def get(self, *_a, **_kw):
+            raise ConnectionError("simulated Redis outage")
+
+        def set(self, *_a, **_kw):
+            raise ConnectionError("simulated Redis outage")
+
+        def hgetall(self, *_a, **_kw):
+            raise ConnectionError("simulated Redis outage")
+
+        def pipeline(self):
+            raise ConnectionError("simulated Redis outage")
+
+    limiter = SahmkRateLimiter(max_per_minute=100, max_per_day=10, redis_client=_BrokenRedis())
+    await limiter.acquire()  # must not raise despite every Redis call failing
+    status = limiter.get_status()
+    assert status["requests_used_today"] == 1
+    assert status["quota_shared_across_workers"] is True  # a client is configured, even if unreachable
+
+
+def test_shared_redis_client_construction_failure_degrades_to_none(monkeypatch):
+    """If settings.redis_dsn itself can't even build a client (missing/
+    malformed config), the module-wide singleton must return None
+    forever for this process rather than raise -- exercised via the
+    default (no explicit redis_client=) singleton path."""
+    monkeypatch.setattr(rate_limiter_module, "_shared_redis_client_attempted", False)
+    monkeypatch.setattr(rate_limiter_module, "_shared_redis_client", None)
+
+    def _raise(*_a, **_kw):
+        raise RuntimeError("simulated: cannot construct a Redis client")
+
+    monkeypatch.setattr(rate_limiter_module.redis_lib.Redis, "from_url", staticmethod(_raise))
+
+    assert rate_limiter_module._get_shared_redis_client() is None
+    # Cached -- a second call doesn't attempt construction again.
+    assert rate_limiter_module._get_shared_redis_client() is None
+
+    monkeypatch.setattr(rate_limiter_module, "_shared_redis_client_attempted", False)
