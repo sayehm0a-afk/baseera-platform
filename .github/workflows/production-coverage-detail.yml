@@ -78,6 +78,9 @@ jobs:
           print('live_market_mode_market_currently_open:', d.get('live_market_mode_market_currently_open'))
           print('market_status:', d.get('market_status'), '|', d.get('market_status_label_ar'))
           print('market_data_provider:', d.get('market_data_provider'), '| market_data_health:', d.get('market_data_health'))
+          print()
+          print('=== sahmk_quota_status ===')
+          print(json.dumps(d.get('sahmk_quota_status'), indent=2, ensure_ascii=False))
           "
 
       - name: Fetch coverage and print full ingestion job detail (including error_summary)
