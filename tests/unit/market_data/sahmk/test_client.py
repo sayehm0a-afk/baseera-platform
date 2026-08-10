@@ -294,6 +294,111 @@ async def test_429_recovers_once_rate_limit_clears():
     assert result == {"index_value": 5}
 
 
+# --- daily-quota exhaustion: a distinct, evidence-based outcome -------------
+# 2026-08-10 production evidence: SAHMK's real 429 body for a *daily*
+# exhaustion reads "Daily rate limit exceeded (5000 requests/day)...
+# Expected available in N seconds" -- distinguished from an ordinary
+# short-lived 429 (which stays SahmkRateLimitError/_RetryableSahmkError,
+# retried as before) so it is never retried and is recorded as real
+# quota-exhaustion evidence for every other caller/worker to see.
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_429_raises_immediately_without_retrying():
+    from src.market_data.sahmk.exceptions import SahmkDailyQuotaExhaustedError
+
+    client, session = _client(
+        [
+            FakeResponse(
+                429,
+                {
+                    "detail": (
+                        "Daily rate limit exceeded (5000 requests/day). Resets at midnight. "
+                        "Upgrade: https://www.sahmk.sa/developers/pricing "
+                        "Expected available in 54711 seconds."
+                    )
+                },
+            )
+        ]
+    )
+    with pytest.raises(SahmkDailyQuotaExhaustedError) as exc_info:
+        await client.get_market_summary("TASI")
+    assert len(session.calls) == 1  # never retried, unlike an ordinary 429
+    assert exc_info.value.retry_after_seconds == 54711.0
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_429_is_a_rate_limit_error_for_backward_compatibility():
+    """Existing callers written against the broader SahmkRateLimitError
+    (provider_connectivity_retry.py's generic except clause, before its
+    own more specific daily-quota clause) must still recognize this."""
+    from src.market_data.sahmk.exceptions import SahmkDailyQuotaExhaustedError
+
+    client, session = _client(
+        [FakeResponse(429, {"detail": "Daily rate limit exceeded (5000 requests/day)."})]
+    )
+    with pytest.raises(SahmkRateLimitError):
+        await client.get_market_summary("TASI")
+    assert issubclass(SahmkDailyQuotaExhaustedError, SahmkRateLimitError)
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_429_does_not_trip_the_circuit_breaker():
+    """A real daily-quota answer means SAHMK is healthy and reachable --
+    our account is just out of budget. Unlike a genuine 429 exhaustion
+    (test_circuit_breaker_opens_after_repeated_429_exhaustion above),
+    this must never count as a breaker failure -- otherwise every other
+    unrelated call on the same client would also be blocked for
+    recovery_timeout, on top of the real multi-hour quota wait."""
+    from src.market_data.sahmk.exceptions import SahmkDailyQuotaExhaustedError
+    from src.market_data.sahmk.rate_limiter import SahmkUpstreamQuotaExhaustedError
+
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=9999)
+    client, session = _client(
+        [FakeResponse(429, {"detail": "Daily rate limit exceeded (5000 requests/day)."})] * 2,
+        circuit_breaker=breaker,
+    )
+    with pytest.raises(SahmkDailyQuotaExhaustedError):
+        await client.get_market_summary("TASI")
+    # The first call's real 429 already recorded evidence on this
+    # client's own rate limiter -- the second call never reaches the
+    # network at all (short-circuited by acquire()), which is an even
+    # stronger proof of "no request storm" than reaching SAHMK again.
+    # If the breaker HAD tripped instead, this would raise
+    # CircuitBreakerOpenError, not SahmkUpstreamQuotaExhaustedError.
+    with pytest.raises(SahmkUpstreamQuotaExhaustedError):
+        await client.get_market_summary("TASI")
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_429_records_evidence_on_the_rate_limiter():
+    limiter = SahmkRateLimiter(max_per_minute=1_000_000, redis_client=None)
+    client, session = _client(
+        [FakeResponse(429, {"detail": "Daily rate limit exceeded (5000 requests/day). Expected available in 120 seconds."})],
+        rate_limiter=limiter,
+    )
+    with pytest.raises(Exception):
+        await client.get_market_summary("TASI")
+
+    status = limiter.get_status()
+    assert status["upstream_confirmed_exhausted"] is True
+    assert "Daily rate limit exceeded" in status["upstream_exhaustion_evidence"]
+
+
+@pytest.mark.asyncio
+async def test_ordinary_429_without_daily_wording_is_still_retried_normally():
+    """A short per-second/per-minute 429 (no "daily" wording at all)
+    must keep using the existing retryable path -- this fix only
+    changes behavior for a real, recognized daily-exhaustion body."""
+    client, session = _client(
+        [FakeResponse(429, {"detail": "Too many requests, slow down."}), FakeResponse(200, {"index_value": 7})]
+    )
+    result = await client.get_market_summary("TASI")
+    assert result == {"index_value": 7}
+    assert len(session.calls) == 2
+
+
 # --- circuit breaker -------------------------------------------------------
 
 

@@ -11,6 +11,8 @@ import asyncio
 
 import pytest
 
+from datetime import datetime, timezone
+
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.market_data.provider_connectivity_retry import (
     ProviderProbeTimeoutError,
@@ -19,10 +21,12 @@ from src.market_data.provider_connectivity_retry import (
 from src.market_data.sahmk.exceptions import (
     SahmkAuthenticationError,
     SahmkConfigurationError,
+    SahmkDailyQuotaExhaustedError,
     SahmkRateLimitError,
     SahmkRequestError,
     SahmkResponseValidationError,
 )
+from src.market_data.sahmk.rate_limiter import SahmkUpstreamQuotaExhaustedError
 
 
 @pytest.fixture(autouse=True)
@@ -205,3 +209,48 @@ async def test_all_retries_exhausted_on_repeated_transient_request_error():
     with pytest.raises(SahmkRequestError):
         await probe_connectivity_with_retry(_check, provider_label="test")
     assert call_count == 3
+
+
+# --- daily-quota exhaustion: never retried (2026-08-10 production evidence) -
+# A real 429 "Daily rate limit exceeded (5000 requests/day)" means
+# hours, not seconds, until recovery -- retrying it here would just be
+# another wasted request/backoff-sleep against a known-exhausted
+# budget. Both the exception client.py raises on a fresh 429 AND the
+# one SahmkRateLimiter raises when a *different* caller already
+# recorded that same evidence must short-circuit identically.
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_exhausted_error_does_not_retry():
+    call_count = 0
+
+    async def _check():
+        nonlocal call_count
+        call_count += 1
+        raise SahmkDailyQuotaExhaustedError(
+            "SAHMK daily quota exhausted (429): Daily rate limit exceeded (5000 requests/day). "
+            "Expected available in 54711 seconds.",
+            retry_after_seconds=54711,
+        )
+
+    with pytest.raises(SahmkDailyQuotaExhaustedError):
+        await probe_connectivity_with_retry(_check, provider_label="test")
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_upstream_quota_exhausted_error_does_not_retry():
+    call_count = 0
+
+    async def _check():
+        nonlocal call_count
+        call_count += 1
+        raise SahmkUpstreamQuotaExhaustedError(
+            "SAHMK's real daily quota is confirmed exhausted.",
+            reset_at_utc=datetime.now(timezone.utc),
+            evidence="Daily rate limit exceeded (5000 requests/day).",
+        )
+
+    with pytest.raises(SahmkUpstreamQuotaExhaustedError):
+        await probe_connectivity_with_retry(_check, provider_label="test")
+    assert call_count == 1

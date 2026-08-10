@@ -44,6 +44,33 @@ class SahmkRateLimitError(SahmkError):
         self.retry_after = retry_after
 
 
+class SahmkDailyQuotaExhaustedError(SahmkRateLimitError):
+    """A 429 whose response body was recognized as SAHMK's real,
+    evidence-based *daily* quota exhaustion (e.g. "Daily rate limit
+    exceeded (5000 requests/day)... Expected available in N seconds"),
+    as opposed to a short-lived per-second/per-minute burst 429.
+
+    2026-08-10 production evidence: SahmkRateLimiter's own local daily
+    counter (UTC-midnight reset) can show a healthy remaining budget
+    while SAHMK's real account-wide quota is already exhausted for
+    several more hours -- the local counter is only ever an optimistic
+    estimate, never authoritative. This distinct exception type is
+    what lets callers (provider_connectivity_retry.py's retry
+    wrapper, SahmkRateLimiter.record_upstream_daily_exhaustion) treat
+    "SAHMK told us, in its own words, that today's quota is spent"
+    completely differently from a transient rate limit: never retried
+    (retrying a multi-hour exhaustion within a few seconds of backoff
+    is pure waste), and recorded as the current real-world quota truth
+    so every other request/worker/process stops hammering SAHMK until
+    the evidence-based reset time SAHMK itself reported, not a
+    guessed one.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: Optional[float] = None, **kwargs):
+        super().__init__(message, retry_after=retry_after_seconds, **kwargs)
+        self.retry_after_seconds = retry_after_seconds
+
+
 class SahmkResponseValidationError(SahmkError):
     """The response was a 2xx but did not contain the fields this
     integration requires -- never fabricated, always raised instead."""

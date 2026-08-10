@@ -176,6 +176,44 @@ async def test_get_last_selected_provider_kind_none_before_any_selection():
     assert provider_factory.get_last_selected_provider_kind() is None
 
 
+# --- get_cached_provider_circuit_breaker_state ------------------------------
+# Backs the admin dashboard's zero-network-call market-data
+# observability (Priority B, 2026-08-10): purely reads whatever the
+# currently cached provider's own breaker already knows, never
+# triggers a fresh probe.
+
+
+def test_circuit_breaker_state_none_before_any_selection():
+    assert provider_factory.get_cached_provider_circuit_breaker_state() is None
+
+
+def test_circuit_breaker_state_none_for_a_provider_shape_without_one():
+    """DevMarketDataProvider (and this test file's _FakeSahmkProvider)
+    have no ._service._client._circuit_breaker chain at all -- the
+    accessor must degrade to None, not raise."""
+    provider_factory._cached_provider = DevMarketDataProvider()
+    assert provider_factory.get_cached_provider_circuit_breaker_state() is None
+
+
+def test_circuit_breaker_state_reads_the_real_nested_breaker():
+    from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerState
+
+    class _FakeBreaker:
+        state = CircuitBreakerState.OPEN
+
+    class _FakeClient:
+        _circuit_breaker = _FakeBreaker()
+
+    class _FakeService:
+        _client = _FakeClient()
+
+    class _FakeProvider:
+        _service = _FakeService()
+
+    provider_factory._cached_provider = _FakeProvider()
+    assert provider_factory.get_cached_provider_circuit_breaker_state() == "OPEN"
+
+
 # --- regression: aiohttp ClientSession concurrency bug (superseded
 # providers being closed out from under a still-in-flight caller) ---
 #

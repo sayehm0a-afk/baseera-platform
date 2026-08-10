@@ -29,6 +29,7 @@ is the layer that turns those into typed models and adds caching.
 
 import asyncio
 import logging
+import re
 from datetime import date
 from typing import Any, Dict, Optional
 
@@ -40,6 +41,7 @@ from src.market_data import config as market_data_config
 from src.market_data.sahmk.exceptions import (
     SahmkAuthenticationError,
     SahmkConfigurationError,
+    SahmkDailyQuotaExhaustedError,
     SahmkEntitlementError,
     SahmkRateLimitError,
     SahmkRequestError,
@@ -49,6 +51,38 @@ from src.market_data.sahmk.request_priority import get_current_priority
 from src.market_data.validators.symbol_validator import validate_symbol_format
 
 logger = logging.getLogger(__name__)
+
+# Matches SAHMK's own real 429 wording, e.g. (production evidence,
+# 2026-08-10): "Daily rate limit exceeded (5000 requests/day). Resets
+# at midnight. Upgrade: https://www.sahmk.sa/developers/pricing
+# Expected available in 54711 seconds." Deliberately evidence-based --
+# no assumed reset timezone is hard-coded anywhere; the "Expected
+# available in N seconds" figure IS the reset time, straight from
+# SAHMK itself, whatever timezone its own "midnight" turns out to be.
+_DAILY_QUOTA_PATTERN = re.compile(r"daily rate limit exceeded", re.IGNORECASE)
+_EXPECTED_AVAILABLE_PATTERN = re.compile(r"expected available in\s+(\d+)\s+seconds", re.IGNORECASE)
+
+
+def _extract_daily_quota_evidence(body: Any) -> Optional["_DailyQuotaEvidence"]:
+    """Returns real evidence extracted from a 429 body if (and only if)
+    it matches SAHMK's own daily-quota-exhaustion wording -- None for
+    an ordinary short-lived rate limit (which should still be retried
+    normally). `body` may be a parsed dict (the common case -- SAHMK
+    returns JSON) or raw text (if the body wasn't valid JSON)."""
+    text = body.get("detail") if isinstance(body, dict) else body
+    if not isinstance(text, str) or not _DAILY_QUOTA_PATTERN.search(text):
+        return None
+    match = _EXPECTED_AVAILABLE_PATTERN.search(text)
+    retry_after_seconds = float(match.group(1)) if match else None
+    return _DailyQuotaEvidence(raw_message=text, retry_after_seconds=retry_after_seconds)
+
+
+class _DailyQuotaEvidence:
+    __slots__ = ("raw_message", "retry_after_seconds")
+
+    def __init__(self, raw_message: str, retry_after_seconds: Optional[float]):
+        self.raw_message = raw_message
+        self.retry_after_seconds = retry_after_seconds
 
 
 class _RetryableSahmkError(Exception):
@@ -196,6 +230,18 @@ class SahmkClient:
             # Raised here, outside circuit_breaker.execute()'s scope --
             # this is a real, surfaced error for the *caller*, but it is
             # deliberately never counted as a breaker failure.
+            if isinstance(outcome.exception, SahmkDailyQuotaExhaustedError):
+                # Records SAHMK's own real evidence so every other
+                # acquire() call -- this process and every other
+                # worker/deployment sharing the same persisted state --
+                # stops hammering SAHMK for nonessential requests until
+                # the reset time SAHMK itself reported, instead of each
+                # discovering the same exhaustion independently via its
+                # own wasted request.
+                self._rate_limiter.record_upstream_daily_exhaustion(
+                    retry_after_seconds=outcome.exception.retry_after_seconds,
+                    raw_message=str(outcome.exception),
+                )
             raise outcome.exception
         return outcome
 
@@ -265,6 +311,27 @@ class SahmkClient:
                 )
             )
         if status == 429:
+            daily_evidence = _extract_daily_quota_evidence(body)
+            if daily_evidence is not None:
+                # A real, deterministic "today's account-wide quota is
+                # spent" answer -- not a transient infrastructure
+                # blip. Returned as a _BusinessError (never raised
+                # inside circuit_breaker.execute()'s scope, never seen
+                # by tenacity's retry_if_exception_type(_RetryableSahmkError)
+                # predicate above) for exactly the same reason 401/403
+                # are: SAHMK is reachable and answered correctly, our
+                # account is just out of budget for the day. Retrying
+                # within a few seconds of backoff, or tripping the
+                # breaker as if SAHMK itself were unhealthy, would
+                # both be wrong.
+                return _BusinessError(
+                    SahmkDailyQuotaExhaustedError(
+                        f"SAHMK daily quota exhausted (429): {daily_evidence.raw_message}",
+                        status_code=status,
+                        body=body,
+                        retry_after_seconds=daily_evidence.retry_after_seconds,
+                    )
+                )
             raise _RetryableSahmkError(
                 f"SAHMK rate limit hit (429): {body}",
                 kind="rate_limit",
