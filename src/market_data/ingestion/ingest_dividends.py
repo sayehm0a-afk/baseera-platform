@@ -32,6 +32,58 @@ from src.market_data.providers.fundamental_data_provider import IFundamentalData
 logger = logging.getLogger(__name__)
 
 
+def _deduplicate_by_ex_date(symbol: str, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """2026-08-09 production evidence: SAHMK's raw dividend "history" list
+    occasionally carries more than one entry for the same ex_date (e.g.
+    two entries, identical dividend_per_share, differing payment_date --
+    a payment-date revision SAHMK's API returns alongside the original
+    entry instead of replacing it). ex_date is this table's real business
+    key (a company does not declare two distinct dividends sharing an
+    ex-date; every real collision observed so far agreed on the amount),
+    so this collapses each ex_date's raw entries to exactly one --
+    deterministically, not "whichever happened to be inserted first" --
+    before they ever reach the DB.
+
+    This matters because the session factory here runs with
+    autoflush=False (src/core/db/database.py): _upsert_dividend's
+    "does this ex_date already exist" query only sees committed rows,
+    not other pending session.add() calls from earlier in this same
+    loop, so two raw entries sharing an ex_date would both be treated
+    as new and collide on uq_dividend_identity at commit time -- exactly
+    the failure production evidence showed."""
+    with_ex_date: Dict[str, List[Dict[str, Any]]] = {}
+    deduplicated: List[Dict[str, Any]] = []
+    for record in records:
+        ex_date = record.get("ex_date")
+        if not ex_date:
+            deduplicated.append(record)  # preserved as-is; existing no-ex_date skip logic handles it
+            continue
+        with_ex_date.setdefault(ex_date, []).append(record)
+
+    for ex_date, group in with_ex_date.items():
+        if len(group) == 1:
+            deduplicated.append(group[0])
+            continue
+        amounts = {str(r.get("dividend_per_share")) for r in group}
+        if len(amounts) > 1:
+            logger.warning(
+                "Dividend dedup for '%s' ex_date=%s: %d raw entries disagree on amount %s -- "
+                "keeping the entry with the latest payment_date as a deterministic tie-break; "
+                "this is a real provider-data anomaly, not fabricated.",
+                symbol, ex_date, len(group), sorted(amounts),
+            )
+        # The entry with a real (non-null) payment_date wins over one with
+        # none; among several real payment_dates, the latest is kept as the
+        # most-recently-confirmed value -- deterministic given the same raw input.
+        chosen = max(group, key=lambda r: (r.get("payment_date") is not None, r.get("payment_date") or ""))
+        logger.info(
+            "Dividend dedup for '%s' ex_date=%s: collapsed %d raw entries into 1 (payment_date=%s).",
+            symbol, ex_date, len(group), chosen.get("payment_date"),
+        )
+        deduplicated.append(chosen)
+    return deduplicated
+
+
 def _upsert_dividend(session: Session, stock: Stock, data: Dict[str, Any]) -> None:
     ex_date = date.fromisoformat(data["ex_date"])
     payment_date = date.fromisoformat(data["payment_date"]) if data.get("payment_date") else None
@@ -78,7 +130,7 @@ async def ingest_dividends(
     for symbol in symbols:
         session = session_factory()
         try:
-            dividends = await get_dividends_fn(symbol)
+            dividends = _deduplicate_by_ex_date(symbol, await get_dividends_fn(symbol))
             stock = get_or_create_stock(session, symbol)
             for record in dividends:
                 if not record.get("ex_date"):

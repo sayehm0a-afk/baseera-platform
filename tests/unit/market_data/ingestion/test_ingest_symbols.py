@@ -1,6 +1,7 @@
 """Unit tests for ingest_symbols.sync_symbols -- in-memory SQLite, no
 live DB/network."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -383,4 +384,184 @@ async def test_isolates_per_symbol_failures(session_factory):
     session = session_factory()
     assert session.query(Stock).filter_by(symbol="1010").count() == 1
     assert session.query(Stock).filter_by(symbol="BAD").count() == 0
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_enriches_sector_via_company_profile_when_directory_entry_lacks_it(session_factory):
+    """2026-08-09 production root cause: SAHMK's bulk directory never
+    carries sector data, so a discovered symbol whose directory entry
+    has no 'sector' key must fall back to a per-symbol
+    get_company_profile() call to actually get one."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(
+        return_value=[
+            {
+                "symbol": "2222", "name": "Saudi Aramco",
+                "is_eligible": True, "instrument_bucket": "MAIN_MARKET_EQUITY", "exclusion_reason": None,
+            },
+        ]
+    )
+    provider.get_company_profile = AsyncMock(
+        return_value={"symbol": "2222", "sector": "Energy", "industry": "Oil & Gas"}
+    )
+
+    await sync_symbols([], provider, session_factory, discover_all=True)
+
+    provider.get_company_profile.assert_awaited_once_with("2222")
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="2222").one()
+    assert stock.sector == "Energy"
+    assert stock.sector_checked_at is not None
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_skips_sector_enrichment_when_directory_already_has_it(session_factory):
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(
+        return_value=[
+            {
+                "symbol": "2222", "name": "Saudi Aramco", "sector": "Energy",
+                "is_eligible": True, "instrument_bucket": "MAIN_MARKET_EQUITY", "exclusion_reason": None,
+            },
+        ]
+    )
+    provider.get_company_profile = AsyncMock(return_value={"symbol": "2222", "sector": "Wrong"})
+
+    await sync_symbols([], provider, session_factory, discover_all=True)
+
+    provider.get_company_profile.assert_not_awaited()
+    session = session_factory()
+    assert session.query(Stock).filter_by(symbol="2222").one().sector == "Energy"
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_skips_sector_enrichment_when_stock_already_has_sector(session_factory):
+    """A symbol enriched by an earlier pass must not be re-fetched just
+    because this pass's directory entry happens not to carry a
+    sector -- quota-efficient re-runs are the whole point of the fix."""
+    session = session_factory()
+    session.add(Stock(symbol="2222", name_en="Saudi Aramco", sector="Energy", is_active=True))
+    session.commit()
+    session.close()
+
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(
+        return_value=[
+            {
+                "symbol": "2222", "name": "Saudi Aramco",
+                "is_eligible": True, "instrument_bucket": "MAIN_MARKET_EQUITY", "exclusion_reason": None,
+            },
+        ]
+    )
+    provider.get_company_profile = AsyncMock(return_value={"symbol": "2222", "sector": "Wrong"})
+
+    await sync_symbols([], provider, session_factory, discover_all=True)
+
+    provider.get_company_profile.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_skips_sector_enrichment_for_excluded_instrument(session_factory):
+    """A directory-classified non-equity instrument (REIT/ETF/SUKUK)
+    has no sector and never will -- a per-symbol company-profile call
+    for it would just waste quota, so the is_active guard must stop it
+    before any call is made."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(
+        return_value=[
+            {
+                "symbol": "4342", "name": "Some REIT Fund",
+                "is_eligible": False, "instrument_bucket": "REIT", "exclusion_reason": "security_type='REIT'",
+            },
+        ]
+    )
+    provider.get_company_profile = AsyncMock(return_value={"symbol": "4342", "sector": "Real Estate"})
+
+    await sync_symbols([], provider, session_factory, discover_all=True)
+
+    provider.get_company_profile.assert_not_awaited()
+    session = session_factory()
+    stock = session.query(Stock).filter_by(symbol="4342").one()
+    assert stock.is_active is False
+    assert stock.sector is None
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_skips_recently_checked_symbol_with_no_sector_found(session_factory):
+    """A symbol that was genuinely checked recently and found to have
+    no sector must not be re-hit on every single sync run -- bounded
+    by get_sector_recheck_days()."""
+    session = session_factory()
+    session.add(
+        Stock(
+            symbol="2222", name_en="Saudi Aramco", sector=None, is_active=True,
+            sector_checked_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+    )
+    session.commit()
+    session.close()
+
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(
+        return_value=[
+            {
+                "symbol": "2222", "name": "Saudi Aramco",
+                "is_eligible": True, "instrument_bucket": "MAIN_MARKET_EQUITY", "exclusion_reason": None,
+            },
+        ]
+    )
+    provider.get_company_profile = AsyncMock(return_value={"symbol": "2222", "sector": "Energy"})
+
+    await sync_symbols([], provider, session_factory, discover_all=True)
+
+    provider.get_company_profile.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rechecks_symbol_after_recheck_window_elapses(session_factory):
+    """Once get_sector_recheck_days() (default 30) has passed since the
+    last real per-symbol check, a still-sectorless symbol is worth
+    trying again -- the provider may have added the data since."""
+    session = session_factory()
+    session.add(
+        Stock(
+            symbol="2222", name_en="Saudi Aramco", sector=None, is_active=True,
+            sector_checked_at=datetime.now(timezone.utc) - timedelta(days=35),
+        )
+    )
+    session.commit()
+    session.close()
+
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+    provider.get_symbol_directory = AsyncMock(
+        return_value=[
+            {
+                "symbol": "2222", "name": "Saudi Aramco",
+                "is_eligible": True, "instrument_bucket": "MAIN_MARKET_EQUITY", "exclusion_reason": None,
+            },
+        ]
+    )
+    provider.get_company_profile = AsyncMock(return_value={"symbol": "2222", "sector": "Energy"})
+
+    await sync_symbols([], provider, session_factory, discover_all=True)
+
+    provider.get_company_profile.assert_awaited_once_with("2222")
+    session = session_factory()
+    assert session.query(Stock).filter_by(symbol="2222").one().sector == "Energy"
     session.close()

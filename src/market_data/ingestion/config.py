@@ -61,6 +61,14 @@ def get_dividends_sync_interval_seconds() -> float:
     return float(os.getenv("INGESTION_DIVIDENDS_INTERVAL_SECONDS", str(24 * 3600)))
 
 
+def get_sector_recheck_days() -> int:
+    """How long a symbol whose per-symbol company-profile fetch found no
+    sector data is left alone before sync_symbols() tries it again --
+    bounds retries of a genuinely provider-side gap without retrying it
+    on every single sync run forever."""
+    return int(os.getenv("INGESTION_SECTOR_RECHECK_DAYS", "30"))
+
+
 def get_ohlcv_backfill_days() -> int:
     """How many days of history to backfill the first time a symbol is
     ingested (subsequent runs are incremental regardless of this
