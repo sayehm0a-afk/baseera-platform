@@ -410,7 +410,11 @@ class SahmkRateLimiter:
         remaining_background = (
             max(0, background_cap - self._day_count) if background_cap is not None else None
         )
-        if exhaustion is not None:
+        if exhaustion is not None and self._max_per_day is not None:
+            # Only overrides an actual configured cap -- "no daily cap
+            # configured" (remaining_total is None) is a distinct,
+            # legitimate state that real exhaustion evidence must not
+            # be allowed to mask as "0 requests remain of an unset cap."
             remaining_total = 0
             remaining_background = 0
         tomorrow_utc_midnight = (

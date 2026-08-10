@@ -20,6 +20,35 @@ from src.market_data.sahmk.rate_limiter import (
 )
 from src.market_data.sahmk.request_priority import BACKGROUND, CRITICAL
 
+# Captured before the autouse fixture below ever patches the module
+# attribute of the same name -- test_shared_redis_client_construction_
+# failure_degrades_to_none needs the REAL implementation to exercise
+# its own construction-failure handling, not the "always None" stub
+# every other test in this file gets.
+_REAL_GET_SHARED_REDIS_CLIENT = rate_limiter_module._get_shared_redis_client
+
+
+@pytest.fixture(autouse=True)
+def _no_real_shared_redis_by_default(monkeypatch):
+    """Every test in this file must be isolated from any real Redis --
+    a test environment that actually provisions Redis (CI does; this
+    repo's local dev sandbox does not) would otherwise let quota state
+    leak across tests through SahmkRateLimiter's process-wide shared
+    singleton (the same one production uses), since `redis_client=None`
+    on a limiter's constructor means "use the default shared client,"
+    not "no Redis." 2026-08-10 production evidence: exactly this
+    caused real CI failures -- one test's record_upstream_daily_
+    exhaustion() call against a real Redis service persisted for the
+    rest of the suite, and cross-test day-counter reconciliation picked
+    up other tests' usage.
+
+    Tests that explicitly exercise real Redis-backed sharing pass their
+    own _FakeRedis instance via redis_client= (SahmkRateLimiter._redis()
+    prefers that override over this patched singleton), so they are
+    unaffected by this fixture."""
+    monkeypatch.setattr(rate_limiter_module, "_get_shared_redis_client", lambda: None)
+    yield
+
 
 class _FakeRedisPipeline:
     """Minimal stand-in for redis-py's Pipeline, backed by the same
@@ -464,6 +493,7 @@ def test_shared_redis_client_construction_failure_degrades_to_none(monkeypatch):
     malformed config), the module-wide singleton must return None
     forever for this process rather than raise -- exercised via the
     default (no explicit redis_client=) singleton path."""
+    monkeypatch.setattr(rate_limiter_module, "_get_shared_redis_client", _REAL_GET_SHARED_REDIS_CLIENT)
     monkeypatch.setattr(rate_limiter_module, "_shared_redis_client_attempted", False)
     monkeypatch.setattr(rate_limiter_module, "_shared_redis_client", None)
 
@@ -472,8 +502,8 @@ def test_shared_redis_client_construction_failure_degrades_to_none(monkeypatch):
 
     monkeypatch.setattr(rate_limiter_module.redis_lib.Redis, "from_url", staticmethod(_raise))
 
-    assert rate_limiter_module._get_shared_redis_client() is None
+    assert _REAL_GET_SHARED_REDIS_CLIENT() is None
     # Cached -- a second call doesn't attempt construction again.
-    assert rate_limiter_module._get_shared_redis_client() is None
+    assert _REAL_GET_SHARED_REDIS_CLIENT() is None
 
     monkeypatch.setattr(rate_limiter_module, "_shared_redis_client_attempted", False)
