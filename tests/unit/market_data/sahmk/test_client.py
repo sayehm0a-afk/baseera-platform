@@ -9,6 +9,7 @@ from datetime import date
 import aiohttp
 import pytest
 
+import src.market_data.sahmk.rate_limiter as rate_limiter_module
 from src.core.runtime.reliability_layer.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpenError,
@@ -53,6 +54,21 @@ def _instant_retry_sleep(monkeypatch):
         return None
 
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_shared_redis_by_default(monkeypatch):
+    """_client()'s default SahmkRateLimiter (like most in this file)
+    passes no redis_client= override, which means "use the process-
+    wide shared singleton" -- fine when no real Redis is reachable
+    (this repo's local dev sandbox), but a real regression in any
+    environment that actually provisions one (CI does): one test's
+    real 429 would persist SAHMK daily-quota-exhaustion evidence into
+    that shared Redis, poisoning every other test in this file that
+    constructs a limiter afterward. See test_rate_limiter.py's
+    identical fixture for the full 2026-08-10 production incident this
+    guards against."""
+    monkeypatch.setattr(rate_limiter_module, "_get_shared_redis_client", lambda: None)
 
 
 # --- construction / credentials -----------------------------------------
