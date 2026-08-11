@@ -7,6 +7,7 @@ import type {
   MarketStatus,
   MarketSummary,
   OpportunitiesResponse,
+  PersonalScanResponse,
   RankingsResponse,
   SectorsResponse,
   WatchlistsResponse,
@@ -72,6 +73,13 @@ export function getRankings(
 export function getOpportunities(runId?: number): Promise<OpportunitiesResponse> {
   const query = runId !== undefined ? `?run_id=${runId}` : "";
   return apiFetch<OpportunitiesResponse>(`/api/v1/market/opportunities${query}`);
+}
+
+/** "امسح السوق الآن" -- at most 5 unique, ranked opportunities read
+ * from the latest completed scan; never triggers a new scan itself
+ * (see src.market_intelligence.personal_scan for why). */
+export function getPersonalTopOpportunities(): Promise<PersonalScanResponse> {
+  return apiFetch<PersonalScanResponse>("/api/v1/market/personal/top-opportunities");
 }
 
 export function getWatchlists(

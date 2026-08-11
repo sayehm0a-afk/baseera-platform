@@ -512,3 +512,98 @@ def test_rankings_and_opportunities_exclude_a_symbol_below_calibrated_confidence
     # data loss.
     highest_confidence = next(r for r in rankings["rankings"] if r["category"] == "HIGHEST_CONFIDENCE")
     assert [e["symbol"] for e in highest_confidence["entries"]] == ["7777"]
+
+
+# --- GET /personal/top-opportunities ("امسح السوق الآن") -------------------
+
+
+def test_personal_top_opportunities_returns_at_most_five_unique_symbols(client, session_factory):
+    symbols = [f"{2000 + i}" for i in range(8)]
+    for symbol in symbols:
+        _seed_stock_with_bars(session_factory, symbol, sector="Energy")
+        _add_fundamentals(session_factory, symbol)
+
+    run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    assert client.get(f"/api/v1/market/scan/{run_id}").json()["status"] == "SUCCESS"
+
+    response = client.get("/api/v1/market/personal/top-opportunities")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["scan_run_id"] == run_id
+    assert body["is_stale"] is False
+    assert len(body["opportunities"]) <= 5
+    seen_symbols = [o["symbol"] for o in body["opportunities"]]
+    assert len(seen_symbols) == len(set(seen_symbols)), f"duplicate symbol in {seen_symbols}"
+    assert [o["rank"] for o in body["opportunities"]] == list(range(1, len(body["opportunities"]) + 1))
+    for opportunity in body["opportunities"]:
+        assert opportunity["simple_decision_ar"] in ("شراء", "انتظار")
+        assert opportunity["decision_label_ar"]
+        assert opportunity["confidence_score"] is not None
+
+
+def test_personal_top_opportunities_arabic_message_when_no_scan_has_ever_run(client, session_factory):
+    response = client.get("/api/v1/market/personal/top-opportunities")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["opportunities"] == []
+    assert body["is_stale"] is True
+    assert body["message_ar"] == "البيانات الحالية غير كافية لإصدار توصية جديدة"
+
+
+def test_personal_top_opportunities_arabic_message_when_nothing_qualifies(client, session_factory):
+    """A completed scan with no price history for the requested symbol
+    gate-rejects it entirely -- the honest result is the "no strong
+    opportunity" Arabic message, never a fabricated pick."""
+    session = session_factory()
+    session.add(Stock(symbol="9999", name_en="No Data Co", sector="Energy"))
+    session.commit()
+    session.close()
+
+    run_id = client.post("/api/v1/market/scan", json={"symbols": ["9999"]}).json()["id"]
+    assert client.get(f"/api/v1/market/scan/{run_id}").json()["status"] == "SUCCESS"
+
+    response = client.get("/api/v1/market/personal/top-opportunities")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["opportunities"] == []
+    assert body["is_stale"] is False
+    assert body["message_ar"] == "لا توجد فرصة عالية الجودة حالياً"
+
+
+def test_personal_top_opportunities_stale_scan_is_disclosed_not_hidden(client, session_factory):
+    _seed_stock_with_bars(session_factory, "2222", sector="Energy")
+    _add_fundamentals(session_factory, "2222")
+
+    run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    assert client.get(f"/api/v1/market/scan/{run_id}").json()["status"] == "SUCCESS"
+
+    # Backdate the run's finished_at well past the freshness threshold --
+    # simulates real production: SAHMK exhausted, no new scan for days.
+    session = session_factory()
+    run = session.query(MarketScanRun).filter_by(id=run_id).one()
+    run.finished_at = datetime.now(timezone.utc) - timedelta(hours=48)
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/market/personal/top-opportunities")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["is_stale"] is True
+    assert body["opportunities"] == []
+    assert body["message_ar"] == "البيانات الحالية غير كافية لإصدار توصية جديدة"
+    assert body["data_age_hours"] > 24.0
+
+
+def test_personal_top_opportunities_credentials_never_exposed(client, session_factory):
+    _seed_stock_with_bars(session_factory, "2222", sector="Energy")
+    _add_fundamentals(session_factory, "2222")
+    client.post("/api/v1/market/scan", json={})
+
+    response = client.get("/api/v1/market/personal/top-opportunities")
+    body_text = response.text.lower()
+    for leaked in ("api_key", "password", "secret", "shmk_"):
+        assert leaked not in body_text

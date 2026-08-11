@@ -112,6 +112,75 @@ class OpportunitiesOut(BaseModel):
     categories: List[OpportunityCategoryOut]
 
 
+class PersonalOpportunityOut(BaseModel):
+    """One card for the personal "أفضل فرص المضاربة الآن" screen --
+    every field is read straight from a persisted `DecisionV2Snapshot`
+    row (see src.market_intelligence.personal_scan), never recomputed
+    or fabricated for this view. `simple_decision_ar` collapses the
+    full Decision taxonomy to the three-word action the mandate's
+    primary UI requires (شراء / انتظار / تجاهل); `decision_label_ar`
+    keeps the fuller existing label (e.g. "شراء قوي") for anyone who
+    wants the extra nuance."""
+
+    rank: int
+    symbol: str
+    company_name_ar: Optional[str] = None
+    company_name_en: str
+    sector_ar: Optional[str] = None
+
+    decision: str
+    decision_label_ar: str
+    simple_decision_ar: str
+
+    current_price: Optional[float] = None
+    market_status: str
+
+    entry_zone_low: Optional[float] = None
+    entry_zone_high: Optional[float] = None
+    entry_status_label_ar: Optional[str] = None
+    is_entry_late: bool
+
+    target_1: Optional[float] = None
+    target_2: Optional[float] = None
+    target_3: Optional[float] = None
+    stop_loss: Optional[float] = None
+    risk_reward_target_1: Optional[float] = None
+
+    confidence_score: float
+    risk_level_label_ar: Optional[str] = None
+
+    decision_summary_ar: Optional[str] = None
+    entry_confirmation_conditions_ar: List[str] = Field(default_factory=list)
+    invalidation_conditions: List[str] = Field(default_factory=list)
+
+    expected_holding_period_label_ar: Optional[str] = None
+    trend_direction_ar: Optional[str] = None
+    trend_strength_label_ar: Optional[str] = None
+    liquidity_quality_ar: Optional[str] = None
+
+    nearest_resistance: Optional[float] = None
+    breakout_level: Optional[float] = None
+
+    decision_timestamp: datetime
+
+
+class PersonalScanOut(BaseModel):
+    """GET /api/v1/market/personal/top-opportunities -- at most 5
+    unique symbols, or an explicit empty state with `message_ar` set to
+    one of the two honest Arabic states the mandate specifies: no
+    sufficiently strong opportunity right now (`is_stale=False`, real
+    fresh data was checked and nothing qualified), or the data itself
+    is too old to issue a new recommendation from (`is_stale=True`)."""
+
+    scan_run_id: Optional[int] = None
+    generated_at: Optional[datetime] = None
+    data_age_hours: Optional[float] = None
+    max_data_age_hours: float
+    is_stale: bool
+    opportunities: List[PersonalOpportunityOut]
+    message_ar: Optional[str] = None
+
+
 class WatchlistEntryOut(BaseModel):
     symbol: str
     sector: Optional[str] = None
