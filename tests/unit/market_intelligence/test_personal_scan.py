@@ -55,7 +55,7 @@ def _add_snapshot(
     confidence_score=75.0, risk_score=40.0, entry_status="READY_NOW",
     risk_reward_target_1=None, news_impact=None, volume_confirms_decision=None,
     abnormal_volume=None, market_risk_entry_permitted=None, why_not_buy_reasons=None,
-    current_price=30.0, invalidation_price=None,
+    current_price=30.0, invalidation_price=None, fundamental_summary=None,
 ):
     stock = session.query(Stock).filter_by(symbol=symbol).first() or _make_stock(session, symbol)
     snapshot = DecisionV2Snapshot(
@@ -68,7 +68,7 @@ def _add_snapshot(
         entry_status=entry_status, risk_reward_target_1=risk_reward_target_1, news_impact=news_impact,
         volume_confirms_decision=volume_confirms_decision, abnormal_volume=abnormal_volume,
         market_risk_entry_permitted=market_risk_entry_permitted, why_not_buy_reasons=why_not_buy_reasons,
-        invalidation_price=invalidation_price,
+        invalidation_price=invalidation_price, fundamental_summary=fundamental_summary,
     )
     session.add(snapshot)
     session.commit()
@@ -296,6 +296,45 @@ def test_candidate_close_to_invalidation_price_is_penalized(session):
     result = select_top_opportunities(session, run, max_results=5, now=now)
 
     assert [c.symbol for c in result.candidates] == ["1202", "1201"]
+
+
+def test_stronger_fundamentals_rank_above_otherwise_identical_candidate(session):
+    """CONT Phase 9: ranking must consider real fundamental quality
+    (revenue growth, profitability, leverage) already persisted on the
+    snapshot, not just technical/confidence/risk-reward."""
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(
+        session, run, "1401",
+        fundamental_summary={
+            "return_on_equity": 0.02, "net_profit_margin": -0.01,
+            "debt_to_equity": 3.0, "revenue_growth": -0.10, "eps_growth": -0.10,
+        },
+    )
+    _add_snapshot(
+        session, run, "1402",
+        fundamental_summary={
+            "return_on_equity": 0.20, "net_profit_margin": 0.15,
+            "debt_to_equity": 0.5, "revenue_growth": 0.15, "eps_growth": 0.15,
+        },
+    )
+    _add_snapshot(session, run, "1403", fundamental_summary=None)
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert [c.symbol for c in result.candidates] == ["1402", "1403", "1401"]
+
+
+def test_missing_fundamental_ratios_are_neutral_not_penalized(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(session, run, "1501", fundamental_summary=None)
+    _add_snapshot(session, run, "1502", fundamental_summary={"return_on_equity": None})
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    symbols = {c.symbol for c in result.candidates}
+    assert symbols == {"1501", "1502"}
 
 
 def test_decision_priority_still_dominates_every_composite_score_factor(session):

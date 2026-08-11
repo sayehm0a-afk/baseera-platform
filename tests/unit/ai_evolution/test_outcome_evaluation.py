@@ -307,6 +307,78 @@ class TestEvaluateDueOutcomes:
         assert due_statuses[7] is not RecommendationOutcomeStatus.PENDING
         assert due_statuses[14] is RecommendationOutcomeStatus.PENDING
 
+    def test_a_terminal_outcome_is_never_silently_rewritten_by_a_later_cycle(self, session, stock):
+        """CONT Phase 10 integrity regression: once a row leaves PENDING,
+        no later call to evaluate_due_outcomes may touch it again, even
+        when new bars arrive that would classify it differently. The
+        historical performance record must be append-only -- a
+        recommendation's recorded outcome describes what actually
+        happened at evaluation time, not the latest re-run."""
+        evaluated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        snapshot = _make_snapshot(
+            session, stock, recommendation=RecommendationLabel.BUY,
+            entry_price=100.0, target_price=110.0, stop_loss=90.0, evaluated_at=evaluated_at,
+        )
+        create_pending_outcomes(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=1), high=112.0, low=99.0, close=111.0)
+        session.commit()
+
+        first_now = evaluated_at + timedelta(days=2)
+        evaluate_due_outcomes(session, now=first_now)
+
+        row = session.query(RecommendationOutcome).filter_by(snapshot_id=snapshot.id, evaluation_horizon_days=1).one()
+        assert row.status is RecommendationOutcomeStatus.SUCCESSFUL
+        first_evaluated_at = row.evaluated_at
+        first_price_at_evaluation = row.price_at_evaluation
+        first_return_pct = row.return_pct
+
+        # A later bar that would have flipped the classification to
+        # FAILED had it existed before the first evaluation -- the
+        # scheduler must never reach back and revise the already-scored
+        # row using it.
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=2), high=95.0, low=80.0, close=82.0)
+        session.commit()
+
+        second_now = evaluated_at + timedelta(days=10)
+        evaluate_due_outcomes(session, now=second_now)  # other horizons (3, 7) become newly due here
+
+        row_after = (
+            session.query(RecommendationOutcome).filter_by(snapshot_id=snapshot.id, evaluation_horizon_days=1).one()
+        )
+        assert row_after.status is RecommendationOutcomeStatus.SUCCESSFUL
+        assert row_after.evaluated_at == first_evaluated_at
+        assert row_after.price_at_evaluation == first_price_at_evaluation
+        assert row_after.return_pct == first_return_pct
+
+    def test_the_original_snapshot_is_never_mutated_by_outcome_evaluation(self, session, stock):
+        """CONT Phase 10 integrity regression: outcome evaluation writes
+        RecommendationOutcome rows only -- the original decision
+        (RecommendationSnapshot) it is scoring must come back byte-for-
+        byte identical, since it is the frozen record of what Basirah
+        actually told the user at the time."""
+        evaluated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        snapshot = _make_snapshot(
+            session, stock, recommendation=RecommendationLabel.BUY,
+            entry_price=100.0, target_price=110.0, stop_loss=90.0, evaluated_at=evaluated_at,
+        )
+        create_pending_outcomes(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, evaluated_at.date() + timedelta(days=1), high=112.0, low=99.0, close=111.0)
+        session.commit()
+
+        evaluate_due_outcomes(session, now=evaluated_at + timedelta(days=2))
+
+        reread = session.query(RecommendationSnapshot).filter_by(id=snapshot.id).one()
+        assert float(reread.confidence_score) == 70.0
+        assert float(reread.total_score) == 65.0
+        assert float(reread.target_price) == 110.0
+        assert float(reread.stop_loss) == 90.0
+        assert float(reread.market_price_at_evaluation) == 100.0
+        assert reread.recommendation == RecommendationLabel.BUY
+
 
 class TestMfeMaeAndPerTargetTracking:
     """Recommendation-engine hardening: MFE/MAE and target_1/2/3

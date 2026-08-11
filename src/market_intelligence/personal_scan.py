@@ -37,6 +37,13 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from src.analysis.decision_v2.types import Decision
+from src.analysis.recommendation.fundamental_contributor import (
+    _score_debt_to_equity,
+    _score_eps_growth,
+    _score_net_margin,
+    _score_revenue_growth,
+    _score_roe,
+)
 from src.domain.models import DecisionV2Snapshot, MarketScanRun
 from src.market_intelligence.config import get_max_data_age_hours
 
@@ -145,6 +152,37 @@ _INVALIDATION_PROXIMITY_TIGHT_PCT = 2.0
 _INVALIDATION_PROXIMITY_NEAR_PCT = 5.0
 
 
+# Fundamental ratios (revenue growth, profitability, leverage) that
+# Decision Engine V2 already persisted on this exact snapshot via
+# `fundamental_summary` (src.analysis.decision_v2.fundamental_summary)
+# -- CONT Phase 9. Reuses `FundamentalScoreContributor`'s own bucket
+# thresholds verbatim (never re-declared here) so this ranking can
+# never contradict the fundamentals a user is shown on the stock
+# detail page. Degrades to 0 (neutral) per-ratio when a ratio could
+# not be computed from real reported financials, exactly like every
+# other _composite_score component.
+_FUNDAMENTAL_QUALITY_SCORERS = (
+    ("return_on_equity", _score_roe),
+    ("net_profit_margin", _score_net_margin),
+    ("debt_to_equity", _score_debt_to_equity),
+    ("revenue_growth", _score_revenue_growth),
+    ("eps_growth", _score_eps_growth),
+)
+
+
+def _fundamental_quality_points(fundamental_summary: Optional[dict]) -> float:
+    if not fundamental_summary:
+        return 0.0
+    points = 0.0
+    for key, scorer in _FUNDAMENTAL_QUALITY_SCORERS:
+        value = fundamental_summary.get(key)
+        if value is None:
+            continue
+        pts, _signal = scorer(value)
+        points += pts
+    return points
+
+
 def _composite_score(snapshot: DecisionV2Snapshot) -> float:
     """A single ranking score blending every real, already-computed
     Decision Engine V2 signal this module has access to -- not just
@@ -171,6 +209,8 @@ def _composite_score(snapshot: DecisionV2Snapshot) -> float:
 
     if snapshot.market_risk_entry_permitted is False:
         score -= 10.0
+
+    score += _fundamental_quality_points(snapshot.fundamental_summary)
 
     reasons = snapshot.why_not_buy_reasons or []
     score += max(len(reasons) * _CONTRADICTION_PENALTY_PER_REASON, _CONTRADICTION_PENALTY_CAP)
