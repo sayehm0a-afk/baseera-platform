@@ -118,7 +118,7 @@ export function AiSignalCard({
         </div>
       ) : null}
 
-      <p className="text-[10px] leading-4 text-bsr-text-muted">
+      <p className="text-xs leading-4 text-bsr-text-muted">
         درجة الجودة تعكس قوة الأدلة المتاحة وقت التحليل، ولا تضمن تحقيق الربح.
       </p>
 

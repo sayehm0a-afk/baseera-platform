@@ -77,7 +77,7 @@ export function PersonalOpportunityCard({ opportunity: o }: PersonalOpportunityC
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-bsr-2 text-sm">
+      <div className="grid grid-cols-1 gap-bsr-2 text-sm sm:grid-cols-3">
         <div>
           <p className="text-xs text-bsr-text-secondary">الهدف الأول</p>
           <p className="bsr-numeric font-semibold text-bsr-market-up">{priceLabel(o.target_1)}</p>

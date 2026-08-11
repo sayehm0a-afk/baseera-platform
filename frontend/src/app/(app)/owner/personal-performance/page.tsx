@@ -53,12 +53,17 @@ function GroupList({ groups }: { groups: GroupPerformance[] }) {
   return (
     <div className="flex flex-col gap-bsr-1">
       {groups.map((g) => (
-        <div key={g.group} className="flex items-center justify-between border-b border-bsr-border-subtle py-bsr-2 last:border-0">
+        <div
+          key={g.group}
+          className="flex flex-wrap items-center justify-between gap-bsr-1 border-b border-bsr-border-subtle py-bsr-2 last:border-0"
+        >
           <span className="text-sm text-bsr-text-secondary">{g.group}</span>
-          <span className="text-xs text-bsr-text-muted">{g.sample_size.toLocaleString("ar-SA")} حالة</span>
-          <span className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
-            {g.win_rate !== null ? `${g.win_rate.toFixed(1)}%` : "—"}
-          </span>
+          <div className="flex items-center gap-bsr-2">
+            <span className="text-xs text-bsr-text-muted">{g.sample_size.toLocaleString("ar-SA")} حالة</span>
+            <span className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
+              {g.win_rate !== null ? `${g.win_rate.toFixed(1)}%` : "—"}
+            </span>
+          </div>
         </div>
       ))}
     </div>

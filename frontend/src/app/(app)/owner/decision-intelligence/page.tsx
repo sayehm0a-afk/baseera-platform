@@ -161,15 +161,17 @@ function DecisionIntelligencePageInner() {
             {data.sector_ranking.map((row) => (
               <div
                 key={row.sector_ar ?? "غير محدد"}
-                className="flex items-center justify-between border-b border-bsr-border-subtle py-bsr-2 last:border-0"
+                className="flex flex-wrap items-center justify-between gap-bsr-1 border-b border-bsr-border-subtle py-bsr-2 last:border-0"
               >
                 <span className="text-sm text-bsr-text-secondary">{row.sector_ar ?? "غير محدد"}</span>
-                <span className="text-xs text-bsr-text-muted">
-                  {row.symbols_evaluated.toLocaleString("ar-SA")} سهم · {row.buy_candidate_count} فرصة شراء
-                </span>
-                <span className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
-                  {row.average_confidence !== null ? `${row.average_confidence.toFixed(1)}%` : "—"}
-                </span>
+                <div className="flex items-center gap-bsr-2">
+                  <span className="text-xs text-bsr-text-muted">
+                    {row.symbols_evaluated.toLocaleString("ar-SA")} سهم · {row.buy_candidate_count} فرصة شراء
+                  </span>
+                  <span className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
+                    {row.average_confidence !== null ? `${row.average_confidence.toFixed(1)}%` : "—"}
+                  </span>
+                </div>
               </div>
             ))}
           </Card>
