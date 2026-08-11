@@ -33,6 +33,7 @@ from src.domain.models import (
 )
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 from src.market_data.providers.market_data_provider import IMarketDataProvider, ProviderHealth
+from src.market_data.sahmk.rate_limiter import SahmkUpstreamQuotaExhaustedError
 from src.news_intelligence.service import NewsIntelligenceService
 
 
@@ -90,6 +91,25 @@ class _QuoteFailsButBarWorksProvider(DevMarketDataProvider):
 
     async def get_latest_quote(self, symbol):
         raise CircuitBreakerOpenError()
+
+
+class _QuoteFailsWithUpstreamQuotaExhaustionProvider(DevMarketDataProvider):
+    """get_latest_quote fails with the rate limiter's own preemptive
+    block (SahmkUpstreamQuotaExhaustedError, raised by acquire() before
+    any network call -- see rate_limiter.py) rather than a SahmkError
+    from a failed request. Reproduces a real 2026-08-11 production
+    condition: a market scan run while SAHMK's daily quota is confirmed
+    exhausted must still fall back to the daily-bar close for every
+    symbol, not propagate an uncaught exception that a scan's retry loop
+    then futilely retries before failing the whole symbol (losing the
+    fundamental leg too, since that never gets a chance to run)."""
+
+    async def get_latest_quote(self, symbol):
+        raise SahmkUpstreamQuotaExhaustedError(
+            "SAHMK's real daily quota is confirmed exhausted.",
+            reset_at_utc=datetime(2026, 8, 11, 21, 0, 0, tzinfo=timezone.utc),
+            evidence="Daily rate limit exceeded (5000 requests/day).",
+        )
 
 
 @pytest.fixture
@@ -218,6 +238,28 @@ async def test_falls_back_to_daily_bar_when_live_quote_fails(session):
 
     assert context.latest_price is not None
     assert context.extra["quote"]["source"] == "dev-synthetic"
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_daily_bar_when_live_quote_hits_upstream_quota_exhaustion(session):
+    # Real 2026-08-11 production condition: SahmkUpstreamQuotaExhaustedError
+    # is not a SahmkError (it's raised by the rate limiter's own
+    # preemptive check, a different exception hierarchy) -- must still
+    # be caught here and fall back to the daily bar, not propagate and
+    # cost the fundamental leg too.
+    stock = _make_stock(session)
+    _add_bars(session, stock)
+
+    context = await build_analysis_context(
+        stock, PeriodType.ANNUAL, session, _QuoteFailsWithUpstreamQuotaExhaustionProvider()
+    )
+
+    assert context.latest_price is not None
+    assert context.extra["quote"]["source"] == "dev-synthetic"
+    # The technical leg (computed before the quote fetch) must survive
+    # the quote failure too -- proof the exception didn't abort the
+    # whole function before this leg's result could be returned.
+    assert context.technical_result is not None
 
 
 @pytest.mark.asyncio

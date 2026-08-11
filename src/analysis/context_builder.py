@@ -39,6 +39,7 @@ from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpe
 from src.domain.models import PeriodType, Stock, Timeframe
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
+from src.market_data.sahmk.rate_limiter import SahmkRateLimitExceededError
 from src.news_intelligence.service import NewsIntelligenceService
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,7 @@ async def build_analysis_context(
                     "ask": quote.get("ask"),
                 }
             }
-        except (SahmkError, CircuitBreakerOpenError) as exc:
+        except (SahmkError, SahmkRateLimitExceededError, CircuitBreakerOpenError) as exc:
             logger.info("Could not fetch a live quote for '%s': %s", symbol, exc)
 
     if market_price is None:
@@ -177,7 +178,7 @@ async def build_analysis_context(
                     "is_synthetic": bar.get("is_synthetic"),
                 }
             }
-        except (SahmkError, CircuitBreakerOpenError) as exc:
+        except (SahmkError, SahmkRateLimitExceededError, CircuitBreakerOpenError) as exc:
             logger.info("Could not fetch a live price for '%s': %s", symbol, exc)
 
     fundamental_result = None
