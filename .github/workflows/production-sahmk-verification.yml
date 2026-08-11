@@ -128,8 +128,29 @@ jobs:
           echo "csrf_present=$([ -n \"$CSRF\" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
           echo "$CSRF" > /tmp/.csrf
 
+      - name: Check deployment commit + SAHMK quota status (zero-network-call, before any live SAHMK request)
+        id: precheck
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/system/summary" \
+            -o /tmp/summary.json -w "\nHTTP %{http_code}\n"
+          echo "=== Admin dashboard summary (deployment + quota fields) ==="
+          python3 -c "import json; d = json.load(open('/tmp/summary.json')); print('deployment_commit:', d.get('deployment_commit')); print('app_version:', d.get('app_version')); print('environment:', d.get('environment')); q = d.get('sahmk_quota_status') or {}; print('sahmk_quota_status:', json.dumps(q, indent=2))"
+          QUOTA_OK=$(python3 -c "import json; d = json.load(open('/tmp/summary.json')); q = d.get('sahmk_quota_status') or {}; exhausted = q.get('upstream_confirmed_exhausted'); remaining = q.get('remaining_today'); print('no' if exhausted or (remaining is not None and remaining <= 0) else 'yes')")
+          echo "quota_available=$QUOTA_OK" >> "$GITHUB_OUTPUT"
+          echo "SAHMK quota available for a controlled live request: $QUOTA_OK"
+          # Default placeholder so the downstream public-API-readback step
+          # (which reads /tmp/diagnostic.json) has a valid, empty JSON file
+          # to fall back on when the diagnostic-scan step below is skipped
+          # for exhausted quota -- it already treats a missing run_id as
+          # "fall back to the latest successful run", never as a failure.
+          echo '{}' > /tmp/diagnostic.json
+
       - name: Trigger the real, controlled SAHMK diagnostic scan
         id: diagnostic
+        if: steps.precheck.outputs.quota_available == 'yes'
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
         run: |
