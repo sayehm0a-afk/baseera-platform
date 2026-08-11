@@ -607,3 +607,61 @@ def test_personal_top_opportunities_credentials_never_exposed(client, session_fa
     body_text = response.text.lower()
     for leaked in ("api_key", "password", "secret", "shmk_"):
         assert leaked not in body_text
+
+
+def _find_api_route(app, path):
+    """Recursively resolves an APIRoute by path, unwrapping this
+    FastAPI version's lazy `_IncludedRouter` sub-router wrappers
+    (app.routes holds them, not flattened APIRoute objects)."""
+    stack = list(app.routes)
+    while stack:
+        route = stack.pop()
+        if getattr(route, "path", None) == path:
+            return route
+        sub_router = getattr(route, "original_router", None)
+        if sub_router is not None:
+            stack.extend(sub_router.routes)
+    return None
+
+
+def test_personal_top_opportunities_route_has_no_market_data_provider_dependency():
+    """Structural guarantee that a future edit can't silently reintroduce
+    a live-data call on this route: unlike every scan/quote/technical
+    route, get_personal_top_opportunities must not depend on
+    get_market_provider (or any provider) at all -- it can only ever
+    read already-persisted DecisionV2Snapshot rows."""
+    route = _find_api_route(main.app, "/api/v1/market/personal/top-opportunities")
+    assert route is not None, "route not registered"
+    dependant = route.dependant
+    all_dependencies = list(dependant.dependencies)
+    call_names = {dep.call.__name__ for dep in all_dependencies if dep.call is not None}
+    assert "get_market_provider" not in call_names
+    assert get_market_provider not in {dep.call for dep in all_dependencies}
+
+
+def test_personal_top_opportunities_never_touches_sahmk_even_when_called_repeatedly(
+    client, session_factory, monkeypatch
+):
+    """Behavioral guarantee for CONT Phase 2: opening or refreshing
+    /today (this route, called by the frontend on every page load) must
+    never make a real SAHMK network call, however many times it's hit.
+    Patches SahmkClient._request -- the one real-network chokepoint
+    every SAHMK call funnels through -- to raise if invoked at all."""
+    from src.market_data.sahmk.client import SahmkClient
+
+    async def _forbidden_request(self, path, params=None):
+        raise AssertionError(
+            f"SahmkClient._request({path!r}) was called by a /today page load -- "
+            "this route must only read already-persisted DecisionV2Snapshot rows."
+        )
+
+    monkeypatch.setattr(SahmkClient, "_request", _forbidden_request)
+
+    _seed_stock_with_bars(session_factory, "2222", sector="Energy")
+    _add_fundamentals(session_factory, "2222")
+    run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    assert client.get(f"/api/v1/market/scan/{run_id}").json()["status"] == "SUCCESS"
+
+    for _ in range(5):
+        response = client.get("/api/v1/market/personal/top-opportunities")
+        assert response.status_code == 200
