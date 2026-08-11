@@ -24,6 +24,7 @@ from src.market_data.providers.market_data_provider import (
     MarketDataProviderFactory,
     ProviderHealth,
 )
+from src.market_data.caching.redis_shared_cache import get_default_sahmk_cache
 from src.market_data.sahmk.client import SahmkClient
 from src.market_data.sahmk.exceptions import (
     SahmkAuthenticationError,
@@ -52,7 +53,8 @@ class SahmkMarketDataProvider(IMarketDataProvider):
         self.api_endpoint = api_endpoint
         self.api_key = api_key
         self._service = SahmkMarketDataService(
-            client=SahmkClient(api_key=api_key, base_url=api_endpoint)
+            client=SahmkClient(api_key=api_key, base_url=api_endpoint),
+            cache=get_default_sahmk_cache(),
         )
         self.authenticated = False
         self.last_universe_classification: Optional[UniverseClassificationResult] = None

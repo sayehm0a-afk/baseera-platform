@@ -52,12 +52,21 @@ class TTLCache:
         key: Any,
         compute: Callable[[], Awaitable[Any]],
         ttl_seconds: Optional[float] = None,
+        model: Optional[type] = None,
     ) -> Any:
         """Returns the cached value if present and unexpired. Otherwise,
         if another caller is already computing this key, awaits that
         caller's in-flight result instead of issuing a second call;
         otherwise awaits compute() itself, caches the result, and
         returns it.
+
+        `model` is accepted and ignored here -- it exists only so this
+        class stays a drop-in match for
+        src.market_data.caching.redis_shared_cache.SharedTTLCache's
+        signature (which needs it to decode a Redis-stored value back
+        into the right dataclass); an in-process cache stores the
+        living Python object directly and never needs to decode
+        anything.
 
         Every caller -- the one that starts the computation and any that
         join it while in flight -- awaits the same asyncio.Task, so a

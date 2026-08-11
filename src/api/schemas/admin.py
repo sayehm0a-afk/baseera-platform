@@ -300,3 +300,12 @@ class AdminDashboardSummaryOut(BaseModel):
     # only if the rate limiter itself could not be read, never a
     # placeholder for "unknown."
     sahmk_quota_status: Optional[Dict[str, Any]] = None
+
+    # Cross-worker shared market-data cache observability -- see
+    # src.market_data.caching.redis_shared_cache.get_observability_snapshot().
+    # `backend_health` is one of "healthy"/"degraded"/"disabled" (never
+    # a raw Redis error message); `by_namespace` carries only aggregate
+    # counters (hits/misses/coalesced_waits/provider_calls/redis_errors),
+    # never a credential or connection string. None only if this read
+    # itself failed, never a placeholder for "unknown."
+    market_data_cache_status: Optional[Dict[str, Any]] = None
