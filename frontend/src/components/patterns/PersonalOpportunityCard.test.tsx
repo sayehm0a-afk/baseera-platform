@@ -18,6 +18,7 @@ const BASE: PersonalOpportunity = {
   simple_decision_ar: "شراء",
   current_price: 30.5,
   market_status: "OPEN",
+  market_status_label_ar: "السوق مفتوح",
   entry_zone_low: 30.0,
   entry_zone_high: 30.8,
   entry_status_label_ar: "مناسب الآن",
@@ -79,5 +80,11 @@ describe("PersonalOpportunityCard", () => {
   it("links to the stock detail page for the same symbol", () => {
     render(<PersonalOpportunityCard opportunity={BASE} />);
     expect(screen.getByRole("link", { name: "التفاصيل" })).toHaveAttribute("href", "/stocks/2222");
+  });
+
+  it("renders the Arabic market-status label, never the raw English enum value", () => {
+    render(<PersonalOpportunityCard opportunity={BASE} />);
+    expect(screen.getByText("السوق مفتوح")).toBeInTheDocument();
+    expect(screen.queryByText("OPEN")).not.toBeInTheDocument();
   });
 });

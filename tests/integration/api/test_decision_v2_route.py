@@ -373,6 +373,11 @@ def test_decision_v2_response_includes_the_phase_2a_canonical_fields(client, db_
     assert isinstance(body["watch_next_session_ar"], list)
     assert body["accumulation_score"] == body["sub_scores"]["volume_score"]
     assert body["technical_confidence"] == body["sub_scores"]["trend_score"]
+    # CONT Phase 5: market_status is a raw English enum ("OPEN" etc.) --
+    # the response must also carry its Arabic translation so the
+    # frontend never has to render the raw value to a user.
+    assert body["market_status_label_ar"]
+    assert body["market_status_label_ar"] != body["market_status"]
 
 
 def test_decision_v2_never_shows_strong_buy_without_gates_passing(client, db_session):

@@ -70,7 +70,7 @@ from src.domain.models import (
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.market_snapshot import MarketSnapshotBuilder
-from src.market_intelligence.market_status import get_market_status
+from src.market_intelligence.market_status import get_market_status, market_status_label_ar
 from src.market_intelligence.opportunity_ranking import curate_opportunity_rankings
 from src.market_intelligence.personal_scan import select_top_opportunities
 from src.market_intelligence.ranking import RankingEngine
@@ -506,6 +506,7 @@ def _to_personal_opportunity_out(rank: int, snapshot: DecisionV2Snapshot) -> Per
         simple_decision_ar=_SIMPLE_DECISION_AR.get(snapshot.decision, "تجاهل"),
         current_price=float(snapshot.current_price) if snapshot.current_price is not None else None,
         market_status=snapshot.market_status,
+        market_status_label_ar=market_status_label_ar(snapshot.market_status),
         entry_zone_low=float(snapshot.entry_zone_low) if snapshot.entry_zone_low is not None else None,
         entry_zone_high=float(snapshot.entry_zone_high) if snapshot.entry_zone_high is not None else None,
         entry_status_label_ar=snapshot.entry_status_label_ar,

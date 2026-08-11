@@ -125,6 +125,7 @@ export interface PersonalOpportunity {
 
   current_price: number | null;
   market_status: string;
+  market_status_label_ar: string;
 
   entry_zone_low: number | null;
   entry_zone_high: number | null;

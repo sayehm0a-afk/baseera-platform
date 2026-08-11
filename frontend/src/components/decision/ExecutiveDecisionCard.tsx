@@ -10,6 +10,16 @@ const FRESHNESS_LABELS_AR: Record<DecisionV2["data_freshness_status"], string> =
   UNKNOWN: "حداثة البيانات غير مؤكدة",
 };
 
+/** `data_source` is an internal provider identifier
+ * (src.market_intelligence.scanner) -- never shown raw to the user,
+ * only this simplified trust signal. Falls back to the raw value only
+ * for a genuinely unrecognized future value, never silently hiding a
+ * new source. */
+const DATA_SOURCE_LABELS_AR: Record<string, string> = {
+  SAHMK_REAL: "بيانات حقيقية من السوق",
+  DEV_SYNTHETIC: "بيانات تجريبية (غير حقيقية)",
+};
+
 function fmt(value: number | null): string {
   return value == null ? "—" : value.toFixed(2);
 }
@@ -88,7 +98,9 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
         <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">
           {FRESHNESS_LABELS_AR[decision.data_freshness_status]}
         </span>
-        <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">{decision.market_status}</span>
+        <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">
+          {decision.market_status_label_ar}
+        </span>
         {decision.sector_ar ? (
           <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">{decision.sector_ar}</span>
         ) : null}
@@ -235,7 +247,7 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
       </p>
 
       <div className="flex flex-wrap items-center gap-x-bsr-3 gap-y-1 text-[11px] text-bsr-text-muted">
-        <span>المصدر: {decision.data_source}</span>
+        <span>المصدر: {DATA_SOURCE_LABELS_AR[decision.data_source] ?? decision.data_source}</span>
         <span>إصدار المحرك: {decision.analysis_version}</span>
         <span className="bsr-numeric">
           وقت القرار: {new Date(decision.decision_timestamp).toLocaleString("ar-SA")}

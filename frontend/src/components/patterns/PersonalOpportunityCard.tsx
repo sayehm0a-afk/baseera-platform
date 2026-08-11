@@ -55,7 +55,7 @@ export function PersonalOpportunityCard({ opportunity: o }: PersonalOpportunityC
         </div>
         <div>
           <p className="text-xs text-bsr-text-secondary">حالة السوق</p>
-          <p className="font-semibold text-bsr-text-primary">{o.market_status}</p>
+          <p className="font-semibold text-bsr-text-primary">{o.market_status_label_ar}</p>
         </div>
       </div>
 

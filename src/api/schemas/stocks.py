@@ -286,6 +286,7 @@ class DecisionV2Out(BaseModel):
     horizon_type: str
 
     market_status: str
+    market_status_label_ar: str
     decision_timestamp: datetime
 
     invalidation_conditions: List[str]

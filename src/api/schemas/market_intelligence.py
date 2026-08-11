@@ -134,6 +134,7 @@ class PersonalOpportunityOut(BaseModel):
 
     current_price: Optional[float] = None
     market_status: str
+    market_status_label_ar: str
 
     entry_zone_low: Optional[float] = None
     entry_zone_high: Optional[float] = None

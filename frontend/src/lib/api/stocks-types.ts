@@ -208,6 +208,7 @@ export interface DecisionV2 {
   horizon_type: string;
 
   market_status: string;
+  market_status_label_ar: string;
   decision_timestamp: string;
 
   invalidation_conditions: string[];

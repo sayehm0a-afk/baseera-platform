@@ -540,6 +540,11 @@ def test_personal_top_opportunities_returns_at_most_five_unique_symbols(client, 
         assert opportunity["simple_decision_ar"] in ("شراء", "انتظار")
         assert opportunity["decision_label_ar"]
         assert opportunity["confidence_score"] is not None
+        # CONT Phase 5: market_status is a raw English enum -- the
+        # response must also carry its Arabic translation, never force
+        # the frontend to render the raw value.
+        assert opportunity["market_status_label_ar"]
+        assert opportunity["market_status_label_ar"] != opportunity["market_status"]
 
 
 def test_personal_top_opportunities_arabic_message_when_no_scan_has_ever_run(client, session_factory):
