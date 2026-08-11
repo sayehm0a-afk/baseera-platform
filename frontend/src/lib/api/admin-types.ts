@@ -246,6 +246,7 @@ export interface PersonalPerformanceDashboard {
   average_max_favorable_excursion_pct: number | null;
   average_max_adverse_excursion_pct: number | null;
   average_realized_return_pct: number | null;
+  average_time_to_target_days: number | null;
 
   calibration_by_bucket: { overall_error: number; buckets: unknown[] } | null;
   calibration_by_type: Record<string, Record<string, unknown>>;

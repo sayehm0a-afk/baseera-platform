@@ -92,6 +92,13 @@ class PersonalPerformanceDashboard:
     average_max_favorable_excursion_pct: Optional[float]
     average_max_adverse_excursion_pct: Optional[float]
     average_realized_return_pct: Optional[float]
+    # Real elapsed days from issuance to the first target actually
+    # touched (RecommendationOutcome.time_to_target_days, populated by
+    # outcome_evaluation.py's own price-path replay) -- lets the owner
+    # compare Basirah's stated time_horizon against what actually
+    # happened, instead of only ever seeing the *expected* duration.
+    # None across outcomes where no target was ever reached, not 0.
+    average_time_to_target_days: Optional[float]
 
     calibration_by_bucket: Optional[Dict]
     calibration_by_type: Dict[str, Dict]
@@ -242,6 +249,7 @@ def compute_personal_performance_dashboard(
         average_max_favorable_excursion_pct=_average([o.max_favorable_excursion_pct for o in outcomes_only]),
         average_max_adverse_excursion_pct=_average([o.max_adverse_excursion_pct for o in outcomes_only]),
         average_realized_return_pct=_average([o.return_pct for o in outcomes_only]),
+        average_time_to_target_days=_average([o.time_to_target_days for o in outcomes_only]),
         calibration_by_bucket=calibration,
         calibration_by_type=by_type,
         calibration_by_holding_period=by_holding_period,

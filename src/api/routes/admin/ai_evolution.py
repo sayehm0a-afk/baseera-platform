@@ -155,6 +155,7 @@ def get_personal_performance_dashboard(
         average_max_favorable_excursion_pct=result.average_max_favorable_excursion_pct,
         average_max_adverse_excursion_pct=result.average_max_adverse_excursion_pct,
         average_realized_return_pct=result.average_realized_return_pct,
+        average_time_to_target_days=result.average_time_to_target_days,
         calibration_by_bucket=result.calibration_by_bucket,
         calibration_by_type=result.calibration_by_type,
         calibration_by_holding_period=result.calibration_by_holding_period,

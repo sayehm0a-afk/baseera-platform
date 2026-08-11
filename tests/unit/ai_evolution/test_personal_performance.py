@@ -68,6 +68,7 @@ def _add_outcome(
     horizon_days=7, status=RecommendationOutcomeStatus.SUCCESSFUL, return_pct=5.0,
     hit_target=True, hit_stop=False, target_1_reached=True, target_2_reached=False,
     target_3_reached=False, mfe=6.0, mae=-1.0, sector="Energy", time_horizon="SWING",
+    time_to_target_days=None,
 ):
     stock = _make_stock(session, symbol, sector=sector)
     snapshot = RecommendationSnapshot(
@@ -86,6 +87,7 @@ def _add_outcome(
             target_1_reached=target_1_reached, target_2_reached=target_2_reached,
             target_3_reached=target_3_reached,
             max_favorable_excursion_pct=mfe, max_adverse_excursion_pct=mae,
+            time_to_target_days=time_to_target_days,
         )
     )
     session.commit()
@@ -142,6 +144,28 @@ def test_target_and_stop_hit_rates_computed_from_real_outcome_flags(session):
     assert result.average_max_favorable_excursion_pct == 6.0
     assert result.average_max_adverse_excursion_pct == -1.0
     assert result.average_realized_return_pct == 5.0
+
+
+def test_average_time_to_target_days_reflects_real_realized_duration(session):
+    """CONT Phase 11: expected-duration realism -- the owner must see
+    how long it actually took to reach a target, not just the stated
+    time_horizon label. Outcomes where no target was ever reached leave
+    time_to_target_days null and must not be treated as 0."""
+    _add_outcome(session, "1111", time_to_target_days=2)
+    _add_outcome(session, "2222", time_to_target_days=4)
+    _add_outcome(session, "3333", time_to_target_days=None, hit_target=False, target_1_reached=False)
+
+    result = compute_personal_performance_dashboard(session, evaluation_horizon_days=7)
+
+    assert result.average_time_to_target_days == 3.0
+
+
+def test_average_time_to_target_days_is_none_not_zero_when_no_target_was_ever_reached(session):
+    _add_outcome(session, "1111", time_to_target_days=None, hit_target=False, target_1_reached=False)
+
+    result = compute_personal_performance_dashboard(session, evaluation_horizon_days=7)
+
+    assert result.average_time_to_target_days is None
 
 
 def test_paper_trade_and_backtest_snapshots_are_excluded(session):

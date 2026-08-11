@@ -189,6 +189,14 @@ function PersonalPerformancePageInner() {
                   : "بيانات غير كافية"}
               </span>
             </div>
+            <div className="flex items-center justify-between py-bsr-2">
+              <span className="text-sm text-bsr-text-secondary">متوسط المدة الفعلية لبلوغ الهدف</span>
+              <span className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
+                {data.average_time_to_target_days !== null
+                  ? `${data.average_time_to_target_days.toFixed(1)} يوم`
+                  : "بيانات غير كافية"}
+              </span>
+            </div>
           </Card>
 
           <Card title="أقوى القطاعات أداءً">

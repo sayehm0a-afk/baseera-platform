@@ -46,6 +46,7 @@ class PersonalPerformanceDashboardOut(BaseModel):
     average_max_favorable_excursion_pct: Optional[float] = None
     average_max_adverse_excursion_pct: Optional[float] = None
     average_realized_return_pct: Optional[float] = None
+    average_time_to_target_days: Optional[float] = None
 
     calibration_by_bucket: Optional[Dict] = None
     calibration_by_type: Dict[str, Dict]
