@@ -41,6 +41,7 @@ from src.market_data.providers.dev_market_data_provider import DevMarketDataProv
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.providers.sahmk_market_data_provider import SahmkMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
+from src.market_data.sahmk.rate_limiter import SahmkRateLimitExceededError
 from src.market_data.strict_mode import StrictRealDataUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -285,7 +286,7 @@ async def _select_provider(
             "access is available."
         )
         return DevMarketDataProvider(), "dev"
-    except (SahmkError, CircuitBreakerOpenError) as exc:
+    except (SahmkError, SahmkRateLimitExceededError, CircuitBreakerOpenError) as exc:
         await _cleanup_on_failure()
         if strict:
             raise StrictRealDataUnavailableError(f"SAHMK connectivity probe failed: {exc}")

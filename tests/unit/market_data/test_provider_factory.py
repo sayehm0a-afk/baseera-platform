@@ -7,9 +7,13 @@ import asyncio
 
 import pytest
 
+from datetime import datetime, timezone
+
 from src.market_data import provider_factory
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkRequestError
+from src.market_data.sahmk.rate_limiter import SahmkUpstreamQuotaExhaustedError
+from src.market_data.strict_mode import StrictRealDataUnavailableError
 
 
 class _FakeSahmkProvider:
@@ -117,6 +121,51 @@ async def test_auto_with_credentials_but_unreachable_host_falls_back_to_dev(monk
     provider = await provider_factory.get_market_data_provider()
     assert isinstance(provider, DevMarketDataProvider)
     assert provider_factory.get_last_selected_provider_kind() == "dev"
+
+
+@pytest.mark.asyncio
+async def test_auto_with_credentials_but_upstream_quota_exhausted_falls_back_to_dev(monkeypatch):
+    """Real 2026-08-11 production condition: SahmkUpstreamQuotaExhaustedError
+    (raised by the rate limiter's own preemptive block -- see
+    rate_limiter.py) is not a SahmkError, a different exception
+    hierarchy. Without this fallback, a real POST /api/v1/market/scan
+    made while SAHMK's quota is confirmed exhausted 500'd with an
+    unhandled exception instead of either falling back to
+    DevMarketDataProvider (non-strict) or raising the clean, typed
+    StrictRealDataUnavailableError -> ProviderUnavailableError 503 the
+    dependency layer already expects (strict)."""
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _quota_exhausted():
+        raise SahmkUpstreamQuotaExhaustedError(
+            "SAHMK's real daily quota is confirmed exhausted.",
+            reset_at_utc=datetime(2026, 8, 11, 21, 0, 0, tzinfo=timezone.utc),
+            evidence="Daily rate limit exceeded (5000 requests/day).",
+        )
+
+    _FakeSahmkProvider.check_connectivity = lambda self: _quota_exhausted()
+
+    provider = await provider_factory.get_market_data_provider()
+    assert isinstance(provider, DevMarketDataProvider)
+    assert provider_factory.get_last_selected_provider_kind() == "dev"
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_with_upstream_quota_exhausted_raises_clean_typed_error(monkeypatch):
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+    monkeypatch.setenv("ALLOW_SYNTHETIC_DATA", "false")
+
+    async def _quota_exhausted():
+        raise SahmkUpstreamQuotaExhaustedError(
+            "SAHMK's real daily quota is confirmed exhausted.",
+            reset_at_utc=datetime(2026, 8, 11, 21, 0, 0, tzinfo=timezone.utc),
+            evidence="Daily rate limit exceeded (5000 requests/day).",
+        )
+
+    _FakeSahmkProvider.check_connectivity = lambda self: _quota_exhausted()
+
+    with pytest.raises(StrictRealDataUnavailableError):
+        await provider_factory.get_market_data_provider()
 
 
 @pytest.mark.asyncio
