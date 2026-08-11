@@ -141,6 +141,33 @@ RISK_LEVEL_LABELS_AR = {
     "VERY_HIGH": "مرتفعة جدًا",
 }
 
+# Arabic labels for the internal English basis codes AIDecisionEngine's
+# _refine_with_key_levels/_compute_price_targets and structure.py's
+# compute_entry_zone/compute_extended_targets return ("atr", "atr_band",
+# "atr_extension", "support_level", "resistance_level", "not_applicable")
+# -- engine.py's recommendation_basis interpolates these into an
+# otherwise-Arabic sentence, so a raw code must never leak through
+# untranslated (2026-08-11 production evidence: recommendation_basis
+# read "...أساس وقف الخسارة: support_level..." unchanged).
+BASIS_LABELS_AR = {
+    "atr": "بناءً على مدى التقلب (ATR)",
+    "atr_band": "بناءً على نطاق التقلب (ATR)",
+    "atr_extension": "بناءً على امتداد التقلب (ATR)",
+    "support_level": "عند أقرب مستوى دعم حقيقي",
+    "resistance_level": "عند أقرب مستوى مقاومة حقيقي",
+    "not_applicable": "غير قابل للحساب حاليًا",
+}
+
+
+def basis_label_ar(basis_code: Optional[str]) -> str:
+    """Never returns the raw English code -- an unrecognized/None code
+    falls back to the same 'ATR' label already used for the common
+    case, rather than leaking an untranslated string into an Arabic
+    sentence."""
+    if basis_code is None:
+        return BASIS_LABELS_AR["atr"]
+    return BASIS_LABELS_AR.get(basis_code, BASIS_LABELS_AR["atr"])
+
 
 @dataclass(frozen=True)
 class SubScores:

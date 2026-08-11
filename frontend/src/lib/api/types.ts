@@ -107,6 +107,64 @@ export interface OpportunitiesResponse {
   categories: OpportunityCategory[];
 }
 
+/** "امسح السوق الآن" -- at most 5 unique, ranked day-trading
+ * opportunities, read straight from src.market_intelligence.
+ * personal_scan (GET /api/v1/market/personal/top-opportunities). Every
+ * field here already exists on the backend's Decision Engine V2
+ * output; nothing is recomputed on the frontend. */
+export interface PersonalOpportunity {
+  rank: number;
+  symbol: string;
+  company_name_ar: string | null;
+  company_name_en: string;
+  sector_ar: string | null;
+
+  decision: string;
+  decision_label_ar: string;
+  simple_decision_ar: string;
+
+  current_price: number | null;
+  market_status: string;
+
+  entry_zone_low: number | null;
+  entry_zone_high: number | null;
+  entry_status_label_ar: string | null;
+  is_entry_late: boolean;
+
+  target_1: number | null;
+  target_2: number | null;
+  target_3: number | null;
+  stop_loss: number | null;
+  risk_reward_target_1: number | null;
+
+  confidence_score: number;
+  risk_level_label_ar: string | null;
+
+  decision_summary_ar: string | null;
+  entry_confirmation_conditions_ar: string[];
+  invalidation_conditions: string[];
+
+  expected_holding_period_label_ar: string | null;
+  trend_direction_ar: string | null;
+  trend_strength_label_ar: string | null;
+  liquidity_quality_ar: string | null;
+
+  nearest_resistance: number | null;
+  breakout_level: number | null;
+
+  decision_timestamp: string;
+}
+
+export interface PersonalScanResponse {
+  scan_run_id: number | null;
+  generated_at: string | null;
+  data_age_hours: number | null;
+  max_data_age_hours: number;
+  is_stale: boolean;
+  opportunities: PersonalOpportunity[];
+  message_ar: string | null;
+}
+
 export interface WatchlistEntry {
   symbol: string;
   sector: string | null;

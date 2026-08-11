@@ -6,7 +6,15 @@ plain dict/list that reaches a JSON column.
 
 import numpy as np
 
-from src.analysis.decision_v2.types import GateOutcome, GateStatus, SubScores, gates_to_dicts, sub_scores_to_dict
+from src.analysis.decision_v2.types import (
+    BASIS_LABELS_AR,
+    GateOutcome,
+    GateStatus,
+    SubScores,
+    basis_label_ar,
+    gates_to_dicts,
+    sub_scores_to_dict,
+)
 
 
 def test_sub_scores_to_dict_coerces_numpy_floats_to_plain_floats():
@@ -49,3 +57,20 @@ def test_gates_to_dicts_coerces_numpy_bool_to_plain_bool():
     ]
     assert type(result[0]["passed"]) is bool
     assert type(result[0]["blocking"]) is bool
+
+
+def test_basis_label_ar_translates_every_known_code():
+    """Regression (2026-08-11 production evidence): engine.py's
+    recommendation_basis interpolates AIDecisionEngine/structure.py's
+    internal English basis codes into an otherwise-Arabic sentence --
+    every code either module can actually return must have a real
+    Arabic translation, never fall through untranslated."""
+    for code in ("atr", "atr_band", "atr_extension", "support_level", "resistance_level", "not_applicable"):
+        label = basis_label_ar(code)
+        assert label == BASIS_LABELS_AR[code]
+        assert label.isascii() is False, f"basis_label_ar({code!r}) returned a non-Arabic string: {label!r}"
+
+
+def test_basis_label_ar_never_leaks_an_unrecognized_or_missing_code():
+    assert basis_label_ar(None) == BASIS_LABELS_AR["atr"]
+    assert basis_label_ar("some_future_english_code") == BASIS_LABELS_AR["atr"]

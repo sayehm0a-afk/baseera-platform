@@ -27,6 +27,7 @@ from src.analysis.decision_v2.types import (
     Decision,
     DecisionResult,
     SubScores,
+    basis_label_ar,
 )
 from src.analysis.recommendation.types import AnalysisContext, Recommendation, SignalDirection
 from src.market_intelligence.config import (
@@ -345,10 +346,11 @@ class DecisionEngineV2:
             recommendation_basis=(
                 "دمج مرجّح وموثّق لعناصر الاتجاه والزخم والحجم والسيولة والتقلب والعائد إلى المخاطرة "
                 "وسياق السوق وجودة البيانات، مبني بالكامل على مؤشرات فنية حقيقية محسوبة مسبقًا "
-                f"(أساس وقف الخسارة: {investment_decision.stop_loss_basis}، "
-                f"أساس الهدف الأول: {investment_decision.target_price_basis}، "
-                f"أساس الهدف الثاني: {target_2_basis}، أساس الهدف الثالث: {target_3_basis}، "
-                f"أساس نطاق الدخول: {entry_basis})."
+                f"(أساس وقف الخسارة: {basis_label_ar(investment_decision.stop_loss_basis)}، "
+                f"أساس الهدف الأول: {basis_label_ar(investment_decision.target_price_basis)}، "
+                f"أساس الهدف الثاني: {basis_label_ar(target_2_basis)}، "
+                f"أساس الهدف الثالث: {basis_label_ar(target_3_basis)}، "
+                f"أساس نطاق الدخول: {basis_label_ar(entry_basis)})."
             ),
             analysis_version=DECISION_V2_ENGINE_VERSION,
             data_source=data_source,

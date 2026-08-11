@@ -33,6 +33,7 @@ from src.api.dependencies import get_market_provider
 from src.api.exceptions import DuplicateMarketScanError, MarketScanRunNotFoundError, NoMarketScanDataError
 from src.api.middleware.rate_limiting import limiter
 from src.auth.rbac import require_active_subscription
+from src.analysis.decision_v2.types import Decision
 from src.api.schemas.market_intelligence import (
     AlertOut,
     AlertsOut,
@@ -45,6 +46,8 @@ from src.api.schemas.market_intelligence import (
     MarketSummaryOut,
     OpportunitiesOut,
     OpportunityCategoryOut,
+    PersonalOpportunityOut,
+    PersonalScanOut,
     RankingEntryOut,
     RankingListOut,
     RankingsOut,
@@ -56,6 +59,7 @@ from src.api.schemas.market_intelligence import (
 )
 from src.core.db.database import get_db
 from src.domain.models import (
+    DecisionV2Snapshot,
     MarketChangeEvent,
     MarketScanProgress,
     MarketScanRun,
@@ -68,6 +72,7 @@ from src.market_intelligence.config import get_max_scan_run_duration_hours
 from src.market_intelligence.market_snapshot import MarketSnapshotBuilder
 from src.market_intelligence.market_status import get_market_status
 from src.market_intelligence.opportunity_ranking import curate_opportunity_rankings
+from src.market_intelligence.personal_scan import select_top_opportunities
 from src.market_intelligence.ranking import RankingEngine
 from src.market_intelligence.read_model import outcome_from_record
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -75,6 +80,23 @@ from src.market_intelligence.services.scan_job_runner import run_market_scan_job
 from src.market_intelligence.symbol_selector import SymbolSelector
 from src.market_intelligence.types import ChangeDetectionResult, ChangeEvent, ChangeType, SectorSummary
 from src.market_intelligence.watchlist import WatchlistEngine
+
+# Personal-mode simplification (see personal_scan.py): the full Decision
+# taxonomy collapses to the three-word action the primary "امسح السوق
+# الآن" UI needs. STRONG_BUY_CANDIDATE/BUY_CANDIDATE both read "شراء" --
+# the fuller "شراء قوي" nuance stays available via decision_label_ar for
+# anyone who wants it; WAIT_FOR_ENTRY reads "انتظار". Every other
+# Decision value is already excluded upstream by personal_scan's
+# _OPPORTUNITY_DECISIONS filter and would never reach this mapping, but
+# falls back to "تجاهل" rather than raising if that ever changes.
+_SIMPLE_DECISION_AR = {
+    Decision.STRONG_BUY_CANDIDATE.value: "شراء",
+    Decision.BUY_CANDIDATE.value: "شراء",
+    Decision.WAIT_FOR_ENTRY.value: "انتظار",
+}
+
+_NO_STRONG_OPPORTUNITY_AR = "لا توجد فرصة عالية الجودة حالياً"
+_DATA_TOO_STALE_AR = "البيانات الحالية غير كافية لإصدار توصية جديدة"
 
 logger = logging.getLogger(__name__)
 
@@ -466,6 +488,82 @@ def get_opportunities(
             )
             for entry in curated
         ],
+    )
+
+
+def _to_personal_opportunity_out(rank: int, snapshot: DecisionV2Snapshot) -> PersonalOpportunityOut:
+    # entry_status is already derived from price_has_missed_entry_zone
+    # (see engine.py) -- reusing the field instead of recomputing it.
+    is_entry_late = snapshot.entry_status == "MISSED_ENTRY"
+    return PersonalOpportunityOut(
+        rank=rank,
+        symbol=snapshot.symbol,
+        company_name_ar=snapshot.company_name_ar,
+        company_name_en=snapshot.company_name_en,
+        sector_ar=snapshot.sector_ar,
+        decision=snapshot.decision,
+        decision_label_ar=snapshot.decision_label_ar,
+        simple_decision_ar=_SIMPLE_DECISION_AR.get(snapshot.decision, "تجاهل"),
+        current_price=float(snapshot.current_price) if snapshot.current_price is not None else None,
+        market_status=snapshot.market_status,
+        entry_zone_low=float(snapshot.entry_zone_low) if snapshot.entry_zone_low is not None else None,
+        entry_zone_high=float(snapshot.entry_zone_high) if snapshot.entry_zone_high is not None else None,
+        entry_status_label_ar=snapshot.entry_status_label_ar,
+        is_entry_late=is_entry_late,
+        target_1=float(snapshot.target_1) if snapshot.target_1 is not None else None,
+        target_2=float(snapshot.target_2) if snapshot.target_2 is not None else None,
+        target_3=float(snapshot.target_3) if snapshot.target_3 is not None else None,
+        stop_loss=float(snapshot.stop_loss) if snapshot.stop_loss is not None else None,
+        risk_reward_target_1=float(snapshot.risk_reward_target_1) if snapshot.risk_reward_target_1 is not None else None,
+        confidence_score=float(snapshot.confidence_score),
+        risk_level_label_ar=snapshot.risk_level_label_ar,
+        decision_summary_ar=snapshot.decision_summary_ar,
+        entry_confirmation_conditions_ar=snapshot.entry_confirmation_conditions_ar or [],
+        invalidation_conditions=snapshot.invalidation_conditions or [],
+        expected_holding_period_label_ar=snapshot.expected_holding_period_label_ar,
+        trend_direction_ar=snapshot.trend_direction_ar,
+        trend_strength_label_ar=snapshot.trend_strength_label_ar,
+        liquidity_quality_ar=snapshot.liquidity_quality_ar,
+        nearest_resistance=float(snapshot.nearest_resistance) if snapshot.nearest_resistance is not None else None,
+        breakout_level=float(snapshot.breakout_level) if snapshot.breakout_level is not None else None,
+        decision_timestamp=snapshot.decision_timestamp,
+    )
+
+
+@router.get("/personal/top-opportunities", response_model=PersonalScanOut)
+@limiter.limit("30/minute")
+def get_personal_top_opportunities(
+    request: Request,
+    max_results: int = Query(5, ge=1, le=5),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> PersonalScanOut:
+    """"امسح السوق الآن" -- at most 5 unique, ranked day-trading
+    opportunities. Reads the latest completed scan's already-persisted
+    `DecisionV2Snapshot` rows (see src.market_intelligence.
+    personal_scan); never triggers a new scan and makes zero SAHMK
+    requests, however many times this is called. Returns an explicit
+    Arabic empty state -- never a fabricated pick -- when either no
+    candidate currently qualifies or the underlying scan is too old to
+    trust."""
+    run = _repository.get_latest_successful_run(session)
+    result = select_top_opportunities(session, run, max_results=max_results)
+
+    if result.is_stale:
+        message_ar = _DATA_TOO_STALE_AR
+    elif not result.candidates:
+        message_ar = _NO_STRONG_OPPORTUNITY_AR
+    else:
+        message_ar = None
+
+    return PersonalScanOut(
+        scan_run_id=result.scan_run.id if result.scan_run is not None else None,
+        generated_at=result.scan_run.finished_at if result.scan_run is not None else None,
+        data_age_hours=result.data_age_hours,
+        max_data_age_hours=result.max_data_age_hours,
+        is_stale=result.is_stale,
+        opportunities=[_to_personal_opportunity_out(i + 1, s) for i, s in enumerate(result.candidates)],
+        message_ar=message_ar,
     )
 
 
