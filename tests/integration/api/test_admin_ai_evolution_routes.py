@@ -23,9 +23,11 @@ from src.domain.models import (
     ConfidenceCalibrationModel,
     ConfidenceCalibrationStatus,
     DailyIntelligenceSnapshot,
+    DecisionV2Snapshot,
     DiscoveredPattern,
     ReflectionReport,
     StaffRole,
+    Stock,
     User,
 )
 
@@ -51,6 +53,14 @@ def session() -> Iterator[Session]:
 @pytest.fixture
 def admin(session) -> User:
     u = User(email="admin@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ADMIN)
+    session.add(u)
+    session.commit()
+    return u
+
+
+@pytest.fixture
+def owner(session) -> User:
+    u = User(email="owner@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
     session.add(u)
     session.commit()
     return u
@@ -223,3 +233,53 @@ def test_paper_trade_comparison_with_no_data(client, admin):
     assert body["evaluation_horizon_days"] == 7
     assert body["champion_sample_size"] == 0
     assert body["significant"] is False
+
+
+# --- GET /personal-performance (CONT Phase 3, OWNER-only) -------------------
+
+
+def test_personal_performance_rejects_unauthenticated_requests(client):
+    """No get_current_user override at all here -- a real request with
+    no access_token cookie, exercising the actual 401 path."""
+    response = client.get("/api/v1/admin/ai-evolution/personal-performance")
+    assert response.status_code == 401
+
+
+def test_personal_performance_rejects_admin_staff_who_is_not_owner(client, admin):
+    _as(admin)
+    response = client.get("/api/v1/admin/ai-evolution/personal-performance")
+    assert response.status_code == 403
+
+
+def test_personal_performance_reports_insufficient_data_for_owner_with_no_history(client, owner):
+    _as(owner)
+    response = client.get("/api/v1/admin/ai-evolution/personal-performance")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_decisions_issued"] == 0
+    assert body["insufficient_data_message_ar"] == "بيانات غير كافية لعرض هذا المقياس"
+    assert body["market_risk_state_calibration_unavailable_ar"]
+
+
+def test_personal_performance_reflects_real_decision_v2_distribution_for_owner(client, owner, session):
+    stock = Stock(symbol="1111", name_en="Company 1111", sector="Energy")
+    session.add(stock)
+    session.commit()
+    session.add(
+        DecisionV2Snapshot(
+            stock_id=stock.id, symbol="1111", company_name_en="Company 1111", decision="BUY_CANDIDATE",
+            decision_label_ar="شراء", confidence_score=75.0, opportunity_quality_score=70.0, risk_score=40.0,
+            data_quality_score=90.0, data_freshness_status="LIVE", market_status="OPEN",
+            decision_timestamp=datetime.now(timezone.utc), analysis_version="2.0.0", data_source="SAHMK_REAL",
+            scan_run_id=1, entry_status="READY_NOW",
+        )
+    )
+    session.commit()
+
+    _as(owner)
+    response = client.get("/api/v1/admin/ai-evolution/personal-performance")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_decisions_issued"] == 1
+    assert body["decision_distribution"] == {"BUY_CANDIDATE": 1}
+    assert body["entry_status_distribution"] == {"READY_NOW": 1}

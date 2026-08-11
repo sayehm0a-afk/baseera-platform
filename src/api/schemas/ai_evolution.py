@@ -11,6 +11,55 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, ConfigDict
 
 
+class GroupPerformanceOut(BaseModel):
+    group: str
+    sample_size: int
+    win_rate: Optional[float] = None
+
+
+class PersonalPerformanceDashboardOut(BaseModel):
+    """OWNER-only diagnostic dashboard over the personal day-trading
+    product's own real decisions and outcomes (CONT Phase 3) -- distinct
+    from the public `/api/v1/recommendations/history/stats` track
+    record, which is intentionally open to every user. Every metric is
+    `None`/empty with `insufficient_data_message_ar` set rather than a
+    fabricated figure when the underlying sample is empty."""
+
+    generated_at: datetime
+    evaluation_horizon_days: int
+
+    total_decisions_issued: int
+    decision_distribution: Dict[str, int]
+    entry_status_distribution: Dict[str, int]
+    market_risk_state_distribution: Dict[str, int]
+    sector_distribution: Dict[str, int]
+
+    outcome_sample_size: int
+    terminal_outcome_sample_size: int
+    status_counts: Dict[str, int]
+    target_1_hit_rate: Optional[float] = None
+    target_2_hit_rate: Optional[float] = None
+    target_3_hit_rate: Optional[float] = None
+    stop_loss_hit_rate: Optional[float] = None
+    expired_count: int
+    unresolved_count: int
+    average_max_favorable_excursion_pct: Optional[float] = None
+    average_max_adverse_excursion_pct: Optional[float] = None
+    average_realized_return_pct: Optional[float] = None
+
+    calibration_by_bucket: Optional[Dict] = None
+    calibration_by_type: Dict[str, Dict]
+    calibration_by_holding_period: Dict[str, Dict]
+    calibration_by_sector: Dict[str, Dict]
+    market_risk_state_calibration_unavailable_ar: str
+
+    strongest_groups: List[GroupPerformanceOut]
+    weakest_groups: List[GroupPerformanceOut]
+
+    small_sample_warning: bool
+    insufficient_data_message_ar: Optional[str] = None
+
+
 class DailyIntelligenceSnapshotOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

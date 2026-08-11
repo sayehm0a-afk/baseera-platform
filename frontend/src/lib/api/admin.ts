@@ -18,6 +18,7 @@ import type {
   FeatureFlagList,
   FullDiscoveryTrigger,
   MarketCoverage,
+  PersonalPerformanceDashboard,
   StaffRoleValue,
   SystemHealth,
 } from "./admin-types";
@@ -148,6 +149,14 @@ export function getAnalytics(): Promise<Analytics> {
 export function getDecisionIntelligence(withinHours = 72): Promise<DecisionIntelligence> {
   return apiFetch<DecisionIntelligence>(
     `/api/v1/admin/market-intelligence/decision-intelligence?within_hours=${withinHours}`
+  );
+}
+
+/** OWNER-only (CONT Phase 3) -- direct, unmodified call to
+ * /api/v1/admin/ai-evolution/personal-performance. */
+export function getPersonalPerformanceDashboard(evaluationHorizonDays = 7): Promise<PersonalPerformanceDashboard> {
+  return apiFetch<PersonalPerformanceDashboard>(
+    `/api/v1/admin/ai-evolution/personal-performance?evaluation_horizon_days=${evaluationHorizonDays}`
   );
 }
 

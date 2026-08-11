@@ -25,12 +25,15 @@ from src.ai_evolution.paper_trading import (
     compare_champion_vs_challenger,
     get_latest_challenger_config,
 )
+from src.ai_evolution.personal_performance import compute_personal_performance_dashboard
 from src.api.schemas.ai_evolution import (
     CalibrationStatusOut,
     DailyIntelligenceSnapshotOut,
     DiscoveredPatternListOut,
     DiscoveredPatternOut,
+    GroupPerformanceOut,
     PaperTradeComparisonOut,
+    PersonalPerformanceDashboardOut,
     ReflectionReportListOut,
     ReflectionReportOut,
 )
@@ -117,3 +120,48 @@ def get_paper_trade_comparison(
 ) -> PaperTradeComparisonOut:
     result = compare_champion_vs_challenger(session, evaluation_horizon_days=evaluation_horizon_days)
     return PaperTradeComparisonOut(evaluation_horizon_days=evaluation_horizon_days, **result.__dict__)
+
+
+@router.get("/personal-performance", response_model=PersonalPerformanceDashboardOut)
+def get_personal_performance_dashboard(
+    evaluation_horizon_days: int = Query(7, ge=1),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.OWNER)),
+) -> PersonalPerformanceDashboardOut:
+    """OWNER-only (CONT Phase 3): decision/entry-status/market-risk-state
+    distributions from the real personal-scan product surface
+    (DecisionV2Snapshot), plus target/stop hit rates, MFE/MAE, realized
+    return, and confidence calibration from real tracked outcomes
+    (RecommendationOutcome/RecommendationSnapshot) -- never a
+    fabricated figure, never hidden behind a "successes only" filter."""
+    result = compute_personal_performance_dashboard(session, evaluation_horizon_days=evaluation_horizon_days)
+    return PersonalPerformanceDashboardOut(
+        generated_at=result.generated_at,
+        evaluation_horizon_days=result.evaluation_horizon_days,
+        total_decisions_issued=result.total_decisions_issued,
+        decision_distribution=result.decision_distribution,
+        entry_status_distribution=result.entry_status_distribution,
+        market_risk_state_distribution=result.market_risk_state_distribution,
+        sector_distribution=result.sector_distribution,
+        outcome_sample_size=result.outcome_sample_size,
+        terminal_outcome_sample_size=result.terminal_outcome_sample_size,
+        status_counts=result.status_counts,
+        target_1_hit_rate=result.target_1_hit_rate,
+        target_2_hit_rate=result.target_2_hit_rate,
+        target_3_hit_rate=result.target_3_hit_rate,
+        stop_loss_hit_rate=result.stop_loss_hit_rate,
+        expired_count=result.expired_count,
+        unresolved_count=result.unresolved_count,
+        average_max_favorable_excursion_pct=result.average_max_favorable_excursion_pct,
+        average_max_adverse_excursion_pct=result.average_max_adverse_excursion_pct,
+        average_realized_return_pct=result.average_realized_return_pct,
+        calibration_by_bucket=result.calibration_by_bucket,
+        calibration_by_type=result.calibration_by_type,
+        calibration_by_holding_period=result.calibration_by_holding_period,
+        calibration_by_sector=result.calibration_by_sector,
+        market_risk_state_calibration_unavailable_ar=result.market_risk_state_calibration_unavailable_ar,
+        strongest_groups=[GroupPerformanceOut(**g.__dict__) for g in result.strongest_groups],
+        weakest_groups=[GroupPerformanceOut(**g.__dict__) for g in result.weakest_groups],
+        small_sample_warning=result.small_sample_warning,
+        insufficient_data_message_ar=result.insufficient_data_message_ar,
+    )
