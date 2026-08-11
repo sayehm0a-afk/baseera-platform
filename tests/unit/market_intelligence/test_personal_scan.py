@@ -47,6 +47,9 @@ def _make_stock(session, symbol) -> Stock:
 def _add_snapshot(
     session, run, symbol, *, decision="BUY_CANDIDATE", opportunity_quality_score=70.0,
     confidence_score=75.0, risk_score=40.0, entry_status="READY_NOW",
+    risk_reward_target_1=None, news_impact=None, volume_confirms_decision=None,
+    abnormal_volume=None, market_risk_entry_permitted=None, why_not_buy_reasons=None,
+    current_price=30.0, invalidation_price=None,
 ):
     stock = session.query(Stock).filter_by(symbol=symbol).first() or _make_stock(session, symbol)
     snapshot = DecisionV2Snapshot(
@@ -54,9 +57,12 @@ def _add_snapshot(
         decision=decision, decision_label_ar="شراء",
         confidence_score=confidence_score, opportunity_quality_score=opportunity_quality_score,
         risk_score=risk_score, data_quality_score=90.0, data_freshness_status="LIVE",
-        current_price=30.0, market_status="OPEN", decision_timestamp=datetime.now(timezone.utc),
+        current_price=current_price, market_status="OPEN", decision_timestamp=datetime.now(timezone.utc),
         analysis_version="2.0.0", data_source="SAHMK_REAL", scan_run_id=run.id,
-        entry_status=entry_status,
+        entry_status=entry_status, risk_reward_target_1=risk_reward_target_1, news_impact=news_impact,
+        volume_confirms_decision=volume_confirms_decision, abnormal_volume=abnormal_volume,
+        market_risk_entry_permitted=market_risk_entry_permitted, why_not_buy_reasons=why_not_buy_reasons,
+        invalidation_price=invalidation_price,
     )
     session.add(snapshot)
     session.commit()
@@ -153,3 +159,104 @@ def test_no_scan_run_at_all_is_stale_not_a_crash(session):
     assert result.candidates == []
     assert result.is_stale is True
     assert result.data_age_hours is None
+
+
+# --- CONT Phase 4: composite-score ranking factors ---------------------------
+
+
+def test_entry_readiness_breaks_a_tie_between_equal_quality_candidates(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(session, run, "5001", entry_status="WAIT_FOR_PULLBACK")
+    _add_snapshot(session, run, "5002", entry_status="READY_NOW")
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert [c.symbol for c in result.candidates] == ["5002", "5001"]
+
+
+def test_higher_risk_reward_ranks_above_otherwise_identical_candidate(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(session, run, "6001", risk_reward_target_1=1.0)
+    _add_snapshot(session, run, "6002", risk_reward_target_1=4.0)
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert [c.symbol for c in result.candidates] == ["6002", "6001"]
+
+
+def test_negative_news_impact_ranks_below_positive_at_equal_quality(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(session, run, "7001", news_impact="NEGATIVE")
+    _add_snapshot(session, run, "7002", news_impact="POSITIVE")
+    _add_snapshot(session, run, "7003", news_impact=None)
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert [c.symbol for c in result.candidates] == ["7002", "7003", "7001"]
+
+
+def test_abnormal_volume_ranks_below_volume_confirmed_at_equal_quality(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(session, run, "8001", abnormal_volume=True)
+    _add_snapshot(session, run, "8002", volume_confirms_decision=True)
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert [c.symbol for c in result.candidates] == ["8002", "8001"]
+
+
+def test_market_risk_entry_not_permitted_is_penalized(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(session, run, "9001", market_risk_entry_permitted=False)
+    _add_snapshot(session, run, "9002", market_risk_entry_permitted=True)
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert [c.symbol for c in result.candidates] == ["9002", "9001"]
+
+
+def test_contradictory_evidence_reasons_lower_the_rank(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(session, run, "1101", why_not_buy_reasons=["سيولة ضعيفة", "تقلب مرتفع"])
+    _add_snapshot(session, run, "1102", why_not_buy_reasons=[])
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert [c.symbol for c in result.candidates] == ["1102", "1101"]
+
+
+def test_candidate_close_to_invalidation_price_is_penalized(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(session, run, "1201", current_price=30.0, invalidation_price=29.7)  # 1% away -- tight
+    _add_snapshot(session, run, "1202", current_price=30.0, invalidation_price=25.0)  # far from invalidation
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert [c.symbol for c in result.candidates] == ["1202", "1201"]
+
+
+def test_decision_priority_still_dominates_every_composite_score_factor(session):
+    """The richer composite score must never override the hard business
+    rule that STRONG_BUY_CANDIDATE > BUY_CANDIDATE > WAIT_FOR_ENTRY,
+    however favorable the losing candidate's other signals are."""
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now)
+    _add_snapshot(
+        session, run, "1301", decision="WAIT_FOR_ENTRY", opportunity_quality_score=99.0,
+        risk_reward_target_1=5.0, news_impact="POSITIVE", volume_confirms_decision=True,
+    )
+    _add_snapshot(
+        session, run, "1302", decision="STRONG_BUY_CANDIDATE", opportunity_quality_score=1.0,
+        risk_reward_target_1=None, news_impact="NEGATIVE", abnormal_volume=True,
+    )
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert [c.symbol for c in result.candidates] == ["1302", "1301"]
