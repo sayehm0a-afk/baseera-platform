@@ -140,6 +140,27 @@ jobs:
           print(d.get('latest_scan_skipped_symbols'))
           "
 
+      - name: Fetch personal top-opportunities (real "امسح السوق الآن" read path -- no scan triggered)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/market/personal/top-opportunities" -o /tmp/personal.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/personal.json'))
+          print('=== personal/top-opportunities ===')
+          print('scan_run_id:', d.get('scan_run_id'))
+          print('is_stale:', d.get('is_stale'))
+          print('data_age_hours:', d.get('data_age_hours'))
+          print('message_ar:', d.get('message_ar'))
+          opps = d.get('opportunities') or []
+          print('opportunities_count:', len(opps))
+          symbols = [o['symbol'] for o in opps]
+          print('symbols:', symbols)
+          print('unique_symbols:', len(symbols) == len(set(symbols)))
+          "
+
       - name: Upload evidence artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -148,6 +169,7 @@ jobs:
           path: |
             /tmp/coverage.json
             /tmp/summary.json
+            /tmp/personal.json
           retention-days: 14
 
       - name: Clean up local session artifacts
