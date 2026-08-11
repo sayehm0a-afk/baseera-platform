@@ -134,6 +134,7 @@ class PersonalOpportunityOut(BaseModel):
 
     current_price: Optional[float] = None
     market_status: str
+    market_status_label_ar: str
 
     entry_zone_low: Optional[float] = None
     entry_zone_high: Optional[float] = None
@@ -177,6 +178,14 @@ class PersonalScanOut(BaseModel):
     data_age_hours: Optional[float] = None
     max_data_age_hours: float
     is_stale: bool
+    # CONT Phase 6: a 4-state honest freshness read (FRESH/AGING/STALE/
+    # NO_SCAN, see personal_scan.py) so the frontend can show "getting
+    # old but still usable" distinctly from a hard staleness cutoff,
+    # instead of only the coarser `is_stale` boolean. `freshness_label_ar`
+    # is the ready-to-render Arabic text -- the frontend never needs to
+    # translate `freshness_state` itself.
+    freshness_state: str
+    freshness_label_ar: str
     opportunities: List[PersonalOpportunityOut]
     message_ar: Optional[str] = None
 

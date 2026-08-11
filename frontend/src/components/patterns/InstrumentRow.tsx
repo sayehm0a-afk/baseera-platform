@@ -73,7 +73,7 @@ export function InstrumentRow({
         {price != null ? (
           <div className="flex flex-col items-end">
             {priceKind === "target" ? (
-              <span className="text-[10px] text-bsr-text-muted">الهدف</span>
+              <span className="text-xs text-bsr-text-muted">الهدف</span>
             ) : null}
             <span className="bsr-numeric font-semibold text-bsr-text-primary">
               {price.toFixed(2)}
@@ -87,7 +87,7 @@ export function InstrumentRow({
               </span>
             ) : null}
             {stopLoss != null ? (
-              <span className="bsr-numeric text-[10px] text-bsr-action-sell">
+              <span className="bsr-numeric text-xs text-bsr-action-sell">
                 وقف: {stopLoss.toFixed(2)}
               </span>
             ) : null}

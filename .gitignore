@@ -1,4 +1,9 @@
 # ===========================
+# Node (stray root-level artifacts; frontend/ has its own .gitignore)
+# ===========================
+node_modules/
+
+# ===========================
 # Python
 # ===========================
 __pycache__/

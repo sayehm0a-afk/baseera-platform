@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { EmptyState } from "@/components/patterns/EmptyState";
+import { FreshnessBanner } from "@/components/patterns/FreshnessBanner";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { PersonalOpportunityCard } from "@/components/patterns/PersonalOpportunityCard";
 import { getPersonalTopOpportunities } from "@/lib/api/market";
@@ -71,6 +72,11 @@ export default function TodayPage() {
         >
           {data.status === "loading" ? "جارٍ البحث عن أفضل الفرص..." : "امسح السوق الآن"}
         </button>
+        {data.status === "ready" ? (
+          <div className="mt-bsr-3">
+            <FreshnessBanner result={data.result} />
+          </div>
+        ) : null}
       </section>
 
       {data.status === "loading" ? <LoadingScreen /> : null}
@@ -95,9 +101,11 @@ export default function TodayPage() {
         <EmptyState
           title={data.result.message_ar ?? "لا توجد فرصة عالية الجودة حالياً"}
           description={
-            data.result.is_stale
-              ? "آخر مسح للسوق قديم جدًا ليُستخدم كتوصية جديدة موثوقة."
-              : "تم فحص السوق ولم يجتز أي سهم معايير الجودة اللازمة لترشيحه حاليًا."
+            data.result.freshness_state === "NO_SCAN"
+              ? "لم يُنفَّذ أي مسح للسوق بعد."
+              : data.result.is_stale
+                ? "آخر مسح للسوق قديم جدًا ليُستخدم كتوصية جديدة موثوقة -- راجع الحالة أعلاه."
+                : "تم فحص السوق ولم يجتز أي سهم معايير الجودة اللازمة لترشيحه حاليًا."
           }
         />
       ) : null}

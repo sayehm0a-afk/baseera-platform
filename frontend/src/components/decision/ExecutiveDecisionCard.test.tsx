@@ -40,7 +40,8 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
     expected_holding_period_max_days: 15,
     expected_holding_period_label_ar: "من 5 إلى 15 يوم تداول",
     horizon_type: "SWING",
-    market_status: "التداول المستمر",
+    market_status: "OPEN",
+    market_status_label_ar: "التداول المستمر",
     decision_timestamp: "2026-08-04T12:00:00Z",
     invalidation_conditions: ["إغلاق دون وقف الخسارة"],
     positive_reasons: ["اتجاه صاعد مؤكد بحجم تداول قوي"],
@@ -197,10 +198,22 @@ describe("ExecutiveDecisionCard", () => {
     }
   });
 
-  it("renders the data source, engine version, and decision timestamp in the footer", () => {
+  it("renders the Arabic data-source trust signal, never the raw internal provider identifier, plus the engine version and decision timestamp", () => {
     render(<ExecutiveDecisionCard decision={buildDecision({ data_source: "SAHMK_REAL", analysis_version: "2.0.0" })} />);
-    expect(screen.getByText(/SAHMK_REAL/)).toBeInTheDocument();
+    expect(screen.getByText(/بيانات حقيقية من السوق/)).toBeInTheDocument();
+    expect(screen.queryByText(/SAHMK_REAL/)).not.toBeInTheDocument();
     expect(screen.getByText(/2\.0\.0/)).toBeInTheDocument();
+  });
+
+  it("falls back to the raw data_source value for an unrecognized future source, rather than hiding it", () => {
+    render(<ExecutiveDecisionCard decision={buildDecision({ data_source: "SOME_NEW_PROVIDER" })} />);
+    expect(screen.getByText(/SOME_NEW_PROVIDER/)).toBeInTheDocument();
+  });
+
+  it("renders the Arabic market-status label, never the raw English enum value", () => {
+    render(<ExecutiveDecisionCard decision={buildDecision({ market_status: "OPEN", market_status_label_ar: "التداول المستمر" })} />);
+    expect(screen.getByText("التداول المستمر")).toBeInTheDocument();
+    expect(screen.queryByText("OPEN")).not.toBeInTheDocument();
   });
 
   it("renders the Phase 2A beginner-friendly summary and why-now sentence", () => {

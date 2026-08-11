@@ -37,6 +37,13 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from src.analysis.decision_v2.types import Decision
+from src.analysis.recommendation.fundamental_contributor import (
+    _score_debt_to_equity,
+    _score_eps_growth,
+    _score_net_margin,
+    _score_revenue_growth,
+    _score_roe,
+)
 from src.domain.models import DecisionV2Snapshot, MarketScanRun
 from src.market_intelligence.config import get_max_data_age_hours
 
@@ -54,6 +61,41 @@ _OPPORTUNITY_DECISIONS = (
 _DECISION_PRIORITY = {value: index for index, value in enumerate(_OPPORTUNITY_DECISIONS)}
 
 
+# Freshness is disclosed as one of four honest states, not a single
+# stale/fresh boolean -- CONT Phase 6. FRESH and AGING both still
+# return real candidates (the scan is within `max_data_age_hours`
+# either way); the distinction is purely informational, so a trader
+# nearing the staleness cutoff sees the data is getting old before it
+# actually stops being usable, rather than a sudden "no data" cliff.
+FRESHNESS_FRESH = "FRESH"
+FRESHNESS_AGING = "AGING"
+FRESHNESS_STALE = "STALE"
+FRESHNESS_NO_SCAN = "NO_SCAN"
+
+FRESHNESS_LABELS_AR = {
+    FRESHNESS_FRESH: "بيانات حديثة",
+    FRESHNESS_AGING: "بيانات آخذة في التقادم لكنها لا تزال مفيدة",
+    FRESHNESS_STALE: "بيانات قديمة جدًا لإصدار توصية جديدة",
+    FRESHNESS_NO_SCAN: "لا يوجد مسح سابق للسوق",
+}
+
+# The fraction of max_data_age_hours after which still-usable data is
+# disclosed as "aging" rather than simply "fresh" -- halfway through
+# the freshness budget is the natural, unambiguous midpoint; not tied
+# to any other threshold in the codebase.
+_AGING_THRESHOLD_FRACTION = 0.5
+
+
+def _classify_freshness(is_stale: bool, data_age_hours: Optional[float], max_data_age_hours: float) -> str:
+    if data_age_hours is None:
+        return FRESHNESS_NO_SCAN
+    if is_stale:
+        return FRESHNESS_STALE
+    if data_age_hours > max_data_age_hours * _AGING_THRESHOLD_FRACTION:
+        return FRESHNESS_AGING
+    return FRESHNESS_FRESH
+
+
 @dataclass(frozen=True)
 class PersonalScanResult:
     scan_run: Optional[MarketScanRun]
@@ -61,6 +103,8 @@ class PersonalScanResult:
     is_stale: bool
     data_age_hours: Optional[float]
     max_data_age_hours: float
+    freshness_state: str
+    freshness_label_ar: str
 
 
 def _latest_snapshot_per_symbol(snapshots: List[DecisionV2Snapshot]) -> List[DecisionV2Snapshot]:
@@ -76,14 +120,119 @@ def _latest_snapshot_per_symbol(snapshots: List[DecisionV2Snapshot]) -> List[Dec
     return list(best_by_symbol.values())
 
 
-def _sort_key(snapshot: DecisionV2Snapshot):
-    priority = _DECISION_PRIORITY.get(snapshot.decision, len(_DECISION_PRIORITY))
+# Entry-readiness points -- how immediately actionable the entry is,
+# not just whether Decision Engine V2 classified it a "candidate."
+# READY_NOW earns the biggest bonus; MISSED_ENTRY (the price already
+# ran past a sane entry zone) is penalized even though the underlying
+# decision may still be BUY_CANDIDATE. CONDITIONAL_ON_BREAKOUT and an
+# unset entry_status are treated as neutral (0) -- no real evidence
+# either way, never guessed.
+_ENTRY_READINESS_POINTS = {
+    "READY_NOW": 10.0,
+    "NEAR_ENTRY": 5.0,
+    "WAIT_FOR_PULLBACK": 0.0,
+    "MISSED_ENTRY": -15.0,
+}
+
+_NEWS_IMPACT_POINTS = {"POSITIVE": 5.0, "NEGATIVE": -8.0}
+
+# Each entry in why_not_buy_reasons is one real, named caveat Decision
+# Engine V2 itself surfaced about this exact candidate (see
+# DecisionResult.why_not_buy_reasons) -- a small per-reason penalty so
+# a candidate with several disclosed caveats ranks below an otherwise
+# similar one with none, without ever hiding or discarding the caveats
+# themselves (still shown in full via the transparency panel).
+_CONTRADICTION_PENALTY_PER_REASON = -2.0
+_CONTRADICTION_PENALTY_CAP = -10.0
+
+# Percent-of-price distance from the invalidation level below which a
+# candidate is penalized for being "one bad tick from invalidated" --
+# real evidence (invalidation_price vs. current_price), not a guess.
+_INVALIDATION_PROXIMITY_TIGHT_PCT = 2.0
+_INVALIDATION_PROXIMITY_NEAR_PCT = 5.0
+
+
+# Fundamental ratios (revenue growth, profitability, leverage) that
+# Decision Engine V2 already persisted on this exact snapshot via
+# `fundamental_summary` (src.analysis.decision_v2.fundamental_summary)
+# -- CONT Phase 9. Reuses `FundamentalScoreContributor`'s own bucket
+# thresholds verbatim (never re-declared here) so this ranking can
+# never contradict the fundamentals a user is shown on the stock
+# detail page. Degrades to 0 (neutral) per-ratio when a ratio could
+# not be computed from real reported financials, exactly like every
+# other _composite_score component.
+_FUNDAMENTAL_QUALITY_SCORERS = (
+    ("return_on_equity", _score_roe),
+    ("net_profit_margin", _score_net_margin),
+    ("debt_to_equity", _score_debt_to_equity),
+    ("revenue_growth", _score_revenue_growth),
+    ("eps_growth", _score_eps_growth),
+)
+
+
+def _fundamental_quality_points(fundamental_summary: Optional[dict]) -> float:
+    if not fundamental_summary:
+        return 0.0
+    points = 0.0
+    for key, scorer in _FUNDAMENTAL_QUALITY_SCORERS:
+        value = fundamental_summary.get(key)
+        if value is None:
+            continue
+        pts, _signal = scorer(value)
+        points += pts
+    return points
+
+
+def _composite_score(snapshot: DecisionV2Snapshot) -> float:
+    """A single ranking score blending every real, already-computed
+    Decision Engine V2 signal this module has access to -- not just
+    quality+confidence. Higher is better. Every component degrades to
+    a neutral (0) contribution when its underlying field is null,
+    never a guessed value standing in for missing evidence."""
     quality = float(snapshot.opportunity_quality_score) if snapshot.opportunity_quality_score is not None else 0.0
     confidence = float(snapshot.confidence_score) if snapshot.confidence_score is not None else 0.0
-    # Lower risk_score is safer; used only as the final tie-break so it
-    # never overrides the primary quality/confidence ranking.
-    risk = float(snapshot.risk_score) if snapshot.risk_score is not None else 100.0
-    return (priority, -quality, -confidence, risk)
+    risk = float(snapshot.risk_score) if snapshot.risk_score is not None else 50.0
+
+    score = quality * 0.30 + confidence * 0.25 + (100.0 - risk) * 0.10
+
+    if snapshot.risk_reward_target_1 is not None:
+        risk_reward = min(float(snapshot.risk_reward_target_1), 5.0)
+        score += (risk_reward / 5.0) * 100.0 * 0.15
+
+    score += _ENTRY_READINESS_POINTS.get(snapshot.entry_status, 0.0)
+    score += _NEWS_IMPACT_POINTS.get(snapshot.news_impact, 0.0)
+
+    if snapshot.volume_confirms_decision is True:
+        score += 5.0
+    if snapshot.abnormal_volume is True:
+        score -= 5.0
+
+    if snapshot.market_risk_entry_permitted is False:
+        score -= 10.0
+
+    score += _fundamental_quality_points(snapshot.fundamental_summary)
+
+    reasons = snapshot.why_not_buy_reasons or []
+    score += max(len(reasons) * _CONTRADICTION_PENALTY_PER_REASON, _CONTRADICTION_PENALTY_CAP)
+
+    if snapshot.current_price is not None and snapshot.invalidation_price is not None and snapshot.current_price:
+        distance_pct = abs(float(snapshot.current_price) - float(snapshot.invalidation_price)) / float(
+            snapshot.current_price
+        ) * 100.0
+        if distance_pct < _INVALIDATION_PROXIMITY_TIGHT_PCT:
+            score -= 10.0
+        elif distance_pct < _INVALIDATION_PROXIMITY_NEAR_PCT:
+            score -= 5.0
+
+    return score
+
+
+def _sort_key(snapshot: DecisionV2Snapshot):
+    priority = _DECISION_PRIORITY.get(snapshot.decision, len(_DECISION_PRIORITY))
+    # Symbol as the final, fully deterministic tie-break -- two
+    # candidates scoring exactly equal must still sort the same way on
+    # every call, never depend on dict/query iteration order.
+    return (priority, -_composite_score(snapshot), snapshot.symbol)
 
 
 def select_top_opportunities(
@@ -102,7 +251,8 @@ def select_top_opportunities(
 
     if scan_run is None or scan_run.finished_at is None:
         return PersonalScanResult(
-            scan_run=scan_run, candidates=[], is_stale=True, data_age_hours=None, max_data_age_hours=max_age_hours
+            scan_run=scan_run, candidates=[], is_stale=True, data_age_hours=None, max_data_age_hours=max_age_hours,
+            freshness_state=FRESHNESS_NO_SCAN, freshness_label_ar=FRESHNESS_LABELS_AR[FRESHNESS_NO_SCAN],
         )
 
     finished_at = scan_run.finished_at
@@ -112,7 +262,8 @@ def select_top_opportunities(
 
     if age_hours > max_age_hours:
         return PersonalScanResult(
-            scan_run=scan_run, candidates=[], is_stale=True, data_age_hours=age_hours, max_data_age_hours=max_age_hours
+            scan_run=scan_run, candidates=[], is_stale=True, data_age_hours=age_hours, max_data_age_hours=max_age_hours,
+            freshness_state=FRESHNESS_STALE, freshness_label_ar=FRESHNESS_LABELS_AR[FRESHNESS_STALE],
         )
 
     rows = (
@@ -127,6 +278,8 @@ def select_top_opportunities(
     deduped = _latest_snapshot_per_symbol(rows)
     ranked = sorted(deduped, key=_sort_key)[:max_results]
 
+    freshness_state = _classify_freshness(False, age_hours, max_age_hours)
     return PersonalScanResult(
-        scan_run=scan_run, candidates=ranked, is_stale=False, data_age_hours=age_hours, max_data_age_hours=max_age_hours
+        scan_run=scan_run, candidates=ranked, is_stale=False, data_age_hours=age_hours, max_data_age_hours=max_age_hours,
+        freshness_state=freshness_state, freshness_label_ar=FRESHNESS_LABELS_AR[freshness_state],
     )

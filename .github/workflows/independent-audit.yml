@@ -1,0 +1,110 @@
+name: Independent Production Audit (temporary, one-shot, read-only)
+
+# An assumption-free audit of real production: exercises every route
+# inventoried in src/api/routes/ as an external user would (anonymous,
+# a brand-new self-registered customer going through the real email-
+# verification wall, and the staff account), plus a real headless-
+# browser pass over the production frontend. No prior conclusions are
+# assumed true -- every check makes its own real HTTP/browser call.
+#
+# Read-only in intent: no env vars are changed, no destructive calls
+# are made. The only state created is one throwaway test user account
+# and one ordinary portfolio-analyze call + one real market scan --
+# the same actions any real customer/operator would trigger.
+#
+# This workflow and its scripts (.github/workflows/independent_audit/)
+# are throwaway audit tooling, not application code.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  api-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install --quiet requests
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend: $BACKEND_URL"
+          rm -f /tmp/backend_domains.json
+
+      - name: Run independent API audit
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: python3 .github/workflows/independent_audit/api_audit.py
+
+  frontend-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: []
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve frontend public URL
+        id: urls
+        run: |
+          railway domain list --service frontend --json > /tmp/frontend_domains.json
+          FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Frontend: $FRONTEND_URL"
+          rm -f /tmp/frontend_domains.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright
+        run: |
+          pip install --quiet playwright
+          playwright install --with-deps chromium
+
+      - name: Run independent frontend audit
+        env:
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+          SCREENSHOT_DIR: /tmp/screenshots
+        run: python3 .github/workflows/independent_audit/frontend_audit.py
+
+      - name: Upload screenshots as evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-audit-screenshots
+          path: /tmp/screenshots
+          retention-days: 7

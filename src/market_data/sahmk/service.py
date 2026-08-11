@@ -271,7 +271,7 @@ class SahmkMarketDataService:
             )
 
         return await self._cache.get_or_compute(
-            ("quote", symbol), _compute, ttl_seconds=QUOTE_CACHE_TTL_SECONDS
+            ("quote", symbol), _compute, ttl_seconds=QUOTE_CACHE_TTL_SECONDS, model=SahmkQuote
         )
 
     async def get_historical_bars(
@@ -306,7 +306,7 @@ class SahmkMarketDataService:
 
         cache_key = ("historical", symbol, date_from.isoformat(), date_to.isoformat(), interval)
         return await self._cache.get_or_compute(
-            cache_key, _compute, ttl_seconds=HISTORICAL_CACHE_TTL_SECONDS
+            cache_key, _compute, ttl_seconds=HISTORICAL_CACHE_TTL_SECONDS, model=SahmkHistoricalBar
         )
 
     async def get_daily_bar(self, symbol: str, on: Optional[date] = None) -> SahmkHistoricalBar:
@@ -334,7 +334,7 @@ class SahmkMarketDataService:
             )
 
         return await self._cache.get_or_compute(
-            ("summary", index), _compute, ttl_seconds=MARKET_SUMMARY_CACHE_TTL_SECONDS
+            ("summary", index), _compute, ttl_seconds=MARKET_SUMMARY_CACHE_TTL_SECONDS, model=SahmkMarketSummary
         )
 
     async def get_recent_events(self, limit: int = 10) -> List[SahmkEvent]:
@@ -352,7 +352,7 @@ class SahmkMarketDataService:
             ]
 
         return await self._cache.get_or_compute(
-            ("events", limit), _compute, ttl_seconds=EVENTS_CACHE_TTL_SECONDS
+            ("events", limit), _compute, ttl_seconds=EVENTS_CACHE_TTL_SECONDS, model=SahmkEvent
         )
 
     async def get_company_profile(self, symbol: str) -> SahmkCompanyProfile:
@@ -369,7 +369,8 @@ class SahmkMarketDataService:
             )
 
         return await self._cache.get_or_compute(
-            ("company_profile", symbol), _compute, ttl_seconds=COMPANY_PROFILE_CACHE_TTL_SECONDS
+            ("company_profile", symbol), _compute, ttl_seconds=COMPANY_PROFILE_CACHE_TTL_SECONDS,
+            model=SahmkCompanyProfile,
         )
 
     async def get_company_directory(self) -> List[SahmkCompanyProfile]:
@@ -534,7 +535,8 @@ class SahmkMarketDataService:
             return result
 
         return await self._cache.get_or_compute(
-            "company_directory", _compute, ttl_seconds=COMPANY_DIRECTORY_CACHE_TTL_SECONDS
+            "company_directory", _compute, ttl_seconds=COMPANY_DIRECTORY_CACHE_TTL_SECONDS,
+            model=SahmkCompanyProfile,
         )
 
     async def get_financials(self, symbol: str, period_type: str = "annual") -> SahmkFinancials:
@@ -591,7 +593,7 @@ class SahmkMarketDataService:
 
         cache_key = ("financials", symbol, period_type)
         return await self._cache.get_or_compute(
-            cache_key, _compute, ttl_seconds=FINANCIALS_CACHE_TTL_SECONDS
+            cache_key, _compute, ttl_seconds=FINANCIALS_CACHE_TTL_SECONDS, model=SahmkFinancials
         )
 
     async def get_dividends(self, symbol: str) -> List[SahmkDividend]:
@@ -625,7 +627,7 @@ class SahmkMarketDataService:
             return result
 
         return await self._cache.get_or_compute(
-            ("dividends", symbol), _compute, ttl_seconds=DIVIDENDS_CACHE_TTL_SECONDS
+            ("dividends", symbol), _compute, ttl_seconds=DIVIDENDS_CACHE_TTL_SECONDS, model=SahmkDividend
         )
 
     async def get_latest_dividend_per_share(self, symbol: str) -> Optional[float]:

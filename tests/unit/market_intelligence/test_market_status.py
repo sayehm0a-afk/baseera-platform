@@ -5,7 +5,11 @@ datetime math layered on trading_calendar, no I/O. Uses fixed dates
 
 from datetime import datetime
 
-from src.market_intelligence.market_status import MarketSessionStatus, get_market_status
+from src.market_intelligence.market_status import (
+    MarketSessionStatus,
+    get_market_status,
+    market_status_label_ar,
+)
 from src.market_intelligence.trading_calendar import TADAWUL_TIMEZONE
 
 
@@ -70,3 +74,24 @@ class TestGetMarketStatus:
     def test_disclosed_gap_note_is_always_present(self):
         info = get_market_status(_tadawul(2026, 7, 28, 12, 0))
         assert "عطلة" in info.holiday_calendar_disclosed_gap
+
+
+class TestMarketStatusLabelAr:
+    """Regression coverage for CONT Phase 5: `market_status` is stored
+    on DecisionV2Snapshot as a raw English string -- this helper is
+    what stands between that and ever leaking to a user-facing
+    surface, so every known value must translate, and an unknown/None
+    value must degrade to the UNKNOWN label rather than leaking raw
+    text."""
+
+    def test_translates_every_known_status_value(self):
+        for status in MarketSessionStatus:
+            label = market_status_label_ar(status.value)
+            assert label
+            assert label.isascii() is False  # every real label is Arabic text
+
+    def test_falls_back_to_unknown_label_for_none(self):
+        assert market_status_label_ar(None) == "حالة غير مؤكدة"
+
+    def test_falls_back_to_unknown_label_for_an_unrecognized_value(self):
+        assert market_status_label_ar("SOME_FUTURE_STATUS") == "حالة غير مؤكدة"

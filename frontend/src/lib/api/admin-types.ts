@@ -209,6 +209,58 @@ export interface DecisionIntelligence {
   sector_ranking: SectorRanking[];
 }
 
+/** OWNER-only performance dashboard for the personal day-trading
+ * product (CONT Phase 3) -- GET
+ * /api/v1/admin/ai-evolution/personal-performance. Distinct from the
+ * public /api/v1/recommendations/history/stats track record: this
+ * diagnostic view is deliberately staff-role-gated (OWNER, not just
+ * ADMIN) server-side. Every field is a direct read of already-computed
+ * aggregates; `null`/empty fields paired with
+ * `insufficient_data_message_ar` mean "not enough data," never a
+ * fabricated figure. */
+export interface GroupPerformance {
+  group: string;
+  sample_size: number;
+  win_rate: number | null;
+}
+
+export interface PersonalPerformanceDashboard {
+  generated_at: string;
+  evaluation_horizon_days: number;
+
+  total_decisions_issued: number;
+  decision_distribution: Record<string, number>;
+  entry_status_distribution: Record<string, number>;
+  market_risk_state_distribution: Record<string, number>;
+  sector_distribution: Record<string, number>;
+
+  outcome_sample_size: number;
+  terminal_outcome_sample_size: number;
+  status_counts: Record<string, number>;
+  target_1_hit_rate: number | null;
+  target_2_hit_rate: number | null;
+  target_3_hit_rate: number | null;
+  stop_loss_hit_rate: number | null;
+  expired_count: number;
+  unresolved_count: number;
+  average_max_favorable_excursion_pct: number | null;
+  average_max_adverse_excursion_pct: number | null;
+  average_realized_return_pct: number | null;
+  average_time_to_target_days: number | null;
+
+  calibration_by_bucket: { overall_error: number; buckets: unknown[] } | null;
+  calibration_by_type: Record<string, Record<string, unknown>>;
+  calibration_by_holding_period: Record<string, Record<string, unknown>>;
+  calibration_by_sector: Record<string, Record<string, unknown>>;
+  market_risk_state_calibration_unavailable_ar: string;
+
+  strongest_groups: GroupPerformance[];
+  weakest_groups: GroupPerformance[];
+
+  small_sample_warning: boolean;
+  insufficient_data_message_ar: string | null;
+}
+
 /** AI Multi-Agent Investment Committee -- GET
  * /api/v1/admin/investment-committee/*. Every field is a direct read
  * of the real, persisted CommitteeConsensus/CommitteeAgentOpinion rows

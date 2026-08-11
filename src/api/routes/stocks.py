@@ -117,7 +117,7 @@ from src.domain.sector_labels import sector_label_ar
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
 from src.market_data.validators.symbol_validator import InvalidSymbolError, validate_symbol_format
-from src.market_intelligence.market_status import MarketSessionStatus, get_market_status
+from src.market_intelligence.market_status import MarketSessionStatus, get_market_status, market_status_label_ar
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository, _f
 
 logger = logging.getLogger(__name__)
@@ -817,6 +817,7 @@ async def get_decision_v2(
         expected_holding_period_label_ar=result.expected_holding_period_label_ar,
         horizon_type=result.horizon_type,
         market_status=result.market_status,
+        market_status_label_ar=market_status_label_ar(result.market_status),
         decision_timestamp=result.decision_timestamp,
         invalidation_conditions=result.invalidation_conditions,
         positive_reasons=result.positive_reasons,

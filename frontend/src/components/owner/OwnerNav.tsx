@@ -21,6 +21,7 @@ const LINKS: { href: string; label: string }[] = [
   { href: "/owner/decision-intelligence", label: "ذكاء القرار" },
   { href: "/owner/investment-committee", label: "لجنة الاستثمار" },
   { href: "/owner/recommendation-history", label: "سجل التوصيات" },
+  { href: "/owner/personal-performance", label: "أداء الفرص اليومية" },
   { href: "/owner/market-coverage", label: "تغطية السوق" },
   { href: "/owner/subscriptions", label: "الاشتراكات" },
 ];

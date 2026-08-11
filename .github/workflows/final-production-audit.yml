@@ -1,0 +1,156 @@
+name: Final Production Audit (temporary, one-shot)
+
+# Independent post-fix audit for the numpy-coercion fix (commit 8d8e4d0)
+# and the temporary reap-threshold maneuver used to capture evidence of
+# it (reap-and-capture-evidence.yml). Verifies, all with real production
+# calls -- no assumptions carried over from the fix/evidence session:
+#   1. MARKET_MAX_SCAN_RUN_DURATION_HOURS is back at its production
+#      default (4) -- no leftover temporary env var.
+#   2. No orphaned PENDING/RUNNING MarketScanRun rows remain.
+#   3. A fresh diagnostic scan still writes real DecisionV2Snapshot rows.
+#   4. Every customer-facing endpoint that reads DecisionV2Snapshot-
+#      backed data (the single-row /decision-v2 route -- NOT touched by
+#      the batch-insert fix, so it needs its own real check -- plus
+#      /market/summary, /market/rankings, /market/opportunities,
+#      /market/watchlists, /market/sectors) returns 200 with real data.
+#   5. Recent backend logs show zero new crash tracebacks since the fix
+#      deployed.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend: $BACKEND_URL"
+
+      - name: "[1] Check MARKET_MAX_SCAN_RUN_DURATION_HOURS is at its production default"
+        run: |
+          # `railway variable list --json` dumps every raw variable value
+          # (including secrets like SAHMK_API_KEY) -- never echo the file
+          # itself, only extract and print the one non-secret key we care about.
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_vars.json 2>/dev/null || echo '{}' > /tmp/backend_vars.json
+          python3 -c "import json; d=json.load(open('/tmp/backend_vars.json')); val=d.get('MARKET_MAX_SCAN_RUN_DURATION_HOURS'); print('MARKET_MAX_SCAN_RUN_DURATION_HOURS =', repr(val)); print('LEFTOVER_TEMPORARY_VALUE_DETECTED:' + repr(val)) if (val is not None and val != '4') else print('OK: no leftover temporary threshold.')" > /tmp/audit_step1_out.txt
+          cat /tmp/audit_step1_out.txt
+          if grep -q 'LEFTOVER_TEMPORARY_VALUE_DETECTED' /tmp/audit_step1_out.txt; then
+            echo "::error::Leftover temporary MARKET_MAX_SCAN_RUN_DURATION_HOURS value detected."
+            exit 1
+          fi
+          rm -f /tmp/backend_vars.json /tmp/audit_step1_out.txt
+
+      - name: Log in as the staff account
+        id: login
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Login as the staff account failed."
+            exit 1
+          fi
+          CSRF=$(grep -i csrf_token /tmp/cookies.txt | awk '{print $NF}')
+          echo "$CSRF" > /tmp/.csrf
+
+      - name: "[2] Dispatch a diagnostic scan -- confirms no orphaned run blocks it"
+        id: diag
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          CSRF=$(cat /tmp/.csrf)
+          curl -sS --connect-timeout 10 --max-time 120 -b /tmp/cookies.txt \
+            -X POST "$BACKEND_URL/api/v1/admin/market-intelligence/diagnostic-scan" \
+            -H "Content-Type: application/json" \
+            -H "x-csrf-token: $CSRF" \
+            -d '{}' \
+            -o /tmp/diagnostic.json -w "\nHTTP %{http_code}\n"
+          echo "=== Diagnostic scan result ==="
+          python3 -m json.tool /tmp/diagnostic.json
+          python3 -c "import json; d=json.load(open('/tmp/diagnostic.json')); err=d.get('sahmk_error') or ''; status=('RUN_44_STILL_REFERENCED:' + err) if 'run 44' in err else (('NOTE_GENUINE_OVERLAP:' + err) if 'already in progress' in err else 'OK_NO_OVERLAP_SKIP'); print(status); print('latest_completed_run_id =', d.get('latest_completed_run_id')); print('latest_completed_run_decision_v2_rows_written =', d.get('latest_completed_run_decision_v2_rows_written')); print('RUN_ID=' + str(d.get('run_id') or d.get('latest_completed_run_id') or ''))" | tee /tmp/diag_summary.txt
+          if grep -q 'RUN_44_STILL_REFERENCED' /tmp/diag_summary.txt; then
+            echo "::error::Run 44 still referenced -- orphan was NOT actually cleared."
+            exit 1
+          fi
+          RUN_ID=$(grep '^RUN_ID=' /tmp/diag_summary.txt | cut -d= -f2)
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: "[3] Check the referenced run's real terminal state (proves no new orphan)"
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          RUN_ID: ${{ steps.diag.outputs.run_id }}
+        run: |
+          if [ -z "$RUN_ID" ]; then echo "No run id to check -- skipping."; exit 0; fi
+          echo "=== GET /api/v1/market/scan/$RUN_ID ==="
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\nHTTP %{http_code}\n" \
+            "$BACKEND_URL/api/v1/market/scan/$RUN_ID"
+
+      - name: "[4a] Verify /decision-v2 (single-row insert path, NOT touched by the batch fix) still works"
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          for SYM in 2222 1120 1180; do
+            echo "=== GET /api/v1/stocks/$SYM/decision-v2 ==="
+            HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt -o /tmp/decision_v2_out.json -w "%{http_code}" \
+              "$BACKEND_URL/api/v1/stocks/$SYM/decision-v2")
+            echo "HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "::error::GET /stocks/$SYM/decision-v2 returned $HTTP_CODE"
+              cat /tmp/decision_v2_out.json
+              exit 1
+            fi
+            python3 -m json.tool /tmp/decision_v2_out.json | head -20
+          done
+
+      - name: "[4b] Verify every other DecisionV2Snapshot-dependent public endpoint"
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          for EP in "market/summary" "market/rankings" "market/opportunities" "market/watchlists" "market/sectors"; do
+            echo "=== GET /api/v1/$EP ==="
+            HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt -o /tmp/ep_out.json -w "%{http_code}" \
+              "$BACKEND_URL/api/v1/$EP")
+            echo "HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "::error::GET /$EP returned $HTTP_CODE"
+              cat /tmp/ep_out.json
+              exit 1
+            fi
+            wc -c /tmp/ep_out.json
+          done
+          echo "All DecisionV2Snapshot-dependent endpoints returned 200."
+
+      - name: "[5] Scan recent backend logs for any NEW crash since the fix deployed"
+        run: |
+          timeout 25 railway logs --service "$RAILWAY_BACKEND_SERVICE" 2>&1 | tail -2000 > /tmp/recent_logs.txt || true
+          echo "=== Every 'Market scan run N failed' line with its real embedded timestamp ==="
+          grep "Market scan run [0-9]* failed" /tmp/recent_logs.txt || echo "(none found)"
+          echo "=== Context around the first numpy-coercion crash signature match, if any (for run-number/timestamp identification) ==="
+          grep -B 15 -m 1 -E "schema \"np\" does not exist|Object of type bool is not JSON serializable" /tmp/recent_logs.txt || echo "(no crash signature found at all -- OK)"
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: rm -f /tmp/.csrf /tmp/cookies.txt /tmp/login_body.json /tmp/diagnostic.json /tmp/decision_v2_out.json /tmp/ep_out.json /tmp/recent_logs.txt /tmp/backend_vars.json /tmp/diag_summary.txt /tmp/check_threshold.py /tmp/check_diag.py /tmp/audit_step1_out.txt

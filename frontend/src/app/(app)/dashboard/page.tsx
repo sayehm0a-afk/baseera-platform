@@ -239,7 +239,7 @@ export default function DashboardPage() {
                       {Math.round(sector.breadth * 100)}%
                     </span>
                   </div>
-                  <div className="flex items-center gap-bsr-4 text-sm">
+                  <div className="flex flex-wrap items-center gap-bsr-4 text-sm">
                     <span className="text-bsr-action-buy">
                       شراء {sector.buy_count}
                     </span>

@@ -125,6 +125,7 @@ export interface PersonalOpportunity {
 
   current_price: number | null;
   market_status: string;
+  market_status_label_ar: string;
 
   entry_zone_low: number | null;
   entry_zone_high: number | null;
@@ -161,6 +162,8 @@ export interface PersonalScanResponse {
   data_age_hours: number | null;
   max_data_age_hours: number;
   is_stale: boolean;
+  freshness_state: "FRESH" | "AGING" | "STALE" | "NO_SCAN";
+  freshness_label_ar: string;
   opportunities: PersonalOpportunity[];
   message_ar: string | null;
 }

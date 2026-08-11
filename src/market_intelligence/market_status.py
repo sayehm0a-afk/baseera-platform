@@ -112,6 +112,20 @@ class MarketStatusInfo:
     )
 
 
+def market_status_label_ar(value: Optional[str]) -> str:
+    """Translates a raw `MarketSessionStatus` value (as stored on
+    `DecisionV2Snapshot.market_status`, a plain string column -- the
+    domain layer never imports this enum, see that model's own
+    docstring) into its Arabic label. Falls back to UNKNOWN's label for
+    `None` or any value outside the known taxonomy, never leaking the
+    raw English string to a user-facing surface."""
+    try:
+        status = MarketSessionStatus(value)
+    except ValueError:
+        return _LABELS_AR[MarketSessionStatus.UNKNOWN]
+    return _LABELS_AR[status]
+
+
 def _last_completed_session_date(local_now: datetime) -> date:
     """The latest Sun-Thu date whose 15:10 closing-auction end is
     strictly before `local_now` (Tadawul local time)."""

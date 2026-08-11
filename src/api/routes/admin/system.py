@@ -156,6 +156,14 @@ async def get_dashboard_summary(
         logger.error("Admin dashboard summary: SAHMK quota status read failed: %s", exc)
         sahmk_quota_status = None
 
+    try:
+        from src.market_data.caching.redis_shared_cache import get_default_sahmk_cache, get_observability_snapshot
+
+        market_data_cache_status = get_observability_snapshot({"sahmk_market_data": get_default_sahmk_cache()})
+    except Exception as exc:
+        logger.error("Admin dashboard summary: market-data cache status read failed: %s", exc)
+        market_data_cache_status = None
+
     market_data_health = _classify_market_data_health(health_snapshot, market_data_circuit_breaker_state)
     market_data_status = _classify_market_data_status(
         health_snapshot, sahmk_quota_status, market_data_circuit_breaker_state
@@ -246,4 +254,5 @@ async def get_dashboard_summary(
         strict_real_data_enforced=is_strict_real_data_enabled(),
         scan_lock_active=scan_lock_active,
         sahmk_quota_status=sahmk_quota_status,
+        market_data_cache_status=market_data_cache_status,
     )
