@@ -162,6 +162,8 @@ export interface PersonalScanResponse {
   data_age_hours: number | null;
   max_data_age_hours: number;
   is_stale: boolean;
+  freshness_state: "FRESH" | "AGING" | "STALE" | "NO_SCAN";
+  freshness_label_ar: string;
   opportunities: PersonalOpportunity[];
   message_ar: string | null;
 }

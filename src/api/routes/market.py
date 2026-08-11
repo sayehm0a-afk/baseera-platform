@@ -563,6 +563,8 @@ def get_personal_top_opportunities(
         data_age_hours=result.data_age_hours,
         max_data_age_hours=result.max_data_age_hours,
         is_stale=result.is_stale,
+        freshness_state=result.freshness_state,
+        freshness_label_ar=result.freshness_label_ar,
         opportunities=[_to_personal_opportunity_out(i + 1, s) for i, s in enumerate(result.candidates)],
         message_ar=message_ar,
     )

@@ -54,6 +54,41 @@ _OPPORTUNITY_DECISIONS = (
 _DECISION_PRIORITY = {value: index for index, value in enumerate(_OPPORTUNITY_DECISIONS)}
 
 
+# Freshness is disclosed as one of four honest states, not a single
+# stale/fresh boolean -- CONT Phase 6. FRESH and AGING both still
+# return real candidates (the scan is within `max_data_age_hours`
+# either way); the distinction is purely informational, so a trader
+# nearing the staleness cutoff sees the data is getting old before it
+# actually stops being usable, rather than a sudden "no data" cliff.
+FRESHNESS_FRESH = "FRESH"
+FRESHNESS_AGING = "AGING"
+FRESHNESS_STALE = "STALE"
+FRESHNESS_NO_SCAN = "NO_SCAN"
+
+FRESHNESS_LABELS_AR = {
+    FRESHNESS_FRESH: "بيانات حديثة",
+    FRESHNESS_AGING: "بيانات آخذة في التقادم لكنها لا تزال مفيدة",
+    FRESHNESS_STALE: "بيانات قديمة جدًا لإصدار توصية جديدة",
+    FRESHNESS_NO_SCAN: "لا يوجد مسح سابق للسوق",
+}
+
+# The fraction of max_data_age_hours after which still-usable data is
+# disclosed as "aging" rather than simply "fresh" -- halfway through
+# the freshness budget is the natural, unambiguous midpoint; not tied
+# to any other threshold in the codebase.
+_AGING_THRESHOLD_FRACTION = 0.5
+
+
+def _classify_freshness(is_stale: bool, data_age_hours: Optional[float], max_data_age_hours: float) -> str:
+    if data_age_hours is None:
+        return FRESHNESS_NO_SCAN
+    if is_stale:
+        return FRESHNESS_STALE
+    if data_age_hours > max_data_age_hours * _AGING_THRESHOLD_FRACTION:
+        return FRESHNESS_AGING
+    return FRESHNESS_FRESH
+
+
 @dataclass(frozen=True)
 class PersonalScanResult:
     scan_run: Optional[MarketScanRun]
@@ -61,6 +96,8 @@ class PersonalScanResult:
     is_stale: bool
     data_age_hours: Optional[float]
     max_data_age_hours: float
+    freshness_state: str
+    freshness_label_ar: str
 
 
 def _latest_snapshot_per_symbol(snapshots: List[DecisionV2Snapshot]) -> List[DecisionV2Snapshot]:
@@ -174,7 +211,8 @@ def select_top_opportunities(
 
     if scan_run is None or scan_run.finished_at is None:
         return PersonalScanResult(
-            scan_run=scan_run, candidates=[], is_stale=True, data_age_hours=None, max_data_age_hours=max_age_hours
+            scan_run=scan_run, candidates=[], is_stale=True, data_age_hours=None, max_data_age_hours=max_age_hours,
+            freshness_state=FRESHNESS_NO_SCAN, freshness_label_ar=FRESHNESS_LABELS_AR[FRESHNESS_NO_SCAN],
         )
 
     finished_at = scan_run.finished_at
@@ -184,7 +222,8 @@ def select_top_opportunities(
 
     if age_hours > max_age_hours:
         return PersonalScanResult(
-            scan_run=scan_run, candidates=[], is_stale=True, data_age_hours=age_hours, max_data_age_hours=max_age_hours
+            scan_run=scan_run, candidates=[], is_stale=True, data_age_hours=age_hours, max_data_age_hours=max_age_hours,
+            freshness_state=FRESHNESS_STALE, freshness_label_ar=FRESHNESS_LABELS_AR[FRESHNESS_STALE],
         )
 
     rows = (
@@ -199,6 +238,8 @@ def select_top_opportunities(
     deduped = _latest_snapshot_per_symbol(rows)
     ranked = sorted(deduped, key=_sort_key)[:max_results]
 
+    freshness_state = _classify_freshness(False, age_hours, max_age_hours)
     return PersonalScanResult(
-        scan_run=scan_run, candidates=ranked, is_stale=False, data_age_hours=age_hours, max_data_age_hours=max_age_hours
+        scan_run=scan_run, candidates=ranked, is_stale=False, data_age_hours=age_hours, max_data_age_hours=max_age_hours,
+        freshness_state=freshness_state, freshness_label_ar=FRESHNESS_LABELS_AR[freshness_state],
     )

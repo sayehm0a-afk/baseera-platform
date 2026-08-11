@@ -13,7 +13,13 @@ from sqlalchemy.pool import StaticPool
 
 from src.core.db.database import Base
 from src.domain.models import DecisionV2Snapshot, MarketScanRun, MarketScanStatus, Stock
-from src.market_intelligence.personal_scan import select_top_opportunities
+from src.market_intelligence.personal_scan import (
+    FRESHNESS_AGING,
+    FRESHNESS_FRESH,
+    FRESHNESS_NO_SCAN,
+    FRESHNESS_STALE,
+    select_top_opportunities,
+)
 
 
 @pytest.fixture
@@ -159,6 +165,56 @@ def test_no_scan_run_at_all_is_stale_not_a_crash(session):
     assert result.candidates == []
     assert result.is_stale is True
     assert result.data_age_hours is None
+
+
+# --- CONT Phase 6: four-state freshness disclosure ---------------------------
+
+
+def test_freshness_state_is_no_scan_when_no_run_exists(session):
+    result = select_top_opportunities(session, None, max_results=5)
+
+    assert result.freshness_state == FRESHNESS_NO_SCAN
+    assert result.freshness_label_ar
+
+
+def test_freshness_state_is_fresh_well_within_the_max_age(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now - timedelta(hours=1))
+    _add_snapshot(session, run, "1111")
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert result.is_stale is False
+    assert result.freshness_state == FRESHNESS_FRESH
+    assert result.freshness_label_ar
+
+
+def test_freshness_state_is_aging_past_the_halfway_point_but_still_within_max_age(session):
+    now = datetime.now(timezone.utc)
+    # Default max_data_age_hours is 24h -- 15h is past the 12h halfway
+    # point but still well under the 24h staleness cutoff.
+    run = _make_run(session, now - timedelta(hours=15))
+    _add_snapshot(session, run, "1111")
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert result.is_stale is False
+    assert result.freshness_state == FRESHNESS_AGING
+    assert result.candidates  # aging data is still usable, unlike stale
+    assert result.freshness_label_ar
+
+
+def test_freshness_state_is_stale_past_the_max_age(session):
+    now = datetime.now(timezone.utc)
+    run = _make_run(session, now - timedelta(hours=30))
+    _add_snapshot(session, run, "1111")
+
+    result = select_top_opportunities(session, run, max_results=5, now=now)
+
+    assert result.is_stale is True
+    assert result.freshness_state == FRESHNESS_STALE
+    assert result.candidates == []
+    assert result.freshness_label_ar
 
 
 # --- CONT Phase 4: composite-score ranking factors ---------------------------
