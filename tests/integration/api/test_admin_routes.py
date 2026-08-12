@@ -21,6 +21,8 @@ from src.core.db.database import Base, get_db
 from src.domain.models import (
     AIRequest,
     AIRequestStatus,
+    IngestionJobStatus,
+    IngestionRunLog,
     Invoice,
     InvoiceStatus,
     Payment,
@@ -610,6 +612,78 @@ def test_dashboard_summary(client, admin, customer):
     assert isinstance(body["market_intelligence_scheduler_running"], bool)
     assert body["new_users_last_24h"] >= 2  # admin + customer, both just created
     assert body["locked_accounts"] == 0
+
+
+def test_dashboard_summary_ingestion_deferred_fields_default_to_none_before_any_run(client, admin):
+    """No ingestion job has ever run in this deployment -- must report
+    0/None, not error, and distinct from ingestion_scheduler_running
+    (which only says the scheduler *process* is alive, not whether its
+    jobs are keeping up)."""
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ingestion_deferred_job_count"] == 0
+    assert body["ingestion_next_retry_at"] is None
+
+
+def test_dashboard_summary_reflects_a_real_deferred_ingestion_job(client, admin, session):
+    """Real production condition (see PR #24): SAHMK quota protection
+    correctly defers a job instead of failing it. The dashboard must
+    surface that a job is currently held back and when it will retry,
+    without staff needing to navigate to the market-coverage page."""
+    next_retry = datetime.now(timezone.utc) + timedelta(hours=3)
+    session.add(
+        IngestionRunLog(
+            job_name="historical_ohlcv",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            finished_at=datetime.now(timezone.utc),
+            status=IngestionJobStatus.DEFERRED,
+            next_retry_at=next_retry,
+        )
+    )
+    session.commit()
+
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ingestion_deferred_job_count"] == 1
+    assert body["ingestion_next_retry_at"] is not None
+
+
+def test_dashboard_summary_ingestion_deferred_count_picks_the_earliest_retry_across_jobs(client, admin, session):
+    """Multiple jobs deferred at once (the real production shape --
+    all four jobs hit the same quota wall together) must count all of
+    them and surface the soonest retry time, not just one job's."""
+    sooner = datetime.now(timezone.utc) + timedelta(hours=1)
+    later = datetime.now(timezone.utc) + timedelta(hours=5)
+    session.add_all(
+        [
+            IngestionRunLog(
+                job_name="symbols", started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+                status=IngestionJobStatus.DEFERRED, next_retry_at=later,
+            ),
+            IngestionRunLog(
+                job_name="dividends", started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+                status=IngestionJobStatus.DEFERRED, next_retry_at=sooner,
+            ),
+            # A SUCCESS row for a third job must not be counted as deferred.
+            IngestionRunLog(
+                job_name="fundamentals", started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+                status=IngestionJobStatus.SUCCESS,
+            ),
+        ]
+    )
+    session.commit()
+
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ingestion_deferred_job_count"] == 2
+    returned_retry_at = datetime.fromisoformat(body["ingestion_next_retry_at"])
+    assert abs((returned_retry_at - sooner).total_seconds()) < 1
 
 
 def test_dashboard_summary_live_market_mode_fields_default_false(client, admin):

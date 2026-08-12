@@ -224,6 +224,16 @@ class AdminDashboardSummaryOut(BaseModel):
     database_health: str
     redis_health: str
     ingestion_scheduler_running: bool
+    # How many of the four ingestion jobs (symbols/historical_ohlcv/
+    # fundamentals/dividends) most recently ran and are currently
+    # DEFERRED (SAHMK background-quota protection, not a genuine
+    # defect -- see src.market_data.ingestion.scheduler) plus the
+    # earliest time any of them will retry. 0/None means nothing is
+    # currently deferred, not "unknown" -- distinct from
+    # ingestion_scheduler_running, which only says the scheduler
+    # process itself is alive, not whether its jobs are keeping up.
+    ingestion_deferred_job_count: int = 0
+    ingestion_next_retry_at: Optional[str] = None
     market_intelligence_scheduler_running: bool
 
     # Live Market Mode owns its own internal ingestion/scan scheduler

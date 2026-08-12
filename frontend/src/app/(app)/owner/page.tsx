@@ -176,6 +176,21 @@ function OwnerStatusPageInner() {
           value={summary.ingestion_scheduler_running ? "يعمل" : "متوقف"}
           colorClass={summary.ingestion_scheduler_running ? "text-bsr-market-up" : "text-bsr-text-muted"}
         />
+        <StatusRow
+          label="مهام استيراد مؤجَّلة (حصة SAHMK)"
+          value={
+            summary.ingestion_deferred_job_count > 0
+              ? `${summary.ingestion_deferred_job_count} من 4`
+              : "لا يوجد"
+          }
+          colorClass={summary.ingestion_deferred_job_count > 0 ? "text-bsr-action-watch" : "text-bsr-market-up"}
+        />
+        {summary.ingestion_deferred_job_count > 0 && summary.ingestion_next_retry_at ? (
+          <StatusRow
+            label="إعادة المحاولة التالية"
+            value={new Date(summary.ingestion_next_retry_at).toLocaleString("ar-SA")}
+          />
+        ) : null}
       </section>
 
       <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
