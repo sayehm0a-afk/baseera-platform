@@ -68,7 +68,7 @@ def upgrade() -> None:
             "ix_decision_v2_snapshots_validation_session_id", ["validation_session_id"], unique=False
         )
         batch_op.create_foreign_key(
-            "fk_decision_v2_snapshots_validation_session_id_validation_sessions",
+            "fk_decision_v2_snapshots_validation_session_id",
             "validation_sessions",
             ["validation_session_id"],
             ["id"],
@@ -148,7 +148,7 @@ def downgrade() -> None:
 
     with op.batch_alter_table("decision_v2_snapshots") as batch_op:
         batch_op.drop_constraint(
-            "fk_decision_v2_snapshots_validation_session_id_validation_sessions", type_="foreignkey"
+            "fk_decision_v2_snapshots_validation_session_id", type_="foreignkey"
         )
         batch_op.drop_index("ix_decision_v2_snapshots_validation_session_id")
         batch_op.drop_column("ranking_position")
