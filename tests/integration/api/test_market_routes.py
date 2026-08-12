@@ -399,6 +399,65 @@ def test_market_status_returns_a_real_tadawul_session_state(client, session_fact
     assert body["holiday_calendar_disclosed_gap"]
 
 
+def test_market_status_fails_fast_when_provider_health_check_hangs(client, session_factory, monkeypatch):
+    """M9 production load testing (2026-08-12, workflow run 31610729772)
+    measured /market/status at p50=15.1s / p95=15.8s under 15 concurrent
+    callers -- health_check() shares the SAHMK client's full tenacity
+    retry/backoff (up to 3 attempts x 10s each), appropriate for a real
+    data fetch but wrong for a probe whose job is to answer "reachable
+    right now" quickly. This asserts the asyncio.wait_for bound added to
+    src/api/routes/market.py's get_market_session_status actually caps
+    that: a health_check() that never returns must still resolve to
+    PROVIDER_UNREACHABLE well within the route's own timeout budget,
+    not hang for tens of seconds."""
+    import time
+
+    from src.market_data.providers.market_data_provider import IMarketDataProvider, ProviderHealth
+
+    class _HangingProvider(IMarketDataProvider):
+        async def authenticate(self):
+            return True
+
+        async def get_stock_data(self, symbol):
+            raise NotImplementedError
+
+        async def get_historical_ohlcv(self, symbol, start, end, interval="1d"):
+            raise NotImplementedError
+
+        async def get_index_data(self, index_name):
+            raise NotImplementedError
+
+        async def get_market_news(self, limit=10):
+            raise NotImplementedError
+
+        async def health_check(self):
+            import asyncio
+
+            await asyncio.sleep(30)
+            return ProviderHealth.HEALTHY
+
+        async def disconnect(self):
+            pass
+
+    async def _get_hanging_provider():
+        return _HangingProvider()
+
+    monkeypatch.setattr(
+        "src.market_data.provider_factory.get_market_data_provider",
+        _get_hanging_provider,
+    )
+
+    start = time.monotonic()
+    response = client.get("/api/v1/market/status")
+    elapsed = time.monotonic() - start
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "PROVIDER_UNREACHABLE"
+    assert body["provider_connected"] is False
+    assert elapsed < 10.0, f"expected the health probe to be bounded well under 10s, took {elapsed:.1f}s"
+
+
 def test_ranking_entries_carry_stop_loss_and_risk_reward(client, session_factory):
     _seed_stock_with_bars(session_factory, "2222")
     run_id = client.post("/api/v1/market/scan", json={}).json()["id"]

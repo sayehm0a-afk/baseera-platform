@@ -22,6 +22,7 @@ fix, mirroring the identical fix applied to src/api/routes/stocks.py --
 this file had no auth dependency at all before this).
 """
 
+import asyncio
 import logging
 from typing import List, Optional
 
@@ -209,6 +210,9 @@ def _change_detection_result_from_events(
     )
 
 
+_STATUS_HEALTH_PROBE_TIMEOUT_SECONDS = 4.0
+
+
 @router.get("/status", response_model=MarketStatusOut)
 async def get_market_session_status(
     _current_user: User = Depends(require_active_subscription()),
@@ -217,7 +221,20 @@ async def get_market_session_status(
     closed), combined with a real connectivity probe of the currently
     selected market data provider -- never a guess about whether the
     provider is reachable. See src.market_intelligence.market_status
-    for the disclosed holiday-calendar gap this inherits."""
+    for the disclosed holiday-calendar gap this inherits.
+
+    `health_check()` goes through the same tenacity retry/backoff the
+    SAHMK client uses for real data fetches (client.py's `_do_request`,
+    up to 3 attempts x 10s each) -- appropriate when the caller wants
+    the data, wrong for a probe whose entire job is to answer "is it
+    reachable *right now*" quickly. M9 production load testing
+    (2026-08-12, workflow run 31610729772) measured this without a
+    bound: p50 15.1s / p95 15.8s under 15 concurrent callers, while
+    every other tested route stayed under ~460ms p95. Bounding the
+    probe with asyncio.wait_for means a slow/degraded upstream now
+    reports PROVIDER_UNREACHABLE in ~4s instead of hanging through the
+    full retry sequence -- the real data-fetch routes are untouched and
+    keep their retries."""
     info = get_market_status()
 
     provider_connected = True
@@ -226,7 +243,7 @@ async def get_market_session_status(
         from src.market_data.providers.market_data_provider import ProviderHealth
 
         provider = await get_market_data_provider()
-        health = await provider.health_check()
+        health = await asyncio.wait_for(provider.health_check(), timeout=_STATUS_HEALTH_PROBE_TIMEOUT_SECONDS)
         provider_connected = health == ProviderHealth.HEALTHY
     except Exception as exc:
         logger.warning("Market status: provider connectivity probe failed: %s", exc)
