@@ -242,7 +242,7 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
             <ul className="flex flex-col gap-bsr-2">
               {sector_exposure.map((sector) => (
                 <li key={sector.sector} className="flex items-center justify-between">
-                  <span className="text-sm text-bsr-text-primary">{sector.sector}</span>
+                  <span className="text-sm text-bsr-text-primary">{sector.sector_ar ?? sector.sector}</span>
                   <div className="flex flex-1 items-center gap-bsr-2 px-bsr-4">
                     <div className="h-2 flex-1 overflow-hidden rounded-bsr-full bg-bsr-navy-700">
                       <div
@@ -356,7 +356,7 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
               <AiSignalCard
                 key={opportunity.symbol}
                 symbol={opportunity.symbol}
-                sector={opportunity.sector}
+                sector={opportunity.sector_ar ?? opportunity.sector}
                 recommendation={opportunity.recommendation as RecommendationValue}
                 confidence={opportunity.confidence}
                 href={`/stocks/${encodeURIComponent(opportunity.symbol)}`}
