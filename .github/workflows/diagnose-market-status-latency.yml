@@ -1,0 +1,56 @@
+name: Diagnose /market/status Latency (temporary, one-shot, read-only)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: resolve
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend: $BACKEND_URL"
+
+      - name: Log in as staff
+        env:
+          BACKEND_URL: ${{ steps.resolve.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Staff login failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: 10 sequential real-timed calls to /api/v1/market/status (no concurrency, isolates server vs. load-test-client latency)
+        env:
+          BACKEND_URL: ${{ steps.resolve.outputs.backend_url }}
+        run: |
+          for i in $(seq 1 10); do
+            curl -sS -b /tmp/cookies.txt --connect-timeout 10 --max-time 30 \
+              -o /tmp/status_body.json -w "call $i: http=%{http_code} time_total=%{time_total}s time_connect=%{time_connect}s time_starttransfer=%{time_starttransfer}s\n" \
+              "$BACKEND_URL/api/v1/market/status"
+            cat /tmp/status_body.json
+            echo ""
+          done
+
+      - name: Clean up
+        run: rm -f /tmp/cookies.txt /tmp/login_body.json /tmp/status_body.json
