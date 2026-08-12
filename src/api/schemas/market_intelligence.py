@@ -447,6 +447,12 @@ class IngestionJobStatusOut(BaseModel):
     duration_seconds: Optional[float] = None
     error_summary: Optional[str] = None
     zero_progress_summary: Optional[str] = None
+    # Only ever set when status="deferred" -- the pipeline correctly
+    # holding this job back because SAHMK's own quota governor refused
+    # a background-priority request to protect the reserve for
+    # live-market-critical operations, not a genuine ingestion defect.
+    # When to expect it to resume automatically.
+    next_retry_at: Optional[datetime] = None
 
 
 class FullDiscoveryTriggerOut(BaseModel):

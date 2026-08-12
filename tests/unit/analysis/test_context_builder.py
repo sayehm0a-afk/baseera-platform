@@ -200,17 +200,20 @@ async def test_no_news_leaves_extra_with_only_quote_provenance(session):
     # bar's own source/is_synthetic/timestamp (needed by Decision Engine
     # V2's freshness/authenticity gates) -- "news_sentiment" stays
     # absent since no NewsEvent was persisted. "bars_used"/
-    # "likely_suspended" are always present (the min_candles/suspension
-    # publication gates' real signals) -- no bars were ingested for
-    # this stock, so bars_used is 0 and likely_suspended is None (not
-    # enough history to judge either way).
+    # "likely_suspended"/"ohlcv_latest_bar_age_days" are always present
+    # (the min_candles/suspension/ohlcv_staleness publication gates'
+    # real signals) -- no bars were ingested for this stock, so
+    # bars_used is 0, likely_suspended is None (not enough history to
+    # judge either way), and ohlcv_latest_bar_age_days is None (no bar
+    # to measure the age of).
     stock = _make_stock(session)
     context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
-    assert set(context.extra.keys()) == {"quote", "bars_used", "likely_suspended"}
+    assert set(context.extra.keys()) == {"quote", "bars_used", "likely_suspended", "ohlcv_latest_bar_age_days"}
     assert context.extra["quote"]["source"] == "dev-synthetic"
     assert context.extra["quote"]["is_synthetic"] is True
     assert context.extra["bars_used"] == 0
     assert context.extra["likely_suspended"] is None
+    assert context.extra["ohlcv_latest_bar_age_days"] is None
     assert "news_sentiment" not in context.extra
 
 
@@ -304,3 +307,60 @@ async def test_real_persisted_news_populates_extra_news_sentiment(session):
     assert context.extra["news_sentiment"]["sentiment_score"] == pytest.approx(0.7)
     assert context.extra["news_sentiment"]["article_count"] == 1
     assert context.extra["news_sentiment"]["events"][0]["headline"] == "Saudi Aramco reports record quarterly profit"
+
+
+# --- ohlcv_latest_bar_age_days: distinct from quote/scan freshness --------
+# The production incident this closes: a live quote is always fetched
+# fresh regardless of ingestion health, so it says nothing about
+# whether the daily-bar history technical indicators are computed from
+# has actually kept up. See src.market_intelligence.publication_gate's
+# _ohlcv_staleness_gate, which reads this field.
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_latest_bar_age_is_none_with_no_bar_history(session):
+    stock = _make_stock(session)  # no bars ingested
+
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
+
+    assert context.extra["ohlcv_latest_bar_age_days"] is None
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_latest_bar_age_reflects_a_recent_bar(session):
+    stock = _make_stock(session)
+    session.add(
+        PriceBar(
+            stock_id=stock.id, timeframe=Timeframe.ONE_DAY,
+            timestamp=datetime.now(timezone.utc) - timedelta(hours=6),
+            open=Decimal("30.0"), high=Decimal("31.0"), low=Decimal("29.0"),
+            close=Decimal("30.5"), volume=1000,
+        )
+    )
+    session.commit()
+
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
+
+    age = context.extra["ohlcv_latest_bar_age_days"]
+    assert age is not None
+    assert 0.0 <= age < 1.0
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_latest_bar_age_reflects_a_stale_bar(session):
+    stock = _make_stock(session)
+    session.add(
+        PriceBar(
+            stock_id=stock.id, timeframe=Timeframe.ONE_DAY,
+            timestamp=datetime.now(timezone.utc) - timedelta(days=10),
+            open=Decimal("30.0"), high=Decimal("31.0"), low=Decimal("29.0"),
+            close=Decimal("30.5"), volume=1000,
+        )
+    )
+    session.commit()
+
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
+
+    age = context.extra["ohlcv_latest_bar_age_days"]
+    assert age is not None
+    assert 9.5 < age < 10.5

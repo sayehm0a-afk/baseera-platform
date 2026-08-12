@@ -125,6 +125,22 @@ def get_max_data_age_hours() -> float:
     return float(os.getenv("MARKET_MAX_DATA_AGE_HOURS", "24"))
 
 
+def get_max_ohlcv_staleness_days() -> float:
+    """Maximum age (days) the most recent daily PriceBar row may be
+    before a symbol's technical analysis is treated as resting on
+    stale history -- distinct from get_max_data_age_hours() above,
+    which only checks the scan/live-quote's own freshness, not whether
+    the multi-day OHLCV window indicators (SMA, momentum, etc.) are
+    computed from has actually kept up. A live quote is always fresh
+    (fetched fresh every scan); the underlying daily-bar history is
+    only as fresh as the last successful historical_ohlcv ingestion
+    run. Default of 5 covers a normal Thu/Fri Saudi weekend plus one
+    full extra day of legitimate ingestion lag (a deferred run waiting
+    on the next SAHMK quota reset) without falsely flagging a symbol
+    the ingestion pipeline is genuinely keeping current."""
+    return float(os.getenv("MARKET_MAX_OHLCV_STALENESS_DAYS", "5"))
+
+
 def get_min_average_traded_value() -> float:
     """Minimum average daily traded value (price x 20-period average
     volume, in SAR) for a BUY/SELL to pass the liquidity gate. This is

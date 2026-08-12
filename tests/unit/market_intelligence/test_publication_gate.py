@@ -225,6 +225,44 @@ def test_untracked_bar_count_is_not_evaluated_not_blocked():
     assert evaluation.status is PublicationStatus.PUBLISHED
 
 
+# --- OHLCV staleness (distinct from the scan/quote freshness gate above) --
+# The production incident this closes: a live quote is always fetched
+# fresh (see context_builder.build_analysis_context), so the
+# data_freshness gate above can PASS even while historical_ohlcv
+# ingestion has been quota-deferred for days -- this is the gate that
+# actually catches technical indicators resting on stale bar history.
+
+
+def test_stale_ohlcv_history_is_rejected():
+    outcome = make_outcome(
+        context=make_context(ohlcv_latest_bar_age_days=12.0),
+        decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0),
+    )
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.REJECTED
+    gate = next(g for g in evaluation.gates if g.name == "ohlcv_staleness")
+    assert gate.status is GateStatus.FAIL
+
+
+def test_fresh_ohlcv_history_passes():
+    outcome = make_outcome(
+        context=make_context(ohlcv_latest_bar_age_days=1.0),
+        decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0),
+    )
+    evaluation = evaluate_publication(outcome)
+    gate = next(g for g in evaluation.gates if g.name == "ohlcv_staleness")
+    assert gate.status is GateStatus.PASS
+    assert evaluation.status is PublicationStatus.PUBLISHED
+
+
+def test_untracked_ohlcv_age_is_not_evaluated_not_blocked():
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
+    evaluation = evaluate_publication(outcome)
+    gate = next(g for g in evaluation.gates if g.name == "ohlcv_staleness")
+    assert gate.status is GateStatus.NOT_EVALUATED
+    assert evaluation.status is PublicationStatus.PUBLISHED
+
+
 # --- suspension ------------------------------------------------------------
 
 

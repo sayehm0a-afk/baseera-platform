@@ -37,6 +37,7 @@ from src.analysis.recommendation.types import Recommendation
 from src.market_intelligence.config import (
     get_fundamental_conflict_margin,
     get_max_data_age_hours,
+    get_max_ohlcv_staleness_days,
     get_max_spread_pct,
     get_min_average_traded_value,
     get_min_calibrated_success_probability,
@@ -98,6 +99,7 @@ def evaluate_publication(
     gates.append(_confidence_gate(outcome))
     gates.append(_targets_gate(outcome))
     gates.append(_min_candles_gate(outcome))
+    gates.append(_ohlcv_staleness_gate(outcome))
     gates.append(_suspension_gate(outcome))
     gates.append(_sector_data_gate(outcome, disclosures))
     gates.append(_benchmark_data_gate(disclosures))
@@ -296,6 +298,35 @@ def _min_candles_gate(outcome: SymbolScanOutcome) -> GateResult:
             detail=f"only {bars_used} daily bars of history, minimum {min_candles} required for a reliable recommendation",
         )
     return GateResult(name="min_candles", status=GateStatus.PASS, detail=f"{bars_used} daily bars of history")
+
+
+def _ohlcv_staleness_gate(outcome: SymbolScanOutcome) -> GateResult:
+    """Distinct from `_freshness_gate` above: that checks how old
+    *this scan* is; this checks how old the *underlying daily-bar
+    history* technical indicators were computed from is. A live quote
+    is always fetched fresh (see context_builder.build_analysis_
+    context), so `_freshness_gate` can PASS even when
+    historical_ohlcv ingestion has been stuck/deferred for days --
+    this is the gate that actually catches that case. See
+    src.market_data.ingestion.scheduler's DEFERRED-status handling for
+    the production incident this closes: SAHMK quota protection
+    correctly deferring historical_ohlcv must never silently let a
+    recommendation rest on days-old technical indicators without
+    disclosing it."""
+    context = outcome.context
+    age_days = context.extra.get("ohlcv_latest_bar_age_days") if context is not None else None
+    if age_days is None:
+        return GateResult(
+            name="ohlcv_staleness", status=GateStatus.NOT_EVALUATED,
+            detail="latest OHLCV bar age not tracked for this outcome",
+        )
+    max_staleness = get_max_ohlcv_staleness_days()
+    if age_days > max_staleness:
+        return GateResult(
+            name="ohlcv_staleness", status=GateStatus.FAIL,
+            detail=f"most recent daily bar is {age_days:.1f} days old, exceeds the {max_staleness:.0f}-day maximum",
+        )
+    return GateResult(name="ohlcv_staleness", status=GateStatus.PASS, detail=f"most recent daily bar is {age_days:.1f} days old")
 
 
 def _suspension_gate(outcome: SymbolScanOutcome) -> GateResult:

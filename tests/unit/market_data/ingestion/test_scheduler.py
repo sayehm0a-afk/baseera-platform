@@ -14,11 +14,19 @@ from src.core.db.database import Base
 from src.domain.models import IngestionJobStatus, IngestionRunLog, Stock
 from src.market_data.ingestion._common import IngestionResult
 from src.market_data.ingestion.scheduler import (
+    _QUOTA_RETRY_SAFETY_BUFFER,
     IngestionScheduler,
     _NonDisconnectingProviderProxy,
+    _compute_quota_retry_at,
+    _find_quota_exceeded_cause,
     reap_stale_ingestion_runs,
     run_ingestion_job,
 )
+from src.market_data.sahmk.rate_limiter import (
+    SahmkQuotaReservedForCriticalError,
+    SahmkUpstreamQuotaExhaustedError,
+)
+from src.market_data.strict_mode import StrictRealDataUnavailableError
 
 # Captured before any fixture ever monkeypatches asyncio.sleep -- the one
 # test that needs real scheduling (proving the loop repeats over actual
@@ -632,3 +640,303 @@ def test_reap_stale_ingestion_runs_leaves_already_finished_rows_alone(session_fa
     session.close()
 
     assert reaped == []
+
+
+# --- _find_quota_exceeded_cause -------------------------------------------
+
+
+def test_find_quota_exceeded_cause_finds_a_direct_quota_error():
+    exc = SahmkQuotaReservedForCriticalError("background dip into critical reserve")
+    assert _find_quota_exceeded_cause(exc) is exc
+
+
+def test_find_quota_exceeded_cause_walks_through_a_wrapped_strict_mode_error():
+    """provider_factory/fundamental_provider_factory re-raise the rate
+    limiter's own exception as StrictRealDataUnavailableError via a bare
+    `raise NewError(...)` inside `except ... as exc:` -- Python sets
+    __context__ automatically even with no explicit `raise ... from exc`.
+    This must see through that wrapping."""
+    try:
+        try:
+            raise SahmkUpstreamQuotaExhaustedError(
+                "upstream 429", reset_at_utc=datetime.now(timezone.utc) + timedelta(hours=2)
+            )
+        except SahmkUpstreamQuotaExhaustedError:
+            raise StrictRealDataUnavailableError("real data unavailable")
+    except StrictRealDataUnavailableError as wrapped:
+        found = _find_quota_exceeded_cause(wrapped)
+
+    assert isinstance(found, SahmkUpstreamQuotaExhaustedError)
+
+
+def test_find_quota_exceeded_cause_returns_none_for_an_unrelated_error():
+    assert _find_quota_exceeded_cause(RuntimeError("some other failure")) is None
+
+
+def test_find_quota_exceeded_cause_bounded_depth_does_not_infinite_loop():
+    exc = RuntimeError("self-referential")
+    exc.__context__ = exc  # pathological, must not hang
+    assert _find_quota_exceeded_cause(exc) is None
+
+
+# --- _compute_quota_retry_at -----------------------------------------------
+
+
+def test_compute_quota_retry_at_uses_upstream_evidence_when_available():
+    reset_at = datetime(2026, 8, 12, 10, 0, 0, tzinfo=timezone.utc)
+    quota_exc = SahmkUpstreamQuotaExhaustedError("upstream 429", reset_at_utc=reset_at)
+
+    retry_at = _compute_quota_retry_at(quota_exc)
+
+    assert retry_at == reset_at + _QUOTA_RETRY_SAFETY_BUFFER
+
+
+def test_compute_quota_retry_at_falls_back_to_rate_limiters_own_reset_estimate(monkeypatch):
+    fallback_reset = datetime(2026, 8, 13, 0, 0, 0, tzinfo=timezone.utc)
+
+    class _FakeLimiter:
+        def get_status(self):
+            return {"resets_at_utc": fallback_reset.isoformat()}
+
+    monkeypatch.setattr(
+        "src.market_data.ingestion.scheduler.get_default_rate_limiter", lambda: _FakeLimiter()
+    )
+    quota_exc = SahmkQuotaReservedForCriticalError("background dip into critical reserve")
+
+    retry_at = _compute_quota_retry_at(quota_exc)
+
+    assert retry_at == fallback_reset + _QUOTA_RETRY_SAFETY_BUFFER
+
+
+# --- run_ingestion_job: DEFERRED vs FAILED ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_ingestion_job_defers_on_quota_reserved_for_critical(session_factory):
+    async def job_fn():
+        raise SahmkQuotaReservedForCriticalError("background dip into critical reserve")
+
+    run_log = await run_ingestion_job("test_job", job_fn, session_factory, max_attempts=3)
+
+    assert run_log.status == IngestionJobStatus.DEFERRED
+    assert run_log.next_retry_at is not None
+    assert run_log.retry_count == 0  # no wasted backoff retries against a quota wall
+    assert "Deferred" in run_log.error_summary
+
+
+@pytest.mark.asyncio
+async def test_run_ingestion_job_defers_on_quota_wrapped_in_strict_mode_error(session_factory):
+    """The real production shape: provider_factory wraps the rate
+    limiter's exception in StrictRealDataUnavailableError before it
+    reaches the ingestion job function."""
+
+    async def job_fn():
+        try:
+            raise SahmkUpstreamQuotaExhaustedError(
+                "upstream 429", reset_at_utc=datetime.now(timezone.utc) + timedelta(hours=3)
+            )
+        except SahmkUpstreamQuotaExhaustedError:
+            raise StrictRealDataUnavailableError("real data unavailable")
+
+    run_log = await run_ingestion_job("test_job", job_fn, session_factory, max_attempts=3)
+
+    assert run_log.status == IngestionJobStatus.DEFERRED
+    assert run_log.next_retry_at is not None
+
+
+@pytest.mark.asyncio
+async def test_run_ingestion_job_still_fails_genuine_non_quota_errors(session_factory):
+    """A quota deferral must never mask a real defect -- unrelated
+    exceptions keep exhausting the full retry budget and are recorded
+    FAILED exactly as before this change."""
+    attempts = []
+
+    async def job_fn():
+        attempts.append(1)
+        raise RuntimeError("genuine ingestion bug")
+
+    run_log = await run_ingestion_job(
+        "test_job", job_fn, session_factory, max_attempts=3, retry_base_delay_seconds=0.01
+    )
+
+    assert len(attempts) == 3
+    assert run_log.status == IngestionJobStatus.FAILED
+    assert run_log.next_retry_at is None
+
+
+# --- IngestionScheduler: DEFERRED-aware rescheduling -----------------------
+
+
+@pytest.mark.asyncio
+async def test_loop_reschedules_a_deferred_job_at_next_retry_at_not_the_normal_interval(
+    session_factory, monkeypatch
+):
+    """A quota-deferred job must wake up when the quota governor says
+    background capacity returns, not on its own (possibly much longer)
+    recurring interval -- otherwise a daily/weekly job deferred once
+    could stay stale for a full extra cycle even after the quota reset."""
+    sleep_calls = []
+
+    async def _recording_sleep(seconds):
+        sleep_calls.append(seconds)
+        raise asyncio.CancelledError()  # stop the loop after one iteration
+
+    monkeypatch.setattr(asyncio, "sleep", _recording_sleep)
+
+    async def always_deferred():
+        raise SahmkQuotaReservedForCriticalError("background dip into critical reserve")
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    with pytest.raises(asyncio.CancelledError):
+        await scheduler._loop("test_job", lambda: 999999, always_deferred)
+
+    assert len(sleep_calls) == 1
+    # Sleeping for the huge normal interval (999999s) would be wrong here --
+    # the deferral's own next_retry_at (a few minutes, given the fallback
+    # reset is "tomorrow UTC midnight" plus the 5-minute safety buffer)
+    # must win instead.
+    assert sleep_calls[0] < 999999
+
+
+@pytest.mark.asyncio
+async def test_loop_uses_the_normal_interval_after_a_successful_run(session_factory, monkeypatch):
+    sleep_calls = []
+
+    async def _recording_sleep(seconds):
+        sleep_calls.append(seconds)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", _recording_sleep)
+
+    async def succeeds():
+        return IngestionResult(symbols_requested=1, symbols_succeeded=1)
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    with pytest.raises(asyncio.CancelledError):
+        await scheduler._loop("test_job", lambda: 123.0, succeeds)
+
+    assert sleep_calls == [123.0]
+
+
+# --- IngestionScheduler._compute_initial_delay: restart resumption --------
+
+
+def test_compute_initial_delay_is_zero_with_no_prior_run(session_factory):
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    assert scheduler._compute_initial_delay("historical_ohlcv") == 0.0
+
+
+def test_compute_initial_delay_is_zero_after_a_successful_prior_run(session_factory):
+    session = session_factory()
+    session.add(
+        IngestionRunLog(
+            job_name="historical_ohlcv",
+            started_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            finished_at=datetime.now(timezone.utc),
+            status=IngestionJobStatus.SUCCESS,
+        )
+    )
+    session.commit()
+    session.close()
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    assert scheduler._compute_initial_delay("historical_ohlcv") == 0.0
+
+
+def test_compute_initial_delay_resumes_a_still_pending_deferral(session_factory):
+    """The persisted-retry-state guarantee: a scheduler restart must not
+    hammer the quota wall again -- it must honor the deferred job's
+    already-recorded next_retry_at."""
+    future_retry = datetime.now(timezone.utc) + timedelta(hours=2)
+    session = session_factory()
+    session.add(
+        IngestionRunLog(
+            job_name="historical_ohlcv",
+            started_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            finished_at=datetime.now(timezone.utc),
+            status=IngestionJobStatus.DEFERRED,
+            next_retry_at=future_retry,
+        )
+    )
+    session.commit()
+    session.close()
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    delay = scheduler._compute_initial_delay("historical_ohlcv")
+
+    assert 0 < delay <= 2 * 3600 + 1
+
+
+def test_compute_initial_delay_is_zero_once_a_deferrals_retry_time_has_passed(session_factory):
+    past_retry = datetime.now(timezone.utc) - timedelta(minutes=5)
+    session = session_factory()
+    session.add(
+        IngestionRunLog(
+            job_name="historical_ohlcv",
+            started_at=datetime.now(timezone.utc) - timedelta(hours=5),
+            finished_at=datetime.now(timezone.utc) - timedelta(hours=4),
+            status=IngestionJobStatus.DEFERRED,
+            next_retry_at=past_retry,
+        )
+    )
+    session.commit()
+    session.close()
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    assert scheduler._compute_initial_delay("historical_ohlcv") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_start_passes_the_resumed_initial_delay_into_each_loop(session_factory, monkeypatch):
+    """Wiring proof: start() must actually thread _compute_initial_delay's
+    result into _loop, not just compute it and drop it."""
+    future_retry = datetime.now(timezone.utc) + timedelta(hours=1)
+    session = session_factory()
+    session.add(
+        IngestionRunLog(
+            job_name="symbols",
+            started_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            finished_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            status=IngestionJobStatus.DEFERRED,
+            next_retry_at=future_retry,
+        )
+    )
+    session.commit()
+    session.close()
+
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_symbols_sync_interval_seconds", lambda: 1000
+    )
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ohlcv_sync_interval_seconds", lambda: 1000
+    )
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_fundamentals_sync_interval_seconds", lambda: 1000
+    )
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_dividends_sync_interval_seconds", lambda: 1000
+    )
+
+    seen_delays = {}
+    real_loop = IngestionScheduler._loop
+
+    async def _recording_loop(self, job_name, interval_fn, job_fn, initial_delay_seconds=0.0):
+        seen_delays[job_name] = initial_delay_seconds
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(IngestionScheduler, "_loop", _recording_loop)
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler.start()
+    # The autouse _instant_sleep fixture makes asyncio.sleep a no-op
+    # coroutine with no internal suspension point, so awaiting it
+    # directly never actually yields control back to the event loop --
+    # the four just-scheduled tasks would never get a chance to run
+    # before stop() cancels them while still pending. The real sleep(0)
+    # is a genuine checkpoint.
+    await _REAL_ASYNCIO_SLEEP(0)
+    await scheduler.stop()
+
+    assert seen_delays["symbols"] > 0
+    assert seen_delays["historical_ohlcv"] == 0.0
+    monkeypatch.setattr(IngestionScheduler, "_loop", real_loop)
