@@ -132,16 +132,19 @@ jobs:
 
           # Every target is a read-only, non-SAHMK-triggering route --
           # confirmed by reading its handler before listing it here.
+          # /api/v1/market/{summary,rankings,sectors,alerts,status} all
+          # require require_active_subscription() (see
+          # src/api/routes/market.py) -- a first real run of this
+          # workflow (2026-08-12) proved this the hard way: they were
+          # originally listed here as unauthenticated and every one of
+          # the 375 calls correctly came back 401, which is the
+          # platform behaving exactly as designed, not a defect. Moved
+          # to AUTH_TARGETS below.
           UNAUTH_TARGETS = [
               ("frontend", "landing", f"{FRONTEND}/"),
               ("frontend", "login_page", f"{FRONTEND}/login"),
               ("frontend", "register_page", f"{FRONTEND}/register"),
               ("backend", "health_live", f"{BACKEND}/health/live"),
-              ("backend", "market_summary", f"{BACKEND}/api/v1/market/summary"),
-              ("backend", "market_rankings", f"{BACKEND}/api/v1/market/rankings"),
-              ("backend", "market_sectors", f"{BACKEND}/api/v1/market/sectors"),
-              ("backend", "market_alerts", f"{BACKEND}/api/v1/market/alerts"),
-              ("backend", "market_status", f"{BACKEND}/api/v1/market/status"),
           ]
           AUTH_TARGETS = [
               ("frontend", "dashboard", f"{FRONTEND}/dashboard"),
@@ -151,6 +154,11 @@ jobs:
               ("frontend", "reports", f"{FRONTEND}/reports"),
               ("frontend", "more", f"{FRONTEND}/more"),
               ("backend", "watchlist_api", f"{BACKEND}/api/v1/watchlist"),
+              ("backend", "market_summary", f"{BACKEND}/api/v1/market/summary"),
+              ("backend", "market_rankings", f"{BACKEND}/api/v1/market/rankings"),
+              ("backend", "market_sectors", f"{BACKEND}/api/v1/market/sectors"),
+              ("backend", "market_alerts", f"{BACKEND}/api/v1/market/alerts"),
+              ("backend", "market_status", f"{BACKEND}/api/v1/market/status"),
           ]
 
           results = []
