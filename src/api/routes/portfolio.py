@@ -25,13 +25,26 @@ route (`/{id}`, `/{id}/recommendations`, `/{id}/risk`, `/{id}/allocation`,
 `/{id}/diversification`, `/{id}/rebalance`, `/{id}/health`) reads the
 latest already-persisted `PortfolioAnalysisSnapshot` for that portfolio
 -- none of them re-runs an analysis.
+
+`POST /api/v1/portfolio/analyze` is rate-limited at 30/minute (M8
+security acceptance pass), matching the precedent already set for
+every other computation-triggering customer route (`/market/opportunities`
+is also 30/minute -- the closest precedent, since both are the
+heaviest write/compute cost in their respective files;
+`/market/personal/top-opportunities`, `/stocks/{symbol}/technical`,
+`/stocks/{symbol}/decision-v2` are lighter per-call reads and get
+60/minute -- Phase 3H). The per-call cost bound above addresses
+request *size*; this addresses request *frequency* -- an authenticated
+customer looping this endpoint would otherwise incur unbounded DB
+writes (a new `PortfolioAnalysisSnapshot` row per call) with no cap.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_market_provider
 from src.api.exceptions import InvalidPortfolioConfigError, NoPortfolioAnalysisError, PortfolioNotFoundError
+from src.api.middleware.rate_limiting import limiter
 from src.api.schemas.news import PortfolioNewsAlertListOut, PortfolioNewsAlertOut
 from src.api.schemas.portfolio_intelligence import (
     AllocationOut,
@@ -77,29 +90,31 @@ def _get_latest_analysis_json(session: Session, portfolio_id: int, user_id: int)
 
 
 @router.post("/analyze", response_model=PortfolioAnalysisOut)
+@limiter.limit("30/minute")
 async def analyze_portfolio(
-    request: PortfolioAnalyzeRequest,
+    request: Request,
+    body: PortfolioAnalyzeRequest,
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
     current_user: User = Depends(require_active_subscription()),
 ) -> PortfolioAnalysisOut:
-    if len(request.holdings) > get_max_holdings_per_portfolio():
+    if len(body.holdings) > get_max_holdings_per_portfolio():
         raise InvalidPortfolioConfigError(
-            f"Portfolio has {len(request.holdings)} holdings, above the "
+            f"Portfolio has {len(body.holdings)} holdings, above the "
             f"{get_max_holdings_per_portfolio()}-holding limit for a single POST /analyze request."
         )
 
-    if request.portfolio_id is not None:
-        portfolio = _get_portfolio_or_404(session, request.portfolio_id, current_user.id)
-        _repository.update_cash_balance(session, portfolio.id, request.cash)
+    if body.portfolio_id is not None:
+        portfolio = _get_portfolio_or_404(session, body.portfolio_id, current_user.id)
+        _repository.update_cash_balance(session, portfolio.id, body.cash)
     else:
-        portfolio = _repository.create_portfolio(session, request.name, request.cash, user_id=current_user.id)
+        portfolio = _repository.create_portfolio(session, body.name, body.cash, user_id=current_user.id)
 
-    holdings = [Holding(symbol=h.symbol, quantity=h.quantity, average_cost=h.average_cost) for h in request.holdings]
+    holdings = [Holding(symbol=h.symbol, quantity=h.quantity, average_cost=h.average_cost) for h in body.holdings]
     _repository.replace_holdings(session, portfolio.id, holdings)
 
     engine = PortfolioEngine(session, market_provider)
-    analysis = await engine.analyze(portfolio_id=portfolio.id, name=portfolio.name, holdings=holdings, cash=request.cash)
+    analysis = await engine.analyze(portfolio_id=portfolio.id, name=portfolio.name, holdings=holdings, cash=body.cash)
 
     _repository.save_analysis_snapshot(session, portfolio.id, analysis, PORTFOLIO_ENGINE_VERSION)
 

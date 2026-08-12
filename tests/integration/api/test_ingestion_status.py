@@ -1,7 +1,16 @@
 """Integration test for GET /ingestion/status. Doesn't use FastAPI's
 Depends()-based DB session (it builds its own via
 database.get_session_factory()), so it's tested by monkeypatching that
-function directly rather than app.dependency_overrides."""
+function directly rather than app.dependency_overrides.
+
+Staff-gated as of the M8 security acceptance pass -- this route
+predates Phase 10's RBAC layer and was previously reachable by any
+unauthenticated caller (docs/ADMIN_AND_RBAC.md §5,
+docs/THREAT_MODEL.md T18). get_current_user is overridden to a staff
+user for the success-path tests, matching the pattern already used in
+test_admin_routes.py; a dedicated test below asserts an anonymous
+caller is now rejected.
+"""
 
 from datetime import datetime, timezone
 
@@ -12,9 +21,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import main
+from src.api.dependencies import get_current_user
 from src.core.db import database
 from src.core.db.database import Base
-from src.domain.models import IngestionJobStatus, IngestionRunLog
+from src.domain.models import IngestionJobStatus, IngestionRunLog, StaffRole, User
 
 
 @pytest.fixture
@@ -39,19 +49,42 @@ def session_factory(monkeypatch):
 
 
 @pytest.fixture
+def admin_client(session_factory):
+    admin = User(id=1, email="admin@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ADMIN)
+    main.app.dependency_overrides[get_current_user] = lambda: admin
+    yield TestClient(main.app)
+    main.app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def client(session_factory):
     yield TestClient(main.app)
 
 
-def test_ingestion_status_when_scheduler_never_started(client, session_factory):
+def test_ingestion_status_rejects_an_unauthenticated_caller(client, session_factory):
     response = client.get("/ingestion/status")
+    assert response.status_code == 401
+
+
+def test_ingestion_status_rejects_a_non_staff_customer(client, session_factory):
+    customer = User(id=2, email="customer@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: customer
+    try:
+        response = client.get("/ingestion/status")
+    finally:
+        main.app.dependency_overrides.clear()
+    assert response.status_code == 403
+
+
+def test_ingestion_status_when_scheduler_never_started(admin_client, session_factory):
+    response = admin_client.get("/ingestion/status")
     assert response.status_code == 200
     body = response.json()
     assert body["scheduler_running"] is False
     assert body["jobs"] == {}
 
 
-def test_ingestion_status_reports_the_most_recent_run_per_job(client, session_factory):
+def test_ingestion_status_reports_the_most_recent_run_per_job(admin_client, session_factory):
     session = session_factory()
     session.add(
         IngestionRunLog(
@@ -80,7 +113,7 @@ def test_ingestion_status_reports_the_most_recent_run_per_job(client, session_fa
     session.commit()
     session.close()
 
-    response = client.get("/ingestion/status")
+    response = admin_client.get("/ingestion/status")
     assert response.status_code == 200
     body = response.json()
     assert "historical_ohlcv" in body["jobs"]
@@ -90,8 +123,8 @@ def test_ingestion_status_reports_the_most_recent_run_per_job(client, session_fa
     assert body["jobs"]["historical_ohlcv"]["status"] == "success"
 
 
-def test_ingestion_status_never_exposes_credentials(client, session_factory):
-    response = client.get("/ingestion/status")
+def test_ingestion_status_never_exposes_credentials(admin_client, session_factory):
+    response = admin_client.get("/ingestion/status")
     body_text = response.text.lower()
     assert "sahmk_api_key" not in body_text
     assert "shmk_" not in body_text
