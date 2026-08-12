@@ -64,3 +64,17 @@ class DailyIntelligenceSnapshotNotFoundError(APIError):
 
     status_code = 404
     code = "daily_intelligence_snapshot_not_found"
+
+
+class ValidationSessionNotFoundError(APIError):
+    status_code = 404
+    code = "validation_session_not_found"
+
+
+class ValidationSessionConflictError(APIError):
+    """A RUNNING session of the same is_dry_run kind already exists, or
+    the session being closed is not currently RUNNING -- see
+    `src.ai_evolution.validation_session_service`."""
+
+    status_code = 409
+    code = "validation_session_conflict"

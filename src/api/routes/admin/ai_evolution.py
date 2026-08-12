@@ -18,7 +18,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from src.admin.exceptions import DailyIntelligenceSnapshotNotFoundError
+from src.admin.exceptions import (
+    DailyIntelligenceSnapshotNotFoundError,
+    ValidationSessionConflictError,
+    ValidationSessionNotFoundError,
+)
 from src.ai_evolution.confidence_calibration import ConfidenceCalibrationEngine
 from src.ai_evolution.paper_trading import (
     DEFAULT_EVALUATION_HORIZON_DAYS,
@@ -26,16 +30,24 @@ from src.ai_evolution.paper_trading import (
     get_latest_challenger_config,
 )
 from src.ai_evolution.personal_performance import compute_personal_performance_dashboard
+from src.ai_evolution.validation_metrics import compute_validation_session_metrics
+from src.ai_evolution.validation_session_service import close_validation_session, create_validation_session
 from src.api.schemas.ai_evolution import (
     CalibrationStatusOut,
     DailyIntelligenceSnapshotOut,
     DiscoveredPatternListOut,
     DiscoveredPatternOut,
+    DuplicateSignalOut,
     GroupPerformanceOut,
     PaperTradeComparisonOut,
     PersonalPerformanceDashboardOut,
+    RankPerformanceOut,
     ReflectionReportListOut,
     ReflectionReportOut,
+    ValidationSessionCreateIn,
+    ValidationSessionListOut,
+    ValidationSessionMetricsOut,
+    ValidationSessionOut,
 )
 from src.auth.rbac import require_staff_role
 from src.core.db.database import get_db
@@ -47,6 +59,7 @@ from src.domain.models import (
     ReflectionReport,
     StaffRole,
     User,
+    ValidationSession,
 )
 
 router = APIRouter(prefix="/api/v1/admin/ai-evolution", tags=["admin"])
@@ -165,4 +178,110 @@ def get_personal_performance_dashboard(
         weakest_groups=[GroupPerformanceOut(**g.__dict__) for g in result.weakest_groups],
         small_sample_warning=result.small_sample_warning,
         insufficient_data_message_ar=result.insufficient_data_message_ar,
+    )
+
+
+# ======================================================================
+# M10: validation-session lifecycle (start/close/list) + per-session
+# metrics. OWNER-only for anything that opens or closes a session --
+# the mutating action that decides what evidence a live M10 measurement
+# is even allowed to claim -- while listing/metrics stay at ADMIN,
+# matching the read-only routes above.
+# ======================================================================
+
+
+@router.post("/validation-sessions", response_model=ValidationSessionOut, status_code=201)
+def create_validation_session_route(
+    payload: ValidationSessionCreateIn,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_staff_role(StaffRole.OWNER)),
+) -> ValidationSessionOut:
+    try:
+        record = create_validation_session(
+            session,
+            payload.name,
+            is_dry_run=payload.is_dry_run,
+            created_by_user_id=current_user.id,
+            notes=payload.notes,
+        )
+    except ValueError as exc:
+        raise ValidationSessionConflictError(str(exc)) from exc
+    return ValidationSessionOut.model_validate(record)
+
+
+@router.post("/validation-sessions/{validation_session_id}/close", response_model=ValidationSessionOut)
+def close_validation_session_route(
+    validation_session_id: int,
+    aborted: bool = Query(False, description="True to mark ABORTED instead of the normal CLOSED."),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.OWNER)),
+) -> ValidationSessionOut:
+    try:
+        record = close_validation_session(session, validation_session_id, aborted=aborted)
+    except ValueError as exc:
+        raise ValidationSessionConflictError(str(exc)) from exc
+    return ValidationSessionOut.model_validate(record)
+
+
+@router.get("/validation-sessions", response_model=ValidationSessionListOut)
+def list_validation_sessions(
+    is_dry_run: Optional[bool] = Query(None, description="Filter by is_dry_run; omit to return every session."),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> ValidationSessionListOut:
+    query = session.query(ValidationSession)
+    if is_dry_run is not None:
+        query = query.filter_by(is_dry_run=is_dry_run)
+    rows = query.order_by(ValidationSession.started_at.desc()).all()
+    return ValidationSessionListOut(sessions=[ValidationSessionOut.model_validate(r) for r in rows])
+
+
+@router.get("/validation-sessions/{validation_session_id}", response_model=ValidationSessionOut)
+def get_validation_session(
+    validation_session_id: int,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> ValidationSessionOut:
+    record = session.query(ValidationSession).filter_by(id=validation_session_id).one_or_none()
+    if record is None:
+        raise ValidationSessionNotFoundError(f"Validation session {validation_session_id} not found.")
+    return ValidationSessionOut.model_validate(record)
+
+
+@router.get("/validation-sessions/{validation_session_id}/metrics", response_model=ValidationSessionMetricsOut)
+def get_validation_session_metrics(
+    validation_session_id: int,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> ValidationSessionMetricsOut:
+    record = session.query(ValidationSession).filter_by(id=validation_session_id).one_or_none()
+    if record is None:
+        raise ValidationSessionNotFoundError(f"Validation session {validation_session_id} not found.")
+    result = compute_validation_session_metrics(session, validation_session_id)
+    return ValidationSessionMetricsOut(
+        validation_session_id=result.validation_session_id,
+        total_signals_issued=result.total_signals_issued,
+        actionable_signals=result.actionable_signals,
+        status_counts=result.status_counts,
+        win_rate=result.win_rate,
+        decisive_signal_count=result.decisive_signal_count,
+        false_positive_rate=result.false_positive_rate,
+        target_hit_rate_by_target=result.target_hit_rate_by_target,
+        stop_loss_rate=result.stop_loss_rate,
+        average_return_pct=result.average_return_pct,
+        expectancy_pct=result.expectancy_pct,
+        average_time_to_target_days=result.average_time_to_target_days,
+        average_time_to_stop_days=result.average_time_to_stop_days,
+        ranking_position_performance=[
+            RankPerformanceOut(**r.__dict__) for r in result.ranking_position_performance
+        ],
+        calibration_pair_count=result.calibration_pair_count,
+        expected_calibration_error=result.expected_calibration_error,
+        duplicate_signals=[DuplicateSignalOut(**d.__dict__) for d in result.duplicate_signals],
+        duplicate_signal_rate=result.duplicate_signal_rate,
+        data_unavailable_count=result.data_unavailable_count,
+        data_unavailable_rate=result.data_unavailable_rate,
+        pending_count=result.pending_count,
+        cancelled_count=result.cancelled_count,
+        partial_count=result.partial_count,
     )

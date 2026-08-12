@@ -70,6 +70,32 @@ def get_daily_intelligence_aggregation_interval_seconds() -> int:
     return int(os.getenv("DAILY_INTELLIGENCE_AGGREGATION_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL_SECONDS)))
 
 
+_DEFAULT_DECISION_V2_OUTCOME_HORIZON_DAYS = 30
+
+
+def is_decision_v2_outcome_scheduler_enabled() -> bool:
+    """M10: gates the DecisionV2Outcome evaluation scheduler -- off by
+    default, same posture as every other scheduler in this layer.
+    Evaluating a PENDING row is read-only against already-ingested
+    price data (no live SAHMK call), so enabling this never touches
+    SAHMK quota regardless of how often it runs."""
+    return os.getenv("DECISION_V2_OUTCOME_SCHEDULER_ENABLED", "false").lower() == "true"
+
+
+def get_decision_v2_outcome_interval_seconds() -> int:
+    return int(os.getenv("DECISION_V2_OUTCOME_INTERVAL_SECONDS", "3600"))
+
+
+def get_decision_v2_outcome_default_horizon_days() -> int:
+    """Fallback `due_at` horizon (decision_timestamp + this many days)
+    for a snapshot whose `expected_holding_period_max_days` is null --
+    should be rare (Decision Engine V2 sets it for every actionable
+    BUY-like decision), kept only as a safety default."""
+    return int(
+        os.getenv("DECISION_V2_OUTCOME_DEFAULT_HORIZON_DAYS", str(_DEFAULT_DECISION_V2_OUTCOME_HORIZON_DAYS))
+    )
+
+
 def is_paper_trading_enabled() -> bool:
     """Gates E8's champion/challenger paper trading -- when off (the
     default), `save_symbol_records` writes only the ordinary champion

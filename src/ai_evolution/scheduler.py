@@ -22,11 +22,13 @@ from sqlalchemy.orm import Session
 from src.ai_evolution.config import (
     get_daily_intelligence_aggregation_interval_seconds,
     get_daily_reflection_interval_seconds,
+    get_decision_v2_outcome_interval_seconds,
     get_outcome_evaluation_interval_seconds,
     get_pattern_discovery_interval_seconds,
 )
 from src.ai_evolution.daily_intelligence_aggregation import aggregate_daily_intelligence
 from src.ai_evolution.daily_reflection import generate_daily_reflection
+from src.ai_evolution.decision_v2_outcome_evaluation import evaluate_pending_outcomes
 from src.ai_evolution.outcome_evaluation import evaluate_due_outcomes
 from src.ai_evolution.pattern_discovery import discover_patterns
 
@@ -302,6 +304,77 @@ class DailyIntelligenceAggregationScheduler:
                 "Daily intelligence aggregation cycle: %d recommendation(s) aggregated for %s.",
                 snapshot.recommendations_evaluated,
                 snapshot.snapshot_date,
+            )
+        finally:
+            session.close()
+
+
+class DecisionV2OutcomeScheduler:
+    """M10: recurring re-run of `evaluate_pending_outcomes()` -- same
+    shape as `OutcomeEvaluationScheduler` above, but for
+    `DecisionV2Outcome` rows instead of the older
+    `RecommendationOutcome` rows. Read-only against already-ingested
+    price data (no SAHMK call), so running it never touches quota
+    regardless of interval."""
+
+    def __init__(
+        self,
+        session_factory: Optional[Callable[[], Session]] = None,
+        interval_seconds: Optional[int] = None,
+    ):
+        self._session_factory = session_factory or self._default_session_factory
+        self._interval_seconds = (
+            interval_seconds if interval_seconds is not None else get_decision_v2_outcome_interval_seconds()
+        )
+        self._task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _default_session_factory() -> Session:
+        from src.core.db import database
+
+        return database.get_session_factory()()
+
+    @property
+    def is_running(self) -> bool:
+        return self._task is not None
+
+    def start(self) -> None:
+        if self._task is not None:
+            logger.warning("DecisionV2OutcomeScheduler.start() called while already running -- ignoring.")
+            return
+        self._task = asyncio.ensure_future(self._loop())
+        logger.info("DecisionV2OutcomeScheduler started (interval_seconds=%s).", self._interval_seconds)
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._task
+        self._task = None
+        logger.info("DecisionV2OutcomeScheduler stopped.")
+
+    async def _loop(self) -> None:
+        while True:
+            try:
+                await self._run_one_cycle()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Unexpected error evaluating pending DecisionV2Outcome rows.")
+            await asyncio.sleep(self._interval_seconds)
+
+    async def _run_one_cycle(self) -> None:
+        session = self._session_factory()
+        try:
+            summary = await asyncio.to_thread(evaluate_pending_outcomes, session)
+            logger.info(
+                "DecisionV2Outcome evaluation cycle: %d evaluated, %d data-unavailable, "
+                "%d cancelled, %d still pending.",
+                summary.evaluated_terminal,
+                summary.data_unavailable,
+                summary.cancelled,
+                summary.still_pending,
             )
         finally:
             session.close()
