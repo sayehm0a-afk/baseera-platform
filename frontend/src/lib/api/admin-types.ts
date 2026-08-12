@@ -16,6 +16,12 @@ export interface AdminDashboardSummary {
   database_health: string;
   redis_health: string;
   ingestion_scheduler_running: boolean;
+  // How many of the four ingestion jobs (symbols/historical_ohlcv/
+  // fundamentals/dividends) are currently DEFERRED on SAHMK background-
+  // quota protection (not a genuine defect), plus the earliest retry
+  // time across them. 0/null means nothing is currently deferred.
+  ingestion_deferred_job_count: number;
+  ingestion_next_retry_at: string | null;
   market_intelligence_scheduler_running: boolean;
   market_data_provider: string | null;
   market_data_health: string | null;

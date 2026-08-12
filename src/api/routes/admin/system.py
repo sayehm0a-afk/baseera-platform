@@ -183,9 +183,49 @@ async def get_dashboard_summary(
     )
 
     from src.analysis.decision_v2.engine import DECISION_V2_ENGINE_VERSION
-    from src.domain.models import MarketScanProgress, MarketScanRun, MarketScanStatus
+    from src.domain.models import (
+        IngestionJobStatus,
+        IngestionRunLog,
+        MarketScanProgress,
+        MarketScanRun,
+        MarketScanStatus,
+    )
     from src.market_data.config import is_strict_real_data_enabled
     from src.market_intelligence.market_status import get_market_status
+
+    # Mirrors admin/market_intelligence.py's own _INGESTION_JOB_NAMES --
+    # duplicated here (not imported) since that name is private to its
+    # module; the four ingestion jobs are otherwise not enumerated
+    # anywhere shared. Surfaces the same DEFERRED-status signal
+    # /coverage already exposes per-job, but as a single at-a-glance
+    # "is anything currently quota-deferred, and when will it retry"
+    # pair for the dashboard landing screen -- staff previously had no
+    # way to see this without navigating to the market-coverage page.
+    ingestion_deferred_job_count = 0
+    ingestion_next_retry_at = None
+    for _job_name in ("symbols", "historical_ohlcv", "fundamentals", "dividends"):
+        _latest_run = (
+            session.query(IngestionRunLog)
+            .filter(IngestionRunLog.job_name == _job_name)
+            .order_by(IngestionRunLog.id.desc())
+            .first()
+        )
+        if (
+            _latest_run is not None
+            and _latest_run.status is IngestionJobStatus.DEFERRED
+            and _latest_run.next_retry_at is not None
+        ):
+            ingestion_deferred_job_count += 1
+            _retry_at = _latest_run.next_retry_at
+            if _retry_at.tzinfo is None:
+                # Same SQLite naive-datetime pitfall documented elsewhere
+                # (e.g. IngestionScheduler._compute_initial_delay) --
+                # next_retry_at is always written as UTC, so a naive
+                # value read back is treated as UTC rather than compared
+                # against an aware datetime incorrectly.
+                _retry_at = _retry_at.replace(tzinfo=timezone.utc)
+            if ingestion_next_retry_at is None or _retry_at < ingestion_next_retry_at:
+                ingestion_next_retry_at = _retry_at
 
     last_scan = (
         session.query(MarketScanRun).order_by(MarketScanRun.created_at.desc()).first()
@@ -210,6 +250,10 @@ async def get_dashboard_summary(
         database_health=database_health,
         redis_health=redis_health,
         ingestion_scheduler_running=main.ingestion_scheduler is not None and main.ingestion_scheduler.is_running,
+        ingestion_deferred_job_count=ingestion_deferred_job_count,
+        ingestion_next_retry_at=(
+            ingestion_next_retry_at.isoformat() if ingestion_next_retry_at is not None else None
+        ),
         market_intelligence_scheduler_running=(
             main.market_intelligence_scheduler is not None and main.market_intelligence_scheduler.is_running
         ),
