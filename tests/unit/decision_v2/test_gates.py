@@ -21,6 +21,8 @@ def _base_buy_inputs(**overrides) -> GateInputs:
         is_synthetic=False,
         data_age_hours=1.0,
         max_age_hours=24.0,
+        ohlcv_latest_bar_age_days=1.0,
+        max_ohlcv_staleness_days=5.0,
         price=100.0,
         entry_zone_low=97.0,
         entry_zone_high=101.0,
@@ -125,6 +127,56 @@ class TestStaleData:
         )
         result = evaluate_decision(inputs, TUNING)
         assert result.decision is Decision.HOLD
+
+
+class TestOhlcvStaleness:
+    """Distinct from TestStaleData above: data_age_hours/max_age_hours
+    track the scan/live-quote's own recency (always fresh -- the
+    current price is fetched live regardless of ingestion health);
+    ohlcv_latest_bar_age_days/max_ohlcv_staleness_days track whether
+    the multi-day daily-bar history the technical sub-scores are
+    computed from has actually kept up, which a live quote fetch says
+    nothing about. Mirrors src.market_intelligence.publication_gate's
+    identical _ohlcv_staleness_gate for the legacy scan path."""
+
+    def test_stale_ohlcv_history_downgrades_buy_to_watch_not_reject(self):
+        inputs = _base_buy_inputs(ohlcv_latest_bar_age_days=12.0, max_ohlcv_staleness_days=5.0)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+        assert any(g.name == "ohlcv_staleness" and not g.passed for g in result.gates)
+
+    def test_fresh_ohlcv_history_passes_and_stays_buy_candidate(self):
+        inputs = _base_buy_inputs(ohlcv_latest_bar_age_days=1.0, max_ohlcv_staleness_days=5.0)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "ohlcv_staleness")
+        assert gate.status is GateStatus.PASS
+
+    def test_untracked_ohlcv_age_is_not_evaluated_not_blocked(self):
+        inputs = _base_buy_inputs(ohlcv_latest_bar_age_days=None)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "ohlcv_staleness")
+        assert gate.status is GateStatus.NOT_EVALUATED
+
+    def test_stale_ohlcv_history_does_not_block_hold(self):
+        inputs = _base_buy_inputs(
+            recommendation=Recommendation.HOLD, direction=0,
+            ohlcv_latest_bar_age_days=12.0, max_ohlcv_staleness_days=5.0,
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.HOLD
+
+    def test_stale_ohlcv_history_does_not_block_exit(self):
+        """A defensive SELL-side action must not be suppressed just
+        because the technical read behind it rests on old bars --
+        exiting is the safer action, not one to discourage."""
+        inputs = _base_buy_inputs(
+            recommendation=Recommendation.STRONG_SELL, direction=-1,
+            ohlcv_latest_bar_age_days=12.0, max_ohlcv_staleness_days=5.0,
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.EXIT
 
 
 class TestEntryZoneAndTargetOrdering:

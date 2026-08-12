@@ -32,6 +32,7 @@ from src.analysis.decision_v2.types import (
 from src.analysis.recommendation.types import AnalysisContext, Recommendation, SignalDirection
 from src.market_intelligence.config import (
     get_max_data_age_hours,
+    get_max_ohlcv_staleness_days,
     get_min_average_traded_value,
     get_min_risk_reward_ratio,
 )
@@ -201,6 +202,8 @@ class DecisionEngineV2:
             is_synthetic=is_synthetic,
             data_age_hours=data_age_hours,
             max_age_hours=max_age_hours,
+            ohlcv_latest_bar_age_days=context.extra.get("ohlcv_latest_bar_age_days"),
+            max_ohlcv_staleness_days=get_max_ohlcv_staleness_days(),
             price=price,
             entry_zone_low=entry_low,
             entry_zone_high=entry_high,

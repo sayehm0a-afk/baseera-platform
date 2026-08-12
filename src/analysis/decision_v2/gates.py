@@ -55,6 +55,8 @@ class GateInputs:
     is_synthetic: Optional[bool]
     data_age_hours: Optional[float]
     max_age_hours: float
+    ohlcv_latest_bar_age_days: Optional[float]
+    max_ohlcv_staleness_days: float
 
     price: Optional[float]
     entry_zone_low: Optional[float]
@@ -146,6 +148,33 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     if is_stale:
         warnings.append("البيانات المستخدمة أقدم من الحد المسموح -- التحليل معروض للاطلاع فقط وليس للتنفيذ الفوري.")
 
+    # OHLCV staleness: distinct from data_freshness above, which only
+    # checks the scan/live-quote's own recency -- the live quote is
+    # always fetched fresh regardless of ingestion health, so it says
+    # nothing about whether the multi-day daily-bar history the
+    # technical sub-scores (trend/momentum/volatility) are computed
+    # from has actually kept up. Only catches this when
+    # historical_ohlcv ingestion has genuinely fallen behind (e.g.
+    # deferred on SAHMK quota protection -- see
+    # src.market_data.ingestion.scheduler) -- the same real production
+    # gap this gate closed in the legacy market-scan publication path
+    # (src.market_intelligence.publication_gate._ohlcv_staleness_gate).
+    ohlcv_is_stale = (
+        inputs.ohlcv_latest_bar_age_days is not None
+        and inputs.ohlcv_latest_bar_age_days > inputs.max_ohlcv_staleness_days
+    )
+    if inputs.ohlcv_latest_bar_age_days is None:
+        gates.append(GateOutcome("ohlcv_staleness", GateStatus.NOT_EVALUATED, "عمر بيانات الشموع اليومية غير معروف.", False))
+    else:
+        gates.append(GateOutcome(
+            "ohlcv_staleness", GateStatus.FAIL if ohlcv_is_stale else GateStatus.PASS,
+            f"أحدث شمعة يومية عمرها {inputs.ohlcv_latest_bar_age_days:.1f} يوم"
+            + (" -- يتجاوز الحد المسموح." if ohlcv_is_stale else "."),
+            False,
+        ))
+    if ohlcv_is_stale:
+        warnings.append("المؤشرات الفنية محسوبة من بيانات شموع يومية قديمة (تأخر تحديث البيانات) -- التحليل معروض للاطلاع فقط.")
+
     # Gate 11: market status known --------------------------------------------
     gates.append(GateOutcome(
         "market_status_known", GateStatus.PASS if inputs.market_status_known else GateStatus.FAIL,
@@ -235,6 +264,9 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # From here on: recommendation is BUY-like (BUY/STRONG_BUY) -----------------
     if is_stale:
         warnings.append("لا يمكن اعتبار هذا فرصة شراء فعلية أثناء عدم توفر بيانات حديثة -- تم تصنيفه للمراقبة فقط.")
+        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
+    if ohlcv_is_stale:
+        warnings.append("لا يمكن اعتبار هذا فرصة شراء فعلية والمؤشرات الفنية مبنية على بيانات شموع قديمة -- تم تصنيفه للمراقبة فقط.")
         return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
 
     # Gate 3: entry zone valid ------------------------------------------------
