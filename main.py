@@ -560,7 +560,7 @@ async def metrics():
 
 
 @app.get("/market-data/status")
-async def market_data_status():
+async def market_data_status(_current_user: User = Depends(require_staff_role(StaffRole.ADMIN))):
     """Reports which market-data and fundamentals providers are
     currently active.
 
@@ -571,6 +571,14 @@ async def market_data_status():
     network-restricted environment) -- this endpoint exposes that
     decision and each provider's own health check for operators.
     Never returns the configured API key.
+
+    Staff-gated (M8 security acceptance pass): this predates Phase 10's
+    RBAC layer, sits outside /api/v1/admin/*, and was previously
+    reachable by any unauthenticated caller -- see
+    docs/ADMIN_AND_RBAC.md §5 and docs/THREAT_MODEL.md T18 for the
+    disclosed gap this closes. Provider-selection/health detail (which
+    backend is active, whether SAHMK is reachable) is internal
+    operational state, not customer-facing data.
     """
     try:
         from src.market_data.fundamental_provider_factory import (
@@ -604,11 +612,15 @@ async def market_data_status():
 
 
 @app.get("/ingestion/status")
-async def ingestion_status():
+async def ingestion_status(_current_user: User = Depends(require_staff_role(StaffRole.ADMIN))):
     """Reports whether the ingestion scheduler is running and the most
     recent run of each job (status, timing, row counts), from
     IngestionRunLog -- so an operator can see "is the database still
     syncing with SAHMK" without grepping logs.
+
+    Staff-gated (M8 security acceptance pass) -- see market_data_status's
+    docstring above for why: this route predates RBAC, leaked scheduler/
+    ingestion-job internals to any unauthenticated caller.
     """
     try:
         from src.core.db.database import get_session_factory
@@ -660,8 +672,13 @@ async def ingestion_status():
 
 
 @app.get("/stats")
-async def get_stats():
-    """Get runtime statistics."""
+async def get_stats(_current_user: User = Depends(require_staff_role(StaffRole.ADMIN))):
+    """Get runtime statistics.
+
+    Staff-gated (M8 security acceptance pass) -- see market_data_status's
+    docstring above for why: this route predates RBAC and was previously
+    reachable by any unauthenticated caller.
+    """
     try:
         if not kernel:
             raise HTTPException(status_code=503, detail="Kernel not initialized")
