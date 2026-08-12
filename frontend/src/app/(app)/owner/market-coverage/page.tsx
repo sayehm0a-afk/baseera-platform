@@ -156,6 +156,9 @@ function MarketCoveragePageInner() {
               <span className="text-xs font-semibold text-bsr-text-primary">{run.job_name}</span>
               <span className="bsr-numeric text-[11px] text-bsr-text-secondary">
                 {run.status ?? "لم يُشغَّل بعد"} · نجح {run.symbols_succeeded} · فشل {run.symbols_failed}
+                {run.status === "deferred" && run.next_retry_at
+                  ? ` · مؤجَّل بسبب حصة SAHMK، إعادة المحاولة ${fmtDate(run.next_retry_at)}`
+                  : ""}
               </span>
             </div>
           ))}

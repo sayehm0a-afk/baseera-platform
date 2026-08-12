@@ -22,6 +22,15 @@ class IngestionJobStatus(str, enum.Enum):
     SUCCESS = "success"
     PARTIAL = "partial"
     FAILED = "failed"
+    # The run did not attempt real ingestion work at all because SAHMK's
+    # own quota governor (src.market_data.sahmk.rate_limiter) refused
+    # this background-priority request to protect quota reserved for
+    # live-market-critical operations -- not a genuine ingestion defect,
+    # so it must never look like one. Distinct from FAILED precisely so
+    # "the pipeline is broken" and "the pipeline is correctly waiting
+    # its turn" are never conflated in status/observability surfaces.
+    # See next_retry_at for when the scheduler will retry automatically.
+    DEFERRED = "deferred"
 
 
 class IngestionRunLog(Base):
@@ -57,6 +66,12 @@ class IngestionRunLog(Base):
     # IngestionResult.zero_progress, which is only ever set when a
     # provider call genuinely returned no bars.
     zero_progress_summary = Column(Text, nullable=True)
+    # Only ever set when status=DEFERRED -- the instant the scheduler
+    # should attempt this job again (the SAHMK background-quota reset
+    # time, from SahmkRateLimiter.get_status()['resets_at_utc'], plus a
+    # small safety buffer), not a generic "try again later" guess. NULL
+    # for every other status.
+    next_retry_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

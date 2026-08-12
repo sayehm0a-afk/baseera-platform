@@ -57,7 +57,11 @@ def test_interval_defaults(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
     assert ingestion_config.get_symbols_sync_interval_seconds() == 24 * 3600
-    assert ingestion_config.get_ohlcv_sync_interval_seconds() == 3600
+    # Not hourly: historical_ohlcv only ever writes daily bars, so an
+    # hourly cadence was pure background-quota waste -- see
+    # get_ohlcv_sync_interval_seconds's own docstring for the
+    # production-evidence-backed rationale.
+    assert ingestion_config.get_ohlcv_sync_interval_seconds() == 6 * 3600
     assert ingestion_config.get_fundamentals_sync_interval_seconds() == 7 * 24 * 3600
     assert ingestion_config.get_dividends_sync_interval_seconds() == 24 * 3600
 

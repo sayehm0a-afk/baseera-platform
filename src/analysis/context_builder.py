@@ -26,6 +26,7 @@ lives in the engine layer, not the API layer.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
@@ -97,6 +98,29 @@ def _detect_likely_suspended(df) -> Optional[bool]:
     zero_volume = bool((recent["volume"] == 0).all())
     frozen_price = bool(recent["close"].nunique() == 1)
     return zero_volume and frozen_price
+
+
+def _ohlcv_latest_bar_age_days(df) -> Optional[float]:
+    """How many calendar days old the most recent daily PriceBar row
+    is -- distinct from the live-quote/scan-freshness check the
+    `data_freshness` publication gate already does. The current price
+    itself is always fetched live (see market_price above); this is
+    about whether the multi-day history technical indicators are
+    computed from (SMA, momentum, etc.) has actually kept up, which a
+    live quote fetch says nothing about. `None` when there is no bar
+    history at all -- distinct from a real, computed age of 0+ days,
+    same NOT_EVALUATED convention as `_detect_likely_suspended`
+    above."""
+    if df.empty:
+        return None
+    latest_bar_at = df.index.max()
+    if latest_bar_at.tzinfo is None:
+        # Same SQLite naive-datetime pitfall as publication_gate.py's
+        # own _freshness_gate -- PriceBar.timestamp is always written
+        # as UTC, so a naive value read back is treated as UTC.
+        latest_bar_at = latest_bar_at.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - latest_bar_at
+    return max(0.0, age.total_seconds() / 86400.0)
 
 
 async def build_analysis_context(
@@ -195,6 +219,7 @@ async def build_analysis_context(
         **_news_sentiment_extra(session, symbol, news_service),
         "bars_used": len(df),
         "likely_suspended": _detect_likely_suspended(df),
+        "ohlcv_latest_bar_age_days": _ohlcv_latest_bar_age_days(df),
     }
 
     return AnalysisContext(

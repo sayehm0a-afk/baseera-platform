@@ -52,9 +52,62 @@ from src.market_data.ingestion.ingest_historical_ohlcv import ingest_historical_
 from src.market_data.ingestion.ingest_symbols import sync_symbols
 from src.market_data.fundamental_provider_factory import get_fundamental_data_provider
 from src.market_data.provider_factory import get_market_data_provider
+from src.market_data.sahmk.rate_limiter import (
+    SahmkRateLimitExceededError,
+    SahmkUpstreamQuotaExhaustedError,
+    get_default_rate_limiter,
+)
 from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
 
 logger = logging.getLogger(__name__)
+
+# Added on top of the quota governor's own reset instant so a job
+# deferred right at the boundary doesn't retry a few seconds early
+# (clock skew between this process and whatever set resets_at_utc,
+# plus giving the day-count rollover a moment to actually take effect)
+# and immediately get deferred again.
+_QUOTA_RETRY_SAFETY_BUFFER = timedelta(minutes=5)
+
+
+def _find_quota_exceeded_cause(exc: BaseException, max_depth: int = 5) -> Optional[SahmkRateLimitExceededError]:
+    """Walks an exception's __cause__/__context__ chain looking for a
+    SahmkRateLimitExceededError (or a subclass -- SahmkQuotaReserved
+    ForCriticalError, SahmkUpstreamQuotaExhaustedError). Needed because
+    provider_factory/fundamental_provider_factory re-raise the rate
+    limiter's own exception as StrictRealDataUnavailableError (a bare
+    `raise NewError(...)` inside an `except ... as exc:` block, which
+    Python sets __context__ for automatically even with no explicit
+    `raise ... from exc`) -- see their own connectivity-probe except
+    clauses. Bounded depth: this only ever needs to see through one or
+    two wrapping layers; an unbounded walk would risk an infinite loop
+    if something's __context__ ever pointed back at itself."""
+    current: Optional[BaseException] = exc
+    for _ in range(max_depth):
+        if current is None:
+            return None
+        if isinstance(current, SahmkRateLimitExceededError):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _compute_quota_retry_at(quota_exc: SahmkRateLimitExceededError) -> datetime:
+    """SahmkUpstreamQuotaExhaustedError carries SAHMK's own real
+    evidence-based reset instant (reset_at_utc) -- used verbatim when
+    available, since it's more authoritative than this limiter's own
+    UTC-midnight estimate. Every other SahmkRateLimitExceededError
+    (plain daily exhaustion, or SahmkQuotaReservedForCriticalError --
+    background dipping into the critical reserve) has no such
+    attribute, so the rate limiter's own resets_at_utc (a real,
+    zero-network-call read of its own tracked state, always the next
+    UTC midnight) is the correct fallback -- background capacity does
+    not free up mid-day; it only resets at day rollover."""
+    if isinstance(quota_exc, SahmkUpstreamQuotaExhaustedError):
+        reset_at = quota_exc.reset_at_utc
+    else:
+        status = get_default_rate_limiter().get_status()
+        reset_at = datetime.fromisoformat(str(status["resets_at_utc"]))
+    return reset_at + _QUOTA_RETRY_SAFETY_BUFFER
 
 
 class _NonDisconnectingProviderProxy:
@@ -127,6 +180,7 @@ async def run_ingestion_job(
     result: Optional[IngestionResult] = None
     error_summary: Optional[str] = None
     retry_count = 0
+    deferred_until: Optional[datetime] = None
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -134,6 +188,29 @@ async def run_ingestion_job(
             retry_count = attempt - 1  # set once, at the final (successful) outcome
             break
         except Exception as exc:  # noqa: BLE001 -- deliberate: any job failure must be caught and logged, never crash the scheduler loop
+            quota_exc = _find_quota_exceeded_cause(exc)
+            if quota_exc is not None:
+                # Not a genuine ingestion failure: the quota governor
+                # correctly refused this background request to protect
+                # the reserve for live-market-critical operations.
+                # Retrying within seconds (the exponential-backoff loop
+                # below) cannot possibly help -- background capacity
+                # only frees up at the next UTC day rollover -- so this
+                # stops immediately rather than burning the remaining
+                # attempts/backoff sleeps on a wall that won't move.
+                retry_count = attempt - 1
+                deferred_until = _compute_quota_retry_at(quota_exc)
+                error_summary = f"Deferred (SAHMK quota protection): {quota_exc}"
+                logger.info(
+                    "Ingestion job '%s' deferred on attempt %d/%d -- SAHMK background quota "
+                    "unavailable, will retry at %s: %s",
+                    job_name,
+                    attempt,
+                    max_attempts,
+                    deferred_until.isoformat(),
+                    quota_exc,
+                )
+                break
             if attempt >= max_attempts:
                 retry_count = attempt - 1  # set once, at the final (failed) outcome
                 error_summary = f"{type(exc).__name__}: {exc}"
@@ -184,6 +261,10 @@ async def run_ingestion_job(
                 run_log.zero_progress_summary = "; ".join(
                     f"{k}: {v}" for k, v in list(result.zero_progress.items())[:10]
                 )
+        elif deferred_until is not None:
+            run_log.status = IngestionJobStatus.DEFERRED
+            run_log.error_summary = error_summary
+            run_log.next_retry_at = deferred_until
         else:
             run_log.status = IngestionJobStatus.FAILED
             run_log.error_summary = error_summary
@@ -315,7 +396,8 @@ class IngestionScheduler:
             ("dividends", ingestion_config.get_dividends_sync_interval_seconds, self._run_dividends),
         ]
         for job_name, interval_fn, job_fn in job_specs:
-            task = asyncio.ensure_future(self._loop(job_name, interval_fn, job_fn))
+            initial_delay = self._compute_initial_delay(job_name)
+            task = asyncio.ensure_future(self._loop(job_name, interval_fn, job_fn, initial_delay))
             self._tasks.append(task)
 
         logger.info("IngestionScheduler started %d job loop(s): %s", len(self._tasks), [s[0] for s in job_specs])
@@ -328,6 +410,34 @@ class IngestionScheduler:
                 await task
         self._tasks.clear()
         logger.info("IngestionScheduler stopped.")
+
+    def _compute_initial_delay(self, job_name: str) -> float:
+        """Persisted-retry-state on restart: if this job's most recent
+        run was DEFERRED (SAHMK background quota unavailable) with a
+        next_retry_at still in the future, a freshly (re)started
+        scheduler must honor that instead of running the job
+        immediately -- which would just hit the same quota wall again
+        and log a redundant deferral. Returns 0.0 (run immediately, the
+        existing on-enable behavior) for every other case: no prior
+        run, a prior run that already succeeded/failed/partial'd, or a
+        DEFERRED run whose retry time has already passed."""
+        session = self._session_factory()
+        try:
+            latest = (
+                session.query(IngestionRunLog)
+                .filter(IngestionRunLog.job_name == job_name)
+                .order_by(IngestionRunLog.id.desc())
+                .first()
+            )
+        finally:
+            session.close()
+        if latest is None or latest.status is not IngestionJobStatus.DEFERRED or latest.next_retry_at is None:
+            return 0.0
+        next_retry_at = latest.next_retry_at
+        if next_retry_at.tzinfo is None:
+            next_retry_at = next_retry_at.replace(tzinfo=timezone.utc)
+        delay = (next_retry_at - datetime.now(timezone.utc)).total_seconds()
+        return max(0.0, delay)
 
     def _reap_stale_runs_once(self) -> None:
         """Mirrors MarketIntelligenceScheduler's own stale-lock reap: a
@@ -356,10 +466,34 @@ class IngestionScheduler:
         job_name: str,
         interval_fn: Callable[[], float],
         job_fn: Callable[[], Awaitable[IngestionResult]],
+        initial_delay_seconds: float = 0.0,
     ) -> None:
+        if initial_delay_seconds > 0:
+            logger.info(
+                "Ingestion job '%s' resuming a persisted quota-deferred wait -- "
+                "sleeping %.0fs before its first run this process.",
+                job_name,
+                initial_delay_seconds,
+            )
+            await asyncio.sleep(initial_delay_seconds)
         while True:
+            next_sleep_seconds = interval_fn()
             try:
-                await run_ingestion_job(job_name, job_fn, self._session_factory)
+                run_log = await run_ingestion_job(job_name, job_fn, self._session_factory)
+                if run_log.status is IngestionJobStatus.DEFERRED and run_log.next_retry_at is not None:
+                    # Quota-deferred: retry when the quota governor says
+                    # background capacity will be available again, not
+                    # on this job's normal (possibly much longer, e.g.
+                    # daily/weekly) recurring interval -- otherwise a
+                    # symbols/fundamentals job deferred once could stay
+                    # stale for a full extra day/week even after the
+                    # quota reset.
+                    next_retry_at = run_log.next_retry_at
+                    if next_retry_at.tzinfo is None:
+                        next_retry_at = next_retry_at.replace(tzinfo=timezone.utc)
+                    next_sleep_seconds = max(
+                        0.0, (next_retry_at - datetime.now(timezone.utc)).total_seconds()
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -372,7 +506,7 @@ class IngestionScheduler:
                     "retry handling).",
                     job_name,
                 )
-            await asyncio.sleep(interval_fn())
+            await asyncio.sleep(next_sleep_seconds)
 
     def _resolve_target_symbols(self) -> List[str]:
         """The symbol set every job except `_run_symbols` operates on:

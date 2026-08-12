@@ -662,6 +662,7 @@ def _ingestion_job_status_out(job_name: str, latest: Optional[IngestionRunLog]) 
         duration_seconds=float(latest.duration_seconds) if latest.duration_seconds is not None else None,
         error_summary=latest.error_summary,
         zero_progress_summary=latest.zero_progress_summary,
+        next_retry_at=latest.next_retry_at,
     )
 
 

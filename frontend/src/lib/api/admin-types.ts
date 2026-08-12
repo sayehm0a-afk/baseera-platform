@@ -368,6 +368,11 @@ export interface IngestionJobStatus {
   finished_at: string | null;
   duration_seconds: number | null;
   error_summary: string | null;
+  // Only ever set when status === "deferred": SAHMK's own quota
+  // governor correctly held this background job back to protect the
+  // reserve for live-market-critical operations, not a genuine
+  // ingestion defect -- when the scheduler will retry automatically.
+  next_retry_at: string | null;
 }
 
 export interface MarketScanRunSummary {

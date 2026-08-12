@@ -50,7 +50,24 @@ def get_symbols_sync_interval_seconds() -> float:
 
 
 def get_ohlcv_sync_interval_seconds() -> float:
-    return float(os.getenv("INGESTION_OHLCV_INTERVAL_SECONDS", str(3600)))
+    """Default is 6 hours, not hourly. historical_ohlcv only ever writes
+    Timeframe.ONE_DAY bars (see ingest_historical_ohlcv.py) -- a daily
+    bar changes at most once per trading day, so an hourly cadence was
+    pure waste: at ~385 active symbols and one SAHMK call per symbol
+    per run (no caching layer sits in front of this -- each run
+    genuinely asks "anything new since last time" per symbol), hourly
+    meant up to 385*24 = 9,240 background-quota calls attempted per
+    day against a 3,500/day background budget -- confirmed by real
+    2026-08-11 production evidence: requests_used_today had already
+    hit the 3,500 background cap by 22:03 UTC, and every scheduled job
+    that hour (symbols/historical_ohlcv/fundamentals/dividends) was
+    correctly refused by the quota governor. Every 6 hours (4 runs/day
+    = ~1,540 calls/day) comfortably covers a post-close refresh plus
+    catch-up slack for newly-discovered symbols, while leaving real
+    headroom in the background budget for dividends (~385/day) and
+    fundamentals (~385/week). Still fully overridable via
+    INGESTION_OHLCV_INTERVAL_SECONDS."""
+    return float(os.getenv("INGESTION_OHLCV_INTERVAL_SECONDS", str(6 * 3600)))
 
 
 def get_fundamentals_sync_interval_seconds() -> float:
