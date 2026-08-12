@@ -210,7 +210,7 @@ jobs:
         run: |
           mkdir -p /tmp/screenshots
           python3 - "$FRONTEND_URL" "$STAFF_EMAIL" "$STAFF_PASSWORD" "$NEW_EMAIL" "$NEW_PASSWORD" "$STOCK_SYMBOL" <<'PYEOF'
-          import re, sys, json
+          import re, sys, json, time
           from playwright.sync_api import sync_playwright
 
           frontend_url, staff_email, staff_password, new_email, new_password, stock_symbol = sys.argv[1:7]
@@ -320,10 +320,41 @@ jobs:
                   page.remove_listener("pageerror", on_pageerror)
 
           def do_login(page, email, password, vp_name, tag):
+              # Diagnostic instrumentation added to root-cause the
+              # intermittent login timeouts seen in the first M7 audit
+              # run: logs every /api/v1/auth/* request/response with
+              # wall-clock timestamps, so a rerun's job log can show
+              # definitively whether the POST /login request was ever
+              # sent, and if so, how long the real network round trip
+              # took -- rather than only reporting the Playwright-side
+              # timeout, which conflates "never sent" with "sent but
+              # slow to respond" and with "sent, fast, but our own
+              # wait_for_url/networkidle step afterwards was slow."
+              net_log = []
+
+              def on_request(req):
+                  if "/api/v1/auth/" in req.url:
+                      net_log.append((time.monotonic(), "request", req.method, req.url))
+
+              def on_response(resp):
+                  if "/api/v1/auth/" in resp.url:
+                      net_log.append((time.monotonic(), "response", resp.status, resp.url))
+
+              def on_requestfailed(req):
+                  if "/api/v1/auth/" in req.url:
+                      net_log.append((time.monotonic(), "requestfailed", req.failure, req.url))
+
+              page.on("request", on_request)
+              page.on("response", on_response)
+              page.on("requestfailed", on_requestfailed)
+
+              t0 = time.monotonic()
               try:
                   page.goto(frontend_url + "/login", wait_until="domcontentloaded", timeout=20000)
+                  t_goto = time.monotonic()
                   email_input = page.locator('input[type="email"], input[name="email"]').first
                   email_input.wait_for(timeout=10000)
+                  t_input_ready = time.monotonic()
                   email_input.fill(email)
                   page.locator('input[type="password"]').first.fill(password)
                   with page.expect_response(
@@ -331,14 +362,43 @@ jobs:
                   ) as resp_info:
                       page.locator('button[type="submit"]').first.click()
                   resp = resp_info.value
+                  t_login_resp = time.monotonic()
                   ok = resp.status == 200
+                  print(f"[{vp_name}] {tag} login timing: goto={t_goto-t0:.2f}s "
+                        f"input_ready={t_input_ready-t_goto:.2f}s login_response={t_login_resp-t_input_ready:.2f}s "
+                        f"status={resp.status}")
                   page.wait_for_url(lambda u: "login" not in u, timeout=15000)
                   page.wait_for_load_state("networkidle", timeout=15000)
                   return ok
               except Exception as e:
-                  print(f"[{vp_name}] {tag} LOGIN FAILED: {e}")
+                  t_fail = time.monotonic()
+                  print(f"[{vp_name}] {tag} LOGIN FAILED after {t_fail-t0:.2f}s: {e}")
+                  print(f"[{vp_name}] {tag} /api/v1/auth/* network log (t+seconds, event, detail, url):")
+                  if net_log:
+                      for ts, kind, detail, url in net_log:
+                          print(f"    t+{ts-t0:.2f}s {kind} {detail} {url}")
+                  else:
+                      print("    (no /api/v1/auth/* request was observed at all -- the click never reached the network layer)")
+                  # Grace window: if the request was sent but our own
+                  # 15s expect_response wait was simply too short under
+                  # runner load, a late response will show up here,
+                  # proving "slow" rather than "never answered."
+                  try:
+                      page.wait_for_timeout(8000)
+                  except Exception:
+                      pass
+                  if net_log:
+                      late = [e for e in net_log if e[0] - t0 > 15]
+                      if late:
+                          print(f"[{vp_name}] {tag} late /api/v1/auth/* events after the 15s window:")
+                          for ts, kind, detail, url in late:
+                              print(f"    t+{ts-t0:.2f}s {kind} {detail} {url}")
                   findings.append({"viewport": vp_name, "path": "/login", "issue": "login_failed", "detail": str(e)})
                   return False
+              finally:
+                  page.remove_listener("request", on_request)
+                  page.remove_listener("response", on_response)
+                  page.remove_listener("requestfailed", on_requestfailed)
 
           with sync_playwright() as p:
               browser = p.chromium.launch()
