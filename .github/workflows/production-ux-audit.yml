@@ -1,0 +1,483 @@
+name: Production UX / Visual-Identity Audit (M7)
+
+# Purpose-built for the M7 mandate: a fresh, evidence-based audit of the
+# ACTUAL CURRENT production UI/UX -- not a pass/fail gate, and not a repeat
+# of production-frontend-verification.yml / production-mobile-and-rbac-
+# verification.yml (overflow + console-error + RBAC evidence only). This
+# workflow adds the missing dimension: real page TEXT content, read from
+# three personas, so concrete copy/hierarchy/terminology issues can be
+# identified from the job console log (this sandbox cannot reach
+# *.up.railway.app directly, and uploaded artifacts/screenshots are not
+# readable by the agent that dispatches this workflow -- only console
+# output is).
+#
+# Personas covered, each against the REAL deployed app, no mock data:
+#   1. First-time/beginner: unauthenticated landing/login/register, then a
+#      brand-new throwaway account's genuinely empty first-use dashboard/
+#      watchlist/opportunities views (real subscription-gating behavior,
+#      not simulated).
+#   2. Experienced/professional: staff-account opportunities/scan/stock-
+#      detail/watchlist/reports views, with a symbol chosen to actually
+#      carry a BUY/STRONG_BUY decision so the real decision/confidence/
+#      risk/entry/target/stop-loss/duration presentation can be inspected,
+#      not just an INSUFFICIENT_DATA placeholder.
+#   3. Owner/admin: a representative subset of /owner/* pages (the full
+#      15-route sweep already exists in production-mobile-and-rbac-
+#      verification.yml for overflow/console evidence; this workflow adds
+#      content-depth checks on top).
+#
+# Read-only by design: only ONE mutating action occurs -- registering the
+# single throwaway beginner account (RFC 2606 example.com address, same
+# convention as every other verification workflow in this repo) -- and it
+# self-deletes at the end. No watchlist add/remove, no scan trigger, no
+# SAHMK-consuming action of any kind.
+#
+# This workflow never fails the run over content-quality findings (that
+# would make it a gate, which is not its job) -- it only exits non-zero on
+# genuine infrastructure failures (login failed, a page failed to load at
+# all). All content findings are printed as structured evidence for a
+# human/agent to read from the job log and act on.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+  RAILWAY_FRONTEND_SERVICE: frontend
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+          if [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::STAFF_EMAIL/STAFF_PASSWORD are not set (need ADMIN or OWNER role)."
+            exit 1
+          fi
+          echo "Secrets present."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright (Python) + Chromium
+        run: |
+          pip install --quiet playwright
+          playwright install --with-deps chromium
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend/frontend public URLs
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          railway domain list --service "$RAILWAY_FRONTEND_SERVICE" --json > /tmp/frontend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend:  $BACKEND_URL"
+          echo "Frontend: $FRONTEND_URL"
+
+      - name: Health checks (backend/frontend)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live" || true
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "frontend / -> HTTP %{http_code}\n" "$FRONTEND_URL/" || true
+
+      - name: Log in as the staff account
+        id: login
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Staff login HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Staff login failed."
+            exit 1
+          fi
+          CSRF=$(grep -i csrf_token /tmp/staff_cookies.txt | awk '{print $NF}')
+          echo "$CSRF" > /tmp/.staff_csrf
+
+      - name: Confirm the deployed commit currently serving production (audit baseline)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/system/summary" -o /tmp/summary.json -w "\nHTTP %{http_code}\n"
+          python3 -c "import json; d = json.load(open('/tmp/summary.json')); print('AUDIT BASELINE deployment_commit:', d.get('deployment_commit')); print('environment:', d.get('environment'))"
+
+      - name: Discover a symbol that actually carries a BUY/STRONG_BUY decision (real data, not fabricated)
+        id: symbol
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/market/rankings" -o /tmp/rankings.json -w "\nHTTP %{http_code}\n"
+          SYM=$(python3 -c "
+          import json
+          d = json.load(open('/tmp/rankings.json'))
+          preferred = ('TOP_BUY', 'TOP_STRONG_BUY')
+          # Pass 1: a preferred category with a real entry.
+          for rl in d.get('rankings', []):
+              if rl.get('category') in preferred:
+                  for e in rl.get('entries', []):
+                      if e.get('symbol'):
+                          print(e['symbol']); raise SystemExit
+          # Pass 2: any entry whose recommendation text mentions buy.
+          for rl in d.get('rankings', []):
+              for e in rl.get('entries', []):
+                  rec = (e.get('recommendation') or '').upper()
+                  if e.get('symbol') and 'BUY' in rec:
+                      print(e['symbol']); raise SystemExit
+          # Pass 3: any entry at all.
+          for rl in d.get('rankings', []):
+              for e in rl.get('entries', []):
+                  if e.get('symbol'):
+                      print(e['symbol']); raise SystemExit
+          print('2222')
+          ")
+          echo "symbol=$SYM" >> "$GITHUB_OUTPUT"
+          echo "Selected decision-rich stock-detail symbol: $SYM"
+
+      - name: "Create the single throwaway beginner/first-time account (register -> staff-verify -> login)"
+        id: newuser
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          TS=$(date +%s)
+          NEW_EMAIL="basirah.ci.ux-audit+${TS}@example.com"
+          NEW_PASSWORD="Audit-CI-${TS}!Aa1"
+          echo "new_email=$NEW_EMAIL" >> "$GITHUB_OUTPUT"
+          echo "Test account: $NEW_EMAIL"
+
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/register_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/register" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$NEW_EMAIL\", \"password\": \"$NEW_PASSWORD\", \"full_name\": \"CI UX Audit\"}")
+          echo "Register HTTP $CODE"
+          if [ "$CODE" != "201" ]; then echo "::error::Registration failed."; cat /tmp/register_body.json; exit 1; fi
+          NEW_USER_ID=$(python3 -c "import json; print(json.load(open('/tmp/register_body.json'))['id'])")
+
+          STAFF_CSRF=$(cat /tmp/.staff_csrf)
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt -o /tmp/verify_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/admin/users/$NEW_USER_ID/verify-email" \
+            -H "Content-Type: application/json" -H "x-csrf-token: $STAFF_CSRF")
+          echo "Staff verify-email HTTP $CODE"
+          if [ "$CODE" != "200" ]; then echo "::error::Staff verify-email fallback failed."; exit 1; fi
+
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/newuser_cookies.txt -o /tmp/login2_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$NEW_EMAIL\", \"password\": \"$NEW_PASSWORD\"}")
+          echo "Post-verification login HTTP $CODE"
+          if [ "$CODE" != "200" ]; then echo "::error::Login after staff verification failed."; exit 1; fi
+          echo "New throwaway beginner account is live -- genuinely empty, first-use state."
+          echo "new_password=$NEW_PASSWORD" >> "$GITHUB_OUTPUT"
+
+      - name: Persona-based content + visual-identity audit (Playwright, real production, read-only)
+        id: audit
+        env:
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+          STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+          STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+          NEW_EMAIL: ${{ steps.newuser.outputs.new_email }}
+          NEW_PASSWORD: ${{ steps.newuser.outputs.new_password }}
+          STOCK_SYMBOL: ${{ steps.symbol.outputs.symbol }}
+        run: |
+          mkdir -p /tmp/screenshots
+          python3 - "$FRONTEND_URL" "$STAFF_EMAIL" "$STAFF_PASSWORD" "$NEW_EMAIL" "$NEW_PASSWORD" "$STOCK_SYMBOL" <<'PYEOF'
+          import re, sys, json
+          from playwright.sync_api import sync_playwright
+
+          frontend_url, staff_email, staff_password, new_email, new_password, stock_symbol = sys.argv[1:7]
+          stock_symbol = stock_symbol or "2222"
+
+          viewports = {
+              "390x844_mobile": {"width": 390, "height": 844},
+              "1440x900_desktop": {"width": 1440, "height": 900},
+          }
+
+          ARABIC_RE = re.compile(r"[؀-ۿ]")
+          LATIN_LETTER_RE = re.compile(r"[A-Za-z]")
+          RAW_TERM_RE = re.compile(
+              r"DecisionV2Snapshot|SymbolIntelligenceRecord|INSUFFICIENT_DATA|Traceback|NoneType|"
+              r"undefined|\bNaN\b|\bnull\b|STRONG_BUY_CANDIDATE|BUY_CANDIDATE|WATCH_CANDIDATE|"
+              r"AVOID_CANDIDATE|TypeError|ReferenceError|Internal Server Error|\[object Object\]"
+          )
+          DECISION_WORDS = ["شراء", "مراقبة", "تجنب", "راقب", "احتفظ"]
+          RISK_CONFIDENCE_WORDS = ["الثقة", "المخاطر", "المخاطرة", "الخطورة"]
+          ENTRY_TARGET_STOP_WORDS = ["الدخول", "الهدف", "وقف الخسارة", "وقف خسارة", "المدة", "الأفق الزمني"]
+
+          _BENIGN_CONSOLE_SUBSTRINGS = ("status of 401", "status of 400")
+
+          findings = []
+          text_dumps = {}
+
+          def word_presence(text, words):
+              return {w: (w in text) for w in words}
+
+          def check_page(page, vp_name, path, tag, dump_text=False, check_decision=False):
+              console_errors = []
+              on_console = lambda msg: console_errors.append(msg.text) if msg.type == "error" else None
+              on_pageerror = lambda err: console_errors.append(str(err))
+              page.on("console", on_console)
+              page.on("pageerror", on_pageerror)
+              try:
+                  page.goto(frontend_url + path, wait_until="networkidle", timeout=25000)
+                  page.wait_for_timeout(1200)
+                  dir_attr = page.evaluate("document.documentElement.getAttribute('dir')")
+                  scroll_width = page.evaluate("document.documentElement.scrollWidth")
+                  client_width = page.evaluate("document.documentElement.clientWidth")
+                  overflow = scroll_width - client_width
+                  body_text = page.locator("body").inner_text(timeout=5000)
+                  safe_name = path.strip("/").replace("/", "_") or "home"
+                  page.screenshot(path=f"/tmp/screenshots/{vp_name}__{safe_name}.png", full_page=True)
+
+                  arabic_chars = len(ARABIC_RE.findall(body_text))
+                  latin_chars = len(LATIN_LETTER_RE.findall(body_text))
+                  total_letters = arabic_chars + latin_chars
+                  arabic_ratio = (arabic_chars / total_letters) if total_letters else 1.0
+
+                  raw_terms = sorted(set(RAW_TERM_RE.findall(body_text)))
+                  real_errors = [e for e in console_errors if not any(b in e for b in _BENIGN_CONSOLE_SUBSTRINGS)]
+
+                  issues = []
+                  if overflow > 4:
+                      issues.append("horizontal_overflow")
+                  if real_errors:
+                      issues.append("console_errors")
+                  if raw_terms:
+                      issues.append("raw_technical_term_leak")
+                  if dir_attr != "rtl":
+                      issues.append("dir_not_rtl")
+                  if total_letters > 20 and arabic_ratio < 0.5:
+                      issues.append("low_arabic_ratio")
+
+                  decision_report = None
+                  if check_decision:
+                      decision_report = {
+                          "decision_words_present": word_presence(body_text, DECISION_WORDS),
+                          "risk_confidence_words_present": word_presence(body_text, RISK_CONFIDENCE_WORDS),
+                          "entry_target_stop_words_present": word_presence(body_text, ENTRY_TARGET_STOP_WORDS),
+                      }
+                      if not any(decision_report["decision_words_present"].values()):
+                          issues.append("no_decision_label_found")
+                      if not any(decision_report["risk_confidence_words_present"].values()):
+                          issues.append("no_risk_or_confidence_label_found")
+                      if not any(decision_report["entry_target_stop_words_present"].values()):
+                          issues.append("no_entry_target_stop_fields_found")
+
+                  status = "OK" if not issues else "ISSUE"
+                  print(f"[{vp_name}] {tag}{path}: dir={dir_attr} overflow_px={overflow} "
+                        f"console_errors={len(console_errors)}(real={len(real_errors)}) "
+                        f"arabic_ratio={arabic_ratio:.2f} raw_terms={raw_terms} -> {status}")
+                  if decision_report:
+                      print(f"    decision_words={decision_report['decision_words_present']}")
+                      print(f"    risk_confidence_words={decision_report['risk_confidence_words_present']}")
+                      print(f"    entry_target_stop_words={decision_report['entry_target_stop_words_present']}")
+
+                  for issue in issues:
+                      findings.append({
+                          "viewport": vp_name, "path": path, "issue": issue,
+                          "overflow_px": overflow if issue == "horizontal_overflow" else None,
+                          "console_errors": real_errors[:5] if issue == "console_errors" else None,
+                          "raw_terms": raw_terms if issue == "raw_technical_term_leak" else None,
+                      })
+
+                  if dump_text:
+                      key = f"{vp_name}__{safe_name}"
+                      text_dumps[key] = body_text[:1200]
+
+              except Exception as e:
+                  print(f"[{vp_name}] {tag}{path}: FAILED -- {e}")
+                  findings.append({"viewport": vp_name, "path": path, "issue": "navigation_failed", "detail": str(e)})
+              finally:
+                  page.remove_listener("console", on_console)
+                  page.remove_listener("pageerror", on_pageerror)
+
+          def do_login(page, email, password, vp_name, tag):
+              try:
+                  page.goto(frontend_url + "/login", wait_until="domcontentloaded", timeout=20000)
+                  email_input = page.locator('input[type="email"], input[name="email"]').first
+                  email_input.wait_for(timeout=10000)
+                  email_input.fill(email)
+                  page.locator('input[type="password"]').first.fill(password)
+                  with page.expect_response(
+                      lambda r: "/api/v1/auth/login" in r.url and r.request.method == "POST", timeout=15000
+                  ) as resp_info:
+                      page.locator('button[type="submit"]').first.click()
+                  resp = resp_info.value
+                  ok = resp.status == 200
+                  page.wait_for_url(lambda u: "login" not in u, timeout=15000)
+                  page.wait_for_load_state("networkidle", timeout=15000)
+                  return ok
+              except Exception as e:
+                  print(f"[{vp_name}] {tag} LOGIN FAILED: {e}")
+                  findings.append({"viewport": vp_name, "path": "/login", "issue": "login_failed", "detail": str(e)})
+                  return False
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              for vp_name, vp in viewports.items():
+                  print(f"\n===== VIEWPORT {vp_name} =====")
+
+                  # ---- Persona 1a: beginner, unauthenticated ----
+                  context = browser.new_context(viewport=vp, locale="ar-SA")
+                  page = context.new_page()
+                  print(f"\n-- Persona 1 (beginner, unauthenticated) --")
+                  check_page(page, vp_name, "/", "[beginner:public] ", dump_text=True)
+                  check_page(page, vp_name, "/login", "[beginner:public] ")
+                  check_page(page, vp_name, "/register", "[beginner:public] ")
+
+                  nav_texts = []
+                  try:
+                      nav_texts = page.locator("nav").first.all_inner_texts()
+                  except Exception:
+                      pass
+                  print(f"[{vp_name}] navigation text sample: {nav_texts}")
+                  context.close()
+
+                  # ---- Persona 1b: beginner, first login, genuinely empty account ----
+                  context = browser.new_context(viewport=vp, locale="ar-SA")
+                  page = context.new_page()
+                  print(f"\n-- Persona 1 (beginner, first-time authenticated, empty account) --")
+                  beginner_ok = do_login(page, new_email, new_password, vp_name, "[beginner]")
+                  if beginner_ok:
+                      check_page(page, vp_name, "/dashboard", "[beginner:first-use] ", dump_text=True)
+                      check_page(page, vp_name, "/watchlist", "[beginner:first-use] ")
+                      check_page(page, vp_name, "/opportunities", "[beginner:first-use] ")
+                  else:
+                      print(f"[{vp_name}] Skipping beginner authenticated pages -- login did not succeed.")
+                  context.close()
+
+                  # ---- Persona 2: experienced/professional (staff account, real decision data) ----
+                  context = browser.new_context(viewport=vp, locale="ar-SA")
+                  page = context.new_page()
+                  print(f"\n-- Persona 2 (experienced/professional) --")
+                  pro_ok = do_login(page, staff_email, staff_password, vp_name, "[professional]")
+                  if pro_ok:
+                      check_page(page, vp_name, "/opportunities", "[professional] ", dump_text=True)
+                      check_page(page, vp_name, "/scan", "[professional] ")
+                      check_page(page, vp_name, f"/stocks/{stock_symbol}", "[professional] ", dump_text=True, check_decision=True)
+                      check_page(page, vp_name, "/watchlist", "[professional] ")
+                      check_page(page, vp_name, "/reports", "[professional] ")
+                      check_page(page, vp_name, "/more", "[professional] ")
+
+                      # ---- Persona 3: owner/admin (representative subset) ----
+                      print(f"\n-- Persona 3 (owner/admin) --")
+                      check_page(page, vp_name, "/owner", "[owner] ", dump_text=True)
+                      check_page(page, vp_name, "/owner/market-coverage", "[owner] ")
+                      check_page(page, vp_name, "/owner/decision-intelligence", "[owner] ")
+                      check_page(page, vp_name, "/owner/recommendation-history", "[owner] ")
+                      check_page(page, vp_name, "/owner/announcements", "[owner] ")
+                  else:
+                      print(f"[{vp_name}] Skipping professional/owner pages -- staff login did not succeed.")
+                  context.close()
+
+              browser.close()
+
+          with open('/tmp/screenshots/findings.json', 'w') as f:
+              json.dump(findings, f, indent=2, ensure_ascii=False)
+          with open('/tmp/screenshots/text_dumps.json', 'w') as f:
+              json.dump(text_dumps, f, indent=2, ensure_ascii=False)
+
+          print("\n\n=== FULL TEXT DUMPS (truncated to 1200 chars each, for manual audit reading) ===")
+          for key, txt in text_dumps.items():
+              print(f"\n----- {key} -----")
+              print(txt)
+
+          print("\n\n=== STRUCTURED FINDINGS SUMMARY ===")
+          if not findings:
+              print("No structured issues found across any tested viewport/page/persona.")
+          else:
+              for f_ in findings:
+                  print(f" - [{f_['viewport']}] {f_['path']}: {f_['issue']} -- {f_}")
+              print(f"\nTOTAL FINDINGS: {len(findings)}")
+
+          hard_failures = [f for f in findings if f["issue"] in ("navigation_failed", "login_failed")]
+          if hard_failures:
+              sys.exit(1)
+          PYEOF
+          ls -la /tmp/screenshots | head -80
+
+      - name: Clean up the throwaway beginner test account (best-effort self-deletion)
+        if: always()
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          NEW_PASSWORD: ${{ steps.newuser.outputs.new_password }}
+        run: |
+          if [ -z "$NEW_PASSWORD" ] || [ ! -f /tmp/newuser_cookies.txt ]; then
+            echo "No test account was created (an earlier step failed first) -- nothing to clean up."
+            exit 0
+          fi
+          NEWUSER_CSRF=$(grep -i csrf_token /tmp/newuser_cookies.txt | awk '{print $NF}')
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -o /tmp/delete_body.json -w "%{http_code}" \
+            -X DELETE "$BACKEND_URL/api/v1/auth/me" \
+            -H "Content-Type: application/json" -H "x-csrf-token: $NEWUSER_CSRF" \
+            -d "{\"password\": \"$NEW_PASSWORD\"}")
+          echo "Self-deletion HTTP $CODE"
+          cat /tmp/delete_body.json 2>/dev/null; echo ""
+          if [ "$CODE" = "200" ] || [ "$CODE" = "204" ]; then
+            echo "Test account deleted successfully."
+          else
+            echo "::warning::Test account self-deletion returned HTTP $CODE -- account may remain (non-fatal, throwaway example.com address)."
+          fi
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json /tmp/screenshots/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found in any captured response body."
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-ux-audit-evidence
+          path: |
+            /tmp/summary.json
+            /tmp/rankings.json
+            /tmp/screenshots/*.png
+            /tmp/screenshots/findings.json
+            /tmp/screenshots/text_dumps.json
+          retention-days: 14
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: |
+          rm -f /tmp/.staff_csrf /tmp/staff_cookies.txt /tmp/newuser_cookies.txt \
+                /tmp/login_body.json /tmp/login2_body.json /tmp/register_body.json \
+                /tmp/verify_body.json /tmp/delete_body.json
