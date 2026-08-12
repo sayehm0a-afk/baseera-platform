@@ -1,0 +1,445 @@
+name: Production Mobile Viewport + Negative RBAC Verification
+
+# Closes the two disclosed gaps in the RELEASE-READY report for commit
+# 76e925c / 25df5b0: (1) a real mobile-viewport pass against production
+# (this session's earlier Playwright runs only used a 1280x900 desktop
+# viewport); (2) a real negative-RBAC pass with a genuine non-staff
+# account (earlier runs only proved the STAFF/OWNER account CAN reach
+# staff routes, never that an ordinary user CANNOT).
+#
+# Modeled closely on the proven register/staff-verify/login pattern in
+# production-m6-acceptance.yml and the proven in-browser Playwright
+# login pattern in production-frontend-verification.yml -- reused, not
+# reinvented. Extends both: the mobile pass now actually logs in per
+# viewport (the M6 workflow's screenshot pass never logged in, so its
+# "owner" screenshots were really just the unauthenticated shell/login
+# redirect); the RBAC pass now loops over a broad set of GET routes
+# across every staff-gated router (system, market-intelligence, users,
+# subscriptions, sessions, announcements, audit-log, analytics, usage,
+# feature-flags, recommendation-history, ai-evolution, investment-
+# committee) instead of just one. Only GET routes are used for the
+# negative check -- POST/mutating staff routes (diagnostic-scan,
+# full-discovery, etc.) are deliberately excluded so a real
+# authorization bug could never cause an actual mutation or SAHMK
+# request during this test; the same require_staff_role/
+# require_any_staff_role dependency gates every method uniformly on
+# each router, so GET-route rejection is representative evidence.
+#
+# Creates exactly one throwaway account (basirah.ci.mobile-rbac+<ts>@
+# example.com, RFC 2606 reserved domain), the same convention already
+# used by production-m6-acceptance.yml/production-committee-
+# acceptance.yml, and self-deletes it at the end via the account's own
+# DELETE /api/v1/auth/me (best-effort -- a billing-history conflict on
+# a brand-new account is not expected, but non-fatal to this run if it
+# happens).
+#
+# Never touches SAHMK, never modifies Railway infrastructure, never
+# weakens auth to run the negative check -- the whole point is proving
+# the real, unmodified authorization boundary holds.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+  RAILWAY_FRONTEND_SERVICE: frontend
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+          if [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::STAFF_EMAIL/STAFF_PASSWORD are not set (need ADMIN or OWNER role)."
+            exit 1
+          fi
+          echo "Secrets present."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright (Python) + Chromium
+        run: |
+          pip install --quiet playwright
+          playwright install --with-deps chromium
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend/frontend public URLs
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          railway domain list --service "$RAILWAY_FRONTEND_SERVICE" --json > /tmp/frontend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "frontend_url=$FRONTEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend:  $BACKEND_URL"
+          echo "Frontend: $FRONTEND_URL"
+
+      - name: Health checks (backend/frontend)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live" || true
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "frontend / -> HTTP %{http_code}\n" "$FRONTEND_URL/" || true
+
+      - name: Log in as the staff account
+        id: login
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Staff login HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Staff login failed."
+            exit 1
+          fi
+          CSRF=$(grep -i csrf_token /tmp/staff_cookies.txt | awk '{print $NF}')
+          echo "$CSRF" > /tmp/.staff_csrf
+
+      - name: Confirm the deployed commit currently serving production
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/system/summary" -o /tmp/summary.json -w "\nHTTP %{http_code}\n"
+          python3 -c "import json; d = json.load(open('/tmp/summary.json')); print('deployment_commit:', d.get('deployment_commit')); print('environment:', d.get('environment'))"
+
+      - name: Discover a real symbol for the stock-detail page check
+        id: symbol
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/market/rankings" -o /tmp/rankings.json -w "\nHTTP %{http_code}\n"
+          SYM=$(python3 -c "
+          import json
+          d = json.load(open('/tmp/rankings.json'))
+          for rl in d.get('rankings', []):
+              for e in rl.get('entries', []):
+                  if e.get('symbol'):
+                      print(e['symbol']); raise SystemExit
+          print('2222')
+          ")
+          echo "symbol=$SYM" >> "$GITHUB_OUTPUT"
+          echo "Selected stock-detail symbol: $SYM"
+
+      - name: "RBAC negative check (1/2): unauthenticated callers must be rejected on every staff GET route"
+        id: rbac_unauth
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          ROUTES=(
+            "/api/v1/admin/system/health"
+            "/api/v1/admin/system/summary"
+            "/api/v1/admin/market-intelligence/coverage"
+            "/api/v1/admin/market-intelligence/decision-intelligence"
+            "/api/v1/admin/market-intelligence/universe-diagnostics"
+            "/api/v1/admin/market-intelligence/symbol-lookup-diagnostics"
+            "/api/v1/admin/users"
+            "/api/v1/admin/subscriptions"
+            "/api/v1/admin/sessions"
+            "/api/v1/admin/announcements"
+            "/api/v1/admin/audit-log"
+            "/api/v1/admin/analytics"
+            "/api/v1/admin/usage/ai"
+            "/api/v1/admin/feature-flags"
+            "/api/v1/admin/recommendation-history"
+            "/api/v1/admin/ai-evolution/dashboard"
+            "/api/v1/admin/ai-evolution/personal-performance"
+            "/api/v1/admin/investment-committee/sessions"
+            "/api/v1/admin/investment-committee/stats"
+          )
+          FAIL=0
+          for ROUTE_PATH in "${ROUTES[@]}"; do
+            CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL$ROUTE_PATH")
+            echo "unauthenticated GET $ROUTE_PATH -> HTTP $CODE"
+            if [ "$CODE" != "401" ] && [ "$CODE" != "403" ]; then
+              echo "::error::Expected 401/403 for unauthenticated access to $ROUTE_PATH, got $CODE"
+              FAIL=1
+            fi
+          done
+          if [ "$FAIL" != "0" ]; then exit 1; fi
+          echo "Confirmed: all ${#ROUTES[@]} staff GET routes reject unauthenticated callers."
+
+      - name: "Create a real throwaway non-staff account (register -> staff-verify -> login)"
+        id: newuser
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          TS=$(date +%s)
+          NEW_EMAIL="basirah.ci.mobile-rbac+${TS}@example.com"
+          NEW_PASSWORD="Verify-CI-${TS}!Aa1"
+          echo "new_email=$NEW_EMAIL" >> "$GITHUB_OUTPUT"
+          echo "Test account: $NEW_EMAIL"
+
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/register_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/register" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$NEW_EMAIL\", \"password\": \"$NEW_PASSWORD\", \"full_name\": \"CI Mobile/RBAC Verification\"}")
+          echo "Register HTTP $CODE"
+          if [ "$CODE" != "201" ]; then echo "::error::Registration failed."; cat /tmp/register_body.json; exit 1; fi
+          NEW_USER_ID=$(python3 -c "import json; print(json.load(open('/tmp/register_body.json'))['id'])")
+
+          STAFF_CSRF=$(cat /tmp/.staff_csrf)
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/staff_cookies.txt -o /tmp/verify_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/admin/users/$NEW_USER_ID/verify-email" \
+            -H "Content-Type: application/json" -H "x-csrf-token: $STAFF_CSRF")
+          echo "Staff verify-email HTTP $CODE"
+          if [ "$CODE" != "200" ]; then echo "::error::Staff verify-email fallback failed."; exit 1; fi
+
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/newuser_cookies.txt -o /tmp/login2_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$NEW_EMAIL\", \"password\": \"$NEW_PASSWORD\"}")
+          echo "Post-verification login HTTP $CODE"
+          if [ "$CODE" != "200" ]; then echo "::error::Login after staff verification failed."; exit 1; fi
+          echo "New non-staff account is live and authenticated."
+          echo "new_password=$NEW_PASSWORD" >> "$GITHUB_OUTPUT"
+
+      - name: "RBAC negative check (2/2): the real non-staff account must be rejected on every staff GET route"
+        id: rbac_nonstaff
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          ROUTES=(
+            "/api/v1/admin/system/health"
+            "/api/v1/admin/system/summary"
+            "/api/v1/admin/market-intelligence/coverage"
+            "/api/v1/admin/market-intelligence/decision-intelligence"
+            "/api/v1/admin/market-intelligence/universe-diagnostics"
+            "/api/v1/admin/market-intelligence/symbol-lookup-diagnostics"
+            "/api/v1/admin/users"
+            "/api/v1/admin/subscriptions"
+            "/api/v1/admin/sessions"
+            "/api/v1/admin/announcements"
+            "/api/v1/admin/audit-log"
+            "/api/v1/admin/analytics"
+            "/api/v1/admin/usage/ai"
+            "/api/v1/admin/feature-flags"
+            "/api/v1/admin/recommendation-history"
+            "/api/v1/admin/ai-evolution/dashboard"
+            "/api/v1/admin/ai-evolution/personal-performance"
+            "/api/v1/admin/investment-committee/sessions"
+            "/api/v1/admin/investment-committee/stats"
+          )
+          FAIL=0
+          for ROUTE_PATH in "${ROUTES[@]}"; do
+            CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -o /dev/null -w "%{http_code}" "$BACKEND_URL$ROUTE_PATH")
+            echo "non-staff GET $ROUTE_PATH -> HTTP $CODE"
+            if [ "$CODE" != "401" ] && [ "$CODE" != "403" ]; then
+              echo "::error::Expected 401/403 for a real non-staff account on $ROUTE_PATH, got $CODE -- POSSIBLE RBAC DEFECT"
+              FAIL=1
+            fi
+          done
+          echo "rbac_defect_found=$([ "$FAIL" = "1" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+          if [ "$FAIL" != "0" ]; then exit 1; fi
+          echo "Confirmed: the real non-staff account is rejected on all ${#ROUTES[@]} staff GET routes. No RBAC defect found."
+
+      - name: "Confirm the non-staff account CAN reach its own, non-staff routes (sanity check the account itself works)"
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -w "\nHTTP %{http_code}\n" "$BACKEND_URL/api/v1/auth/me"
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -w "\nHTTP %{http_code}\n" "$BACKEND_URL/api/v1/watchlist"
+
+      - name: Mobile + desktop viewport pass (real login per viewport, overflow + console-error + screenshot evidence)
+        id: viewports
+        env:
+          FRONTEND_URL: ${{ steps.urls.outputs.frontend_url }}
+          STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+          STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+          STOCK_SYMBOL: ${{ steps.symbol.outputs.symbol }}
+        run: |
+          mkdir -p /tmp/screenshots
+          python3 - "$FRONTEND_URL" "$STAFF_EMAIL" "$STAFF_PASSWORD" "$STOCK_SYMBOL" <<'PYEOF'
+          import sys, json
+          from playwright.sync_api import sync_playwright
+
+          frontend_url, staff_email, staff_password, stock_symbol = sys.argv[1:5]
+          stock_symbol = stock_symbol or "2222"
+
+          viewports = {
+              "375x667_iphone_se": {"width": 375, "height": 667},
+              "390x844_iphone_12_14": {"width": 390, "height": 844},
+              "430x932_iphone_14_pro_max": {"width": 430, "height": 932},
+              "1440x900_desktop": {"width": 1440, "height": 900},
+          }
+
+          public_pages = ["/", "/login", "/register"]
+          owner_pages = [
+              "/owner", "/owner/users", "/owner/subscriptions", "/owner/market-coverage",
+              "/owner/investment-committee", "/owner/recommendation-history",
+              "/owner/decision-intelligence", "/owner/personal-performance",
+              "/owner/ai-usage", "/owner/analytics", "/owner/announcements",
+              "/owner/audit-log", "/owner/feature-flags", "/owner/live-test", "/owner/sessions",
+          ]
+          authed_pages = [
+              "/dashboard", "/opportunities", "/scan", "/watchlist", "/reports",
+              "/more", f"/stocks/{stock_symbol}",
+          ] + owner_pages
+
+          findings = []
+
+          def check_page(page, vp_name, path, tag):
+              console_errors = []
+              on_console = lambda msg: console_errors.append(msg.text) if msg.type == "error" else None
+              on_pageerror = lambda err: console_errors.append(str(err))
+              page.on("console", on_console)
+              page.on("pageerror", on_pageerror)
+              try:
+                  page.goto(frontend_url + path, wait_until="networkidle", timeout=25000)
+                  page.wait_for_timeout(1200)
+                  dir_attr = page.evaluate("document.documentElement.getAttribute('dir')")
+                  scroll_width = page.evaluate("document.documentElement.scrollWidth")
+                  client_width = page.evaluate("document.documentElement.clientWidth")
+                  overflow = scroll_width - client_width
+                  safe_name = path.strip("/").replace("/", "_") or "home"
+                  page.screenshot(path=f"/tmp/screenshots/{vp_name}__{safe_name}.png", full_page=True)
+                  status = "OK" if overflow <= 4 and not console_errors else "ISSUE"
+                  print(f"[{vp_name}] {tag}{path}: dir={dir_attr} overflow_px={overflow} console_errors={len(console_errors)} -> {status}")
+                  if overflow > 4:
+                      findings.append({"viewport": vp_name, "path": path, "issue": "horizontal_overflow", "overflow_px": overflow})
+                  if console_errors:
+                      findings.append({"viewport": vp_name, "path": path, "issue": "console_errors", "errors": console_errors[:5]})
+              except Exception as e:
+                  print(f"[{vp_name}] {tag}{path}: FAILED -- {e}")
+                  findings.append({"viewport": vp_name, "path": path, "issue": "navigation_failed", "detail": str(e)})
+              finally:
+                  page.remove_listener("console", on_console)
+                  page.remove_listener("pageerror", on_pageerror)
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              for vp_name, vp in viewports.items():
+                  context = browser.new_context(viewport=vp, locale="ar-SA")
+                  page = context.new_page()
+
+                  for path in public_pages:
+                      check_page(page, vp_name, path, "[public] ")
+
+                  login_ok = False
+                  try:
+                      page.goto(frontend_url + "/login", wait_until="domcontentloaded", timeout=20000)
+                      email_input = page.locator('input[type="email"], input[name="email"]').first
+                      email_input.wait_for(timeout=10000)
+                      email_input.fill(staff_email)
+                      page.locator('input[type="password"]').first.fill(staff_password)
+                      resp_promise = page.wait_for_response(
+                          lambda r: "/api/v1/auth/login" in r.url and r.request.method == "POST", timeout=15000
+                      )
+                      page.locator('button[type="submit"]').first.click()
+                      resp = resp_promise
+                      login_ok = resp.status == 200
+                      page.wait_for_url(lambda u: "login" not in u, timeout=15000)
+                      page.wait_for_load_state("networkidle", timeout=15000)
+                  except Exception as e:
+                      print(f"[{vp_name}] STAFF LOGIN FAILED: {e}")
+                      findings.append({"viewport": vp_name, "path": "/login", "issue": "staff_login_failed", "detail": str(e)})
+
+                  if login_ok:
+                      for path in authed_pages:
+                          check_page(page, vp_name, path, "[owner] " if path.startswith("/owner") else "[user] ")
+                  else:
+                      print(f"[{vp_name}] Skipping authenticated pages -- staff login did not succeed.")
+
+                  context.close()
+              browser.close()
+
+          with open('/tmp/screenshots/findings.json', 'w') as f:
+              json.dump(findings, f, indent=2)
+
+          print("\n=== MOBILE/DESKTOP VIEWPORT FINDINGS SUMMARY ===")
+          if not findings:
+              print("No horizontal overflow, console errors, or navigation failures found across any tested viewport/page.")
+          else:
+              for f_ in findings:
+                  print(f" - [{f_['viewport']}] {f_['path']}: {f_['issue']} -- {f_}")
+              print(f"\nTOTAL FINDINGS: {len(findings)}")
+
+          hard_failures = [f for f in findings if f["issue"] in ("navigation_failed", "staff_login_failed")]
+          if hard_failures:
+              sys.exit(1)
+          PYEOF
+          ls -la /tmp/screenshots | head -50
+
+      - name: Clean up the throwaway non-staff test account (best-effort self-deletion)
+        if: always()
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          NEW_PASSWORD: ${{ steps.newuser.outputs.new_password }}
+        run: |
+          if [ -z "$NEW_PASSWORD" ] || [ ! -f /tmp/newuser_cookies.txt ]; then
+            echo "No test account was created (an earlier step failed first) -- nothing to clean up."
+            exit 0
+          fi
+          NEWUSER_CSRF=$(grep -i csrf_token /tmp/newuser_cookies.txt | awk '{print $NF}')
+          CODE=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/newuser_cookies.txt -o /tmp/delete_body.json -w "%{http_code}" \
+            -X DELETE "$BACKEND_URL/api/v1/auth/me" \
+            -H "Content-Type: application/json" -H "x-csrf-token: $NEWUSER_CSRF" \
+            -d "{\"password\": \"$NEW_PASSWORD\"}")
+          echo "Self-deletion HTTP $CODE"
+          cat /tmp/delete_body.json 2>/dev/null; echo ""
+          if [ "$CODE" = "200" ] || [ "$CODE" = "204" ]; then
+            echo "Test account deleted successfully."
+          else
+            echo "::warning::Test account self-deletion returned HTTP $CODE -- account may remain (non-fatal, throwaway example.com address)."
+          fi
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found in any captured response body."
+
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-mobile-rbac-evidence
+          path: |
+            /tmp/summary.json
+            /tmp/rankings.json
+            /tmp/screenshots/*.png
+            /tmp/screenshots/findings.json
+          retention-days: 14
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: |
+          rm -f /tmp/.staff_csrf /tmp/staff_cookies.txt /tmp/newuser_cookies.txt \
+                /tmp/login_body.json /tmp/login2_body.json /tmp/register_body.json \
+                /tmp/verify_body.json /tmp/delete_body.json
