@@ -34,6 +34,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from src.analysis.decision_v2.types import DECISION_LABELS_AR, Decision
+
 from src.api.schemas.market_intelligence import (
     ConfidenceBucketCountOut,
     DbConsistencyOut,
@@ -962,55 +964,56 @@ async def get_market_coverage(
         ),
     )
 
+    no_scan_reason_ar = "لم يكتمل أي مسح للسوق بعد."
     pipeline_funnel = [
         PipelineStageOut(
-            stage="Discovery (total Stock rows)",
+            stage="الاكتشاف (إجمالي الأسهم المسجّلة)",
             output_count=total_stocks,
             relative_to=total_stocks,
             dropped=0,
-            reason="Every symbol a SAHMK directory sync has ever seen, plus any explicitly configured symbol.",
+            reason="كل رمز ظهر في مزامنة دليل الشركات من SAHMK، إضافة إلى أي رمز مُضاف يدوياً.",
         ),
         PipelineStageOut(
-            stage="Eligibility (active, non-excluded)",
+            stage="الأهلية (نشط وغير مستبعد)",
             output_count=active_stocks,
             relative_to=total_stocks,
             dropped=total_stocks - active_stocks,
-            reason="Excluded by universe_policy.classify_universe as ETF/REIT/sukuk/rights/suspended/delisted.",
+            reason="مستبعد بواسطة قاعدة تصنيف الكون الاستثماري بصفته صندوق مؤشرات/صندوق عقاري/صكوكاً/حقوق أولوية/موقوفاً/مشطوباً.",
         ),
         PipelineStageOut(
-            stage="OHLCV ingested",
+            stage="استيراد بيانات الأسعار (OHLCV)",
             output_count=stocks_with_price_history,
             relative_to=active_stocks,
             dropped=active_stocks - stocks_with_price_history,
-            reason="Active stock has no PriceBar rows yet; SymbolSelector requires at least one bar to scan it.",
+            reason="لا تتوفر بيانات أسعار تاريخية بعد لهذا السهم النشط؛ يلزم توفر شمعة سعرية واحدة على الأقل لفحصه.",
         ),
         PipelineStageOut(
-            stage="Fundamentals ingested",
+            stage="استيراد البيانات المالية",
             output_count=stocks_with_fundamentals,
             relative_to=active_stocks,
             dropped=active_stocks - stocks_with_fundamentals,
-            reason="Active stock has no FundamentalSnapshot rows yet.",
+            reason="لا تتوفر بيانات مالية بعد لهذا السهم النشط.",
         ),
         PipelineStageOut(
-            stage="Dividends ingested",
+            stage="استيراد بيانات التوزيعات",
             output_count=stocks_with_dividends,
             relative_to=active_stocks,
             dropped=active_stocks - stocks_with_dividends,
-            reason="Active stock has no Dividend rows yet (many real companies pay none -- absence alone is not a defect).",
+            reason="لا تتوفر بيانات توزيعات أرباح بعد لهذا السهم (كثير من الشركات فعلياً لا توزّع أرباحاً، فغياب البيانات وحده ليس خللاً).",
         ),
         PipelineStageOut(
-            stage="Entered Decision Engine (latest scan)",
+            stage="دخل محرك القرار (آخر مسح)",
             output_count=latest_scan_symbols_entering_decision_engine,
             relative_to=stocks_with_price_history,
             dropped=max(stocks_with_price_history - latest_scan_symbols_entering_decision_engine, 0),
             reason=(
-                "Symbols with a DecisionV2Snapshot tied to the latest MarketScanRun."
+                "الرموز التي صدر لها قرار من محرك القرار مرتبط بآخر مسح للسوق."
                 if latest_scan is not None
-                else "No MarketScanRun has completed yet."
+                else no_scan_reason_ar
             ),
         ),
         PipelineStageOut(
-            stage="Recommendations generated (latest scan)",
+            stage="توصيات صادرة (آخر مسح)",
             output_count=latest_scan_recommendations_generated,
             relative_to=(
                 latest_scan_symbols_entering_decision_engine
@@ -1027,9 +1030,9 @@ async def get_market_coverage(
                 0,
             ),
             reason=(
-                "SymbolIntelligenceRecord rows written by the latest MarketScanRun."
+                "توصيات صدرت فعلياً في آخر مسح للسوق."
                 if latest_scan is not None
-                else "No MarketScanRun has completed yet."
+                else no_scan_reason_ar
             ),
         ),
     ]
@@ -1069,6 +1072,18 @@ async def get_market_coverage(
 
 _BUY_DECISIONS = {"STRONG_BUY_CANDIDATE", "BUY_CANDIDATE"}
 _REJECTED_DECISIONS = {"REJECT", "INSUFFICIENT_DATA"}
+
+
+def _decision_label_ar(decision: str) -> str:
+    """`DecisionV2Snapshot.decision` is persisted as the raw enum
+    value (e.g. "BUY_CANDIDATE") -- translate it through the same
+    canonical Arabic taxonomy every other decision-carrying response
+    already uses, so this dashboard never surfaces the raw enum name
+    to a human reader."""
+    try:
+        return DECISION_LABELS_AR[Decision(decision)]
+    except ValueError:
+        return decision
 
 
 def _confidence_bucket_label(score: float) -> str:
@@ -1153,7 +1168,8 @@ async def get_decision_intelligence(
         window_hours=within_hours,
         total_symbols_evaluated=len(latest_rows),
         decision_distribution=[
-            DecisionCountOut(decision=decision, count=count) for decision, count in decision_counter.items()
+            DecisionCountOut(decision=decision, decision_label_ar=_decision_label_ar(decision), count=count)
+            for decision, count in decision_counter.items()
         ],
         confidence_buckets=[
             ConfidenceBucketCountOut(bucket_label=label, count=count) for label, count in bucket_counter.items()
@@ -1180,6 +1196,7 @@ async def get_decision_intelligence(
                 company_name_ar=row.company_name_ar,
                 sector_ar=row.sector_ar,
                 decision=row.decision,
+                decision_label_ar=_decision_label_ar(row.decision),
                 failed_gate_names=[g.get("name", "unknown") for g in (row.gates or []) if g.get("status") == "FAIL"],
                 decision_timestamp=row.decision_timestamp,
             )

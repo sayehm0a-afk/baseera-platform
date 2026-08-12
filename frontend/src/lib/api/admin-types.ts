@@ -154,6 +154,7 @@ export interface Analytics {
 
 export interface DecisionCount {
   decision: string;
+  decision_label_ar: string;
   count: number;
 }
 
@@ -183,6 +184,7 @@ export interface RejectedOpportunity {
   company_name_ar: string | null;
   sector_ar: string | null;
   decision: string;
+  decision_label_ar: string;
   failed_gate_names: string[];
   decision_timestamp: string;
 }

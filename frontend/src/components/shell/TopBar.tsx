@@ -113,8 +113,8 @@ export function TopBar() {
                       <span className="text-sm text-bsr-text-primary">
                         {result.name_ar ?? result.name_en}
                       </span>
-                      {result.sector ? (
-                        <span className="text-xs text-bsr-text-secondary">{result.sector}</span>
+                      {result.sector_ar ?? result.sector ? (
+                        <span className="text-xs text-bsr-text-secondary">{result.sector_ar ?? result.sector}</span>
                       ) : null}
                     </span>
                     <span className="bsr-numeric text-sm font-semibold text-bsr-text-primary">

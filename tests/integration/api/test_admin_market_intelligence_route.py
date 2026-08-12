@@ -679,13 +679,13 @@ def test_coverage_pipeline_funnel_stages_are_all_present_with_reasons(client, se
     stages = response.json()["pipeline_funnel"]
     stage_names = [s["stage"] for s in stages]
     assert stage_names == [
-        "Discovery (total Stock rows)",
-        "Eligibility (active, non-excluded)",
-        "OHLCV ingested",
-        "Fundamentals ingested",
-        "Dividends ingested",
-        "Entered Decision Engine (latest scan)",
-        "Recommendations generated (latest scan)",
+        "الاكتشاف (إجمالي الأسهم المسجّلة)",
+        "الأهلية (نشط وغير مستبعد)",
+        "استيراد بيانات الأسعار (OHLCV)",
+        "استيراد البيانات المالية",
+        "استيراد بيانات التوزيعات",
+        "دخل محرك القرار (آخر مسح)",
+        "توصيات صادرة (آخر مسح)",
     ]
     for stage in stages:
         assert stage["reason"]
@@ -956,7 +956,9 @@ def test_decision_intelligence_collapses_repeat_requests_to_the_latest_snapshot(
     assert response.status_code == 200
     body = response.json()
     assert body["total_symbols_evaluated"] == 1
-    assert body["decision_distribution"] == [{"decision": "BUY_CANDIDATE", "count": 1}]
+    assert body["decision_distribution"] == [
+        {"decision": "BUY_CANDIDATE", "decision_label_ar": "شراء", "count": 1}
+    ]
 
 
 def test_decision_intelligence_excludes_snapshots_outside_the_window(client, session_factory, as_staff):

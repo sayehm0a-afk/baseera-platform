@@ -36,6 +36,7 @@ describe("ReportsPage", () => {
     const entry = (symbol: string) => ({
       symbol,
       sector: null,
+      sector_ar: null,
       recommendation: null,
       confidence: null,
       final_score: null,

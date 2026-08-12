@@ -10,7 +10,9 @@ quote; it is labeled at every layer, all the way to the HTTP response.
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
+
+from src.domain.sector_labels import sector_label_ar
 
 
 class StockOut(BaseModel):
@@ -20,8 +22,20 @@ class StockOut(BaseModel):
     name_en: str
     name_ar: Optional[str] = None
     sector: Optional[str] = None
+    sector_ar: Optional[str] = None
     currency: str
     is_active: bool
+
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "StockOut":
+        # `Stock` (the ORM model) has no `sector_ar` column, so a plain
+        # from_attributes pass-through always leaves it None -- fill it
+        # here from the same canonical English->Arabic map every other
+        # sector-carrying response already uses, rather than requiring
+        # every call site to remember to compute it.
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
 
 
 class StockSearchResultOut(BaseModel):
@@ -31,6 +45,13 @@ class StockSearchResultOut(BaseModel):
     name_en: str
     name_ar: Optional[str] = None
     sector: Optional[str] = None
+    sector_ar: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "StockSearchResultOut":
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
 
 
 class StockSearchOut(BaseModel):

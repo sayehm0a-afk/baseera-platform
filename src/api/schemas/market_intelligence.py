@@ -67,6 +67,7 @@ class MarketScanProgressOut(BaseModel):
 class RankingEntryOut(BaseModel):
     symbol: str
     sector: Optional[str] = None
+    sector_ar: Optional[str] = None
     recommendation: Optional[str] = None
     confidence: Optional[float] = None
     final_score: Optional[float] = None
@@ -193,6 +194,7 @@ class PersonalScanOut(BaseModel):
 class WatchlistEntryOut(BaseModel):
     symbol: str
     sector: Optional[str] = None
+    sector_ar: Optional[str] = None
     recommendation: Optional[str] = None
     confidence: Optional[float] = None
     reason: str
@@ -521,6 +523,7 @@ class DecisionCountOut(BaseModel):
     value."""
 
     decision: str
+    decision_label_ar: str
     count: int
 
 
@@ -559,6 +562,7 @@ class RejectedOpportunityOut(BaseModel):
     company_name_ar: Optional[str] = None
     sector_ar: Optional[str] = None
     decision: str
+    decision_label_ar: str
     failed_gate_names: List[str]
     decision_timestamp: datetime
 

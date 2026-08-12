@@ -85,7 +85,7 @@ function DecisionIntelligencePageInner() {
         <>
           <Card title="توزيع القرارات">
             {data.decision_distribution.map((row) => (
-              <CountRow key={row.decision} label={row.decision} value={row.count} />
+              <CountRow key={row.decision} label={row.decision_label_ar} value={row.count} />
             ))}
           </Card>
 
@@ -134,7 +134,7 @@ function DecisionIntelligencePageInner() {
                   <div key={row.symbol} className="border-b border-bsr-border-subtle py-bsr-2 last:border-0">
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-bsr-text-primary">{row.symbol}</span>
-                      <span className="text-xs text-bsr-text-muted">{row.decision}</span>
+                      <span className="text-xs text-bsr-text-muted">{row.decision_label_ar}</span>
                     </div>
                     <p className="text-sm text-bsr-text-secondary">
                       {row.failed_gate_names.length > 0

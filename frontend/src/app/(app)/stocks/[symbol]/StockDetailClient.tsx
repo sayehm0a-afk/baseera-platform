@@ -195,7 +195,8 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
 
   const stockData = stock.data;
   const displayName = stockData.name_ar ?? stockData.name_en;
-  const sectorAr = decisionV2.status === "ready" ? decisionV2.data.sector_ar : null;
+  const sectorAr =
+    (decisionV2.status === "ready" ? decisionV2.data.sector_ar : null) ?? stockData.sector_ar;
   const decisionRec =
     decision.status === "ready" ? (decision.data.recommendation as RecommendationValue) : null;
 
@@ -238,6 +239,10 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
               آخر تحديث: {new Date(quote.data.timestamp).toLocaleString("ar-SA")}
             </span>
           </div>
+        ) : quote.status === "unavailable" ? (
+          <p className="text-sm text-bsr-text-secondary">
+            تعذّر تحميل آخر سعر متداول -- مزود بيانات السوق غير متاح حالياً.
+          </p>
         ) : (
           <p className="text-sm text-bsr-text-secondary">تعذّر تحميل آخر سعر متداول.</p>
         )}
@@ -272,7 +277,17 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           title="البيانات غير كافية لإصدار قرار"
           description="لا تتوفر بيانات فنية أو مالية كافية لهذا السهم بعد لتشغيل محرك القرار الإصدار الثاني."
         />
-      ) : null}
+      ) : decisionV2.status === "unavailable" ? (
+        <EmptyState
+          title="تعذّر تحميل قرار الذكاء الاصطناعي"
+          description="مزود بيانات السوق غير متاح حالياً، ويتوقف محرك القرار عن إصدار توصيات جديدة إلى حين استعادة الاتصال به. هذا لا يعني عدم كفاية البيانات التاريخية لهذا السهم."
+        />
+      ) : (
+        <EmptyState
+          title="تعذّر تحميل قرار الذكاء الاصطناعي"
+          description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+        />
+      )}
 
       {/* Chart */}
       <div id="chart" className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-3">
@@ -331,10 +346,20 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           </div>
         ) : decision.status === "loading" ? (
           <LoadingScreen />
-        ) : (
+        ) : decision.status === "insufficient_data" ? (
           <EmptyState
             title="لا تتوفر توصية آلية لهذا السهم بعد"
             description="غالباً بسبب نقص بيانات تاريخية كافية لتشغيل محرك القرار."
+          />
+        ) : decision.status === "unavailable" ? (
+          <EmptyState
+            title="تعذّر تحميل التوصية الآلية"
+            description="مزود بيانات السوق غير متاح حالياً. حاول مرة أخرى بعد استعادة الاتصال."
+          />
+        ) : (
+          <EmptyState
+            title="تعذّر تحميل التوصية الآلية"
+            description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
           />
         )
       ) : null}
@@ -353,8 +378,18 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           </div>
         ) : technical.status === "loading" ? (
           <LoadingScreen />
-        ) : (
+        ) : technical.status === "insufficient_data" ? (
           <EmptyState title="لا تتوفر مؤشرات فنية كافية لهذا السهم بعد" />
+        ) : technical.status === "unavailable" ? (
+          <EmptyState
+            title="تعذّر تحميل المؤشرات الفنية"
+            description="مزود بيانات السوق غير متاح حالياً. حاول مرة أخرى بعد استعادة الاتصال."
+          />
+        ) : (
+          <EmptyState
+            title="تعذّر تحميل المؤشرات الفنية"
+            description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+          />
         )
       ) : null}
 
@@ -379,8 +414,18 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           </div>
         ) : fundamentals.status === "loading" ? (
           <LoadingScreen />
-        ) : (
+        ) : fundamentals.status === "insufficient_data" ? (
           <EmptyState title="لا تتوفر بيانات مالية كافية لهذا السهم بعد" />
+        ) : fundamentals.status === "unavailable" ? (
+          <EmptyState
+            title="تعذّر تحميل البيانات المالية"
+            description="مزود بيانات السوق غير متاح حالياً. حاول مرة أخرى بعد استعادة الاتصال."
+          />
+        ) : (
+          <EmptyState
+            title="تعذّر تحميل البيانات المالية"
+            description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+          />
         )
       ) : null}
 
@@ -389,8 +434,18 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <AnalystReportView report={analystReport.data} />
         ) : analystReport.status === "loading" ? (
           <LoadingScreen />
-        ) : (
+        ) : analystReport.status === "insufficient_data" ? (
           <EmptyState title="لا يتوفر تقرير الذكاء الاصطناعي الكامل لهذا السهم بعد" />
+        ) : analystReport.status === "unavailable" ? (
+          <EmptyState
+            title="تعذّر تحميل تقرير الذكاء الاصطناعي"
+            description="مزود بيانات السوق غير متاح حالياً. حاول مرة أخرى بعد استعادة الاتصال."
+          />
+        ) : (
+          <EmptyState
+            title="تعذّر تحميل تقرير الذكاء الاصطناعي"
+            description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+          />
         )
       ) : null}
 

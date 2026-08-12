@@ -58,6 +58,7 @@ from src.api.schemas.market_intelligence import (
     WatchlistsOut,
 )
 from src.core.db.database import get_db
+from src.domain.sector_labels import sector_label_ar
 from src.domain.models import (
     DecisionV2Snapshot,
     MarketChangeEvent,
@@ -423,7 +424,7 @@ def get_rankings(
                 category=ranking_list.category.value,
                 entries=[
                     RankingEntryOut(
-                        symbol=e.symbol, sector=e.sector, recommendation=e.recommendation,
+                        symbol=e.symbol, sector=e.sector, sector_ar=sector_label_ar(e.sector), recommendation=e.recommendation,
                         confidence=e.confidence, final_score=e.final_score, target_price=e.target_price,
                         expected_return_pct=e.expected_return_pct, risk_level=e.risk_level, rank_value=e.rank_value,
                         current_price=e.current_price, stop_loss=e.stop_loss,
@@ -476,7 +477,7 @@ def get_opportunities(
                 gate_exclusion_note_ar=entry.gate_exclusion_note_ar,
                 entries=[
                     RankingEntryOut(
-                        symbol=e.symbol, sector=e.sector, recommendation=e.recommendation,
+                        symbol=e.symbol, sector=e.sector, sector_ar=sector_label_ar(e.sector), recommendation=e.recommendation,
                         confidence=e.confidence, final_score=e.final_score, target_price=e.target_price,
                         expected_return_pct=e.expected_return_pct, risk_level=e.risk_level, rank_value=e.rank_value,
                         current_price=e.current_price, stop_loss=e.stop_loss,
@@ -613,7 +614,7 @@ def get_watchlists(
                 category=result.category.value,
                 entries=[
                     WatchlistEntryOut(
-                        symbol=e.symbol, sector=e.sector, recommendation=e.recommendation,
+                        symbol=e.symbol, sector=e.sector, sector_ar=sector_label_ar(e.sector), recommendation=e.recommendation,
                         confidence=e.confidence, reason=e.reason,
                     )
                     for e in result.entries

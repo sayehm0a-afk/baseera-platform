@@ -66,6 +66,7 @@ export interface AlertsResponse {
 export interface RankingEntry {
   symbol: string;
   sector: string | null;
+  sector_ar: string | null;
   recommendation: string | null;
   confidence: number | null;
   final_score: number | null;
@@ -171,6 +172,7 @@ export interface PersonalScanResponse {
 export interface WatchlistEntry {
   symbol: string;
   sector: string | null;
+  sector_ar: string | null;
   recommendation: string | null;
   confidence: number | null;
   reason: string;

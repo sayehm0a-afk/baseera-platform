@@ -106,7 +106,7 @@ export default function OpportunitiesPage() {
                 <AiSignalCard
                   key={`${section.category}-${entry.symbol}`}
                   symbol={entry.symbol}
-                  sector={entry.sector}
+                  sector={entry.sector_ar ?? entry.sector}
                   recommendation={(entry.recommendation as RecommendationValue) ?? "HOLD"}
                   confidence={entry.confidence}
                   currentPrice={entry.current_price}
