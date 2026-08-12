@@ -5,6 +5,8 @@ directory returns). A sector not present in this map falls back to
 English "Unclassified" label -- Basirah's Arabic-only UX requirement.
 """
 
+import re
+
 SECTOR_LABELS_AR = {
     "Energy": "الطاقة",
     "Materials": "المواد الأساسية",
@@ -30,7 +32,36 @@ SECTOR_LABELS_AR = {
 }
 
 
+# Real production evidence (M7 audit, symbols 6004/9591) showed SAHMK
+# does not consistently spell out the same abbreviations this map's own
+# keys use -- e.g. symbol 6004 came back "Commercial & Professional Svc"
+# (this map's key spells "Services" in full) while symbol 9591 came back
+# "Real Estate Mgmt & Development" (this map's key abbreviates "Dev't").
+# Matching only the exact key string silently dropped a real, mappable
+# sector to "غير محدد". Normalizing both sides through the same
+# abbreviation expansion makes the match order-independent without
+# hardcoding every specific variant.
+_ABBREVIATION_EXPANSIONS = (
+    (re.compile(r"\bSvc\.?\b", re.IGNORECASE), "Services"),
+    (re.compile(r"\bMgmt\.?\b", re.IGNORECASE), "Management"),
+    (re.compile(r"\bDev't\.?\b", re.IGNORECASE), "Development"),
+)
+
+
+def _normalize_sector(sector: str) -> str:
+    text = sector.strip()
+    for pattern, replacement in _ABBREVIATION_EXPANSIONS:
+        text = pattern.sub(replacement, text)
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+_NORMALIZED_LABELS_AR = {_normalize_sector(k): v for k, v in SECTOR_LABELS_AR.items()}
+
+
 def sector_label_ar(sector: "str | None") -> "str | None":
     if not sector:
         return None
-    return SECTOR_LABELS_AR.get(sector, "غير محدد")
+    direct = SECTOR_LABELS_AR.get(sector)
+    if direct is not None:
+        return direct
+    return _NORMALIZED_LABELS_AR.get(_normalize_sector(sector), "غير محدد")

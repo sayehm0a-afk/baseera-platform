@@ -29,6 +29,7 @@ export interface MarketSummary {
 
 export interface SectorSummary {
   sector: string;
+  sector_ar: string | null;
   symbol_count: number;
   average_confidence: number | null;
   average_final_score: number | null;

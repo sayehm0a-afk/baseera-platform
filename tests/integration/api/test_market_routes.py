@@ -245,8 +245,12 @@ def test_full_read_surface_after_a_completed_scan(client, session_factory):
 
     sectors = client.get("/api/v1/market/sectors")
     assert sectors.status_code == 200
-    sector_names = {s["sector"] for s in sectors.json()["sectors"]}
+    sectors_body = sectors.json()["sectors"]
+    sector_names = {s["sector"] for s in sectors_body}
     assert sector_names == {"Energy", "Banks"}
+    sector_ar_by_name = {s["sector"]: s["sector_ar"] for s in sectors_body}
+    assert sector_ar_by_name["Energy"] == "الطاقة"
+    assert sector_ar_by_name["Banks"] == "البنوك"
 
     changes = client.get("/api/v1/market/changes")
     assert changes.status_code == 200

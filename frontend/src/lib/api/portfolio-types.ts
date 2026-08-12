@@ -16,6 +16,7 @@ export interface PortfolioAnalyzeRequestBody {
 export interface HoldingAnalysis {
   symbol: string;
   sector: string | null;
+  sector_ar: string | null;
   quantity: number;
   average_cost: number | null;
   latest_price: number | null;
@@ -35,6 +36,7 @@ export interface HoldingAnalysis {
 export interface AllocationEntry {
   symbol: string;
   sector: string | null;
+  sector_ar: string | null;
   quantity: number;
   market_value: number | null;
   weight: number | null;
@@ -49,6 +51,7 @@ export interface Allocation {
 
 export interface SectorExposure {
   sector: string;
+  sector_ar: string | null;
   market_value: number;
   weight: number;
   holdings_count: number;
@@ -105,6 +108,7 @@ export interface RebalanceAction {
 export interface NewBuyOpportunity {
   symbol: string;
   sector: string | null;
+  sector_ar: string | null;
   recommendation: string;
   confidence: number | null;
   final_score: number | null;

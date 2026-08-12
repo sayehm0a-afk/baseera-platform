@@ -152,6 +152,16 @@ def test_analyze_creates_a_new_portfolio_and_returns_full_analysis(client, db_se
     assert "concentration" in body and "diversification" in body
     assert "risk_profile" in body and "recommendations" in body and "health_score" in body
 
+    holding_sector_ar = {h["symbol"]: h["sector_ar"] for h in body["holdings"]}
+    assert holding_sector_ar["2222"] == "الطاقة"
+    assert holding_sector_ar["1010"] == "البنوك"
+    allocation_sector_ar = {e["symbol"]: e["sector_ar"] for e in body["allocation"]["entries"]}
+    assert allocation_sector_ar["2222"] == "الطاقة"
+    assert allocation_sector_ar["1010"] == "البنوك"
+    exposure_sector_ar = {e["sector"]: e["sector_ar"] for e in body["sector_exposure"]}
+    assert exposure_sector_ar["Energy"] == "الطاقة"
+    assert exposure_sector_ar["Banks"] == "البنوك"
+
 
 def test_analyze_rejects_too_many_holdings(client, db_session, monkeypatch):
     monkeypatch.setenv("PORTFOLIO_MAX_HOLDINGS", "1")

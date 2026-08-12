@@ -233,7 +233,7 @@ export default function DashboardPage() {
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-bsr-text-primary">
-                      {sector.sector}
+                      {sector.sector_ar ?? sector.sector}
                     </span>
                     <span className="bsr-numeric text-xs text-bsr-text-secondary">
                       {Math.round(sector.breadth * 100)}%

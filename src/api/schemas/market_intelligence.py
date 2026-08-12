@@ -5,7 +5,9 @@ conventions as src/api/schemas/backtesting.py and stocks.py.
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from src.domain.sector_labels import sector_label_ar
 
 
 class MarketScanRequest(BaseModel):
@@ -213,6 +215,7 @@ class WatchlistsOut(BaseModel):
 
 class SectorSummaryOut(BaseModel):
     sector: str
+    sector_ar: Optional[str] = None
     symbol_count: int
     average_confidence: Optional[float] = None
     average_final_score: Optional[float] = None
@@ -224,6 +227,12 @@ class SectorSummaryOut(BaseModel):
     hold_count: int
     breadth: float
     momentum: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "SectorSummaryOut":
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
 
 
 class SectorsOut(BaseModel):

@@ -10,7 +10,9 @@ GET reads, with no separate deserializer to keep in sync.
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from src.domain.sector_labels import sector_label_ar
 
 
 class HoldingRequest(BaseModel):
@@ -39,6 +41,7 @@ class PortfolioOut(BaseModel):
 class HoldingAnalysisOut(BaseModel):
     symbol: str
     sector: Optional[str] = None
+    sector_ar: Optional[str] = None
     quantity: float
     average_cost: Optional[float] = None
     latest_price: Optional[float] = None
@@ -54,13 +57,26 @@ class HoldingAnalysisOut(BaseModel):
     target_price: Optional[float] = None
     error: Optional[str] = None
 
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "HoldingAnalysisOut":
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
+
 
 class AllocationEntryOut(BaseModel):
     symbol: str
     sector: Optional[str] = None
+    sector_ar: Optional[str] = None
     quantity: float
     market_value: Optional[float] = None
     weight: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "AllocationEntryOut":
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
 
 
 class AllocationOut(BaseModel):
@@ -72,10 +88,17 @@ class AllocationOut(BaseModel):
 
 class SectorExposureOut(BaseModel):
     sector: str
+    sector_ar: Optional[str] = None
     market_value: float
     weight: float
     holdings_count: int
     symbols: List[str]
+
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "SectorExposureOut":
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
 
 
 class ConcentrationOut(BaseModel):
@@ -128,10 +151,17 @@ class RebalanceActionOut(BaseModel):
 class NewBuyOpportunityOut(BaseModel):
     symbol: str
     sector: Optional[str] = None
+    sector_ar: Optional[str] = None
     recommendation: str
     confidence: Optional[float] = None
     final_score: Optional[float] = None
     rationale: str
+
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "NewBuyOpportunityOut":
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
 
 
 class RebalancePlanOut(BaseModel):
