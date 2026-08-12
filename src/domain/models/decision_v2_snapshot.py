@@ -101,6 +101,20 @@ class DecisionV2Snapshot(Base):
 
     requested_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
+    # M10: which explicit, bounded validation session (if any) this
+    # decision was issued under -- null for the overwhelming majority
+    # of rows (routine scheduled scans, individual /decision-v2 page
+    # views), populated only while a ValidationSession is RUNNING and
+    # this row was written by that session's scan. `ranking_position`
+    # is the 1-indexed rank (by confidence, among BUY-like decisions
+    # only) this symbol held within its own scan batch at the moment
+    # of insertion -- computed once, in-memory, before the INSERT
+    # (see MarketIntelligenceRepository.save_symbol_records), never
+    # patched in afterward, so it never violates this table's
+    # insert-only/no-UPDATE discipline.
+    validation_session_id = Column(Integer, ForeignKey("validation_sessions.id"), nullable=True, index=True)
+    ranking_position = Column(Integer, nullable=True)
+
     # ======================================================================
     # Phase 2A/2C canonical extensions -- every field `DecisionResult`
     # (src.analysis.decision_v2.types) carries beyond the base columns

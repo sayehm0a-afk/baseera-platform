@@ -23,12 +23,16 @@ from src.domain.models import (
     ConfidenceCalibrationModel,
     ConfidenceCalibrationStatus,
     DailyIntelligenceSnapshot,
+    DecisionV2Outcome,
+    DecisionV2OutcomeStatus,
     DecisionV2Snapshot,
     DiscoveredPattern,
     ReflectionReport,
     StaffRole,
     Stock,
     User,
+    ValidationSession,
+    ValidationSessionStatus,
 )
 
 
@@ -283,3 +287,156 @@ def test_personal_performance_reflects_real_decision_v2_distribution_for_owner(c
     assert body["total_decisions_issued"] == 1
     assert body["decision_distribution"] == {"BUY_CANDIDATE": 1}
     assert body["entry_status_distribution"] == {"READY_NOW": 1}
+
+
+# --- M10: /validation-sessions (OWNER for mutations, ADMIN for reads) ------
+
+
+def test_non_staff_customer_is_rejected_from_every_validation_session_route(client, customer):
+    _as(customer)
+    assert client.post("/api/v1/admin/ai-evolution/validation-sessions", json={"name": "S1"}).status_code == 403
+    assert client.get("/api/v1/admin/ai-evolution/validation-sessions").status_code == 403
+    assert client.get("/api/v1/admin/ai-evolution/validation-sessions/1").status_code == 403
+    assert client.get("/api/v1/admin/ai-evolution/validation-sessions/1/metrics").status_code == 403
+    assert client.post("/api/v1/admin/ai-evolution/validation-sessions/1/close").status_code == 403
+
+
+def test_admin_cannot_create_or_close_a_validation_session(client, admin):
+    """OWNER-only: an ADMIN can read validation-session data but must
+    not be able to open or close the session that decides what counts
+    as real M10 evidence."""
+    _as(admin)
+    assert client.post("/api/v1/admin/ai-evolution/validation-sessions", json={"name": "S1"}).status_code == 403
+    assert client.post("/api/v1/admin/ai-evolution/validation-sessions/1/close").status_code == 403
+
+
+def test_owner_creates_a_validation_session(client, owner):
+    _as(owner)
+    response = client.post(
+        "/api/v1/admin/ai-evolution/validation-sessions",
+        json={"name": "M10 Session 1", "is_dry_run": True, "notes": "dry run before live"},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "M10 Session 1"
+    assert body["is_dry_run"] is True
+    assert body["status"] == "RUNNING"
+    assert body["created_by_user_id"] == owner.id
+
+
+def test_owner_cannot_open_two_running_sessions_of_the_same_kind(client, owner):
+    _as(owner)
+    first = client.post("/api/v1/admin/ai-evolution/validation-sessions", json={"name": "S1", "is_dry_run": False})
+    assert first.status_code == 201
+
+    second = client.post("/api/v1/admin/ai-evolution/validation-sessions", json={"name": "S2", "is_dry_run": False})
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "validation_session_conflict"
+
+
+def test_owner_closes_a_validation_session(client, owner):
+    _as(owner)
+    created = client.post(
+        "/api/v1/admin/ai-evolution/validation-sessions", json={"name": "S1", "is_dry_run": False}
+    ).json()
+
+    response = client.post(f"/api/v1/admin/ai-evolution/validation-sessions/{created['id']}/close")
+    assert response.status_code == 200
+    assert response.json()["status"] == "CLOSED"
+    assert response.json()["ended_at"] is not None
+
+
+def test_closing_an_already_closed_session_conflicts(client, owner):
+    _as(owner)
+    created = client.post(
+        "/api/v1/admin/ai-evolution/validation-sessions", json={"name": "S1", "is_dry_run": False}
+    ).json()
+    client.post(f"/api/v1/admin/ai-evolution/validation-sessions/{created['id']}/close")
+
+    second_close = client.post(f"/api/v1/admin/ai-evolution/validation-sessions/{created['id']}/close")
+    assert second_close.status_code == 409
+
+
+def test_get_validation_session_404s_when_missing(client, admin):
+    _as(admin)
+    response = client.get("/api/v1/admin/ai-evolution/validation-sessions/999")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "validation_session_not_found"
+
+
+def test_list_validation_sessions_filters_by_is_dry_run(client, owner, admin):
+    _as(owner)
+    client.post("/api/v1/admin/ai-evolution/validation-sessions", json={"name": "Real", "is_dry_run": False})
+    client.post("/api/v1/admin/ai-evolution/validation-sessions", json={"name": "Dry", "is_dry_run": True})
+
+    _as(admin)
+    all_sessions = client.get("/api/v1/admin/ai-evolution/validation-sessions")
+    assert len(all_sessions.json()["sessions"]) == 2
+
+    dry_only = client.get("/api/v1/admin/ai-evolution/validation-sessions", params={"is_dry_run": True})
+    assert len(dry_only.json()["sessions"]) == 1
+    assert dry_only.json()["sessions"][0]["name"] == "Dry"
+
+
+def test_validation_session_metrics_404s_when_session_missing(client, admin):
+    _as(admin)
+    response = client.get("/api/v1/admin/ai-evolution/validation-sessions/999/metrics")
+    assert response.status_code == 404
+
+
+def test_validation_session_metrics_reflects_real_outcome_rows(client, admin, session):
+    vs = ValidationSession(
+        name="M10 Session", status=ValidationSessionStatus.RUNNING, is_dry_run=False,
+        started_at=datetime.now(timezone.utc),
+    )
+    session.add(vs)
+    session.commit()
+
+    stock1 = Stock(symbol="1111", name_en="Company 1111", sector="Energy")
+    stock2 = Stock(symbol="2222", name_en="Company 2222", sector="Materials")
+    session.add_all([stock1, stock2])
+    session.commit()
+
+    snap1 = DecisionV2Snapshot(
+        stock_id=stock1.id, symbol="1111", company_name_en="Company 1111", decision="BUY_CANDIDATE",
+        decision_label_ar="شراء", confidence_score=80.0, opportunity_quality_score=70.0, risk_score=30.0,
+        data_quality_score=90.0, data_freshness_status="LIVE", current_price=100.0, market_status="OPEN",
+        decision_timestamp=datetime.now(timezone.utc), analysis_version="2.0.0", data_source="SAHMK_REAL",
+        validation_session_id=vs.id, ranking_position=1,
+    )
+    snap2 = DecisionV2Snapshot(
+        stock_id=stock2.id, symbol="2222", company_name_en="Company 2222", decision="BUY_CANDIDATE",
+        decision_label_ar="شراء", confidence_score=60.0, opportunity_quality_score=55.0, risk_score=40.0,
+        data_quality_score=85.0, data_freshness_status="LIVE", current_price=50.0, market_status="OPEN",
+        decision_timestamp=datetime.now(timezone.utc), analysis_version="2.0.0", data_source="SAHMK_REAL",
+        validation_session_id=vs.id, ranking_position=2,
+    )
+    session.add_all([snap1, snap2])
+    session.flush()
+
+    session.add(
+        DecisionV2Outcome(
+            decision_v2_snapshot_id=snap1.id, validation_session_id=vs.id, symbol="1111",
+            due_at=datetime.now(timezone.utc), status=DecisionV2OutcomeStatus.TARGET_1_HIT,
+            entry_price=100.0, return_pct=10.0,
+        )
+    )
+    session.add(
+        DecisionV2Outcome(
+            decision_v2_snapshot_id=snap2.id, validation_session_id=vs.id, symbol="2222",
+            due_at=datetime.now(timezone.utc), status=DecisionV2OutcomeStatus.STOP_LOSS_HIT,
+            entry_price=50.0, return_pct=-8.0,
+        )
+    )
+    session.commit()
+
+    _as(admin)
+    response = client.get(f"/api/v1/admin/ai-evolution/validation-sessions/{vs.id}/metrics")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_signals_issued"] == 2
+    assert body["actionable_signals"] == 2
+    assert body["win_rate"] == pytest.approx(0.5)
+    assert body["stop_loss_rate"] == pytest.approx(0.5)
+    # DATA_UNAVAILABLE must never be silently folded into win/loss.
+    assert body["data_unavailable_count"] == 0

@@ -149,6 +149,7 @@ pattern_discovery_scheduler = None
 daily_reflection_scheduler = None
 daily_intelligence_aggregation_scheduler = None
 live_market_mode_scheduler = None
+decision_v2_outcome_scheduler = None
 
 
 class TaskRequest(BaseModel):
@@ -172,6 +173,7 @@ async def startup_event():
     global kernel, container, ingestion_scheduler, market_intelligence_scheduler
     global outcome_evaluation_scheduler, pattern_discovery_scheduler, daily_reflection_scheduler
     global daily_intelligence_aggregation_scheduler, live_market_mode_scheduler
+    global decision_v2_outcome_scheduler
 
     # Live Market Mode (LIVE_MARKET_MODE_ENABLED) supersedes the
     # standalone market-scan scheduler below -- it owns its own internal
@@ -333,6 +335,27 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Error starting daily intelligence aggregation scheduler: {e}", exc_info=True)
 
+    # M10: recurring re-check of PENDING DecisionV2Outcome rows against
+    # real forward price data (correctly linked to DecisionV2Snapshot,
+    # not the older RecommendationSnapshot). Read-only against
+    # already-ingested price data -- never touches SAHMK quota. Same
+    # isolation, same disabled-by-default posture as the schedulers above.
+    try:
+        from src.ai_evolution.config import is_decision_v2_outcome_scheduler_enabled
+        from src.ai_evolution.scheduler import DecisionV2OutcomeScheduler
+
+        if is_decision_v2_outcome_scheduler_enabled():
+            decision_v2_outcome_scheduler = DecisionV2OutcomeScheduler()
+            decision_v2_outcome_scheduler.start()
+            logger.info("DecisionV2Outcome evaluation scheduler started.")
+        else:
+            logger.info(
+                "DecisionV2Outcome evaluation scheduler disabled "
+                "(set DECISION_V2_OUTCOME_SCHEDULER_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting DecisionV2Outcome evaluation scheduler: {e}", exc_info=True)
+
     # Legacy runtime kernel / worker / sample-agent bootstrap. No real
     # route (market/stocks/portfolio/analyst/news/admin) reaches into the
     # `kernel`/`container` globals set here -- see the standalone comment
@@ -427,6 +450,9 @@ async def shutdown_event():
 
         if daily_intelligence_aggregation_scheduler is not None:
             await daily_intelligence_aggregation_scheduler.stop()
+
+        if decision_v2_outcome_scheduler is not None:
+            await decision_v2_outcome_scheduler.stop()
 
         if kernel:
             await kernel.stop()

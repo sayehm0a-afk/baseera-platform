@@ -61,6 +61,12 @@ from src.domain.models.portfolio_news_alert import PortfolioNewsAlert, Portfolio
 from src.domain.models.decision_v2_snapshot import DecisionV2Snapshot
 from src.domain.models.committee_opinion import CommitteeAgentOpinion
 from src.domain.models.committee_session import CommitteeConsensus
+from src.domain.models.validation_session import ValidationSession, ValidationSessionStatus
+from src.domain.models.decision_v2_outcome import (
+    DecisionV2Outcome,
+    DecisionV2OutcomeStatus,
+    NON_RESOLVING_STATUSES,
+)
 
 __all__ = [
     "Stock",
@@ -146,4 +152,9 @@ __all__ = [
     "DecisionV2Snapshot",
     "CommitteeAgentOpinion",
     "CommitteeConsensus",
+    "ValidationSession",
+    "ValidationSessionStatus",
+    "DecisionV2Outcome",
+    "DecisionV2OutcomeStatus",
+    "NON_RESOLVING_STATUSES",
 ]

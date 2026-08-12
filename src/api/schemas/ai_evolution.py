@@ -145,3 +145,86 @@ class PaperTradeComparisonOut(BaseModel):
     z_score: Optional[float] = None
     p_value: Optional[float] = None
     significant: bool
+
+
+class ValidationSessionOut(BaseModel):
+    """M10: one explicit, bounded live-market validation run. `is_dry_run`
+    is always shown -- a dry-run session's evidence must never be mistaken
+    for real validation evidence in any UI that renders this."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    status: str
+    is_dry_run: bool
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    source_production_commit: Optional[str] = None
+    market_regime_at_start: Optional[Dict] = None
+    notes: Optional[str] = None
+    created_by_user_id: Optional[int] = None
+    created_at: datetime
+
+
+class ValidationSessionListOut(BaseModel):
+    sessions: List[ValidationSessionOut]
+
+
+class ValidationSessionCreateIn(BaseModel):
+    name: str
+    is_dry_run: bool = False
+    notes: Optional[str] = None
+
+
+class RankPerformanceOut(BaseModel):
+    rank: int
+    signal_count: int
+    win_rate: Optional[float] = None
+    average_return_pct: Optional[float] = None
+
+
+class DuplicateSignalOut(BaseModel):
+    symbol: str
+    signal_count: int
+
+
+class ValidationSessionMetricsOut(BaseModel):
+    """M10 (Part G): every metric is computed live from this session's
+    own `DecisionV2Snapshot`/`DecisionV2Outcome` rows -- see
+    `src.ai_evolution.validation_metrics`. `DATA_UNAVAILABLE` is never
+    folded into win_rate/false_positive_rate/stop_loss_rate."""
+
+    validation_session_id: int
+
+    total_signals_issued: int
+    actionable_signals: int
+    status_counts: Dict[str, int]
+
+    win_rate: Optional[float] = None
+    decisive_signal_count: int
+    false_positive_rate: Optional[float] = None
+
+    target_hit_rate_by_target: Dict[int, Optional[float]]
+    stop_loss_rate: Optional[float] = None
+
+    average_return_pct: Optional[float] = None
+    expectancy_pct: Optional[float] = None
+
+    average_time_to_target_days: Optional[float] = None
+    average_time_to_stop_days: Optional[float] = None
+
+    ranking_position_performance: List[RankPerformanceOut]
+
+    calibration_pair_count: int
+    expected_calibration_error: Optional[float] = None
+
+    duplicate_signals: List[DuplicateSignalOut]
+    duplicate_signal_rate: Optional[float] = None
+
+    data_unavailable_count: int
+    data_unavailable_rate: Optional[float] = None
+
+    pending_count: int
+    cancelled_count: int
+    partial_count: int
