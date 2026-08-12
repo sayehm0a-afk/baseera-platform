@@ -89,9 +89,9 @@ export default function WatchlistPage() {
                     <span className="bsr-numeric font-semibold text-bsr-text-primary">
                       {entry.symbol}
                     </span>
-                    {entry.sector ? (
+                    {entry.sector_ar ?? entry.sector ? (
                       <span className="text-sm text-bsr-text-secondary">
-                        {entry.sector}
+                        {entry.sector_ar ?? entry.sector}
                       </span>
                     ) : null}
                   </div>

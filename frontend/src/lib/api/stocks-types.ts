@@ -5,6 +5,7 @@ export interface Stock {
   name_en: string;
   name_ar: string | null;
   sector: string | null;
+  sector_ar: string | null;
   currency: string;
   is_active: boolean;
 }
@@ -379,6 +380,7 @@ export interface StockSearchResult {
   name_en: string;
   name_ar: string | null;
   sector: string | null;
+  sector_ar: string | null;
 }
 
 export interface StockSearch {

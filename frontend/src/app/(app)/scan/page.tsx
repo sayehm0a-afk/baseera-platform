@@ -68,7 +68,7 @@ export default function ScanPage() {
               <li key={entry.symbol}>
                 <InstrumentRow
                   symbol={entry.symbol}
-                  sector={entry.sector}
+                  sector={entry.sector_ar ?? entry.sector}
                   price={entry.target_price}
                   priceKind="target"
                   stopLoss={entry.stop_loss}
