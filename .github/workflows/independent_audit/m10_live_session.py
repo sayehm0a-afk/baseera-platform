@@ -23,19 +23,59 @@ perform redundant provider calls"):
 This script and its wrapper workflow are throwaway one-off tooling,
 same convention as api_audit.py / dump_logs.py in this directory --
 not application code.
+
+Scheduled-run date guard: the wrapper workflow also carries an
+`on: schedule:` cron (see m10-live-session.yml) so M10 LIVE SESSION 1
+can run automatically at the next valid Tadawul open without any
+external scheduling infrastructure. Cron has no concept of "year," so
+the same cron expression would technically also fire on this same
+month/day in every future year -- SCHEDULED_RUN_TARGET_DATE_UTC below
+guards against that: a schedule-triggered run on any date other than
+the one specific date this was set up for is a pure no-op (zero HTTP
+calls, zero SAHMK cost), not a second live session. A manual
+workflow_dispatch is never subject to this guard.
 """
 
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 
 import requests
 
+SCHEDULED_RUN_TARGET_DATE_UTC = "2026-08-16"
+
+if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+    _today_utc = datetime.now(timezone.utc).date().isoformat()
+    if _today_utc != SCHEDULED_RUN_TARGET_DATE_UTC:
+        print(
+            f"Scheduled cron firing on {_today_utc} != target date {SCHEDULED_RUN_TARGET_DATE_UTC} -- "
+            "not the intended one-shot M10 LIVE SESSION 1 date. No-op: zero HTTP calls, zero SAHMK cost."
+        )
+        sys.exit(0)
+
+
+def _checked_out_head() -> str:
+    """The commit this workflow run actually checked out -- for a
+    schedule trigger that's main's tip at fire time, for a manual
+    dispatch it's whatever ref was given. Used as the default
+    "expected production commit" (gate 1) when the caller doesn't
+    pin an explicit EXPECTED_COMMIT, so a scheduled run (which has no
+    workflow_dispatch input to read) still enforces gate 1 instead of
+    silently skipping it."""
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except Exception:  # noqa: BLE001 -- best-effort default, never crash the gate check itself
+        return ""
+
+
 BACKEND_URL = os.environ["BACKEND_URL"].rstrip("/")
 STAFF_EMAIL = os.environ["STAFF_EMAIL"]
 STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
-EXPECTED_COMMIT = os.environ.get("EXPECTED_COMMIT", "").strip()
+EXPECTED_COMMIT = os.environ.get("EXPECTED_COMMIT", "").strip() or _checked_out_head()
 
 evidence = {}
 
@@ -193,6 +233,18 @@ if not isinstance(r, requests.Response) or r.status_code != 201:
 vsession = r.json()
 log("created_validation_session", vsession)
 vsession_id = vsession["id"]
+
+# Gate 6, explicit: this run must be tagged as the real M10 LIVE
+# validation session, never a dry run -- assert it against the
+# session record the backend actually persisted, not just the
+# request payload we sent.
+if vsession.get("is_dry_run") is not False:
+    infra_error(
+        f"Created session id={vsession_id} is not tagged is_dry_run=false (got {vsession.get('is_dry_run')!r}) "
+        "-- refusing to treat it as a real M10 live session.",
+        vsession,
+    )
+log("gate_6_live_not_dry_run_confirmed", {"validation_session_id": vsession_id, "is_dry_run": vsession.get("is_dry_run")})
 
 # ---------------------------------------------------------------------------
 # 5. Free market-status read-back. If not OPEN, abort immediately --
