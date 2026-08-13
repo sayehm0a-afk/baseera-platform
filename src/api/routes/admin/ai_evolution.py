@@ -44,6 +44,8 @@ from src.api.schemas.ai_evolution import (
     RankPerformanceOut,
     ReflectionReportListOut,
     ReflectionReportOut,
+    ValidationLedgerEntryOut,
+    ValidationLedgerOut,
     ValidationSessionCreateIn,
     ValidationSessionListOut,
     ValidationSessionMetricsOut,
@@ -55,6 +57,8 @@ from src.domain.models import (
     CalibrationConfig,
     CalibrationStatus,
     DailyIntelligenceSnapshot,
+    DecisionV2Outcome,
+    DecisionV2Snapshot,
     DiscoveredPattern,
     ReflectionReport,
     StaffRole,
@@ -63,6 +67,10 @@ from src.domain.models import (
 )
 
 router = APIRouter(prefix="/api/v1/admin/ai-evolution", tags=["admin"])
+
+
+def _f(value) -> Optional[float]:
+    return float(value) if value is not None else None
 
 
 @router.get("/dashboard", response_model=DailyIntelligenceSnapshotOut)
@@ -285,3 +293,75 @@ def get_validation_session_metrics(
         cancelled_count=result.cancelled_count,
         partial_count=result.partial_count,
     )
+
+
+@router.get("/validation-sessions/{validation_session_id}/ledger", response_model=ValidationLedgerOut)
+def get_validation_session_ledger(
+    validation_session_id: int,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> ValidationLedgerOut:
+    """The complete, immutable per-recommendation ledger for one
+    session -- every `DecisionV2Snapshot` issued while it was open,
+    left-joined to its `DecisionV2Outcome` (null only for a
+    non-actionable decision, which never opens a trackable position).
+    Ordered by decision_timestamp so the ledger reads as a real
+    timeline, not insertion order."""
+    record = session.query(ValidationSession).filter_by(id=validation_session_id).one_or_none()
+    if record is None:
+        raise ValidationSessionNotFoundError(f"Validation session {validation_session_id} not found.")
+
+    rows = (
+        session.query(DecisionV2Snapshot, DecisionV2Outcome)
+        .outerjoin(DecisionV2Outcome, DecisionV2Outcome.decision_v2_snapshot_id == DecisionV2Snapshot.id)
+        .filter(DecisionV2Snapshot.validation_session_id == validation_session_id)
+        .order_by(DecisionV2Snapshot.decision_timestamp.asc())
+        .all()
+    )
+
+    entries = []
+    for snapshot, outcome in rows:
+        entries.append(
+            ValidationLedgerEntryOut(
+                decision_v2_snapshot_id=snapshot.id,
+                symbol=snapshot.symbol,
+                company_name_ar=snapshot.company_name_ar,
+                decision_timestamp=snapshot.decision_timestamp,
+                ranking_position=snapshot.ranking_position,
+                decision=snapshot.decision,
+                decision_label_ar=snapshot.decision_label_ar,
+                confidence_score=float(snapshot.confidence_score),
+                entry_zone_low=_f(snapshot.entry_zone_low),
+                entry_zone_high=_f(snapshot.entry_zone_high),
+                current_price=_f(snapshot.current_price),
+                target_1=_f(snapshot.target_1),
+                target_2=_f(snapshot.target_2),
+                target_3=_f(snapshot.target_3),
+                stop_loss=_f(snapshot.stop_loss),
+                expected_holding_period_min_days=snapshot.expected_holding_period_min_days,
+                expected_holding_period_max_days=snapshot.expected_holding_period_max_days,
+                expected_holding_period_label_ar=snapshot.expected_holding_period_label_ar,
+                data_source=snapshot.data_source,
+                is_real_data=snapshot.is_real_data,
+                validation_session_id=snapshot.validation_session_id,
+                outcome_status=outcome.status.value if outcome is not None else None,
+                outcome_due_at=outcome.due_at if outcome is not None else None,
+                entry_price=_f(outcome.entry_price) if outcome is not None else None,
+                target_1_hit=outcome.target_1_hit if outcome is not None else None,
+                target_1_hit_at=outcome.target_1_hit_at if outcome is not None else None,
+                target_2_hit=outcome.target_2_hit if outcome is not None else None,
+                target_2_hit_at=outcome.target_2_hit_at if outcome is not None else None,
+                target_3_hit=outcome.target_3_hit if outcome is not None else None,
+                target_3_hit_at=outcome.target_3_hit_at if outcome is not None else None,
+                stop_loss_hit=outcome.stop_loss_hit if outcome is not None else None,
+                stop_loss_hit_at=outcome.stop_loss_hit_at if outcome is not None else None,
+                first_event=outcome.first_event if outcome is not None else None,
+                return_pct=_f(outcome.return_pct) if outcome is not None else None,
+                time_to_target_days=outcome.time_to_target_days if outcome is not None else None,
+                time_to_stop_days=outcome.time_to_stop_days if outcome is not None else None,
+                evaluated_at=outcome.evaluated_at if outcome is not None else None,
+                last_checked_at=outcome.last_checked_at if outcome is not None else None,
+            )
+        )
+
+    return ValidationLedgerOut(validation_session_id=validation_session_id, entries=entries)
