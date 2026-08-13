@@ -46,6 +46,11 @@ def log(label, obj):
     print(json.dumps(obj, indent=2, default=str))
 
 
+def print_final_bundle():
+    print("\n--- final_evidence_bundle ---")
+    print(json.dumps(evidence, indent=2, default=str))
+
+
 def call(session, method, path, csrf=None, **kw):
     headers = kw.pop("headers", {})
     if csrf:
@@ -69,7 +74,7 @@ def no_go(reason, extra=None):
     print("=" * 70)
     if extra is not None:
         log("no_go_evidence", extra)
-    log("final_evidence_bundle", evidence)
+    print_final_bundle()
     sys.exit(0)
 
 
@@ -80,7 +85,7 @@ def infra_error(reason, extra=None):
     print("=" * 70)
     if extra is not None:
         log("infra_error_evidence", extra)
-    log("final_evidence_bundle", evidence)
+    print_final_bundle()
     sys.exit(1)
 
 
@@ -131,6 +136,15 @@ market_data_status = summary.get("market_data_status")
 market_data_provider = summary.get("market_data_provider")
 if market_data_provider != "sahmk":
     no_go(f"Current market data provider is not sahmk (got {market_data_provider!r}) -- refusing to validate off non-real data.", summary)
+
+last_scan_status = summary.get("last_scan_status")
+if last_scan_status in ("PENDING", "RUNNING"):
+    no_go(
+        f"A production market scan is already in progress (last_scan_id={summary.get('last_scan_id')}, "
+        f"status={last_scan_status}) -- refusing to make the diagnostic-scan call while it's active, to "
+        "avoid a redundant SAHMK connectivity probe and an overlap-guard rejection.",
+        summary,
+    )
 
 # ---------------------------------------------------------------------------
 # 2. Zero-cost health check
@@ -254,6 +268,6 @@ r = call(staff, "POST", f"/api/v1/admin/ai-evolution/validation-sessions/{vsessi
 closed = r.json() if isinstance(r, requests.Response) and r.status_code == 200 else {"error": getattr(r, "status_code", None)}
 log("closed_validation_session", closed)
 
-log("final_evidence_bundle", evidence)
+print_final_bundle()
 print("\nM10 LIVE VALIDATION SESSION 1 complete. See final_evidence_bundle above for the complete evidence.")
 sys.exit(0)
