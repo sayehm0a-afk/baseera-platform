@@ -273,6 +273,21 @@ class MarketIntelligenceRepository:
             session.commit()
         return reaped
 
+    def has_in_flight_run(self, session: Session) -> Optional[MarketScanRun]:
+        """The one overlap-guard query every scan-triggering call site
+        needs (POST /market/scan, the diagnostic-scan admin route, and
+        the scheduled scan loop) -- centralized here so the three call
+        sites can't drift into subtly different definitions of
+        "already running." Returns the in-flight run (PENDING or
+        RUNNING) if one exists, else None. Callers should call
+        `reap_stale_runs` first so a crashed run doesn't false-positive
+        this check forever."""
+        return (
+            session.query(MarketScanRun)
+            .filter(MarketScanRun.status.in_([MarketScanStatus.PENDING, MarketScanStatus.RUNNING]))
+            .first()
+        )
+
     def get_latest_successful_run(self, session: Session, before_run_id: Optional[int] = None) -> Optional[MarketScanRun]:
         query = session.query(MarketScanRun).filter(MarketScanRun.status == MarketScanStatus.SUCCESS)
         if before_run_id is not None:
