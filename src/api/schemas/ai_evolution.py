@@ -228,3 +228,60 @@ class ValidationSessionMetricsOut(BaseModel):
     pending_count: int
     cancelled_count: int
     partial_count: int
+
+
+class ValidationLedgerEntryOut(BaseModel):
+    """M10: one row of the complete, immutable recommendation ledger for
+    a validation session -- every field a reviewer needs to independently
+    audit one recommendation and its real forward outcome, with nothing
+    silently dropped or reclassified. `outcome_status` is null only for
+    a non-actionable decision (WATCH/HOLD/etc.) that never opened a
+    trackable position -- never for an actionable one, which always gets
+    a row (PENDING at minimum)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    decision_v2_snapshot_id: int
+    symbol: str
+    company_name_ar: Optional[str] = None
+    decision_timestamp: datetime
+    ranking_position: Optional[int] = None
+    decision: str
+    decision_label_ar: str
+    confidence_score: float
+    entry_zone_low: Optional[float] = None
+    entry_zone_high: Optional[float] = None
+    current_price: Optional[float] = None
+    target_1: Optional[float] = None
+    target_2: Optional[float] = None
+    target_3: Optional[float] = None
+    stop_loss: Optional[float] = None
+    expected_holding_period_min_days: Optional[int] = None
+    expected_holding_period_max_days: Optional[int] = None
+    expected_holding_period_label_ar: Optional[str] = None
+    data_source: str
+    is_real_data: Optional[bool] = None
+    validation_session_id: Optional[int] = None
+
+    outcome_status: Optional[str] = None
+    outcome_due_at: Optional[datetime] = None
+    entry_price: Optional[float] = None
+    target_1_hit: Optional[bool] = None
+    target_1_hit_at: Optional[datetime] = None
+    target_2_hit: Optional[bool] = None
+    target_2_hit_at: Optional[datetime] = None
+    target_3_hit: Optional[bool] = None
+    target_3_hit_at: Optional[datetime] = None
+    stop_loss_hit: Optional[bool] = None
+    stop_loss_hit_at: Optional[datetime] = None
+    first_event: Optional[str] = None
+    return_pct: Optional[float] = None
+    time_to_target_days: Optional[int] = None
+    time_to_stop_days: Optional[int] = None
+    evaluated_at: Optional[datetime] = None
+    last_checked_at: Optional[datetime] = None
+
+
+class ValidationLedgerOut(BaseModel):
+    validation_session_id: int
+    entries: List[ValidationLedgerEntryOut]

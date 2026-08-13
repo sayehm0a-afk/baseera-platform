@@ -440,3 +440,53 @@ def test_validation_session_metrics_reflects_real_outcome_rows(client, admin, se
     assert body["stop_loss_rate"] == pytest.approx(0.5)
     # DATA_UNAVAILABLE must never be silently folded into win/loss.
     assert body["data_unavailable_count"] == 0
+
+    ledger_response = client.get(f"/api/v1/admin/ai-evolution/validation-sessions/{vs.id}/ledger")
+    assert ledger_response.status_code == 200
+    ledger = ledger_response.json()
+    assert ledger["validation_session_id"] == vs.id
+    entries = {e["symbol"]: e for e in ledger["entries"]}
+    assert set(entries) == {"1111", "2222"}
+    assert entries["1111"]["ranking_position"] == 1
+    assert entries["1111"]["outcome_status"] == "TARGET_1_HIT"
+    assert entries["1111"]["return_pct"] == pytest.approx(10.0)
+    assert entries["2222"]["outcome_status"] == "STOP_LOSS_HIT"
+    assert entries["2222"]["return_pct"] == pytest.approx(-8.0)
+
+
+def test_validation_session_ledger_404s_when_session_missing(client, admin):
+    _as(admin)
+    response = client.get("/api/v1/admin/ai-evolution/validation-sessions/999/ledger")
+    assert response.status_code == 404
+
+
+def test_validation_session_ledger_includes_non_actionable_decisions_with_null_outcome(client, admin, session):
+    vs = ValidationSession(
+        name="M10 Session", status=ValidationSessionStatus.RUNNING, is_dry_run=False,
+        started_at=datetime.now(timezone.utc),
+    )
+    session.add(vs)
+    session.commit()
+
+    stock = Stock(symbol="3333", name_en="Company 3333", sector="Retail")
+    session.add(stock)
+    session.commit()
+
+    session.add(
+        DecisionV2Snapshot(
+            stock_id=stock.id, symbol="3333", company_name_en="Company 3333", decision="WATCH",
+            decision_label_ar="مراقبة", confidence_score=40.0, opportunity_quality_score=30.0, risk_score=50.0,
+            data_quality_score=80.0, data_freshness_status="LIVE", current_price=20.0, market_status="OPEN",
+            decision_timestamp=datetime.now(timezone.utc), analysis_version="2.0.0", data_source="SAHMK_REAL",
+            validation_session_id=vs.id,
+        )
+    )
+    session.commit()
+
+    _as(admin)
+    response = client.get(f"/api/v1/admin/ai-evolution/validation-sessions/{vs.id}/ledger")
+    assert response.status_code == 200
+    entries = response.json()["entries"]
+    assert len(entries) == 1
+    assert entries[0]["decision"] == "WATCH"
+    assert entries[0]["outcome_status"] is None

@@ -1,0 +1,63 @@
+name: M10 Live Validation Session (temporary, one-shot, strict GO/NO-GO)
+
+# Runs a strict LIVE GO/NO-GO check against real production, then --
+# only if every check passes -- creates the real (is_dry_run=false) M10
+# ValidationSession, runs exactly ONE controlled diagnostic scan as
+# both the required live-freshness proof and the session's first real
+# evidence, and closes the session. No mocking, no backfilling, no
+# simulated data. See .github/workflows/independent_audit/m10_live_session.py
+# for the full GO/NO-GO sequence and cost-protection logic.
+#
+# This workflow and its script are throwaway one-off tooling, same
+# convention as dump-logs.yml / independent-audit.yml in this repo --
+# not application code.
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: "Verified M10 production commit SHA to require (blank to skip the check)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  m10-live-session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      RAILWAY_BACKEND_SERVICE: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install --quiet requests
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend: $BACKEND_URL"
+          rm -f /tmp/backend_domains.json
+
+      - name: Run M10 live GO/NO-GO + session
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: python3 .github/workflows/independent_audit/m10_live_session.py
