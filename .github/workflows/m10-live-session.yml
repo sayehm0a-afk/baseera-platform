@@ -16,9 +16,22 @@ on:
   workflow_dispatch:
     inputs:
       expected_commit:
-        description: "Verified M10 production commit SHA to require (blank to skip the check)"
+        description: "Verified M10 production commit SHA to require (blank = derive from checked-out HEAD)"
         required: false
         default: ""
+  # One-shot auto-run for M10 LIVE SESSION 1, scheduled for the next
+  # valid Tadawul trading day after the 2026-08-13 attempts both
+  # correctly returned NO-GO (a real scan in progress, then exhausted
+  # background SAHMK quota). 07:20 UTC = 10:20 Arabia Standard Time,
+  # 20 minutes into Tadawul's 10:00-15:00 AST session -- a deliberate
+  # buffer past the open-time race and past the live scheduler's own
+  # first burst scan, so the "no conflicting scan running" gate has a
+  # real chance to pass. Cron has no "year" field, so this expression
+  # also matches every future Aug 16 -- m10_live_session.py's own
+  # SCHEDULED_RUN_TARGET_DATE_UTC guard makes any firing that isn't
+  # actually 2026-08-16 (UTC) a pure no-op before any HTTP call.
+  schedule:
+    - cron: "20 7 16 8 *"
 
 permissions:
   contents: read
@@ -60,4 +73,5 @@ jobs:
         env:
           BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: python3 .github/workflows/independent_audit/m10_live_session.py
