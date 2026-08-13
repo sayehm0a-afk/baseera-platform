@@ -194,6 +194,18 @@ vsession = r.json()
 log("created_validation_session", vsession)
 vsession_id = vsession["id"]
 
+# Gate 6, explicit: this run must be tagged as the real M10 LIVE
+# validation session, never a dry run -- assert it against the
+# session record the backend actually persisted, not just the
+# request payload we sent.
+if vsession.get("is_dry_run") is not False:
+    infra_error(
+        f"Created session id={vsession_id} is not tagged is_dry_run=false (got {vsession.get('is_dry_run')!r}) "
+        "-- refusing to treat it as a real M10 live session.",
+        vsession,
+    )
+log("gate_6_live_not_dry_run_confirmed", {"validation_session_id": vsession_id, "is_dry_run": vsession.get("is_dry_run")})
+
 # ---------------------------------------------------------------------------
 # 5. Free market-status read-back. If not OPEN, abort immediately --
 #    zero SAHMK quota ever spent on this run.
