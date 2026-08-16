@@ -16,6 +16,7 @@ import pytest
 from src.market_data.caching import redis_shared_cache as cache_module
 from src.market_data.caching.redis_shared_cache import (
     CacheBackendHealth,
+    SharedCacheStats,
     SharedTTLCache,
     get_observability_snapshot,
 )
@@ -291,6 +292,86 @@ def test_observability_snapshot_never_exposes_redis_credentials():
     dumped = str(snapshot)
     assert "redis://" not in dumped
     assert "password" not in dumped.lower()
+
+
+# --- per-operation accounting (SAHMK quota optimization mandate, 2026-08-16) -
+
+
+@pytest.mark.asyncio
+async def test_by_operation_breakdown_derives_endpoint_from_the_cache_key():
+    fake = _FakeRedis()
+    cache = SharedTTLCache("sahmk_market_data", redis_client=fake)
+
+    async def _compute():
+        return {"value": 1}
+
+    await cache.get_or_compute(("quote", "2222"), _compute, ttl_seconds=60)
+    await cache.get_or_compute(("quote", "2222"), _compute, ttl_seconds=60)  # hit
+    await cache.get_or_compute(("dividends", "1120"), _compute, ttl_seconds=60)
+
+    assert cache.stats_by_operation["unclassified:quote"].misses == 1
+    assert cache.stats_by_operation["unclassified:quote"].hits == 1
+    assert cache.stats_by_operation["unclassified:quote"].provider_calls == 1
+    assert cache.stats_by_operation["unclassified:dividends"].misses == 1
+
+
+@pytest.mark.asyncio
+async def test_by_operation_breakdown_includes_the_active_operation_scope_subsystem():
+    from src.market_data.sahmk.operation_scope import MARKET_SCAN, operation_scope
+
+    fake = _FakeRedis()
+    cache = SharedTTLCache("sahmk_market_data", redis_client=fake)
+
+    async def _compute():
+        return {"value": 1}
+
+    with operation_scope(MARKET_SCAN):
+        await cache.get_or_compute(("quote", "2222"), _compute, ttl_seconds=60)
+
+    assert cache.stats_by_operation["market_scan:quote"].misses == 1
+    # Flat totals stay unaffected -- this is an additive breakdown, not a
+    # replacement for the existing aggregate counters.
+    assert cache.stats.misses == 1
+
+
+@pytest.mark.asyncio
+async def test_coalesced_wait_counts_as_a_hit_and_a_duplicate_request_prevented_per_operation():
+    fake = _FakeRedis()
+    cache_a = SharedTTLCache("sahmk_market_data", redis_client=fake)
+    cache_b = SharedTTLCache("sahmk_market_data", redis_client=fake)
+
+    async def _slow_compute():
+        await asyncio.sleep(0.05)
+        return {"value": 1}
+
+    results = await asyncio.gather(
+        cache_a.get_or_compute(("quote", "2222"), _slow_compute, ttl_seconds=60),
+        cache_b.get_or_compute(("quote", "2222"), _slow_compute, ttl_seconds=60),
+    )
+    assert results[0] == results[1] == {"value": 1}
+
+    total_provider_calls = (
+        cache_a.stats_by_operation["unclassified:quote"].provider_calls
+        + cache_b.stats_by_operation["unclassified:quote"].provider_calls
+    )
+    total_coalesced = (
+        cache_a.stats_by_operation.get("unclassified:quote", SharedCacheStats()).coalesced_waits
+        + cache_b.stats_by_operation.get("unclassified:quote", SharedCacheStats()).coalesced_waits
+    )
+    assert total_provider_calls == 1
+    assert total_coalesced == 1
+
+
+def test_get_observability_snapshot_includes_by_operation():
+    fake = _FakeRedis()
+    cache = SharedTTLCache("sahmk_market_data", redis_client=fake)
+    cache.stats_by_operation["market_scan:quote"] = SharedCacheStats(hits=3, misses=1)
+
+    snapshot = get_observability_snapshot({"sahmk_market_data": cache})
+
+    assert snapshot["by_operation"]["market_scan:quote"] == {
+        "hits": 3, "misses": 1, "coalesced_waits": 0, "provider_calls": 0, "redis_errors": 0,
+    }
 
 
 # --- dataclass encode/decode round-trip ---------------------------------------

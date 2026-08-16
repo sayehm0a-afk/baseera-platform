@@ -57,6 +57,7 @@ from src.market_data.sahmk.rate_limiter import (
     SahmkUpstreamQuotaExhaustedError,
     get_default_rate_limiter,
 )
+from src.market_data.sahmk.operation_scope import INGESTION, operation_scope
 from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
 
 logger = logging.getLogger(__name__)
@@ -385,7 +386,7 @@ class IngestionScheduler:
             ("symbols", ingestion_config.get_symbols_sync_interval_seconds, self._run_symbols),
             (
                 "historical_ohlcv",
-                ingestion_config.get_ohlcv_sync_interval_seconds,
+                ingestion_config.get_ohlcv_sync_next_delay_seconds,
                 self._run_historical_ohlcv,
             ),
             (
@@ -539,7 +540,7 @@ class IngestionScheduler:
         return list(dict.fromkeys(list(configured) + discovered))
 
     async def _run_symbols(self) -> IngestionResult:
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(INGESTION):
             provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
             symbols = ingestion_config.get_ingestion_symbol_universe()
             return await sync_symbols(
@@ -550,7 +551,7 @@ class IngestionScheduler:
             )
 
     async def _run_historical_ohlcv(self) -> IngestionResult:
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(INGESTION):
             provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
             symbols = self._resolve_target_symbols()
             return await ingest_historical_ohlcv(
@@ -561,7 +562,7 @@ class IngestionScheduler:
             )
 
     async def _run_fundamentals(self) -> IngestionResult:
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(INGESTION):
             provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
             symbols = self._resolve_target_symbols()
             return await ingest_fundamentals(
@@ -572,7 +573,7 @@ class IngestionScheduler:
             )
 
     async def _run_dividends(self) -> IngestionResult:
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(INGESTION):
             provider = _NonDisconnectingProviderProxy(await self._get_fundamental_provider())
             symbols = self._resolve_target_symbols()
             return await ingest_dividends(symbols, provider, self._session_factory)

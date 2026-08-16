@@ -241,7 +241,7 @@ async def test_scheduler_start_creates_four_job_tasks(session_factory, monkeypat
         "src.market_data.ingestion.config.get_symbols_sync_interval_seconds", lambda: 1000
     )
     monkeypatch.setattr(
-        "src.market_data.ingestion.config.get_ohlcv_sync_interval_seconds", lambda: 1000
+        "src.market_data.ingestion.config.get_ohlcv_sync_next_delay_seconds", lambda: 1000
     )
     monkeypatch.setattr(
         "src.market_data.ingestion.config.get_fundamentals_sync_interval_seconds", lambda: 1000
@@ -908,7 +908,7 @@ async def test_start_passes_the_resumed_initial_delay_into_each_loop(session_fac
         "src.market_data.ingestion.config.get_symbols_sync_interval_seconds", lambda: 1000
     )
     monkeypatch.setattr(
-        "src.market_data.ingestion.config.get_ohlcv_sync_interval_seconds", lambda: 1000
+        "src.market_data.ingestion.config.get_ohlcv_sync_next_delay_seconds", lambda: 1000
     )
     monkeypatch.setattr(
         "src.market_data.ingestion.config.get_fundamentals_sync_interval_seconds", lambda: 1000

@@ -70,6 +70,31 @@ def get_ohlcv_sync_interval_seconds() -> float:
     return float(os.getenv("INGESTION_OHLCV_INTERVAL_SECONDS", str(6 * 3600)))
 
 
+def get_ohlcv_sync_next_delay_seconds() -> float:
+    """What `IngestionScheduler`'s job loop actually uses to schedule
+    `historical_ohlcv`'s *next* run (see ingestion/scheduler.py's
+    job_specs) -- calendar-aware and once-per-trading-day by default,
+    replacing the fixed-interval cadence `get_ohlcv_sync_interval_
+    seconds` still represents.
+
+    If `INGESTION_OHLCV_INTERVAL_SECONDS` is explicitly set, honors it
+    verbatim (the pre-existing fixed-interval override, preserved as an
+    operator escape hatch for whoever needs a different cadence than
+    "once daily, shortly after Tadawul close"). Otherwise delegates to
+    `trading_calendar.seconds_until_next_ohlcv_sync()`, which computes
+    the real number of seconds until the next post-close sync window --
+    the once-per-trading-day-at-the-correct-time default a daily bar
+    actually needs (see that function's own docstring for the real
+    production-quota-exhaustion history behind this change).
+    """
+    raw = os.getenv("INGESTION_OHLCV_INTERVAL_SECONDS")
+    if raw is not None:
+        return float(raw)
+    from src.market_intelligence.trading_calendar import seconds_until_next_ohlcv_sync
+
+    return seconds_until_next_ohlcv_sync()
+
+
 def get_fundamentals_sync_interval_seconds() -> float:
     return float(os.getenv("INGESTION_FUNDAMENTALS_INTERVAL_SECONDS", str(7 * 24 * 3600)))
 

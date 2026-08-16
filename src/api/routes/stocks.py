@@ -12,14 +12,17 @@ Stock; the provider layer's own symbol-format validation is enough.
 they do require an existing Stock row -- there is nothing to read
 otherwise.
 
-Known, disclosed gap: PriceBar (unlike FundamentalSnapshot) has no
-source/is_synthetic columns, so /history cannot currently tell a caller
-whether a given historical bar came from real SAHMK data or the
-synthetic dev provider once it's been ingested into the database --
-only /quote and /fundamentals, which read directly from a provider or
-from FundamentalSnapshot (which does have those columns), can. Adding
-that column is a schema migration, tracked as follow-up work, not done
-here.
+/quote's daily-bar leg (open/high/low/volume) prefers an already-
+ingested local PriceBar row over a live provider call: the once-daily
+OHLCV ingestion job (see market_data.ingestion.config.get_ohlcv_sync_
+next_delay_seconds) already persists today's bar shortly after Tadawul
+close, so a live get_stock_data() call for the same bar every time a
+user views a stock page would be a pure duplicate SAHMK request for
+data already sitting in the database -- SAHMK is only actually called
+here when no local bar exists yet for today (a fresh symbol, or before
+today's ingestion run has happened). The live-quote leg (close/volume/
+timestamp when fresher) is untouched -- that piece is genuinely
+time-sensitive and has no local substitute.
 
 /decision, /decision-v2, and /analyst-report are three different views
 over one computation, not three engines: each builds the same
@@ -112,13 +115,15 @@ from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.domain.arabic_text import normalize_arabic
-from src.domain.models import DecisionV2Snapshot, FundamentalSnapshot, PeriodType, Stock, Timeframe, User
+from src.domain.models import DecisionV2Snapshot, FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe, User
 from src.domain.sector_labels import sector_label_ar
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
+from src.market_data.sahmk.operation_scope import STOCK_DETAIL, operation_scope
 from src.market_data.validators.symbol_validator import InvalidSymbolError, validate_symbol_format
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status, market_status_label_ar
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository, _f
+from src.market_intelligence.trading_calendar import to_tadawul_time
 
 logger = logging.getLogger(__name__)
 
@@ -261,9 +266,43 @@ def get_stock(
     return _get_stock_or_404(session, symbol)
 
 
+def _todays_local_daily_bar(session: Session, symbol: str) -> Optional[Dict[str, object]]:
+    """The day's PriceBar for `symbol`, already ingested by the
+    once-daily OHLCV sync job -- read straight from the database, zero
+    SAHMK cost. Returns None (never raises) whenever there is nothing
+    usable to reuse: the symbol isn't a registered Stock yet, it has no
+    bars at all, or its most recent bar isn't from *today* (Tadawul
+    local date) -- e.g. before today's post-close ingestion run has
+    happened yet, or ingestion is disabled/behind. The caller falls
+    back to a live provider call in every one of those cases, exactly
+    matching this route's pre-existing behavior."""
+    stock = session.query(Stock).filter(Stock.symbol == symbol).one_or_none()
+    if stock is None:
+        return None
+    bar = (
+        session.query(PriceBar)
+        .filter(PriceBar.stock_id == stock.id, PriceBar.timeframe == Timeframe.ONE_DAY)
+        .order_by(PriceBar.timestamp.desc())
+        .first()
+    )
+    if bar is None or to_tadawul_time(bar.timestamp).date() != to_tadawul_time().date():
+        return None
+    return {
+        "open": float(bar.open),
+        "high": float(bar.high),
+        "low": float(bar.low),
+        "close": float(bar.close),
+        "volume": int(bar.volume),
+        "timestamp": bar.timestamp,
+        "source": bar.source,
+        "is_synthetic": bar.is_synthetic,
+    }
+
+
 @router.get("/{symbol}/quote", response_model=QuoteOut)
 async def get_quote(
     symbol: str,
+    session: Session = Depends(get_db),
     provider: IMarketDataProvider = Depends(get_market_provider),
     _current_user: User = Depends(require_active_subscription()),
 ) -> QuoteOut:
@@ -293,23 +332,25 @@ async def get_quote(
     # genuine, complete daily OHLCV bar.
     live_price: Optional[float] = None
     live_data: Dict[str, object] = {}
-    get_latest_quote = getattr(provider, "get_latest_quote", None)
-    if get_latest_quote is not None:
-        try:
-            live_data = await get_latest_quote(symbol)
-            live_price = live_data.get("price")
-        except (SahmkError, CircuitBreakerOpenError) as exc:
-            logger.info("Could not fetch a live quote for '%s': %s", symbol, exc)
+    with operation_scope(STOCK_DETAIL):
+        get_latest_quote = getattr(provider, "get_latest_quote", None)
+        if get_latest_quote is not None:
+            try:
+                live_data = await get_latest_quote(symbol)
+                live_price = live_data.get("price")
+            except (SahmkError, CircuitBreakerOpenError) as exc:
+                logger.info("Could not fetch a live quote for '%s': %s", symbol, exc)
 
-    bar: Optional[Dict[str, object]] = None
-    try:
-        bar = await provider.get_stock_data(symbol)
-    except InvalidSymbolError as exc:
-        raise InvalidSymbolFormatError(str(exc)) from exc
-    except (SahmkError, CircuitBreakerOpenError) as exc:
-        if live_price is None:
-            raise ProviderUnavailableError(f"Could not fetch a live quote for '{symbol}': {exc}") from exc
-        logger.info("No finalized daily bar for '%s' yet, using the live quote instead: %s", symbol, exc)
+        bar: Optional[Dict[str, object]] = _todays_local_daily_bar(session, symbol)
+        if bar is None:
+            try:
+                bar = await provider.get_stock_data(symbol)
+            except InvalidSymbolError as exc:
+                raise InvalidSymbolFormatError(str(exc)) from exc
+            except (SahmkError, CircuitBreakerOpenError) as exc:
+                if live_price is None:
+                    raise ProviderUnavailableError(f"Could not fetch a live quote for '{symbol}': {exc}") from exc
+                logger.info("No finalized daily bar for '%s' yet, using the live quote instead: %s", symbol, exc)
 
     if bar is None and live_price is None:
         raise ProviderUnavailableError(f"Could not fetch a live quote for '{symbol}': no data from any source.")

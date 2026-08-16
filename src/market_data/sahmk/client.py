@@ -46,11 +46,38 @@ from src.market_data.sahmk.exceptions import (
     SahmkRateLimitError,
     SahmkRequestError,
 )
+from src.market_data.sahmk.operation_scope import get_current_operation
 from src.market_data.sahmk.rate_limiter import SahmkRateLimiter, get_default_rate_limiter
 from src.market_data.sahmk.request_priority import get_current_priority
 from src.market_data.validators.symbol_validator import validate_symbol_format
 
 logger = logging.getLogger(__name__)
+
+# Maps each real SAHMK endpoint path prefix to the per-operation
+# accounting category the audit mandate asks for (quote/OHLCV/
+# fundamentals/dividends/symbols, plus the two endpoints that don't map
+# onto one of those five names). Checked in order against the request
+# path -- every _request() call goes through exactly one of these, so
+# this list, not a per-method parameter, is the single source of truth
+# for "what kind of SAHMK data was this."
+_ENDPOINT_CLASSIFICATION_PREFIXES = (
+    ("/quote/", "quote"),
+    ("/historical/", "ohlcv"),
+    ("/financials/", "fundamentals"),
+    ("/dividends/", "dividends"),
+    ("/companies/", "symbols"),
+    ("/company/", "company_profile"),
+    ("/market/summary/", "market_summary"),
+    ("/events/", "events"),
+)
+
+
+def _classify_endpoint(path: str) -> str:
+    for prefix, category in _ENDPOINT_CLASSIFICATION_PREFIXES:
+        if path.startswith(prefix):
+            return category
+    return "other"  # pragma: no cover -- every wrapper method below uses a mapped prefix
+
 
 # Matches SAHMK's own real 429 wording, e.g. (production evidence,
 # 2026-08-10): "Daily rate limit exceeded (5000 requests/day). Resets
@@ -201,7 +228,21 @@ class SahmkClient:
         # limiter tell a background backfill's request apart from a
         # live Decision Engine scan's, without changing every method's
         # signature (see request_priority.py's module docstring).
-        await self._rate_limiter.acquire(priority=get_current_priority())
+        #
+        # endpoint (quote/ohlcv/fundamentals/...) is derived from `path`
+        # itself -- always accurate, no caller has to set anything.
+        # subsystem (stock_detail/market_scan/portfolio/ingestion/
+        # admin_diagnostics/None) comes from the same kind of contextvar
+        # as priority, for the same reason (operation_scope.py's module
+        # docstring). Both are recorded together so per-operation SAHMK
+        # accounting (the audit mandate's OBSERVABILITY REQUIREMENT) can
+        # answer "what kind of data" and "which subsystem asked for it"
+        # as two real, independently inspectable dimensions.
+        await self._rate_limiter.acquire(
+            priority=get_current_priority(),
+            endpoint=_classify_endpoint(path),
+            subsystem=get_current_operation(),
+        )
 
         @retry(
             reraise=True,

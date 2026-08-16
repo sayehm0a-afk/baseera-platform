@@ -1700,3 +1700,211 @@ def test_continue_scan_cycle_successive_calls_rotate_through_distinct_symbols(
     assert len(second_symbols) == 2
     assert first_symbols.isdisjoint(second_symbols)
     assert first_symbols | second_symbols == {"2222", "1120", "1180", "1211"}
+
+
+# --- GET /stage1-scan ------------------------------------------------------
+
+
+def test_stage1_scan_requires_staff_role(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+
+    response = client.get("/api/v1/admin/market-intelligence/stage1-scan")
+
+    assert response.status_code == 403
+
+
+def test_stage1_scan_allows_an_analyst_account(client, session_factory):
+    """Unlike the mutating /continue-scan-cycle and
+    /stage2-validate-candidates routes (ADMIN/OWNER only), Stage 1 makes
+    no live provider call and writes nothing -- it is a read-only
+    diagnostic, so it follows the broader ANALYST-or-above convention
+    every other read-only route in this file already uses."""
+    analyst = User(email="analyst@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ANALYST)
+    main.app.dependency_overrides[get_current_user] = lambda: analyst
+
+    response = client.get("/api/v1/admin/market-intelligence/stage1-scan")
+
+    assert response.status_code == 200
+
+
+def test_stage1_scan_never_calls_the_market_data_provider(client, session_factory, as_staff, monkeypatch):
+    """The core Stage 1 guarantee, proven end-to-end through the real
+    HTTP route rather than just at the module level: with real seeded
+    Stock/PriceBar rows in the DB, the route must succeed WITHOUT ever
+    reaching for a market-data provider -- so a provider that raises if
+    called at all still leaves this route working."""
+    from src.market_data import provider_factory
+
+    async def _explode_if_called(force_refresh=False):
+        raise AssertionError("stage1-scan must never call get_market_data_provider")
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _explode_if_called)
+
+    _seed_stock_with_bars(session_factory, "2222")
+
+    response = client.get("/api/v1/admin/market-intelligence/stage1-scan")
+
+    assert response.status_code == 200
+
+
+def test_stage1_scan_reports_real_local_results_for_seeded_stocks(client, session_factory, as_staff):
+    _seed_stock_with_bars(session_factory, "2222")
+    _seed_stock_with_bars(session_factory, "1120")
+
+    response = client.get("/api/v1/admin/market-intelligence/stage1-scan")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["universe_size"] == 2
+    assert body["evaluated_count"] == 2
+    assert body["skipped_count"] == 0
+    assert body["candidate_count"] == len(body["candidates"])
+    for candidate in body["candidates"]:
+        assert candidate["symbol"] in {"2222", "1120"}
+        assert len(candidate["signals"]) > 0
+        for signal in candidate["signals"]:
+            assert signal["name"]
+            assert signal["detail_ar"]
+
+
+# --- POST /stage2-validate-candidates --------------------------------------
+
+
+def test_stage2_validate_candidates_requires_staff_role(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+
+    response = client.post(
+        "/api/v1/admin/market-intelligence/stage2-validate-candidates", json={"symbols": ["2222"]}
+    )
+
+    assert response.status_code == 403
+
+
+def test_stage2_validate_candidates_rejects_an_analyst_account(client, session_factory):
+    """Same tier as /continue-scan-cycle -- this route spends real SAHMK
+    quota, so read-only ANALYST access must not extend to it."""
+    analyst = User(email="analyst@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ANALYST)
+    main.app.dependency_overrides[get_current_user] = lambda: analyst
+
+    response = client.post(
+        "/api/v1/admin/market-intelligence/stage2-validate-candidates", json={"symbols": ["2222"]}
+    )
+
+    assert response.status_code == 403
+
+
+def test_stage2_validate_candidates_stops_when_not_leader(client, session_factory, as_staff, monkeypatch):
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _NeverLeaderLock)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    response = client.post(
+        "/api/v1/admin/market-intelligence/stage2-validate-candidates", json={"symbols": ["2222"]}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is False
+    assert body["stop_reason"] == "not_leader"
+
+
+def test_stage2_validate_candidates_stops_when_sahmk_is_not_live(client, session_factory, as_staff, monkeypatch):
+    from src.market_data import provider_factory
+
+    def _degraded_health():
+        return {
+            "configured_provider": "sahmk", "strict_real_data": True, "synthetic_allowed": False,
+            "sahmk_key_present": True, "current_provider_kind": "sahmk",
+            "last_connectivity_status": "FAILED", "last_connectivity_at": None, "last_real_data_at": None,
+        }
+
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _degraded_health)
+
+    response = client.post(
+        "/api/v1/admin/market-intelligence/stage2-validate-candidates", json={"symbols": ["2222"]}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is False
+    assert body["stop_reason"] == "sahmk_not_live"
+
+
+def test_stage2_validate_candidates_scans_exactly_the_supplied_symbols(
+    client, session_factory, as_staff, monkeypatch
+):
+    """The whole point of Stage 2: it must validate ONLY the caller-
+    supplied candidate list, never fall back to stale-first rotation
+    over the full universe -- proven here by seeding a THIRD eligible
+    symbol that is deliberately left out of the request body and must
+    never appear in symbols_scanned."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+    from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+
+    _seed_stock_with_bars(session_factory, "2222")
+    _seed_stock_with_bars(session_factory, "1120")
+    _seed_stock_with_bars(session_factory, "1180")  # eligible, but NOT requested
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _AlwaysLeaderLock)
+    monkeypatch.setattr(admin_mi_module, "get_market_scan_symbols_per_cycle", lambda: 20)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    fake_provider = DevMarketDataProvider()
+
+    async def _fake_get_provider(force_refresh=False):
+        return fake_provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+
+    response = client.post(
+        "/api/v1/admin/market-intelligence/stage2-validate-candidates",
+        json={"symbols": ["2222", "1120"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is True
+    assert body["symbols_requested"] == 2
+    assert set(body["symbols_scanned"]) == {"2222", "1120"}
+    assert "1180" not in body["symbols_scanned"]
+
+
+def test_stage2_validate_candidates_caps_at_the_configured_per_cycle_limit(
+    client, session_factory, as_staff, monkeypatch
+):
+    """A Stage 1 candidate list can exceed one cycle's cap -- this route
+    must slice to get_market_scan_symbols_per_cycle(), same bound every
+    other manually triggered cycle respects, never send the whole list
+    in one call."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+    from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+
+    for symbol in ("2222", "1120", "1180"):
+        _seed_stock_with_bars(session_factory, symbol)
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _AlwaysLeaderLock)
+    monkeypatch.setattr(admin_mi_module, "get_market_scan_symbols_per_cycle", lambda: 2)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    fake_provider = DevMarketDataProvider()
+
+    async def _fake_get_provider(force_refresh=False):
+        return fake_provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+
+    response = client.post(
+        "/api/v1/admin/market-intelligence/stage2-validate-candidates",
+        json={"symbols": ["2222", "1120", "1180"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbols_requested"] == 2
+    assert set(body["symbols_scanned"]) == {"2222", "1120"}

@@ -43,6 +43,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_market_provider
+from src.market_data.sahmk.operation_scope import PORTFOLIO, operation_scope
 from src.api.exceptions import InvalidPortfolioConfigError, NoPortfolioAnalysisError, PortfolioNotFoundError
 from src.api.middleware.rate_limiting import limiter
 from src.api.schemas.news import PortfolioNewsAlertListOut, PortfolioNewsAlertOut
@@ -114,7 +115,10 @@ async def analyze_portfolio(
     _repository.replace_holdings(session, portfolio.id, holdings)
 
     engine = PortfolioEngine(session, market_provider)
-    analysis = await engine.analyze(portfolio_id=portfolio.id, name=portfolio.name, holdings=holdings, cash=body.cash)
+    with operation_scope(PORTFOLIO):
+        analysis = await engine.analyze(
+            portfolio_id=portfolio.id, name=portfolio.name, holdings=holdings, cash=body.cash
+        )
 
     _repository.save_analysis_snapshot(session, portfolio.id, analysis, PORTFOLIO_ENGINE_VERSION)
 
