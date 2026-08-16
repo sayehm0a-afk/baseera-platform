@@ -368,6 +368,117 @@ def get_snapshot_top_sectors_count() -> int:
     return int(os.getenv("MARKET_SNAPSHOT_TOP_SECTORS_COUNT", "5"))
 
 
+# --- Basirah Radar V2 -- Stage 1 local-only ranking (2026-08-16) -----------
+#
+# Every threshold below drives Stage 1's local-only candidate signals and
+# its composite ranking_score (src.market_intelligence.stage1_local_scan).
+# None of these are empirically calibrated against this platform's own
+# forward-tested outcomes yet -- that calibration is exactly what the
+# existing src.ai_evolution outcome-tracking infrastructure would need real
+# accumulated Radar V2 history to eventually justify. They are disclosed
+# here, not hidden, and made env-configurable (rather than baked in as
+# unreviewable module constants) precisely so they can be tuned without a
+# code change once that evidence exists.
+
+
+def get_stage1_abnormal_volume_ratio() -> float:
+    """Relative-volume bar (current bar / 20-period average) above which
+    Stage 1 fires its "abnormal_volume" signal. Reused verbatim as the
+    same 2.0x bar src.analysis.decision_v2.evidence.derive_accumulation_
+    evidence already treats as "abnormal volume" in the live decision
+    pipeline -- not a second, uncoordinated number."""
+    return float(os.getenv("RADAR_STAGE1_ABNORMAL_VOLUME_RATIO", "2.0"))
+
+
+def get_stage1_trending_adx_threshold() -> float:
+    """ADX-14 reading at/above which Stage 1 considers a symbol
+    "trending" -- a conventional technical-analysis band (below ~20-25 is
+    usually considered range-bound), not yet forward-tested against this
+    platform's own outcomes."""
+    return float(os.getenv("RADAR_STAGE1_TRENDING_ADX_THRESHOLD", "25.0"))
+
+
+def get_stage1_rsi_oversold() -> float:
+    return float(os.getenv("RADAR_STAGE1_RSI_OVERSOLD", "30.0"))
+
+
+def get_stage1_rsi_overbought() -> float:
+    return float(os.getenv("RADAR_STAGE1_RSI_OVERBOUGHT", "70.0"))
+
+
+def get_stage1_min_dollar_volume_sar() -> float:
+    """Minimum last-close x last-volume (SAR) a symbol must clear to be
+    eligible as a Stage 1 candidate at all, regardless of which signals
+    fire -- a conservative liquidity floor against an illiquid micro-cap
+    becoming a "candidate" purely because one indicator crossed a
+    threshold on thin volume. A single-bar proxy, not the 20-period
+    average_traded_value get_min_average_traded_value() gates on
+    elsewhere in the live decision pipeline -- disclosed, not hidden."""
+    return float(os.getenv("RADAR_STAGE1_MIN_DOLLAR_VOLUME_SAR", "100000"))
+
+
+def get_stage1_atr_reward_multiple() -> float:
+    """When no overhead resistance level is available from local swing-
+    pivot detection, Stage 1 estimates a structural "potential target"
+    this many ATR multiples above the last close, purely to rank
+    risk/reward potential -- never presented as a committed target price
+    (Stage 2 / Decision Engine V2's own target derivation is the real,
+    published price plan)."""
+    return float(os.getenv("RADAR_STAGE1_ATR_REWARD_MULTIPLE", "2.0"))
+
+
+def get_stage1_atr_risk_multiple() -> float:
+    """Same as get_stage1_atr_reward_multiple(), for the downside
+    ("potential stop") side of the same structural risk/reward
+    estimate."""
+    return float(os.getenv("RADAR_STAGE1_ATR_RISK_MULTIPLE", "1.0"))
+
+
+def get_stage1_trend_weight() -> float:
+    """Stage 1's composite ranking_score weights -- passed straight
+    into src.analysis.decision_v2.scoring.opportunity_quality_score
+    (the same weighted-blend-with-renormalization function the live
+    Decision Engine V2 pipeline already uses for its own
+    opportunity_quality_score) via a DecisionV2Tuning instance built
+    from these six configurable weights, with market_context_weight
+    and data_quality_weight forced to 0 -- Stage 1 has no live quote or
+    trading-session context to compute either sub-score from. The six
+    weights below are intended to sum to 1.0 (enforced by a test); the
+    scoring function renormalizes across whichever sub-scores are
+    actually available (not None) for a given symbol regardless."""
+    return float(os.getenv("RADAR_STAGE1_TREND_WEIGHT", "0.25"))
+
+
+def get_stage1_momentum_weight() -> float:
+    return float(os.getenv("RADAR_STAGE1_MOMENTUM_WEIGHT", "0.20"))
+
+
+def get_stage1_volume_weight() -> float:
+    return float(os.getenv("RADAR_STAGE1_VOLUME_WEIGHT", "0.15"))
+
+
+def get_stage1_liquidity_weight() -> float:
+    return float(os.getenv("RADAR_STAGE1_LIQUIDITY_WEIGHT", "0.15"))
+
+
+def get_stage1_volatility_weight() -> float:
+    return float(os.getenv("RADAR_STAGE1_VOLATILITY_WEIGHT", "0.10"))
+
+
+def get_stage1_risk_reward_weight() -> float:
+    return float(os.getenv("RADAR_STAGE1_RISK_REWARD_WEIGHT", "0.15"))
+
+
+def get_radar_stage2_candidate_cap() -> int:
+    """Hard ceiling on how many of Stage 1's top-ranked candidates
+    Radar V2's orchestrator may hand to Stage 2 for bounded live SAHMK
+    validation in one run -- "never live-query the entire universe" is a
+    structural guarantee only if this cap exists independently of
+    however large the real candidate_count happens to be on a given
+    day."""
+    return int(os.getenv("RADAR_STAGE2_CANDIDATE_CAP", "15"))
+
+
 # --- scheduler -------------------------------------------------------------
 
 

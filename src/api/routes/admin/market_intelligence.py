@@ -60,6 +60,7 @@ from src.api.schemas.market_intelligence import (
     SectorCoverageOut,
     SectorRankingOut,
     Stage1CandidateOut,
+    Stage1ComponentScoresOut,
     Stage1ScanOut,
     Stage1SignalOut,
     Stage2ValidateRequest,
@@ -589,6 +590,16 @@ async def get_stage1_scan(
                 rsi_14=c.rsi_14,
                 atr_pct=c.atr_pct,
                 signals=[Stage1SignalOut(name=s.name, detail_ar=s.detail_ar) for s in c.signals],
+                ranking_score=c.ranking_score,
+                component_scores=Stage1ComponentScoresOut(
+                    trend=c.component_scores.trend,
+                    momentum=c.component_scores.momentum,
+                    volume=c.component_scores.volume,
+                    liquidity=c.component_scores.liquidity,
+                    volatility=c.component_scores.volatility,
+                    risk_reward=c.component_scores.risk_reward,
+                ),
+                risk_reward_ratio=c.risk_reward_ratio,
             )
             for c in result.candidates
         ],

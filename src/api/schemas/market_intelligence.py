@@ -784,6 +784,23 @@ class Stage1SignalOut(BaseModel):
     detail_ar: str
 
 
+class Stage1ComponentScoresOut(BaseModel):
+    """The six sub-scores (0-100, 50=neutral) behind `ranking_score` --
+    trend/momentum/volume/liquidity/volatility/risk_reward, exactly as
+    `src.analysis.decision_v2.scoring.opportunity_quality_score` combines
+    them for the live decision pipeline. `None` means genuinely not
+    computable for this symbol (excluded from the weighted blend, not
+    defaulted to a number) -- this is what lets a caller see WHY a
+    candidate ranked where it did, not just the final score."""
+
+    trend: Optional[float] = None
+    momentum: Optional[float] = None
+    volume: Optional[float] = None
+    liquidity: Optional[float] = None
+    volatility: Optional[float] = None
+    risk_reward: Optional[float] = None
+
+
 class Stage1CandidateOut(BaseModel):
     symbol: str
     latest_close: Optional[float] = None
@@ -794,6 +811,9 @@ class Stage1CandidateOut(BaseModel):
     rsi_14: Optional[float] = None
     atr_pct: Optional[float] = None
     signals: List[Stage1SignalOut] = Field(default_factory=list)
+    ranking_score: Optional[float] = None
+    component_scores: Stage1ComponentScoresOut = Field(default_factory=Stage1ComponentScoresOut)
+    risk_reward_ratio: Optional[float] = None
 
 
 class Stage1ScanOut(BaseModel):
