@@ -19,6 +19,7 @@ from sqlalchemy.pool import StaticPool
 from src.core.db.database import Base
 from src.domain.models import DecisionV2Outcome, DecisionV2Snapshot, PriceBar, RadarOpportunity, Stock, Timeframe
 from src.market_intelligence.radar_v2 import (
+    compute_radar_v2_performance,
     emit_radar_opportunities,
     run_radar_v2_cycle,
     select_stage2_candidates,
@@ -330,3 +331,57 @@ class TestRunRadarV2Cycle:
         assert len(result.opportunities_emitted) == 1
         assert result.opportunities_emitted[0].symbol == stock.symbol
         assert session.query(RadarOpportunity).count() == 1
+
+
+class TestComputeRadarV2Performance:
+    def test_empty_database_reports_none_rates_not_zero(self, session):
+        metrics = compute_radar_v2_performance(session)
+        assert metrics.total_opportunities_emitted == 0
+        assert metrics.resolved_count == 0
+        assert metrics.target_hit_rate is None
+        assert metrics.stop_loss_hit_rate is None
+        assert metrics.average_return_pct is None
+
+    def test_pending_actionable_opportunity_is_tracked_but_not_resolved(self, session):
+        stock = _stock(session)
+        _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)])
+
+        metrics = compute_radar_v2_performance(session)
+        assert metrics.total_opportunities_emitted == 1
+        assert metrics.total_outcomes_tracked == 1
+        assert metrics.pending_count == 1
+        assert metrics.resolved_count == 0
+        assert metrics.target_hit_rate is None
+
+    def test_live_opportunities_by_classification_counts_only_non_superseded_rows(self, session):
+        stock = _stock(session)
+        t0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)], emitted_at=t0)
+
+        _snapshot(session, stock, scan_run_id=2, decision="STRONG_BUY_CANDIDATE")
+        emit_radar_opportunities(session, 2, [_candidate(stock.symbol)], emitted_at=t0 + timedelta(hours=1))
+
+        metrics = compute_radar_v2_performance(session)
+        # The first BUY_CANDIDATE row was superseded -- only the live
+        # STRONG_BUY_CANDIDATE one counts toward the current composition.
+        assert metrics.live_opportunities_by_classification == {"STRONG_BUY_CANDIDATE": 1}
+        assert metrics.total_opportunities_emitted == 2
+
+    def test_resolved_outcomes_compute_real_rates(self, session):
+        stock = _stock(session)
+        snapshot = _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)])
+
+        outcome = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        outcome.status = "TARGET_1_HIT"
+        outcome.return_pct = 8.5
+        session.commit()
+
+        metrics = compute_radar_v2_performance(session)
+        assert metrics.resolved_count == 1
+        assert metrics.target_hit_count == 1
+        assert metrics.target_hit_rate == 1.0
+        assert metrics.stop_loss_hit_rate == 0.0
+        assert metrics.average_return_pct == 8.5

@@ -43,7 +43,13 @@ from typing import Any, Awaitable, Callable, List, Optional
 from sqlalchemy.orm import Session
 
 from src.ai_evolution.decision_v2_outcome_evaluation import create_pending_decision_v2_outcome
-from src.domain.models import DecisionV2Snapshot, RadarOpportunity
+from src.domain.models import (
+    NON_RESOLVING_STATUSES,
+    DecisionV2Outcome,
+    DecisionV2OutcomeStatus,
+    DecisionV2Snapshot,
+    RadarOpportunity,
+)
 from src.market_intelligence.config import (
     get_confidence_change_threshold,
     get_duplicate_suppression_window_hours,
@@ -298,4 +304,84 @@ async def run_radar_v2_cycle(
         scan_run_id=scan_run_id,
         opportunities_emitted=emission.emitted,
         opportunities_suppressed_as_duplicate=emission.suppressed_symbols,
+    )
+
+
+_TARGET_HIT_STATUSES = frozenset(
+    {
+        DecisionV2OutcomeStatus.TARGET_1_HIT,
+        DecisionV2OutcomeStatus.TARGET_2_HIT,
+        DecisionV2OutcomeStatus.TARGET_3_HIT,
+    }
+)
+
+
+@dataclass(frozen=True)
+class RadarV2PerformanceMetrics:
+    """Phase B: "measure target hit rate, stop-loss hit rate, return
+    after signal... false-positive rate." Computed directly from real
+    `DecisionV2Outcome` rows reached via `RadarOpportunity.
+    decision_v2_snapshot_id` -- never a second, parallel outcome
+    ledger. Every rate is `None` (not 0.0) when `resolved_count` is
+    zero, so a genuine "no data yet" state is never presented as a
+    real 0% rate -- this is expected to be `None` for a long time after
+    Radar V2 first ships, since a target/stop can only resolve once
+    real forward market days have actually elapsed."""
+
+    total_opportunities_emitted: int
+    total_outcomes_tracked: int
+    pending_count: int
+    resolved_count: int
+    target_hit_count: int
+    stop_loss_hit_count: int
+    partial_count: int
+    expired_count: int
+    data_unavailable_count: int
+    target_hit_rate: Optional[float]
+    stop_loss_hit_rate: Optional[float]
+    average_return_pct: Optional[float]
+    live_opportunities_by_classification: dict
+
+
+def compute_radar_v2_performance(session: Session) -> RadarV2PerformanceMetrics:
+    opportunities = session.query(RadarOpportunity).all()
+    snapshot_ids = [o.decision_v2_snapshot_id for o in opportunities]
+    outcomes = (
+        session.query(DecisionV2Outcome)
+        .filter(DecisionV2Outcome.decision_v2_snapshot_id.in_(snapshot_ids))
+        .all()
+        if snapshot_ids
+        else []
+    )
+
+    pending = sum(1 for o in outcomes if o.status in NON_RESOLVING_STATUSES)
+    resolved = [o for o in outcomes if o.status not in NON_RESOLVING_STATUSES]
+    target_hits = sum(1 for o in resolved if o.status in _TARGET_HIT_STATUSES)
+    stop_hits = sum(1 for o in resolved if o.status == DecisionV2OutcomeStatus.STOP_LOSS_HIT)
+    partial = sum(1 for o in resolved if o.status == DecisionV2OutcomeStatus.PARTIAL)
+    expired = sum(1 for o in resolved if o.status == DecisionV2OutcomeStatus.EXPIRED)
+    data_unavailable = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.DATA_UNAVAILABLE)
+
+    resolved_count = len(resolved)
+    returns = [float(o.return_pct) for o in resolved if o.return_pct is not None]
+
+    live_by_classification: dict = {}
+    for opp in opportunities:
+        if opp.superseded_by_id is None:
+            live_by_classification[opp.classification] = live_by_classification.get(opp.classification, 0) + 1
+
+    return RadarV2PerformanceMetrics(
+        total_opportunities_emitted=len(opportunities),
+        total_outcomes_tracked=len(outcomes),
+        pending_count=pending,
+        resolved_count=resolved_count,
+        target_hit_count=target_hits,
+        stop_loss_hit_count=stop_hits,
+        partial_count=partial,
+        expired_count=expired,
+        data_unavailable_count=data_unavailable,
+        target_hit_rate=round(target_hits / resolved_count, 4) if resolved_count > 0 else None,
+        stop_loss_hit_rate=round(stop_hits / resolved_count, 4) if resolved_count > 0 else None,
+        average_return_pct=round(sum(returns) / len(returns), 4) if returns else None,
+        live_opportunities_by_classification=live_by_classification,
     )
