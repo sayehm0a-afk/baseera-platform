@@ -10,10 +10,13 @@ dump_logs.py / api_audit.py in this directory.
 
 Also (read-only, zero SAHMK cost -- both routes read already-persisted
 DB rows from the most recent scan, never touch the provider) prints
-the real per-symbol opportunity detail for the most recent MarketScanRun
-(GET /scan/{run_id} + GET /opportunities?run_id=...), so the exact
+the real per-symbol opportunity detail for a MarketScanRun (GET
+/scan/{run_id} + GET /opportunities?run_id=...), so the exact
 symbols/prices/scores/targets/stops a live scan produced can be
-inspected without re-running a scan.
+inspected without re-running a scan. Defaults to the most recent scan
+(summary.last_scan_id); set SCAN_RUN_ID to inspect a specific earlier
+run instead (e.g. the automatic scheduled scan rather than a later
+diagnostic scan that has since become "most recent").
 """
 
 import json
@@ -26,6 +29,7 @@ BACKEND_URL = os.environ["BACKEND_URL"].rstrip("/")
 STAFF_EMAIL = os.environ["STAFF_EMAIL"]
 STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
 EXPECTED_COMMIT = os.environ.get("EXPECTED_COMMIT", "").strip()
+SCAN_RUN_ID = os.environ.get("SCAN_RUN_ID", "").strip()
 
 session = requests.Session()
 r = session.post(f"{BACKEND_URL}/api/v1/auth/login", json={"email": STAFF_EMAIL, "password": STAFF_PASSWORD}, timeout=30)
@@ -42,7 +46,7 @@ summary = r.json()
 actual_commit = summary.get("deployment_commit")
 print(json.dumps(summary, indent=2, default=str))
 
-last_scan_id = summary.get("last_scan_id")
+last_scan_id = int(SCAN_RUN_ID) if SCAN_RUN_ID else summary.get("last_scan_id")
 if last_scan_id is not None:
     r = session.get(f"{BACKEND_URL}/api/v1/market/scan/{last_scan_id}", timeout=30)
     print(f"\n--- scan_run_{last_scan_id} ---")
