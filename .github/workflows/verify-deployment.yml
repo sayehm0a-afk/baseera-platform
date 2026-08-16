@@ -7,6 +7,10 @@ on:
         description: "Commit SHA expected to be running in production"
         required: false
         default: ""
+      scan_run_id:
+        description: "Specific MarketScanRun id to inspect (blank = most recent scan)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -20,6 +24,7 @@ jobs:
       STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
       EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+      SCAN_RUN_ID: ${{ inputs.scan_run_id }}
     steps:
       - uses: actions/checkout@v4
 
