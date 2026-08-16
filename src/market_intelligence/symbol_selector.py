@@ -1,20 +1,22 @@
 """SymbolSelector: resolves "every listed Saudi stock" to a concrete,
 scannable symbol list -- reads only the already-ingested `Stock`/
-`PriceBar` tables (via a plain SQLAlchemy query on the existing domain
-models), never a market-data provider. Symbol *discovery* (finding out
-what's listed on Tadawul/Nomu in the first place) is already
-`sync_symbols`'s job (src/market_data/ingestion/ingest_symbols.py) --
-this module reuses whatever `Stock` rows that ingestion job (or manual
-seeding) has already produced, rather than duplicating provider-facing
-directory logic.
+`PriceBar`/`SymbolIntelligenceRecord` tables (via a plain SQLAlchemy
+query on the existing domain models), never a market-data provider.
+Symbol *discovery* (finding out what's listed on Tadawul/Nomu in the
+first place) is already `sync_symbols`'s job
+(src/market_data/ingestion/ingest_symbols.py) -- this module reuses
+whatever `Stock` rows that ingestion job (or manual seeding) has
+already produced, rather than duplicating provider-facing directory
+logic.
 """
 
 import logging
 from typing import List, Optional
 
+from sqlalchemy import func, nullsfirst
 from sqlalchemy.orm import Session
 
-from src.domain.models import PriceBar, Stock
+from src.domain.models import PriceBar, Stock, SymbolIntelligenceRecord
 from src.market_intelligence.config import get_scan_max_symbols, is_price_history_required_for_scan
 
 logger = logging.getLogger(__name__)
@@ -22,36 +24,77 @@ logger = logging.getLogger(__name__)
 
 class SymbolSelector:
     """`select()` returns every active `Stock.symbol`, in a stable
-    (alphabetical) order. When `MARKET_SCAN_REQUIRE_PRICE_HISTORY` is
-    true (the default), a symbol with zero ingested `PriceBar` rows is
-    skipped here rather than being handed to the scanner only to come
-    back as "insufficient data" -- the same "validates availability,
-    skips unavailable symbols" requirement, resolved with one query
-    instead of one failed pipeline run per symbol.
+    (alphabetical) order by default. When `MARKET_SCAN_REQUIRE_PRICE_
+    HISTORY` is true (the default), a symbol with zero ingested
+    `PriceBar` rows is skipped here rather than being handed to the
+    scanner only to come back as "insufficient data" -- the same
+    "validates availability, skips unavailable symbols" requirement,
+    resolved with one query instead of one failed pipeline run per
+    symbol.
     """
 
-    def select(self, session: Session, symbols: Optional[List[str]] = None) -> List[str]:
+    def select(
+        self,
+        session: Session,
+        symbols: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+        prioritize_stale: bool = False,
+    ) -> List[str]:
+        """`limit`+`prioritize_stale=True` is the incremental-refresh
+        mode the scheduled scan loop uses (2026-08-13 SAHMK quota
+        incident -- see IntervalMarketIntelligenceScheduler's own
+        docstring): instead of the full universe, only the `limit`
+        symbols whose most recent `SymbolIntelligenceRecord.evaluated_at`
+        is oldest are returned (a symbol never scanned at all sorts
+        first, ahead of any real timestamp) -- so repeated bounded
+        cycles still refresh every symbol over time, oldest-data-first,
+        rather than re-scanning the same full universe every cycle."""
         if symbols is not None:
             # An explicit list (e.g. a REST caller scanning a subset)
             # bypasses discovery entirely, but still respects the same
             # bounded-workload ceiling as the full universe.
             return symbols[: get_scan_max_symbols()]
 
-        query = session.query(Stock.symbol).filter(Stock.is_active.is_(True))
+        query = session.query(Stock.id, Stock.symbol).filter(Stock.is_active.is_(True))
 
         if is_price_history_required_for_scan():
             symbols_with_bars = session.query(PriceBar.stock_id).distinct().subquery()
             query = query.filter(Stock.id.in_(session.query(symbols_with_bars.c.stock_id)))
 
-        resolved = [row[0] for row in query.order_by(Stock.symbol).all()]
+        if prioritize_stale:
+            last_evaluated = (
+                session.query(
+                    SymbolIntelligenceRecord.stock_id.label("stock_id"),
+                    func.max(SymbolIntelligenceRecord.evaluated_at).label("last_evaluated_at"),
+                )
+                .group_by(SymbolIntelligenceRecord.stock_id)
+                .subquery()
+            )
+            query = query.outerjoin(last_evaluated, last_evaluated.c.stock_id == Stock.id).add_columns(
+                last_evaluated.c.last_evaluated_at
+            )
+            # Explicit NULLS FIRST: SQLite's ASC default already puts
+            # NULL first, but Postgres's ASC default puts NULL LAST --
+            # without this, a never-evaluated symbol would sort behind
+            # every real timestamp on production (Postgres), the exact
+            # opposite of "scan the never-scanned symbols first."
+            rows = query.order_by(
+                nullsfirst(last_evaluated.c.last_evaluated_at.asc()), Stock.symbol.asc()
+            ).all()
+            resolved = [row[1] for row in rows]
+        else:
+            resolved = [row[1] for row in query.order_by(Stock.symbol).all()]
 
         max_symbols = get_scan_max_symbols()
         if len(resolved) > max_symbols:
             logger.warning(
                 "SymbolSelector resolved %d active symbols, above MARKET_SCAN_MAX_SYMBOLS=%d -- "
-                "truncating to the first %d alphabetically.",
+                "truncating to the first %d.",
                 len(resolved), max_symbols, max_symbols,
             )
             resolved = resolved[:max_symbols]
+
+        if limit is not None:
+            resolved = resolved[:limit]
 
         return resolved

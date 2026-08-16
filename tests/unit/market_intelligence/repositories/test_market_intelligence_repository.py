@@ -195,6 +195,39 @@ def test_get_latest_successful_run_before_run_id(session, repo):
     assert previous.id == run1.id
 
 
+def test_has_in_flight_run_returns_none_when_nothing_is_running(session, repo):
+    assert repo.has_in_flight_run(session) is None
+
+
+def test_has_in_flight_run_finds_a_pending_run(session, repo):
+    run = repo.create_scan_run(session, symbols_requested=1)
+    in_flight = repo.has_in_flight_run(session)
+    assert in_flight is not None
+    assert in_flight.id == run.id
+
+
+def test_has_in_flight_run_finds_a_running_run(session, repo):
+    run = repo.create_scan_run(session, symbols_requested=1)
+    repo.mark_running(session, run.id)
+    in_flight = repo.has_in_flight_run(session)
+    assert in_flight is not None
+    assert in_flight.id == run.id
+
+
+def test_has_in_flight_run_ignores_finished_runs(session, repo):
+    """The overlap guard's whole purpose: a completed/failed run must
+    never block the next scan -- only PENDING/RUNNING count as
+    'already in progress', the same distinction POST /market/scan and
+    the admin diagnostic-scan route already relied on before this
+    method centralized their identical inline query."""
+    success = repo.create_scan_run(session, symbols_requested=1)
+    repo.finish_run(session, success.id, MarketScanStatus.SUCCESS, symbols_succeeded=1, symbols_skipped=0, symbols_failed=0)
+    failed = repo.create_scan_run(session, symbols_requested=1)
+    repo.finish_run(session, failed.id, MarketScanStatus.FAILED, symbols_succeeded=0, symbols_skipped=0, symbols_failed=1)
+
+    assert repo.has_in_flight_run(session) is None
+
+
 def _seed_stock(session, symbol="2222"):
     stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector="Energy")
     session.add(stock)

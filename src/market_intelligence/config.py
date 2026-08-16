@@ -83,6 +83,48 @@ def get_max_scan_run_duration_hours() -> float:
     return float(os.getenv("MARKET_MAX_SCAN_RUN_DURATION_HOURS", "4"))
 
 
+def get_market_scan_symbols_per_cycle() -> int:
+    """The scheduled scan's incremental batch size -- production
+    evidence (2026-08-13 SAHMK quota-exhaustion incident) showed the
+    scheduler re-selecting the ENTIRE active universe (372 symbols)
+    every single cycle, each symbol issuing a live SAHMK quote call
+    with only a 15s cache TTL (QUOTE_CACHE_TTL_SECONDS), so back-to-
+    back cycles got essentially no cache benefit and burned the whole
+    daily quota within about an hour of market open.
+
+    A scheduled cycle now selects only this many symbols (the least-
+    recently-scanned first -- see SymbolSelector.select's
+    `prioritize_stale` -- so the full universe still gets refreshed
+    over successive cycles, just not all-at-once every cycle). Default
+    (20) intentionally matches SAHMK_MAX_REQUESTS_PER_MINUTE's own
+    default (20/min) -- one cycle's batch comfortably fits inside a
+    single per-minute rate-limiter window even at the shortest
+    supported scan interval (60s), instead of a cycle spilling into
+    (and starving) the next one."""
+    return int(os.getenv("MARKET_SCAN_SYMBOLS_PER_CYCLE", "20"))
+
+
+def get_scan_min_background_quota_remaining() -> int:
+    """Circuit breaker: the scheduler skips starting a new cycle
+    entirely (zero SAHMK calls, not even one) once the SAHMK rate
+    limiter's own `remaining_today_for_background` estimate drops below
+    this many requests -- stopping proactively, before individual
+    per-symbol acquire() calls would start failing mid-scan and waste
+    the partial work already done that cycle."""
+    return int(os.getenv("MARKET_SCAN_MIN_BACKGROUND_QUOTA_REMAINING", "10"))
+
+
+def get_scan_leader_lease_seconds() -> float:
+    """TTL of the Redis leader lease `IntervalMarketIntelligenceScheduler`
+    uses so only one of Gunicorn's worker processes actually drives the
+    scan loop at a time (2026-08-13 incident: with no such lease, all 4
+    workers independently ran the full scheduler, quadrupling real
+    SAHMK volume for identical, redundant work). Renewed every tick
+    while a worker holds it; a worker that crashes without releasing it
+    simply lets it expire, so leadership fails over automatically."""
+    return float(os.getenv("MARKET_SCAN_LEADER_LEASE_SECONDS", "180"))
+
+
 # --- rankings / watchlists ----------------------------------------------
 
 

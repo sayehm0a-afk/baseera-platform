@@ -74,7 +74,6 @@ from src.domain.models import (
     FundamentalSnapshot,
     IngestionRunLog,
     MarketScanRun,
-    MarketScanStatus,
     PriceBar,
     StaffRole,
     Stock,
@@ -156,11 +155,7 @@ async def trigger_diagnostic_scan(
         symbols = request.symbols or list(_DEFAULT_DIAGNOSTIC_SYMBOLS)
 
         _repository.reap_stale_runs(session, get_max_scan_run_duration_hours())
-        in_flight = (
-            session.query(MarketScanRun)
-            .filter(MarketScanRun.status.in_([MarketScanStatus.PENDING, MarketScanStatus.RUNNING]))
-            .first()
-        )
+        in_flight = _repository.has_in_flight_run(session)
         if in_flight is not None:
             sahmk_error = (
                 f"Skipped: a market scan (run {in_flight.id}, {in_flight.status.value}) "

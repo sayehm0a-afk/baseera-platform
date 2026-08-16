@@ -185,6 +185,49 @@ if last_scan_status in ("PENDING", "RUNNING"):
         "avoid a redundant SAHMK connectivity probe and an overlap-guard rejection.",
         summary,
     )
+if summary.get("scan_lock_active"):
+    no_go(
+        "A market scan lock is currently active (scan_lock_active=true) -- refusing to run M10 while "
+        "any scan (scheduled or manual) may be consuming SAHMK quota concurrently.",
+        summary,
+    )
+
+# ---------------------------------------------------------------------------
+# 1b. Zero-cost runaway-scheduler gate (2026-08-13 SAHMK quota-exhaustion
+#     incident -- see src/market_intelligence/scheduler.py's own
+#     docstring for the fix this checks the effect of). Every field
+#     read here already came from the single /admin/system/summary
+#     call above -- no additional request.
+# ---------------------------------------------------------------------------
+critical_used = quota.get("critical_requests_used_today")
+reserved_for_critical = quota.get("reserved_for_critical")
+if critical_used is not None and reserved_for_critical is not None and critical_used > reserved_for_critical:
+    no_go(
+        f"CRITICAL-priority SAHMK usage today ({critical_used}) exceeds the configured reserve "
+        f"({reserved_for_critical}) -- this is the exact signature of the 2026-08-13 incident (a "
+        "background caller consuming CRITICAL-reserved quota instead of being throttled). Refusing to "
+        "run M10 until the reserve is holding again.",
+        quota,
+    )
+
+scheduler_running = summary.get("market_intelligence_scheduler_running")
+live_mode_running = summary.get("live_market_mode_running")
+if scheduler_running and not live_mode_running:
+    no_go(
+        "market_intelligence_scheduler_running=true while live_market_mode_running=false -- the scan "
+        "loop appears to be running outside Tadawul-hours gating, which is how the 2026-08-13 runaway "
+        "scan happened. Refusing to run M10 until this is understood.",
+        {"market_intelligence_scheduler_running": scheduler_running, "live_market_mode_running": live_mode_running},
+    )
+log("runaway_scheduler_gate", {
+    "critical_requests_used_today": critical_used,
+    "reserved_for_critical": reserved_for_critical,
+    "background_requests_used_today": quota.get("background_requests_used_today"),
+    "quota_shared_across_workers": quota.get("quota_shared_across_workers"),
+    "market_intelligence_scheduler_running": scheduler_running,
+    "live_market_mode_running": live_mode_running,
+    "result": "PASS",
+})
 
 # ---------------------------------------------------------------------------
 # 2. Zero-cost health check

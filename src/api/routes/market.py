@@ -65,7 +65,6 @@ from src.domain.models import (
     MarketChangeEvent,
     MarketScanProgress,
     MarketScanRun,
-    MarketScanStatus,
     SectorIntelligenceSummary,
     User,
 )
@@ -288,11 +287,7 @@ async def create_scan(
     # the same DB rows for the same symbols. Unlike backtests.py's
     # "only guard large-scope runs" nuance, every market scan already
     # covers the full selected universe, so this is unconditional.
-    in_flight = (
-        session.query(MarketScanRun)
-        .filter(MarketScanRun.status.in_([MarketScanStatus.PENDING, MarketScanStatus.RUNNING]))
-        .first()
-    )
+    in_flight = _repository.has_in_flight_run(session)
     if in_flight is not None:
         raise DuplicateMarketScanError(
             f"A market scan (run {in_flight.id}, {in_flight.status.value}) is already in progress -- "
