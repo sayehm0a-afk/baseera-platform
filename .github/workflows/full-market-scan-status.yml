@@ -1,0 +1,45 @@
+name: Full Market Scan Status (temporary, one-shot, read-only, zero SAHMK cost)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      RAILWAY_BACKEND_SERVICE: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet requests
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Dump backend service env vars (zero SAHMK cost -- Railway API only)
+        run: |
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_vars.json
+
+      - name: Report status
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+          RAILWAY_VARS_FILE: /tmp/backend_vars.json
+        run: python3 .github/workflows/independent_audit/full_market_scan_status.py
