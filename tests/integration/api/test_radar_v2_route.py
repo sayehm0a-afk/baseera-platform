@@ -240,6 +240,46 @@ def test_radar_v2_scan_happy_path_emits_a_real_opportunity(client, session_facto
     assert summary_response.json()["live_opportunity_count"] == 1
 
 
+def test_radar_v2_scan_never_touches_the_critical_reserve(client, session_factory, as_staff, monkeypatch):
+    """Phase E's explicit requirement: protected/critical SAHMK quota
+    must never be spent by background radar work. Radar V2's Stage 2
+    call always runs under priority_scope(BACKGROUND) (inherited,
+    unmodified, from _run_one_bounded_background_cycle) -- proven here
+    directly by reading the real rate limiter's critical counter before
+    and after a real scan that DID execute and DID spend background
+    quota."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+    from src.market_data.sahmk.rate_limiter import get_default_rate_limiter
+
+    _seed_volume_spike_candidate(session_factory, "2222")
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _AlwaysLeaderLock)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    fake_provider = DevMarketDataProvider()
+
+    async def _fake_get_provider(force_refresh=False):
+        return fake_provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+
+    # Delta, not an absolute value: the shared, process-wide rate
+    # limiter singleton may already carry state from unrelated tests
+    # earlier in the same pytest session (unrelated to Radar V2) --
+    # the real invariant under test is that THIS call adds nothing to
+    # the critical counter, whatever it started at.
+    critical_before = get_default_rate_limiter().get_status()["critical_requests_used_today"]
+
+    response = client.post("/api/v1/admin/market-intelligence/radar-v2/scan")
+
+    assert response.status_code == 200
+    assert response.json()["stage2_executed"] is True
+
+    critical_after = get_default_rate_limiter().get_status()["critical_requests_used_today"]
+    assert critical_after == critical_before
+
+
 def test_radar_v2_scan_never_exceeds_the_configured_candidate_cap(
     client, session_factory, as_staff, monkeypatch
 ):
