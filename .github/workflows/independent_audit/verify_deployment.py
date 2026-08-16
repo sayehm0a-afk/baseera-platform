@@ -7,6 +7,13 @@ fields the 2026-08-16 SAHMK quota-exhaustion fix (PR #39) added, so a
 human/AI reviewer can confirm the fix is actually live without any
 SAHMK quota spent. Throwaway diagnostic tooling, same convention as
 dump_logs.py / api_audit.py in this directory.
+
+Also (read-only, zero SAHMK cost -- both routes read already-persisted
+DB rows from the most recent scan, never touch the provider) prints
+the real per-symbol opportunity detail for the most recent MarketScanRun
+(GET /scan/{run_id} + GET /opportunities?run_id=...), so the exact
+symbols/prices/scores/targets/stops a live scan produced can be
+inspected without re-running a scan.
 """
 
 import json
@@ -34,6 +41,16 @@ if r.status_code != 200:
 summary = r.json()
 actual_commit = summary.get("deployment_commit")
 print(json.dumps(summary, indent=2, default=str))
+
+last_scan_id = summary.get("last_scan_id")
+if last_scan_id is not None:
+    r = session.get(f"{BACKEND_URL}/api/v1/market/scan/{last_scan_id}", timeout=30)
+    print(f"\n--- scan_run_{last_scan_id} ---")
+    print(json.dumps(r.json() if r.status_code == 200 else {"status": r.status_code, "body": r.text[:500]}, indent=2, default=str))
+
+    r = session.get(f"{BACKEND_URL}/api/v1/market/opportunities", params={"run_id": last_scan_id}, timeout=30)
+    print(f"\n--- opportunities_run_{last_scan_id} ---")
+    print(json.dumps(r.json() if r.status_code == 200 else {"status": r.status_code, "body": r.text[:500]}, indent=2, default=str))
 
 print("\n--- verification ---")
 print(f"deployment_commit: {actual_commit}")

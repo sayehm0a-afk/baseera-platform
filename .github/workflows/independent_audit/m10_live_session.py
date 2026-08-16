@@ -57,13 +57,10 @@ if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
 
 
 def _checked_out_head() -> str:
-    """The commit this workflow run actually checked out -- for a
-    schedule trigger that's main's tip at fire time, for a manual
-    dispatch it's whatever ref was given. Used as the default
-    "expected production commit" (gate 1) when the caller doesn't
-    pin an explicit EXPECTED_COMMIT, so a scheduled run (which has no
-    workflow_dispatch input to read) still enforces gate 1 instead of
-    silently skipping it."""
+    """The commit this workflow run actually checked out -- whatever
+    ref was given to a manual dispatch. Used as the default "expected
+    production commit" (gate 1) for workflow_dispatch runs that don't
+    pin an explicit EXPECTED_COMMIT."""
     try:
         return subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
@@ -72,10 +69,26 @@ def _checked_out_head() -> str:
         return ""
 
 
+# 2026-08-16: a schedule trigger has no workflow_dispatch input to read,
+# so gate 1 previously fell back to _checked_out_head() -- main's tip AT
+# CRON-FIRE TIME. That's wrong whenever main has advanced for reasons
+# unrelated to a required backend redeploy (e.g. merging CI/tooling-only
+# commits): it produces a false "deployed commit does not match" NO-GO
+# even though the actually-relevant application commit is still correctly
+# deployed. For schedule runs specifically, gate 1 must compare against
+# the last commit actually verified deployed, not against whatever ref
+# happened to be checked out this run.
+SCHEDULED_RUN_EXPECTED_COMMIT = "6c7c6cf85decdcd6d4ff66c30e2a8868d89937f7"
+
 BACKEND_URL = os.environ["BACKEND_URL"].rstrip("/")
 STAFF_EMAIL = os.environ["STAFF_EMAIL"]
 STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
-EXPECTED_COMMIT = os.environ.get("EXPECTED_COMMIT", "").strip() or _checked_out_head()
+EXPECTED_COMMIT = os.environ.get("EXPECTED_COMMIT", "").strip()
+if not EXPECTED_COMMIT:
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+        EXPECTED_COMMIT = SCHEDULED_RUN_EXPECTED_COMMIT
+    else:
+        EXPECTED_COMMIT = _checked_out_head()
 
 evidence = {}
 
