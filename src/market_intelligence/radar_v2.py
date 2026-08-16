@@ -42,6 +42,7 @@ from typing import Any, Awaitable, Callable, List, Optional
 
 from sqlalchemy.orm import Session
 
+from src.ai_evolution.decision_v2_outcome_evaluation import create_pending_decision_v2_outcome
 from src.domain.models import DecisionV2Snapshot, RadarOpportunity
 from src.market_intelligence.config import (
     get_confidence_change_threshold,
@@ -181,6 +182,17 @@ def emit_radar_opportunities(
             # symbol this run (e.g. it failed or was skipped) -- there is
             # no "sufficient evidence" to emit an opportunity from.
             continue
+
+        # Phase B forward-testing: every actionable snapshot Stage 2
+        # produced this run gets outcome tracking, independent of
+        # whether Radar V2 chooses to *display* a fresh opportunity for
+        # it below -- dedup is about avoiding a duplicate card, not
+        # about skipping measurement of what the underlying decision
+        # actually did. Idempotent (unique constraint on
+        # decision_v2_snapshot_id) and a no-op for non-actionable
+        # decisions (WATCH/AVOID/etc.), so calling it unconditionally
+        # here is always safe.
+        create_pending_decision_v2_outcome(session, snapshot)
 
         confidence = float(snapshot.confidence_score)
         prior = _current_live_opportunity(session, candidate.symbol)

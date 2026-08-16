@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.core.db.database import Base
-from src.domain.models import DecisionV2Snapshot, PriceBar, RadarOpportunity, Stock, Timeframe
+from src.domain.models import DecisionV2Outcome, DecisionV2Snapshot, PriceBar, RadarOpportunity, Stock, Timeframe
 from src.market_intelligence.radar_v2 import (
     emit_radar_opportunities,
     run_radar_v2_cycle,
@@ -137,6 +137,44 @@ class TestEmitRadarOpportunities:
         by_symbol = {r.symbol: r for r in result.emitted}
         assert by_symbol["1111"].stage1_rank == 1
         assert by_symbol["2222"].stage1_rank == 2
+
+
+class TestOutcomeTrackingWiring:
+    def test_an_actionable_decision_gets_a_pending_outcome_row(self, session):
+        stock = _stock(session)
+        _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE")
+
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)])
+
+        outcomes = session.query(DecisionV2Outcome).filter_by(symbol=stock.symbol).all()
+        assert len(outcomes) == 1
+        assert outcomes[0].status.value == "PENDING"
+
+    def test_a_non_actionable_decision_gets_no_outcome_row(self, session):
+        stock = _stock(session)
+        _snapshot(session, stock, scan_run_id=1, decision="WATCH")
+
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)])
+
+        assert session.query(DecisionV2Outcome).filter_by(symbol=stock.symbol).count() == 0
+
+    def test_outcome_tracking_still_applies_to_a_suppressed_duplicate(self, session):
+        """Dedup suppresses the *displayed* radar card, never the
+        underlying real-market outcome measurement."""
+        stock = _stock(session)
+        t0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        _snapshot(session, stock, scan_run_id=1, confidence=70.0)
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol, 80.0)], emitted_at=t0)
+
+        snapshot2 = _snapshot(session, stock, scan_run_id=2, confidence=71.0)
+        result = emit_radar_opportunities(
+            session, 2, [_candidate(stock.symbol, 81.0)], emitted_at=t0 + timedelta(hours=1)
+        )
+        assert result.suppressed_symbols == [stock.symbol]
+
+        outcomes = session.query(DecisionV2Outcome).filter_by(symbol=stock.symbol).all()
+        assert len(outcomes) == 2
+        assert {o.decision_v2_snapshot_id for o in outcomes} >= {snapshot2.id}
 
 
 class TestDeduplication:
