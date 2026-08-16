@@ -31,13 +31,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from src.analysis.decision_v2.types import DECISION_LABELS_AR, Decision
 
 from src.api.schemas.market_intelligence import (
     ConfidenceBucketCountOut,
+    ContinueScanCycleOut,
     DbConsistencyOut,
     DecisionCountOut,
     DecisionIntelligenceOut,
@@ -67,12 +68,14 @@ from src.api.schemas.market_intelligence import (
     UniverseSampleEntryOut,
 )
 from src.auth.rbac import require_any_staff_role, require_staff_role
+from src.auth.token_store import get_redis_client
 from src.core.db.database import get_db
 from src.domain.models import (
     DecisionV2Snapshot,
     Dividend,
     FundamentalSnapshot,
     IngestionRunLog,
+    MarketScanProgress,
     MarketScanRun,
     PriceBar,
     StaffRole,
@@ -82,11 +85,19 @@ from src.domain.models import (
 )
 from src.market_data.ingestion import config as ingestion_config
 from src.market_data.providers.sector_provider import get_sector_classification_provider
+from src.market_data.sahmk.rate_limiter import get_default_rate_limiter
 from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
 from src.market_data.strict_mode import StrictRealDataUnavailableError
-from src.market_intelligence.config import get_max_scan_run_duration_hours
+from src.market_intelligence.config import (
+    get_scan_min_background_quota_remaining,
+    get_market_scan_symbols_per_cycle,
+    get_max_scan_run_duration_hours,
+    get_scan_leader_lease_seconds,
+)
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
+from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 from src.market_intelligence.services.scan_job_runner import run_market_scan_job
+from src.market_intelligence.symbol_selector import SymbolSelector
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +337,168 @@ async def trigger_diagnostic_scan(
         latest_completed_run_v1_sample_symbols=latest_completed_run_v1_sample_symbols,
         latest_completed_run_decision_v2_rows_written=latest_completed_run_decision_v2_rows_written,
         latest_completed_run_decision_v2_sample=latest_completed_run_decision_v2_sample,
+    )
+
+
+@router.post("/continue-scan-cycle", response_model=ContinueScanCycleOut)
+async def continue_scan_cycle(
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ADMIN, StaffRole.OWNER)),
+) -> ContinueScanCycleOut:
+    """Staff/OWNER-only: manually advances ONE more cycle of the exact
+    same bounded, stale-first, BACKGROUND-priority, leader-locked
+    rotation `IntervalMarketIntelligenceScheduler._run_one_cycle()`
+    already runs on its own (env-configured, defaults to daily)
+    interval -- so a real full-universe coverage pass can be advanced
+    within a single trading day without waiting for the next scheduled
+    cycle, and without bypassing a single one of that cycle's existing
+    safety guards:
+
+      * SymbolSelector(prioritize_stale=True) -- the identical
+        oldest-data-first selection the scheduler uses, never a
+        separate/duplicated selection rule.
+      * limit=get_market_scan_symbols_per_cycle() -- the same
+        MARKET_SCAN_SYMBOLS_PER_CYCLE cap (defaults to 20), never the
+        full universe in one call.
+      * priority_scope(BACKGROUND) around the scan job -- this call's
+        SAHMK requests are background-eligible only, exactly like the
+        scheduler's own cycle; they can never draw on
+        `reserved_for_critical`.
+      * SchedulerLeaderLock (the same shared Redis lease key the
+        scheduler's own loop uses) -- only one cycle, from any source
+        (the scheduler's own tick or a concurrent call to this route),
+        can run at a time.
+      * The same overlap guard (`has_in_flight_run`) and quota circuit
+        breaker every other scan-triggering route already applies.
+
+    `executed=False` always means no scan ran and no SAHMK quota was
+    spent this call. `stop_reason="universe_complete"` (an empty
+    `SymbolSelector` result -- zero active, price-history-eligible
+    symbols exist at all) is a genuine but rare edge case, NOT the
+    normal way a full-universe pass finishes: because a symbol's
+    `evaluated_at` only ever moves forward, the selector keeps
+    rotating through the whole eligible universe forever, cycle after
+    cycle, and never returns empty once every symbol has a real
+    evaluation. The caller is expected to call this endpoint
+    repeatedly, once per cycle, accumulating the distinct
+    `symbols_scanned` across calls and comparing that count against
+    the real active-and-eligible universe size (e.g. from
+    `GET .../coverage`'s `stocks_with_price_history`) to know when a
+    full pass is done -- not by waiting for an empty response."""
+    triggered_at = datetime.now(timezone.utc)
+
+    def _stopped(reason: str, quota_before=None, in_flight_run_id: Optional[int] = None) -> ContinueScanCycleOut:
+        return ContinueScanCycleOut(
+            triggered_at=triggered_at, executed=False, stop_reason=reason,
+            quota_before=quota_before, in_flight_run_id=in_flight_run_id,
+        )
+
+    # --- Pre-cycle safety checks (all zero SAHMK cost) ---
+    quota_before = get_default_rate_limiter().get_status()
+    if quota_before.get("upstream_confirmed_exhausted"):
+        return _stopped("upstream_confirmed_exhausted", quota_before)
+
+    remaining_bg = quota_before.get("remaining_today_for_background")
+    # A cycle costs at most MARKET_SCAN_SYMBOLS_PER_CYCLE real provider
+    # calls (fewer once cache hits are counted) -- refusing to start a
+    # new cycle unless that full worst case still fits comfortably
+    # inside the remaining background budget is what actually prevents
+    # this route from ever running the reserve down, not merely the
+    # existing MARKET_SCAN_MIN_BACKGROUND_QUOTA_REMAINING floor (which
+    # exists to protect against much smaller, incidental background
+    # calls, not a deliberate 20-request cycle).
+    safety_threshold = max(get_market_scan_symbols_per_cycle(), get_scan_min_background_quota_remaining())
+    if remaining_bg is not None and remaining_bg < safety_threshold:
+        return _stopped("background_quota_low", quota_before)
+
+    try:
+        session.execute(text("SELECT 1"))
+    except Exception:
+        logger.error("continue_scan_cycle: database health probe failed.", exc_info=True)
+        return _stopped("database_unhealthy", quota_before)
+
+    try:
+        get_redis_client().ping()
+    except Exception:
+        logger.error("continue_scan_cycle: redis health probe failed.", exc_info=True)
+        return _stopped("redis_unhealthy", quota_before)
+
+    from src.market_data.provider_factory import get_market_data_health, get_market_data_provider
+
+    health = get_market_data_health()
+    if health.get("current_provider_kind") != "sahmk" or health.get("last_connectivity_status") != "SUCCESS":
+        return _stopped("sahmk_not_live", quota_before)
+
+    _repository.reap_stale_runs(session, get_max_scan_run_duration_hours())
+    in_flight = _repository.has_in_flight_run(session)
+    if in_flight is not None:
+        return _stopped("scan_in_progress", quota_before, in_flight_run_id=in_flight.id)
+
+    leader_lock = SchedulerLeaderLock()
+    if not leader_lock.try_acquire_or_renew(get_scan_leader_lease_seconds()):
+        return _stopped("not_leader", quota_before)
+
+    symbols = SymbolSelector().select(
+        session, limit=get_market_scan_symbols_per_cycle(), prioritize_stale=True
+    )
+    if not symbols:
+        return _stopped("universe_complete", quota_before)
+
+    run = _repository.create_scan_run(session, symbols_requested=len(symbols))
+    run_id = run.id
+
+    provider = await get_market_data_provider()
+
+    # Local import so a test's monkeypatch of
+    # src.core.db.database.get_session_factory is honored, same
+    # reasoning src/api/routes/market.py's create_scan documents.
+    from src.core.db.database import get_session_factory
+
+    with priority_scope(BACKGROUND):
+        await run_market_scan_job(run_id, get_session_factory(), provider, symbols)
+
+    session.expire_all()
+    run = _repository.get_run(session, run_id)
+    quota_after = get_default_rate_limiter().get_status()
+
+    v1_records = (
+        session.query(SymbolIntelligenceRecord).filter(SymbolIntelligenceRecord.scan_run_id == run_id).all()
+    )
+    v2_records = session.query(DecisionV2Snapshot).filter(DecisionV2Snapshot.scan_run_id == run_id).all()
+
+    recommendation_counts: Dict[str, int] = {}
+    for record in v1_records:
+        key = record.recommendation.value
+        recommendation_counts[key] = recommendation_counts.get(key, 0) + 1
+
+    decision_counts: Dict[str, int] = {}
+    for record in v2_records:
+        decision_counts[record.decision] = decision_counts.get(record.decision, 0) + 1
+
+    progress = session.query(MarketScanProgress).filter(MarketScanProgress.run_id == run_id).first()
+
+    return ContinueScanCycleOut(
+        triggered_at=triggered_at,
+        executed=True,
+        stop_reason=None,
+        run_id=run.id,
+        run_status=run.status.value,
+        symbols_requested=run.symbols_requested,
+        symbols_succeeded=run.symbols_succeeded,
+        symbols_skipped=run.symbols_skipped,
+        symbols_failed=run.symbols_failed,
+        skipped_symbols_summary=run.skipped_symbols_summary,
+        symbols_scanned=sorted(symbols),
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        duration_seconds=float(run.duration_seconds) if run.duration_seconds is not None else None,
+        quota_before=quota_before,
+        quota_after=quota_after,
+        recommendation_counts=recommendation_counts,
+        decision_counts=decision_counts,
+        published_count=progress.published_count if progress else 0,
+        rejected_count=progress.rejected_count if progress else 0,
+        watch_only_count=progress.watch_only_count if progress else 0,
     )
 
 

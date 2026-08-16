@@ -1363,3 +1363,340 @@ def test_symbol_lookup_diagnostics_dividends_raw_surfaces_true_response_shape(
     assert "dividend_history" in raw["detail"]
     assert "item_count=1" in raw["detail"]
     assert "amount" in raw["detail"]
+
+
+# --- POST /continue-scan-cycle -------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_real_shared_redis_for_continue_scan_cycle(monkeypatch):
+    """Mirrors test_scheduler.py's own identically-named fixture: the
+    route under test reaches for the same two process-wide Redis
+    singletons (SchedulerLeaderLock's default constructor,
+    SahmkRateLimiter's default client) directly, so tests here must not
+    depend on whatever the sandbox's real Redis happens to hold."""
+    import src.market_data.sahmk.rate_limiter as rate_limiter_module
+    import src.market_intelligence.scheduler_leader_lock as leader_lock_module
+
+    monkeypatch.setattr(leader_lock_module, "_get_shared_redis_client", lambda: None)
+    monkeypatch.setattr(rate_limiter_module, "_get_shared_redis_client", lambda: None)
+
+
+class _AlwaysLeaderLock:
+    """Same fake double test_scheduler.py already uses -- reports
+    leadership without touching Redis, so a test can exercise a real
+    cycle execution deterministically."""
+
+    def try_acquire_or_renew(self, lease_seconds: float) -> bool:
+        return True
+
+    def release(self) -> None:
+        pass
+
+
+class _NeverLeaderLock:
+    def try_acquire_or_renew(self, lease_seconds: float) -> bool:
+        return False
+
+    def release(self) -> None:
+        pass
+
+
+def _fake_live_sahmk_health():
+    return {
+        "configured_provider": "sahmk",
+        "strict_real_data": False,
+        "synthetic_allowed": True,
+        "sahmk_key_present": True,
+        "current_provider_kind": "sahmk",
+        "last_connectivity_status": "SUCCESS",
+        "last_connectivity_at": datetime.now(timezone.utc).isoformat(),
+        "last_real_data_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def test_continue_scan_cycle_requires_staff_role(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 403
+
+
+def test_continue_scan_cycle_rejects_an_analyst_account(client, session_factory):
+    """This is a mutating/quota-spending route, same tier as
+    /full-discovery -- ANALYST (read-only elsewhere) must not gain the
+    power to trigger a real SAHMK-consuming scan cycle."""
+    analyst = User(email="analyst@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ANALYST)
+    main.app.dependency_overrides[get_current_user] = lambda: analyst
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 403
+
+
+def test_continue_scan_cycle_owner_is_allowed(client, session_factory, monkeypatch):
+    owner = User(email="owner@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+    main.app.dependency_overrides[get_current_user] = lambda: owner
+
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _NeverLeaderLock)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    # Not-leader is a legitimate, non-403 stop -- proves the OWNER role
+    # itself passed the auth gate (an ADMIN-or-OWNER dependency would
+    # 403 an ANALYST above but never an OWNER).
+    assert response.status_code == 200
+    assert response.json()["executed"] is False
+
+
+def test_continue_scan_cycle_happy_path_runs_one_real_bounded_cycle(
+    client, session_factory, as_staff, monkeypatch
+):
+    """The core behavior: with a leader lease held, live SAHMK health,
+    and no in-flight run, the route selects the next
+    MARKET_SCAN_SYMBOLS_PER_CYCLE stale-first symbols, runs the exact
+    same run_market_scan_job path the scheduler uses inside
+    priority_scope(BACKGROUND), and reports real per-cycle evidence."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+    from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+
+    _seed_stock_with_bars(session_factory, "2222")
+    _seed_stock_with_bars(session_factory, "1120")
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _AlwaysLeaderLock)
+    monkeypatch.setattr(admin_mi_module, "get_market_scan_symbols_per_cycle", lambda: 20)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    fake_provider = DevMarketDataProvider()
+
+    async def _fake_get_provider(force_refresh=False):
+        return fake_provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is True
+    assert body["stop_reason"] is None
+    assert body["run_id"] is not None
+    assert body["run_status"] == "SUCCESS"
+    assert body["symbols_requested"] == 2
+    assert body["symbols_succeeded"] == 2
+    assert set(body["symbols_scanned"]) == {"2222", "1120"}
+    assert body["quota_before"] is not None
+    assert body["quota_after"] is not None
+    # Background-priority is the whole point of this route -- the
+    # critical reserve must read 0 both before and after a cycle it
+    # drove.
+    assert body["quota_before"]["critical_requests_used_today"] == 0
+    assert body["quota_after"]["critical_requests_used_today"] == 0
+    assert sum(body["recommendation_counts"].values()) == 2
+
+
+def test_continue_scan_cycle_skips_without_running_when_not_leader(
+    client, session_factory, as_staff, monkeypatch
+):
+    """Two workers (or a concurrent scheduler tick and a manual call)
+    racing for the same lease must never both run a cycle -- the loser
+    reports a clean, zero-cost skip, never an error and never a scan."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _NeverLeaderLock)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is False
+    assert body["stop_reason"] == "not_leader"
+    assert body["run_id"] is None
+
+
+def test_continue_scan_cycle_stops_when_sahmk_is_not_live(client, session_factory, as_staff, monkeypatch):
+    from src.market_data import provider_factory
+
+    def _degraded_health():
+        return {
+            "configured_provider": "sahmk", "strict_real_data": True, "synthetic_allowed": False,
+            "sahmk_key_present": True, "current_provider_kind": "sahmk",
+            "last_connectivity_status": "FAILED", "last_connectivity_at": None, "last_real_data_at": None,
+        }
+
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _degraded_health)
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is False
+    assert body["stop_reason"] == "sahmk_not_live"
+
+
+def test_continue_scan_cycle_stops_when_upstream_quota_confirmed_exhausted(
+    client, session_factory, as_staff, monkeypatch
+):
+    """The circuit breaker every other scan-triggering path already
+    respects -- this route must refuse to even attempt a cycle, not
+    just fail loudly mid-scan."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+
+    def _exhausted_status():
+        return {
+            "upstream_confirmed_exhausted": True, "remaining_today_for_background": 0,
+            "remaining_today": 0, "critical_requests_used_today": 0,
+        }
+
+    class _FakeRateLimiter:
+        def get_status(self):
+            return _exhausted_status()
+
+    monkeypatch.setattr(admin_mi_module, "get_default_rate_limiter", lambda: _FakeRateLimiter())
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is False
+    assert body["stop_reason"] == "upstream_confirmed_exhausted"
+
+
+def test_continue_scan_cycle_stops_when_background_quota_is_low(client, session_factory, as_staff, monkeypatch):
+    """A worst-case cycle costs up to MARKET_SCAN_SYMBOLS_PER_CYCLE real
+    requests -- the route must refuse a new cycle unless that full
+    worst case still fits inside the remaining background budget, so
+    this continuation can never itself run the background pool (and by
+    extension the critical reserve) dry."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+
+    def _low_background_status():
+        return {
+            "upstream_confirmed_exhausted": False, "remaining_today_for_background": 5,
+            "remaining_today": 100, "critical_requests_used_today": 0,
+        }
+
+    class _FakeRateLimiter:
+        def get_status(self):
+            return _low_background_status()
+
+    monkeypatch.setattr(admin_mi_module, "get_default_rate_limiter", lambda: _FakeRateLimiter())
+    monkeypatch.setattr(admin_mi_module, "get_market_scan_symbols_per_cycle", lambda: 20)
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is False
+    assert body["stop_reason"] == "background_quota_low"
+
+
+def test_continue_scan_cycle_skips_when_a_scan_is_already_in_flight(
+    client, session_factory, as_staff, monkeypatch
+):
+    """The identical overlap guard every other scan-triggering route
+    uses -- must never start a second cycle while one (from the
+    scheduler's own tick, or a prior call to this same route) is still
+    RUNNING."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+
+    session = session_factory()
+    in_flight = MarketScanRun(status=MarketScanStatus.RUNNING, symbols_requested=20)
+    session.add(in_flight)
+    session.commit()
+    in_flight_id = in_flight.id
+    session.close()
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _AlwaysLeaderLock)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is False
+    assert body["stop_reason"] == "scan_in_progress"
+    assert body["in_flight_run_id"] == in_flight_id
+
+
+def test_continue_scan_cycle_bounds_symbols_to_the_configured_cap(
+    client, session_factory, as_staff, monkeypatch
+):
+    """Never sends the full universe in one call -- with 3 eligible
+    symbols and a cap of 2, exactly 2 must be requested this cycle,
+    proving MARKET_SCAN_SYMBOLS_PER_CYCLE (not the full active
+    universe) bounds every single call to this route."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+    from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+
+    _seed_stock_with_bars(session_factory, "2222")
+    _seed_stock_with_bars(session_factory, "1120")
+    _seed_stock_with_bars(session_factory, "1180")
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _AlwaysLeaderLock)
+    monkeypatch.setattr(admin_mi_module, "get_market_scan_symbols_per_cycle", lambda: 2)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    fake_provider = DevMarketDataProvider()
+
+    async def _fake_get_provider(force_refresh=False):
+        return fake_provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbols_requested"] == 2
+    assert len(body["symbols_scanned"]) == 2
+
+
+def test_continue_scan_cycle_successive_calls_rotate_through_distinct_symbols(
+    client, session_factory, as_staff, monkeypatch
+):
+    """The real full-universe-continuation guarantee: two successive
+    calls (cap=2, universe=4) must cover 4 DISTINCT symbols across both
+    cycles, not re-scan the same 2 twice -- proves the stale-first
+    ordering genuinely advances coverage call over call, the entire
+    point of this endpoint."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data import provider_factory
+    from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+
+    for symbol in ("2222", "1120", "1180", "1211"):
+        _seed_stock_with_bars(session_factory, symbol)
+
+    monkeypatch.setattr(admin_mi_module, "SchedulerLeaderLock", _AlwaysLeaderLock)
+    monkeypatch.setattr(admin_mi_module, "get_market_scan_symbols_per_cycle", lambda: 2)
+    monkeypatch.setattr(provider_factory, "get_market_data_health", _fake_live_sahmk_health)
+
+    fake_provider = DevMarketDataProvider()
+
+    async def _fake_get_provider(force_refresh=False):
+        return fake_provider
+
+    monkeypatch.setattr(provider_factory, "get_market_data_provider", _fake_get_provider)
+
+    first = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle").json()
+    second = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle").json()
+
+    assert first["executed"] is True
+    assert second["executed"] is True
+    first_symbols = set(first["symbols_scanned"])
+    second_symbols = set(second["symbols_scanned"])
+    assert len(first_symbols) == 2
+    assert len(second_symbols) == 2
+    assert first_symbols.isdisjoint(second_symbols)
+    assert first_symbols | second_symbols == {"2222", "1120", "1180", "1211"}

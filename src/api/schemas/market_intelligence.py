@@ -739,3 +739,41 @@ class SymbolLookupDiagnosticsOut(BaseModel):
     provider_kind: Optional[str] = None
     sahmk_error: Optional[str] = None
     results: List[SymbolLookupDiagnosticOut] = Field(default_factory=list)
+
+
+class ContinueScanCycleOut(BaseModel):
+    """Response for POST /api/v1/admin/market-intelligence/continue-scan-cycle
+    -- one manually-advanced cycle of the exact same bounded, stale-first,
+    BACKGROUND-priority, leader-locked rotation
+    IntervalMarketIntelligenceScheduler._run_one_cycle() runs on its own
+    (daily) interval. `executed=False` always means no scan ran and no
+    SAHMK quota was spent this call -- `stop_reason` says why (a genuine
+    safety gate, universe fully covered, or a concurrency skip)."""
+
+    triggered_at: datetime
+    executed: bool
+    stop_reason: Optional[str] = None
+    in_flight_run_id: Optional[int] = None
+
+    run_id: Optional[int] = None
+    run_status: Optional[str] = None
+    symbols_requested: int = 0
+    symbols_succeeded: int = 0
+    symbols_skipped: int = 0
+    symbols_failed: int = 0
+    skipped_symbols_summary: Optional[str] = None
+    symbols_scanned: List[str] = Field(default_factory=list)
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+
+    quota_before: Optional[Dict] = None
+    quota_after: Optional[Dict] = None
+    cache_status_before: Optional[Dict] = None
+    cache_status_after: Optional[Dict] = None
+
+    recommendation_counts: Dict[str, int] = Field(default_factory=dict)
+    decision_counts: Dict[str, int] = Field(default_factory=dict)
+    published_count: int = 0
+    rejected_count: int = 0
+    watch_only_count: int = 0
