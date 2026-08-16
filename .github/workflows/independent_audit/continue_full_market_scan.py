@@ -54,6 +54,8 @@ if r.status_code != 200:
     print(f"Staff login failed: status={r.status_code} body={r.text[:500]}")
     sys.exit(1)
 print("Login OK.")
+csrf_token = session.cookies.get("csrf_token")
+session.headers.update({"X-CSRF-Token": csrf_token})
 
 print("\n=== Pre-flight: /admin/system/summary ===")
 r = session.get(f"{BACKEND_URL}/api/v1/admin/system/summary", timeout=30)
