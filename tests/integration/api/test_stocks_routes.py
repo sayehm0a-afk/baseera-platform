@@ -220,6 +220,100 @@ def test_get_quote_falls_back_to_live_quote_when_daily_bar_not_yet_finalized(cli
     assert body["is_synthetic"] is False
 
 
+class _FailIfCalledProvider(IMarketDataProvider):
+    """Priority-2 quota fix regression: get_stock_data() must never be
+    called when an already-ingested, same-day local PriceBar exists --
+    that would be a duplicate SAHMK request for data already sitting in
+    the database. Raising AssertionError (rather than just tracking a
+    call count) makes the assertion fail loudly, inside the request,
+    if the route regresses back to always fetching live."""
+
+    async def authenticate(self):
+        return True
+
+    async def get_stock_data(self, symbol):
+        raise AssertionError("get_stock_data() must not be called when a fresh local bar already exists")
+
+    async def get_latest_quote(self, symbol):
+        return {
+            "symbol": symbol,
+            "price": 30.9,
+            "change": 0.1,
+            "change_percent": 0.3,
+            "volume": 15000,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": "sahmk",
+            "is_synthetic": False,
+        }
+
+    async def get_historical_ohlcv(self, symbol, start, end, interval="1d"):
+        raise NotImplementedError
+
+    async def get_index_data(self, index_name):
+        raise NotImplementedError
+
+    async def get_market_news(self, limit=10):
+        raise NotImplementedError
+
+    async def health_check(self):
+        return ProviderHealth.HEALTHY
+
+    async def disconnect(self):
+        pass
+
+
+def test_get_quote_reuses_todays_already_ingested_local_bar_instead_of_a_live_call(client, db_session):
+    stock = _make_stock(db_session)
+    db_session.add(
+        PriceBar(
+            stock_id=stock.id,
+            timeframe=Timeframe.ONE_DAY,
+            timestamp=datetime.now(timezone.utc),
+            open=Decimal("30.0"),
+            high=Decimal("31.0"),
+            low=Decimal("29.0"),
+            close=Decimal("30.5"),
+            volume=12345,
+            source="sahmk",
+            is_synthetic=False,
+        )
+    )
+    db_session.commit()
+
+    import main
+    from src.api.dependencies import get_market_provider
+
+    main.app.dependency_overrides[get_market_provider] = lambda: _FailIfCalledProvider()
+    try:
+        response = client.get("/api/v1/stocks/2222/quote")
+    finally:
+        del main.app.dependency_overrides[get_market_provider]
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["open"] == 30.0
+    assert body["high"] == 31.0
+    assert body["low"] == 29.0
+    assert body["volume"] == 12345
+    assert body["close"] == 30.9  # the live quote still wins for `close`, unchanged behavior
+    assert body["source"] == "sahmk"
+    assert body["is_synthetic"] is False
+
+
+def test_get_quote_falls_back_to_live_when_the_local_bar_is_not_from_today(client, db_session):
+    """A registered Stock with only stale (non-today) bars must still
+    fall back to a live provider call -- proves the fix doesn't serve
+    outdated open/high/low as if it were current."""
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=3)  # dated 2026-01-01..03, never "today"
+
+    response = client.get("/api/v1/stocks/2222/quote")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == "2222"
+    assert body["source"] == "dev-synthetic"
+
+
 # --- GET /api/v1/stocks/{symbol}/history --------------------------------
 
 

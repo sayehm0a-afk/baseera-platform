@@ -39,6 +39,7 @@ import redis as redis_lib
 
 from src.core.config import settings
 from src.market_data.caching.ttl_cache import TTLCache
+from src.market_data.sahmk.operation_scope import UNCLASSIFIED, get_current_operation
 
 logger = logging.getLogger(__name__)
 
@@ -166,9 +167,37 @@ class SharedTTLCache:
         self._redis_override = redis_client
         self._local = TTLCache()
         self.stats = SharedCacheStats()
+        self.stats_by_operation: Dict[str, SharedCacheStats] = {}
 
     def _redis(self) -> "Optional[redis_lib.Redis]":
         return self._redis_override if self._redis_override is not None else _get_shared_redis_client()
+
+    def _record(self, field: str, operation_key: str) -> None:
+        """Increments `field` on both the flat totals (`self.stats`,
+        unchanged behavior) and the per-operation breakdown
+        (`self.stats_by_operation[operation_key]`, new) -- the audit
+        mandate's "cache_hits, cache_misses, coalesced_requests,
+        duplicate_requests_prevented ... by operation" requirement.
+        `coalesced_waits` doubles as "duplicate_requests_prevented":
+        every coalesced wait is, by construction, one caller that did
+        NOT trigger its own extra provider call because another
+        in-flight request already covered it."""
+        setattr(self.stats, field, getattr(self.stats, field) + 1)
+        bucket = self.stats_by_operation.setdefault(operation_key, SharedCacheStats())
+        setattr(bucket, field, getattr(bucket, field) + 1)
+
+    @staticmethod
+    def _operation_key(key: Any) -> str:
+        """Compound "subsystem:endpoint" key, mirroring
+        sahmk.rate_limiter's own _operation_key: `endpoint` is the cache
+        key's own leading element (call sites already pass tuples like
+        `("quote", symbol)` -- see _stable_key's docstring above --
+        which is already the SAHMK-data-type category), `subsystem`
+        comes from the same operation_scope contextvar client.py reads
+        for the rate limiter's half of this same accounting."""
+        endpoint = key[0] if isinstance(key, tuple) and key else (key if isinstance(key, str) else "other")
+        subsystem = get_current_operation() or UNCLASSIFIED
+        return f"{subsystem}:{endpoint}"
 
     @property
     def backend_health(self) -> str:
@@ -191,6 +220,7 @@ class SharedTTLCache:
         ttl_seconds: float,
         model: Optional[Type[T]] = None,
     ) -> T:
+        operation_key = self._operation_key(key)
         client = self._redis()
         if client is None:
             return await self._local.get_or_compute(key, compute, ttl_seconds=ttl_seconds)
@@ -203,11 +233,11 @@ class SharedTTLCache:
             return await self._local.get_or_compute(key, compute, ttl_seconds=ttl_seconds)
 
         if raw is not None:
-            self.stats.hits += 1
+            self._record("hits", operation_key)
             return _decode_value(json.loads(raw), model)
 
-        self.stats.misses += 1
-        return await self._compute_and_share(client, redis_key, compute, ttl_seconds, model)
+        self._record("misses", operation_key)
+        return await self._compute_and_share(client, redis_key, compute, ttl_seconds, model, operation_key)
 
     async def _compute_and_share(
         self,
@@ -216,6 +246,7 @@ class SharedTTLCache:
         compute: Callable[[], Awaitable[T]],
         ttl_seconds: float,
         model: Optional[Type[T]],
+        operation_key: str,
     ) -> T:
         lock_key = redis_key + ":lock"
         try:
@@ -225,7 +256,7 @@ class SharedTTLCache:
             got_lock = None  # neither confirmed winner nor confirmed loser -- treat as winner below
 
         if got_lock is False:
-            waited = await self._wait_for_result(client, redis_key, model)
+            waited = await self._wait_for_result(client, redis_key, model, operation_key)
             if waited is not _MISSING:
                 return waited
             # Lock-holder never wrote a result (crashed, or its own
@@ -233,7 +264,7 @@ class SharedTTLCache:
             # through and compute it ourselves rather than deadlock or
             # return nothing.
 
-        self.stats.provider_calls += 1
+        self._record("provider_calls", operation_key)
         value = await compute()
         try:
             client.setex(redis_key, int(ttl_seconds), json.dumps(_encode_value(value)))
@@ -246,8 +277,10 @@ class SharedTTLCache:
                 pass
         return value
 
-    async def _wait_for_result(self, client: "redis_lib.Redis", redis_key: str, model: Optional[Type[T]]):
-        self.stats.coalesced_waits += 1
+    async def _wait_for_result(
+        self, client: "redis_lib.Redis", redis_key: str, model: Optional[Type[T]], operation_key: str
+    ):
+        self._record("coalesced_waits", operation_key)
         for _ in range(_POLL_MAX_ATTEMPTS):
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)
             try:
@@ -256,7 +289,7 @@ class SharedTTLCache:
                 self.stats.redis_errors += 1
                 return _MISSING
             if raw is not None:
-                self.stats.hits += 1
+                self._record("hits", operation_key)
                 return _decode_value(json.loads(raw), model)
         return _MISSING
 
@@ -292,4 +325,14 @@ def get_observability_snapshot(caches: Dict[str, "SharedTTLCache"]) -> Dict[str,
     return {
         "backend_health": next(iter(caches.values())).backend_health if caches else CacheBackendHealth.DISABLED,
         "by_namespace": {name: cache.stats.as_dict() for name, cache in caches.items()},
+        # "subsystem:endpoint" -> SharedCacheStats dict, merged across
+        # every cache in `caches` (today there's one: "sahmk_market_data")
+        # -- real, measured cache hit/miss/coalesced/provider-call counts
+        # per Basirah subsystem and SAHMK data type, tracked from
+        # deployment forward only (see operation_scope.py).
+        "by_operation": {
+            operation_key: bucket.as_dict()
+            for cache in caches.values()
+            for operation_key, bucket in cache.stats_by_operation.items()
+        },
     }

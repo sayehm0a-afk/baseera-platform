@@ -59,6 +59,7 @@ from sqlalchemy.orm import Session
 
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.rate_limiter import SahmkRateLimiter, get_default_rate_limiter
+from src.market_data.sahmk.operation_scope import MARKET_SCAN, operation_scope
 from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
 from src.market_intelligence.config import (
     get_market_intelligence_scan_interval,
@@ -241,6 +242,6 @@ class IntervalMarketIntelligenceScheduler:
         finally:
             session.close()
 
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(MARKET_SCAN):
             provider = await self._get_market_provider()
             await run_market_scan_job(run_id, self._session_factory, provider, symbols=symbols)

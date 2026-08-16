@@ -49,6 +49,7 @@ import redis as redis_lib
 
 from src.core.config import settings
 from src.market_data import config as market_data_config
+from src.market_data.sahmk.operation_scope import UNCLASSIFIED
 from src.market_data.sahmk.request_priority import BACKGROUND, CRITICAL
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,16 @@ _DEFAULT_EXHAUSTION_HOLD_SECONDS = 3600
 # claim about when SAHMK's own quota resets), short enough that stale
 # days don't accumulate forever.
 _DAY_COUNT_TTL_SECONDS = 2 * 24 * 3600
+
+
+def _operation_key(endpoint: Optional[str], subsystem: Optional[str]) -> str:
+    """Compound "subsystem:endpoint" key -- e.g. "market_scan:quote",
+    "ingestion:ohlcv", "stock_detail:quote", "unclassified:dividends".
+    Two independent dimensions in one string (see operation_scope.py's
+    module docstring for why they're not collapsed into one at the
+    source): a report can recover either half by splitting on the first
+    ":", or read the whole key for the exact (subsystem, endpoint) pair."""
+    return f"{subsystem or UNCLASSIFIED}:{endpoint or 'other'}"
 
 
 class SahmkRateLimitExceededError(Exception):
@@ -185,6 +196,10 @@ class SahmkRateLimiter:
         self._day_count = 0
         self._background_count = 0
         self._critical_count = 0
+        # Per-operation breakdown (see _operation_key) for the SAME day
+        # window as the counters above -- reset together in
+        # _roll_day_window_locked, never tracked separately.
+        self._operation_counts: Dict[str, int] = {}
         self._lock = asyncio.Lock()
         # Explicit override (tests) short-circuits the lazy shared
         # singleton entirely -- None here still means "use the shared
@@ -201,14 +216,28 @@ class SahmkRateLimiter:
     def _redis(self) -> "Optional[redis_lib.Redis]":
         return self._redis_override if self._redis_override is not None else _get_shared_redis_client()
 
-    async def acquire(self, priority: str = CRITICAL) -> None:
+    async def acquire(
+        self,
+        priority: str = CRITICAL,
+        endpoint: Optional[str] = None,
+        subsystem: Optional[str] = None,
+    ) -> None:
         """Blocks (sleeping, never busy-waiting) until a slot is free
         under the per-minute window, then reserves it. Raises
         immediately -- never sleeps -- if SAHMK's own real evidence
         says today's quota is already exhausted, or if the daily quota
         (or, for a priority=BACKGROUND caller, the background-available
         portion of it) is already spent per this limiter's own
-        tracking."""
+        tracking.
+
+        `endpoint` (quote/ohlcv/fundamentals/...) and `subsystem`
+        (stock_detail/market_scan/portfolio/ingestion/admin_diagnostics/
+        None) are optional, additive accounting dimensions -- see
+        operation_scope.py's module docstring -- recorded once the slot
+        is actually reserved, for per-operation SAHMK usage reporting
+        (get_status()'s `by_operation`). Never gate anything: an
+        unclassified call (both None) is still counted, just under
+        "unclassified:other"."""
         exhaustion = self._read_upstream_exhaustion()
         if exhaustion is not None:
             raise SahmkUpstreamQuotaExhaustedError(
@@ -258,7 +287,9 @@ class SahmkRateLimiter:
                 self._background_count += 1
             else:
                 self._critical_count += 1
-            self._persist_day_counts_increment(priority)
+            operation_key = _operation_key(endpoint, subsystem)
+            self._operation_counts[operation_key] = self._operation_counts.get(operation_key, 0) + 1
+            self._persist_day_counts_increment(priority, operation_key)
 
     def record_upstream_daily_exhaustion(
         self, *, retry_after_seconds: Optional[float], raw_message: str
@@ -330,7 +361,10 @@ class SahmkRateLimiter:
     def _redis_day_hash_key(self, day_key: str) -> str:
         return f"sahmk:quota:day:{day_key}"
 
-    def _persist_day_counts_increment(self, priority: str) -> None:
+    def _redis_operation_hash_key(self, day_key: str) -> str:
+        return f"sahmk:quota:day:{day_key}:ops"
+
+    def _persist_day_counts_increment(self, priority: str, operation_key: str) -> None:
         client = self._redis()
         if client is None:
             return
@@ -341,6 +375,9 @@ class SahmkRateLimiter:
             pipe.hincrby(key, "total", 1)
             pipe.hincrby(key, field, 1)
             pipe.expire(key, _DAY_COUNT_TTL_SECONDS)
+            ops_key = self._redis_operation_hash_key(self._day_key)
+            pipe.hincrby(ops_key, operation_key, 1)
+            pipe.expire(ops_key, _DAY_COUNT_TTL_SECONDS)
             pipe.execute()
         except Exception:
             logger.debug(
@@ -368,6 +405,22 @@ class SahmkRateLimiter:
             )
             return None
 
+    def _read_persisted_operation_counts(self, day_key: str) -> Optional[Dict[str, int]]:
+        client = self._redis()
+        if client is None:
+            return None
+        try:
+            raw = client.hgetall(self._redis_operation_hash_key(day_key))
+            if not raw:
+                return None
+            return {k: int(v) for k, v in raw.items()}
+        except Exception:
+            logger.debug(
+                "SahmkRateLimiter: failed reading persisted per-operation counts from Redis.",
+                exc_info=True,
+            )
+            return None
+
     def _roll_day_window_locked(self) -> None:
         today_key = datetime.now(timezone.utc).date().isoformat()
         if today_key != self._day_key:
@@ -375,6 +428,7 @@ class SahmkRateLimiter:
             self._day_count = 0
             self._background_count = 0
             self._critical_count = 0
+            self._operation_counts = {}
         # Cross-process reconciliation: when Redis is reachable, use
         # whichever is higher between this process's own view and the
         # shared persisted total -- a fresh/restarted process picks up
@@ -385,6 +439,10 @@ class SahmkRateLimiter:
             self._day_count = max(self._day_count, persisted["day"])
             self._background_count = max(self._background_count, persisted["background"])
             self._critical_count = max(self._critical_count, persisted["critical"])
+        persisted_ops = self._read_persisted_operation_counts(today_key)
+        if persisted_ops is not None:
+            for key, count in persisted_ops.items():
+                self._operation_counts[key] = max(self._operation_counts.get(key, 0), count)
 
     def get_status(self) -> Dict[str, object]:
         """Secret-free snapshot for admin/system-health diagnostics
@@ -427,6 +485,12 @@ class SahmkRateLimiter:
             "requests_used_today": self._day_count,
             "critical_requests_used_today": self._critical_count,
             "background_requests_used_today": self._background_count,
+            # Real, measured provider calls today broken down by
+            # "subsystem:endpoint" (e.g. "market_scan:quote",
+            # "ingestion:ohlcv", "stock_detail:quote") -- see
+            # operation_scope.py's module docstring. Tracked from
+            # deployment forward only; never backfilled or estimated.
+            "by_operation": dict(self._operation_counts),
             "remaining_today": remaining_total,
             "remaining_today_for_background": remaining_background,
             "requests_in_last_minute": len(self._minute_window),
@@ -449,6 +513,7 @@ class SahmkRateLimiter:
         self._day_count = 0
         self._background_count = 0
         self._critical_count = 0
+        self._operation_counts = {}
         self._local_upstream_reset_at = None
         self._local_upstream_evidence = None
 

@@ -74,3 +74,54 @@ def seconds_until_close(now: Optional[datetime] = None) -> Optional[float]:
         return None
     close_at = datetime.combine(local.date(), TADAWUL_SESSION_CLOSE, tzinfo=TADAWUL_TIMEZONE)
     return (close_at - local).total_seconds()
+
+
+# How long after Tadawul's own published close to wait before asking
+# SAHMK for that day's finalized daily bar -- gives the exchange/
+# provider time to settle and publish the close print, so the once-
+# daily OHLCV sync (see market_data.ingestion.config.
+# get_ohlcv_sync_next_delay_seconds) doesn't fire into a not-yet-final
+# bar and have to wait until the following day's run to pick it up.
+OHLCV_SYNC_POST_CLOSE_BUFFER_MINUTES = 30
+
+
+def seconds_until_next_ohlcv_sync(
+    now: Optional[datetime] = None, buffer_minutes: int = OHLCV_SYNC_POST_CLOSE_BUFFER_MINUTES
+) -> float:
+    """Seconds until the next once-daily OHLCV ingestion window: the
+    next Tadawul trading day's session close plus `buffer_minutes`.
+
+    `historical_ohlcv` only ever writes ONE_DAY bars (see
+    ingest_historical_ohlcv.py), which change at most once per trading
+    day -- syncing more often than this is pure background-quota waste
+    with zero freshness gain (real 2026-08-11 production evidence: an
+    hourly cadence alone hit the 3,500/day background quota cap by
+    22:03 UTC; a partial fix moved it to a fixed 6h interval, which
+    still spent ~44% of the entire background budget on data that only
+    changes once a day). This function is what makes the cadence
+    actually once-daily and correctly timed, rather than just less
+    frequent -- see get_ohlcv_sync_next_delay_seconds's own docstring
+    for how it's wired into the scheduler.
+    """
+    local = _to_tadawul_time(now)
+    buffer = timedelta(minutes=buffer_minutes)
+    candidate_day = local
+    for _ in range(8):  # at most 2 consecutive non-trading days (Fri/Sat) -- always terminates well before 8
+        candidate_sync_at = (
+            datetime.combine(candidate_day.date(), TADAWUL_SESSION_CLOSE, tzinfo=TADAWUL_TIMEZONE) + buffer
+        )
+        if candidate_day.weekday() in TADAWUL_TRADING_WEEKDAYS and candidate_sync_at > local:
+            return (candidate_sync_at - local).total_seconds()
+        candidate_day = datetime.combine(
+            candidate_day.date() + timedelta(days=1), time(0, 0), tzinfo=TADAWUL_TIMEZONE
+        )
+    raise AssertionError("unreachable -- every 7-day window contains a Tadawul trading day")
+
+
+def to_tadawul_time(now: Optional[datetime] = None) -> datetime:
+    """Public wrapper over the module's own local-time conversion --
+    used by callers that need to compare a stored UTC timestamp (e.g.
+    a PriceBar row) against "today" in Tadawul's own calendar, such as
+    deciding whether a locally-persisted daily bar is fresh enough to
+    serve without an extra live provider call."""
+    return _to_tadawul_time(now)

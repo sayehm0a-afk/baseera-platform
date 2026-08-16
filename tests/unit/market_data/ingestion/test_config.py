@@ -71,6 +71,23 @@ def test_interval_overrides(monkeypatch):
     assert ingestion_config.get_ohlcv_sync_interval_seconds() == 600.0
 
 
+def test_ohlcv_next_delay_honors_explicit_env_override(monkeypatch):
+    monkeypatch.setenv("INGESTION_OHLCV_INTERVAL_SECONDS", "600")
+    assert ingestion_config.get_ohlcv_sync_next_delay_seconds() == 600.0
+
+
+def test_ohlcv_next_delay_defaults_to_the_calendar_aware_once_daily_window(monkeypatch):
+    """Without an explicit override, the real scheduling cadence comes
+    from trading_calendar.seconds_until_next_ohlcv_sync(), not a fixed
+    interval -- see that function's own docstring for why (a daily bar
+    only ever changes once per trading day)."""
+    monkeypatch.delenv("INGESTION_OHLCV_INTERVAL_SECONDS", raising=False)
+    monkeypatch.setattr(
+        "src.market_intelligence.trading_calendar.seconds_until_next_ohlcv_sync", lambda: 12345.0
+    )
+    assert ingestion_config.get_ohlcv_sync_next_delay_seconds() == 12345.0
+
+
 def test_backfill_days_default_and_override(monkeypatch):
     monkeypatch.delenv("INGESTION_OHLCV_BACKFILL_DAYS", raising=False)
     assert ingestion_config.get_ohlcv_backfill_days() == 90

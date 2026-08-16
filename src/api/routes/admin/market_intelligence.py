@@ -59,6 +59,10 @@ from src.api.schemas.market_intelligence import (
     RiskCountOut,
     SectorCoverageOut,
     SectorRankingOut,
+    Stage1CandidateOut,
+    Stage1ScanOut,
+    Stage1SignalOut,
+    Stage2ValidateRequest,
     SymbolLookupCheckOut,
     SymbolLookupDiagnosticOut,
     SymbolLookupDiagnosticsOut,
@@ -85,6 +89,7 @@ from src.domain.models import (
 )
 from src.market_data.ingestion import config as ingestion_config
 from src.market_data.providers.sector_provider import get_sector_classification_provider
+from src.market_data.sahmk.operation_scope import ADMIN_DIAGNOSTICS, MARKET_SCAN, operation_scope
 from src.market_data.sahmk.rate_limiter import get_default_rate_limiter
 from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
 from src.market_data.strict_mode import StrictRealDataUnavailableError
@@ -97,6 +102,7 @@ from src.market_intelligence.config import (
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 from src.market_intelligence.services.scan_job_runner import run_market_scan_job
+from src.market_intelligence.stage1_local_scan import run_stage1_local_scan
 from src.market_intelligence.symbol_selector import SymbolSelector
 
 logger = logging.getLogger(__name__)
@@ -144,7 +150,7 @@ async def trigger_diagnostic_scan(
         # the background-eligible portion of today's SAHMK quota, never
         # the reserve set aside for live-market-critical operations
         # (see src.market_data.sahmk.rate_limiter/request_priority).
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(ADMIN_DIAGNOSTICS):
             await get_market_data_provider(force_refresh=True)
     except StrictRealDataUnavailableError as exc:
         sahmk_error = _scrub(f"{type(exc).__name__}: {exc}")
@@ -181,7 +187,7 @@ async def trigger_diagnostic_scan(
             # reasoning src/api/routes/market.py's create_scan documents.
             from src.core.db.database import get_session_factory
 
-            with priority_scope(BACKGROUND):
+            with priority_scope(BACKGROUND), operation_scope(ADMIN_DIAGNOSTICS):
                 await run_market_scan_job(run.id, get_session_factory(), provider, symbols)
 
             session.expire_all()
@@ -340,51 +346,39 @@ async def trigger_diagnostic_scan(
     )
 
 
-@router.post("/continue-scan-cycle", response_model=ContinueScanCycleOut)
-async def continue_scan_cycle(
-    session: Session = Depends(get_db),
-    _current_user: User = Depends(require_any_staff_role(StaffRole.ADMIN, StaffRole.OWNER)),
+async def _run_one_bounded_background_cycle(
+    session: Session, caller: str, resolve_symbols,
 ) -> ContinueScanCycleOut:
-    """Staff/OWNER-only: manually advances ONE more cycle of the exact
-    same bounded, stale-first, BACKGROUND-priority, leader-locked
-    rotation `IntervalMarketIntelligenceScheduler._run_one_cycle()`
-    already runs on its own (env-configured, defaults to daily)
-    interval -- so a real full-universe coverage pass can be advanced
-    within a single trading day without waiting for the next scheduled
-    cycle, and without bypassing a single one of that cycle's existing
-    safety guards:
+    """Shared implementation behind every manually triggered scan
+    cycle -- `/continue-scan-cycle` (stale-first rotation) and
+    `/stage2-validate-candidates` (an explicit, Stage-1-narrowed
+    symbol list). Every safety guard a manually triggered cycle needs
+    lives here exactly once, so a new symbol-resolution strategy never
+    has to duplicate any of them:
 
-      * SymbolSelector(prioritize_stale=True) -- the identical
-        oldest-data-first selection the scheduler uses, never a
-        separate/duplicated selection rule.
-      * limit=get_market_scan_symbols_per_cycle() -- the same
-        MARKET_SCAN_SYMBOLS_PER_CYCLE cap (defaults to 20), never the
-        full universe in one call.
-      * priority_scope(BACKGROUND) around the scan job -- this call's
-        SAHMK requests are background-eligible only, exactly like the
-        scheduler's own cycle; they can never draw on
-        `reserved_for_critical`.
+      * upstream_confirmed_exhausted / background_quota_low checks --
+        a cycle costs at most MARKET_SCAN_SYMBOLS_PER_CYCLE real
+        provider calls (fewer once cache hits are counted); refusing
+        to start unless that full worst case still fits comfortably
+        inside the remaining background budget is what actually
+        prevents this path from ever running the critical reserve
+        down.
+      * database/redis health probes.
+      * SAHMK connectivity probe (current_provider_kind == "sahmk").
+      * The same overlap guard (`has_in_flight_run`) every other
+        scan-triggering route already applies.
       * SchedulerLeaderLock (the same shared Redis lease key the
-        scheduler's own loop uses) -- only one cycle, from any source
-        (the scheduler's own tick or a concurrent call to this route),
+        scheduler's own loop uses) -- only one cycle, from any source,
         can run at a time.
-      * The same overlap guard (`has_in_flight_run`) and quota circuit
-        breaker every other scan-triggering route already applies.
+      * priority_scope(BACKGROUND) around the scan job -- these SAHMK
+        requests are background-eligible only; they can never draw on
+        `reserved_for_critical`.
 
-    `executed=False` always means no scan ran and no SAHMK quota was
-    spent this call. `stop_reason="universe_complete"` (an empty
-    `SymbolSelector` result -- zero active, price-history-eligible
-    symbols exist at all) is a genuine but rare edge case, NOT the
-    normal way a full-universe pass finishes: because a symbol's
-    `evaluated_at` only ever moves forward, the selector keeps
-    rotating through the whole eligible universe forever, cycle after
-    cycle, and never returns empty once every symbol has a real
-    evaluation. The caller is expected to call this endpoint
-    repeatedly, once per cycle, accumulating the distinct
-    `symbols_scanned` across calls and comparing that count against
-    the real active-and-eligible universe size (e.g. from
-    `GET .../coverage`'s `stocks_with_price_history`) to know when a
-    full pass is done -- not by waiting for an empty response."""
+    `resolve_symbols` is called only after every zero-cost pre-flight
+    check has already passed and the leader lock has been acquired --
+    a caller's own symbol-resolution logic never needs to re-check any
+    of the above itself. `executed=False` always means no scan ran and
+    no SAHMK quota was spent this call."""
     triggered_at = datetime.now(timezone.utc)
 
     def _stopped(reason: str, quota_before=None, in_flight_run_id: Optional[int] = None) -> ContinueScanCycleOut:
@@ -399,14 +393,6 @@ async def continue_scan_cycle(
         return _stopped("upstream_confirmed_exhausted", quota_before)
 
     remaining_bg = quota_before.get("remaining_today_for_background")
-    # A cycle costs at most MARKET_SCAN_SYMBOLS_PER_CYCLE real provider
-    # calls (fewer once cache hits are counted) -- refusing to start a
-    # new cycle unless that full worst case still fits comfortably
-    # inside the remaining background budget is what actually prevents
-    # this route from ever running the reserve down, not merely the
-    # existing MARKET_SCAN_MIN_BACKGROUND_QUOTA_REMAINING floor (which
-    # exists to protect against much smaller, incidental background
-    # calls, not a deliberate 20-request cycle).
     safety_threshold = max(get_market_scan_symbols_per_cycle(), get_scan_min_background_quota_remaining())
     if remaining_bg is not None and remaining_bg < safety_threshold:
         return _stopped("background_quota_low", quota_before)
@@ -414,13 +400,13 @@ async def continue_scan_cycle(
     try:
         session.execute(text("SELECT 1"))
     except Exception:
-        logger.error("continue_scan_cycle: database health probe failed.", exc_info=True)
+        logger.error("%s: database health probe failed.", caller, exc_info=True)
         return _stopped("database_unhealthy", quota_before)
 
     try:
         get_redis_client().ping()
     except Exception:
-        logger.error("continue_scan_cycle: redis health probe failed.", exc_info=True)
+        logger.error("%s: redis health probe failed.", caller, exc_info=True)
         return _stopped("redis_unhealthy", quota_before)
 
     from src.market_data.provider_factory import get_market_data_health, get_market_data_provider
@@ -438,9 +424,7 @@ async def continue_scan_cycle(
     if not leader_lock.try_acquire_or_renew(get_scan_leader_lease_seconds()):
         return _stopped("not_leader", quota_before)
 
-    symbols = SymbolSelector().select(
-        session, limit=get_market_scan_symbols_per_cycle(), prioritize_stale=True
-    )
+    symbols = resolve_symbols()
     if not symbols:
         return _stopped("universe_complete", quota_before)
 
@@ -454,7 +438,7 @@ async def continue_scan_cycle(
     # reasoning src/api/routes/market.py's create_scan documents.
     from src.core.db.database import get_session_factory
 
-    with priority_scope(BACKGROUND):
+    with priority_scope(BACKGROUND), operation_scope(MARKET_SCAN):
         await run_market_scan_job(run_id, get_session_factory(), provider, symbols)
 
     session.expire_all()
@@ -499,6 +483,115 @@ async def continue_scan_cycle(
         published_count=progress.published_count if progress else 0,
         rejected_count=progress.rejected_count if progress else 0,
         watch_only_count=progress.watch_only_count if progress else 0,
+    )
+
+
+@router.post("/continue-scan-cycle", response_model=ContinueScanCycleOut)
+async def continue_scan_cycle(
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ADMIN, StaffRole.OWNER)),
+) -> ContinueScanCycleOut:
+    """Staff/OWNER-only: manually advances ONE more cycle of the exact
+    same bounded, stale-first, BACKGROUND-priority, leader-locked
+    rotation `IntervalMarketIntelligenceScheduler._run_one_cycle()`
+    already runs on its own (env-configured, defaults to daily)
+    interval -- so a real full-universe coverage pass can be advanced
+    within a single trading day without waiting for the next scheduled
+    cycle. Every safety guard lives in `_run_one_bounded_background_
+    cycle` (see its own docstring); this route only supplies the
+    symbol-resolution strategy: `SymbolSelector(prioritize_stale=True)`
+    -- the identical oldest-data-first selection the scheduler uses,
+    capped at `get_market_scan_symbols_per_cycle()`, never the full
+    universe in one call.
+
+    `stop_reason="universe_complete"` (an empty `SymbolSelector`
+    result -- zero active, price-history-eligible symbols exist at
+    all) is a genuine but rare edge case, NOT the normal way a
+    full-universe pass finishes: because a symbol's `evaluated_at`
+    only ever moves forward, the selector keeps rotating through the
+    whole eligible universe forever, cycle after cycle, and never
+    returns empty once every symbol has a real evaluation. The caller
+    is expected to call this endpoint repeatedly, once per cycle,
+    accumulating the distinct `symbols_scanned` across calls and
+    comparing that count against the real active-and-eligible universe
+    size (e.g. from `GET .../coverage`'s `stocks_with_price_history`)
+    to know when a full pass is done -- not by waiting for an empty
+    response.
+
+    Since the SAHMK quota optimization mandate (2026-08-16), Stage 1
+    of the two-stage scan (`GET .../stage1-scan`, zero SAHMK cost)
+    offers a cheaper way to know which symbols are actually worth a
+    live cycle -- see `POST .../stage2-validate-candidates` for the
+    candidate-list-driven equivalent of this route."""
+    return await _run_one_bounded_background_cycle(
+        session,
+        "continue_scan_cycle",
+        lambda: SymbolSelector().select(session, limit=get_market_scan_symbols_per_cycle(), prioritize_stale=True),
+    )
+
+
+@router.post("/stage2-validate-candidates", response_model=ContinueScanCycleOut)
+async def stage2_validate_candidates(
+    request: Stage2ValidateRequest,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ADMIN, StaffRole.OWNER)),
+) -> ContinueScanCycleOut:
+    """Stage 2 of the two-stage Radar scan (SAHMK quota optimization
+    mandate, 2026-08-16): spends real, live SAHMK quota ONLY on the
+    exact candidate symbols Stage 1's local-only scan
+    (`GET .../stage1-scan`, zero SAHMK cost) already narrowed the
+    universe down to -- the caller supplies that list in the request
+    body. Runs through the identical bounded, BACKGROUND-priority,
+    leader-locked, quota-gated cycle `/continue-scan-cycle` uses (see
+    `_run_one_bounded_background_cycle`'s own docstring for every
+    guard), just symbol-list-driven instead of stale-first-rotation-
+    driven.
+
+    Capped at `get_market_scan_symbols_per_cycle()` per call, same as
+    every other manually triggered cycle -- call again with the
+    remaining slice of a larger candidate list to validate all of it,
+    exactly like `/continue-scan-cycle`'s own repeated-call contract."""
+    symbols = request.symbols[: get_market_scan_symbols_per_cycle()]
+    return await _run_one_bounded_background_cycle(session, "stage2_validate_candidates", lambda: symbols)
+
+
+@router.get("/stage1-scan", response_model=Stage1ScanOut)
+async def get_stage1_scan(
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> Stage1ScanOut:
+    """Stage 1 of the two-stage Radar scan (SAHMK quota optimization
+    mandate, 2026-08-16): narrows the full eligible Saudi-market
+    universe down to genuine candidates using ONLY already-persisted
+    local data (PriceBar rows + locally computed technical indicators)
+    -- zero SAHMK requests, no matter how large the universe is (see
+    `run_stage1_local_scan`'s own docstring for the exact local-only
+    signals used and why). A GET, not a POST: this route makes no live
+    provider call and writes nothing to the database, so it is safe to
+    call as often as needed to inspect the current local candidate set
+    before spending any real SAHMK quota on Stage 2
+    (`POST .../stage2-validate-candidates`)."""
+    result = run_stage1_local_scan(session)
+    return Stage1ScanOut(
+        generated_at=datetime.now(timezone.utc),
+        universe_size=result.universe_size,
+        evaluated_count=result.evaluated_count,
+        skipped_count=result.skipped_count,
+        candidate_count=result.candidate_count,
+        candidates=[
+            Stage1CandidateOut(
+                symbol=c.symbol,
+                latest_close=c.latest_close,
+                latest_bar_timestamp=c.latest_bar_timestamp,
+                dollar_volume=c.dollar_volume,
+                relative_volume=c.relative_volume,
+                adx_14=c.adx_14,
+                rsi_14=c.rsi_14,
+                atr_pct=c.atr_pct,
+                signals=[Stage1SignalOut(name=s.name, detail_ar=s.detail_ar) for s in c.signals],
+            )
+            for c in result.candidates
+        ],
     )
 
 
@@ -547,7 +640,7 @@ async def get_universe_diagnostics(
     try:
         # priority=BACKGROUND: an admin diagnostic, not the live
         # Decision Engine scan pipeline (see request_priority.py).
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(ADMIN_DIAGNOSTICS):
             provider = await get_market_data_provider(force_refresh=True)
     except StrictRealDataUnavailableError as exc:
         return UniverseDiagnosticsOut(
@@ -568,7 +661,7 @@ async def get_universe_diagnostics(
         # with the full bucket/distinct-value breakdown) is what this
         # route actually needs; the per-entry dicts it returns are a
         # differently-shaped, UI-facing view of the same classification.
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(ADMIN_DIAGNOSTICS):
             await provider.get_symbol_directory()
     except Exception as exc:  # noqa: BLE001 -- report every failure mode, never crash this diagnostic route
         return UniverseDiagnosticsOut(
@@ -669,7 +762,7 @@ async def get_symbol_lookup_diagnostics(
         # this route is also the single most expensive diagnostic call
         # per invocation (~6 real requests/symbol), so it must never
         # draw from the reserve set aside for live-market operations.
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(ADMIN_DIAGNOSTICS):
             market_provider = await get_market_data_provider(force_refresh=True)
     except StrictRealDataUnavailableError as exc:
         return SymbolLookupDiagnosticsOut(
@@ -684,7 +777,7 @@ async def get_symbol_lookup_diagnostics(
         )
 
     try:
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(ADMIN_DIAGNOSTICS):
             fundamental_provider = await get_fundamental_data_provider(force_refresh=True)
     except StrictRealDataUnavailableError:
         fundamental_provider = None
@@ -698,7 +791,7 @@ async def get_symbol_lookup_diagnostics(
     # whether the per-symbol calls below are attempted.
     known_symbols: Optional[set] = None
     try:
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(ADMIN_DIAGNOSTICS):
             directory = await market_provider.get_symbol_directory()
         known_symbols = {c["symbol"] for c in directory}
     except Exception:  # noqa: BLE001 -- directory membership is informational only
@@ -781,7 +874,7 @@ async def get_symbol_lookup_diagnostics(
 
     results: List[SymbolLookupDiagnosticOut] = []
     for symbol in symbol_list:
-        with priority_scope(BACKGROUND):
+        with priority_scope(BACKGROUND), operation_scope(ADMIN_DIAGNOSTICS):
             quote = await _check(market_provider.get_latest_quote(symbol))
             company_profile = await _check(market_provider.get_company_profile(symbol))
             historical_bar = await _check(market_provider.get_stock_data(symbol))

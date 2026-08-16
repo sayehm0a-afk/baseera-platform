@@ -488,6 +488,51 @@ async def test_redis_failure_degrades_to_in_process_tracking_without_raising(mon
     assert status["quota_shared_across_workers"] is True  # a client is configured, even if unreachable
 
 
+# --- per-operation accounting (SAHMK quota optimization mandate, 2026-08-16) -
+
+
+@pytest.mark.asyncio
+async def test_acquire_tracks_usage_by_operation():
+    limiter = SahmkRateLimiter(max_per_minute=100, redis_client=None)
+    await limiter.acquire(priority=CRITICAL, endpoint="quote", subsystem="stock_detail")
+    await limiter.acquire(priority=BACKGROUND, endpoint="quote", subsystem="stock_detail")
+    await limiter.acquire(priority=BACKGROUND, endpoint="ohlcv", subsystem="ingestion")
+
+    by_operation = limiter.get_status()["by_operation"]
+    assert by_operation["stock_detail:quote"] == 2
+    assert by_operation["ingestion:ohlcv"] == 1
+
+
+@pytest.mark.asyncio
+async def test_acquire_without_endpoint_or_subsystem_falls_back_to_unclassified_other():
+    limiter = SahmkRateLimiter(max_per_minute=100, redis_client=None)
+    await limiter.acquire()  # no endpoint/subsystem -- still counted, never dropped
+    assert limiter.get_status()["by_operation"] == {"unclassified:other": 1}
+
+
+def test_reset_clears_operation_counts():
+    limiter = SahmkRateLimiter(max_per_minute=1, redis_client=None)
+    limiter._operation_counts = {"market_scan:quote": 5}
+    limiter.reset()
+    assert limiter.get_status()["by_operation"] == {}
+
+
+@pytest.mark.asyncio
+async def test_operation_counts_reconcile_from_redis_across_instances():
+    """Same cross-process reconciliation guarantee day_count already
+    has (see test_day_counts_reconcile_from_redis_across_instances),
+    now proven for the per-operation breakdown too."""
+    shared_redis = _FakeRedis()
+    worker_a = SahmkRateLimiter(max_per_minute=100, redis_client=shared_redis)
+    worker_b = SahmkRateLimiter(max_per_minute=100, redis_client=shared_redis)
+
+    await worker_a.acquire(priority=BACKGROUND, endpoint="dividends", subsystem="ingestion")
+    await worker_a.acquire(priority=BACKGROUND, endpoint="dividends", subsystem="ingestion")
+
+    status_b = worker_b.get_status()
+    assert status_b["by_operation"]["ingestion:dividends"] >= 2
+
+
 def test_shared_redis_client_construction_failure_degrades_to_none(monkeypatch):
     """If settings.redis_dsn itself can't even build a client (missing/
     malformed config), the module-wide singleton must return None

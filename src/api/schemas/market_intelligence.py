@@ -777,3 +777,48 @@ class ContinueScanCycleOut(BaseModel):
     published_count: int = 0
     rejected_count: int = 0
     watch_only_count: int = 0
+
+
+class Stage1SignalOut(BaseModel):
+    name: str
+    detail_ar: str
+
+
+class Stage1CandidateOut(BaseModel):
+    symbol: str
+    latest_close: Optional[float] = None
+    latest_bar_timestamp: Optional[datetime] = None
+    dollar_volume: Optional[float] = None
+    relative_volume: Optional[float] = None
+    adx_14: Optional[float] = None
+    rsi_14: Optional[float] = None
+    atr_pct: Optional[float] = None
+    signals: List[Stage1SignalOut] = Field(default_factory=list)
+
+
+class Stage1ScanOut(BaseModel):
+    """GET /api/v1/admin/market-intelligence/stage1-scan -- Stage 1 of
+    the two-stage Radar scan (SAHMK quota optimization mandate,
+    2026-08-16). Narrows the full eligible universe to genuine
+    candidates using ONLY already-persisted local data -- zero SAHMK
+    requests, regardless of universe size. A GET, not a POST: this
+    route makes no live provider call and writes nothing, so it is
+    safe to call as often as needed."""
+
+    generated_at: datetime
+    universe_size: int
+    evaluated_count: int
+    skipped_count: int
+    candidate_count: int
+    candidates: List[Stage1CandidateOut] = Field(default_factory=list)
+
+
+class Stage2ValidateRequest(BaseModel):
+    """Request body for POST .../stage2-validate-candidates -- the
+    caller supplies the exact symbols Stage 1 (GET .../stage1-scan)
+    already narrowed the universe down to. Capped at
+    MARKET_SCAN_SYMBOLS_PER_CYCLE per call, same as every other
+    manually triggered cycle; call again with the remaining slice for
+    a candidate list larger than one cycle."""
+
+    symbols: List[str]

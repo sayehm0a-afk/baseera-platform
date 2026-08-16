@@ -10,7 +10,9 @@ from src.market_intelligence.trading_calendar import (
     TADAWUL_TIMEZONE,
     is_market_open,
     seconds_until_close,
+    seconds_until_next_ohlcv_sync,
     seconds_until_next_open,
+    to_tadawul_time,
 )
 
 
@@ -97,6 +99,50 @@ class TestSecondsUntilClose:
 
     def test_zero_at_the_exact_closing_moment(self):
         assert seconds_until_close(_tadawul(2026, 7, 28, 15, 0)) is None  # already closed, not "0 seconds left"
+
+
+class TestSecondsUntilNextOhlcvSync:
+    def test_mid_session_targets_todays_close_plus_buffer(self):
+        # Tuesday 12:00 -> close 15:00 + 30min buffer == 15:30, 3.5h away.
+        result = seconds_until_next_ohlcv_sync(_tadawul(2026, 7, 28, 12, 0))
+        assert result == 3.5 * 3600
+
+    def test_before_open_still_targets_todays_close_plus_buffer(self):
+        # Tuesday 05:00 -> today's 15:30 window, 10.5h away.
+        result = seconds_until_next_ohlcv_sync(_tadawul(2026, 7, 28, 5, 0))
+        assert result == 10.5 * 3600
+
+    def test_just_after_todays_window_rolls_to_the_next_trading_day(self):
+        # Tuesday 15:31 (1 minute past the 15:30 window) -> Wednesday 15:30.
+        result = seconds_until_next_ohlcv_sync(_tadawul(2026, 7, 28, 15, 31))
+        expected = (24 * 3600) - 60
+        assert result == expected
+
+    def test_exactly_at_the_window_rolls_to_the_next_trading_day(self):
+        # The window instant itself is not "still in the future" -- it
+        # must have already fired, so this rolls to tomorrow, matching
+        # seconds_until_next_open's own "> local" (strict) semantics.
+        result = seconds_until_next_ohlcv_sync(_tadawul(2026, 7, 28, 15, 30))
+        assert result == 24 * 3600
+
+    def test_thursday_evening_skips_the_weekend_to_sunday(self):
+        # Thursday 16:00 (already past Thursday's window) -> Sunday 15:30.
+        result = seconds_until_next_ohlcv_sync(_tadawul(2026, 7, 30, 16, 0))
+        expected = (8 * 3600) + (2 * 86400) + (15.5 * 3600)  # to midnight Thu, +Fri+Sat, then to 15:30 Sun
+        assert result == expected
+
+    def test_custom_buffer_minutes(self):
+        result = seconds_until_next_ohlcv_sync(_tadawul(2026, 7, 28, 12, 0), buffer_minutes=0)
+        assert result == 3 * 3600
+
+
+class TestToTadawulTime:
+    def test_converts_utc_to_tadawul_local(self):
+        result = to_tadawul_time(datetime(2026, 7, 28, 7, 0, tzinfo=timezone.utc))
+        assert result == _tadawul(2026, 7, 28, 10, 0)
+
+    def test_defaults_to_now_when_omitted(self):
+        assert isinstance(to_tadawul_time(), datetime)
 
 
 class TestTimezoneConversion:

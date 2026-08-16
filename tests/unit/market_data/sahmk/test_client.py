@@ -548,6 +548,73 @@ async def test_request_acquires_a_rate_limiter_slot_before_dispatching():
     limiter.acquire.assert_awaited_once()
 
 
+# --- per-operation accounting (SAHMK quota optimization mandate, 2026-08-16) -
+
+
+@pytest.mark.asyncio
+async def test_acquire_receives_the_endpoint_classification_for_every_wrapper_method():
+    from unittest.mock import AsyncMock
+
+    limiter = AsyncMock()
+    client, _ = _client(
+        [
+            FakeResponse(200, {"price": 1}),
+            FakeResponse(200, {"data": []}),
+            FakeResponse(200, {"index_value": 1}),
+            FakeResponse(200, {"events": []}),
+            FakeResponse(200, {"name": "x"}),
+            FakeResponse(200, {}),
+            FakeResponse(200, {"history": []}),
+            FakeResponse(200, {"results": []}),
+        ],
+        rate_limiter=limiter,
+    )
+    from datetime import date
+
+    await client.get_quote("2222")
+    await client.get_historical("2222", date_from=date(2026, 1, 1), date_to=date(2026, 1, 2))
+    await client.get_market_summary("TASI")
+    await client.get_events()
+    await client.get_company_profile("2222")
+    await client.get_financials("2222")
+    await client.get_dividends("2222")
+    await client.get_companies()
+
+    endpoints = [call.kwargs["endpoint"] for call in limiter.acquire.await_args_list]
+    assert endpoints == [
+        "quote", "ohlcv", "market_summary", "events", "company_profile", "fundamentals", "dividends", "symbols",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_acquire_receives_the_current_operation_scope_subsystem():
+    from unittest.mock import AsyncMock
+
+    from src.market_data.sahmk.operation_scope import STOCK_DETAIL, operation_scope
+
+    limiter = AsyncMock()
+    client, _ = _client([FakeResponse(200, {"price": 1})], rate_limiter=limiter)
+
+    with operation_scope(STOCK_DETAIL):
+        await client.get_quote("2222")
+
+    call = limiter.acquire.await_args_list[0]
+    assert call.kwargs["subsystem"] == STOCK_DETAIL
+
+
+@pytest.mark.asyncio
+async def test_acquire_receives_no_subsystem_outside_any_operation_scope():
+    from unittest.mock import AsyncMock
+
+    limiter = AsyncMock()
+    client, _ = _client([FakeResponse(200, {"price": 1})], rate_limiter=limiter)
+
+    await client.get_quote("2222")
+
+    call = limiter.acquire.await_args_list[0]
+    assert call.kwargs["subsystem"] is None
+
+
 @pytest.mark.asyncio
 async def test_daily_quota_exceeded_never_reaches_the_circuit_breaker():
     """SahmkRateLimitExceededError means "we decided not to call," not
