@@ -36,12 +36,14 @@ safety logic but by composition:
     result with its real `stop_reason` is surfaced as-is.
 """
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from src.ai_evolution.confidence_calibration import expected_calibration_error
 from src.ai_evolution.decision_v2_outcome_evaluation import create_pending_decision_v2_outcome
 from src.domain.models import (
     NON_RESOLVING_STATUSES,
@@ -400,4 +402,139 @@ def compute_radar_v2_performance(session: Session) -> RadarV2PerformanceMetrics:
         stop_loss_hit_rate=round(stop_hits / resolved_count, 4) if resolved_count > 0 else None,
         average_return_pct=round(sum(returns) / len(returns), 4) if returns else None,
         live_opportunities_by_classification=live_by_classification,
+    )
+
+
+# RADAR-C Phase D (mandate section 8, "performance analytics"): unlike
+# `compute_radar_v2_performance` above (a flat, always-on summary) or
+# `src.ai_evolution.validation_metrics.compute_validation_session_metrics`
+# (rigorous but scoped to one rare, explicitly-opened ValidationSession
+# window), this answers the mandate's explicit breakdown questions --
+# win rate by classification/confidence-band/market-regime, performance
+# by sector/holding-horizon -- over the FULL, ongoing RadarOpportunity/
+# DecisionV2Outcome history, not one session. Reuses the exact same
+# decisive-outcome definition (TARGET_x_HIT vs STOP_LOSS_HIT; PENDING/
+# PARTIAL/EXPIRED/CANCELLED/DATA_UNAVAILABLE excluded from win-rate math,
+# same as validation_metrics.py) so the two views can never silently
+# disagree about what counts as a win.
+_CONFIDENCE_BANDS = [(0.0, 60.0, "0-59"), (60.0, 70.0, "60-69"), (70.0, 80.0, "70-79"), (80.0, 90.0, "80-89"), (90.0, 101.0, "90-100")]
+
+
+@dataclass(frozen=True)
+class GroupPerformance:
+    label: str
+    signal_count: int
+    win_rate: Optional[float]
+    average_return_pct: Optional[float]
+
+
+@dataclass(frozen=True)
+class RadarV2ExtendedPerformanceMetrics:
+    win_rate_by_classification: List[GroupPerformance]
+    win_rate_by_confidence_band: List[GroupPerformance]
+    win_rate_by_market_regime: List[GroupPerformance]
+    performance_by_sector: List[GroupPerformance]
+    performance_by_holding_horizon: List[GroupPerformance]
+    average_return_pct: Optional[float]
+    median_return_pct: Optional[float]
+    average_favorable_excursion_pct: Optional[float]
+    average_adverse_excursion_pct: Optional[float]
+    calibration_pair_count: int
+    expected_calibration_error: Optional[float]
+
+
+def _median(values: List[float]) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    mid = n // 2
+    return ordered[mid] if n % 2 == 1 else (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _confidence_band(confidence: float) -> str:
+    for low, high, label in _CONFIDENCE_BANDS:
+        if low <= confidence < high:
+            return label
+    return _CONFIDENCE_BANDS[-1][2]
+
+
+def _group_performance(
+    groups: Dict[str, List[DecisionV2Outcome]]
+) -> List[GroupPerformance]:
+    results = []
+    for label in sorted(groups):
+        rows = groups[label]
+        decisive = [o for o in rows if o.status in _TARGET_HIT_STATUSES or o.status == DecisionV2OutcomeStatus.STOP_LOSS_HIT]
+        wins = [o for o in decisive if o.status in _TARGET_HIT_STATUSES]
+        returns = [float(o.return_pct) for o in rows if o.return_pct is not None]
+        results.append(
+            GroupPerformance(
+                label=label,
+                signal_count=len(rows),
+                win_rate=round(len(wins) / len(decisive), 4) if decisive else None,
+                average_return_pct=round(sum(returns) / len(returns), 4) if returns else None,
+            )
+        )
+    return results
+
+
+def compute_radar_v2_extended_performance(session: Session) -> RadarV2ExtendedPerformanceMetrics:
+    """Every `RadarOpportunity` ever emitted (not only currently-live
+    ones -- a superseded opportunity's own real outcome still counts
+    toward these breakdowns), joined to its `DecisionV2Snapshot` (for
+    classification/confidence/market-regime/sector/horizon) and
+    `DecisionV2Outcome` (for the real resolved result)."""
+    rows = (
+        session.query(RadarOpportunity, DecisionV2Snapshot, DecisionV2Outcome)
+        .join(DecisionV2Snapshot, DecisionV2Snapshot.id == RadarOpportunity.decision_v2_snapshot_id)
+        .outerjoin(DecisionV2Outcome, DecisionV2Outcome.decision_v2_snapshot_id == DecisionV2Snapshot.id)
+        .all()
+    )
+
+    by_classification: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
+    by_confidence_band: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
+    by_market_regime: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
+    by_sector: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
+    by_horizon: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
+
+    all_returns: List[float] = []
+    mfe_values: List[float] = []
+    mae_values: List[float] = []
+    calibration_pairs: List[tuple] = []
+
+    for opportunity, snapshot, outcome in rows:
+        if outcome is None:
+            continue
+        by_classification[opportunity.classification or "UNKNOWN"].append(outcome)
+        if snapshot.confidence_score is not None:
+            by_confidence_band[_confidence_band(float(snapshot.confidence_score))].append(outcome)
+        by_market_regime[snapshot.market_risk_state or "UNKNOWN"].append(outcome)
+        by_sector[snapshot.sector_ar or "غير محدد"].append(outcome)
+        by_horizon[snapshot.horizon_type or "UNKNOWN"].append(outcome)
+
+        if outcome.return_pct is not None:
+            all_returns.append(float(outcome.return_pct))
+        if outcome.max_favorable_excursion_pct is not None:
+            mfe_values.append(float(outcome.max_favorable_excursion_pct))
+        if outcome.max_adverse_excursion_pct is not None:
+            mae_values.append(float(outcome.max_adverse_excursion_pct))
+        if (
+            outcome.status in _TARGET_HIT_STATUSES or outcome.status == DecisionV2OutcomeStatus.STOP_LOSS_HIT
+        ) and snapshot.confidence_score is not None:
+            label = 1 if outcome.status in _TARGET_HIT_STATUSES else 0
+            calibration_pairs.append((float(snapshot.confidence_score), label))
+
+    return RadarV2ExtendedPerformanceMetrics(
+        win_rate_by_classification=_group_performance(by_classification),
+        win_rate_by_confidence_band=_group_performance(by_confidence_band),
+        win_rate_by_market_regime=_group_performance(by_market_regime),
+        performance_by_sector=_group_performance(by_sector),
+        performance_by_holding_horizon=_group_performance(by_horizon),
+        average_return_pct=round(sum(all_returns) / len(all_returns), 4) if all_returns else None,
+        median_return_pct=round(_median(all_returns), 4) if all_returns else None,
+        average_favorable_excursion_pct=round(sum(mfe_values) / len(mfe_values), 4) if mfe_values else None,
+        average_adverse_excursion_pct=round(sum(mae_values) / len(mae_values), 4) if mae_values else None,
+        calibration_pair_count=len(calibration_pairs),
+        expected_calibration_error=expected_calibration_error(calibration_pairs),
     )

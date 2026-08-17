@@ -57,6 +57,8 @@ from src.api.schemas.market_intelligence import (
     RadarOpportunityDetailOut,
     RadarOpportunitySummaryOut,
     RadarStage1ComponentScoresOut,
+    RadarV2ExtendedPerformanceOut,
+    RadarV2GroupPerformanceOut,
     RadarV2PerformanceOut,
     RadarV2SahmkConsumptionOut,
     RadarV2ScanOut,
@@ -111,6 +113,7 @@ from src.market_intelligence.config import (
     get_scan_leader_lease_seconds,
 )
 from src.market_intelligence.radar_v2 import (
+    compute_radar_v2_extended_performance,
     compute_radar_v2_performance,
     list_live_opportunities,
     run_radar_v2_cycle,
@@ -773,6 +776,42 @@ async def get_radar_v2_performance(
         stop_loss_hit_rate=metrics.stop_loss_hit_rate,
         average_return_pct=metrics.average_return_pct,
         live_opportunities_by_classification=metrics.live_opportunities_by_classification,
+    )
+
+
+@router.get("/radar-v2/performance/extended", response_model=RadarV2ExtendedPerformanceOut)
+async def get_radar_v2_extended_performance(
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> RadarV2ExtendedPerformanceOut:
+    """RADAR-C Phase D -- see `compute_radar_v2_extended_performance`'s
+    own docstring for the exact breakdowns and why each group's
+    win_rate/return stays null rather than a fabricated 0.0 with no
+    resolved outcomes behind it."""
+    metrics = compute_radar_v2_extended_performance(session)
+
+    def _groups(items):
+        return [
+            RadarV2GroupPerformanceOut(
+                label=g.label, signal_count=g.signal_count, win_rate=g.win_rate,
+                average_return_pct=g.average_return_pct,
+            )
+            for g in items
+        ]
+
+    return RadarV2ExtendedPerformanceOut(
+        generated_at=datetime.now(timezone.utc),
+        win_rate_by_classification=_groups(metrics.win_rate_by_classification),
+        win_rate_by_confidence_band=_groups(metrics.win_rate_by_confidence_band),
+        win_rate_by_market_regime=_groups(metrics.win_rate_by_market_regime),
+        performance_by_sector=_groups(metrics.performance_by_sector),
+        performance_by_holding_horizon=_groups(metrics.performance_by_holding_horizon),
+        average_return_pct=metrics.average_return_pct,
+        median_return_pct=metrics.median_return_pct,
+        average_favorable_excursion_pct=metrics.average_favorable_excursion_pct,
+        average_adverse_excursion_pct=metrics.average_adverse_excursion_pct,
+        calibration_pair_count=metrics.calibration_pair_count,
+        expected_calibration_error=metrics.expected_calibration_error,
     )
 
 
