@@ -110,7 +110,11 @@ from src.market_intelligence.config import (
     get_radar_stage2_candidate_cap,
     get_scan_leader_lease_seconds,
 )
-from src.market_intelligence.radar_v2 import compute_radar_v2_performance, run_radar_v2_cycle
+from src.market_intelligence.radar_v2 import (
+    compute_radar_v2_performance,
+    list_live_opportunities,
+    run_radar_v2_cycle,
+)
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 from src.market_intelligence.services.scan_job_runner import run_market_scan_job
@@ -578,7 +582,7 @@ async def stage2_validate_candidates(
 # ============================================================================
 
 
-def _radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummaryOut:
+def radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummaryOut:
     snapshot = opportunity.snapshot
     return RadarOpportunitySummaryOut(
         id=opportunity.id,
@@ -614,9 +618,9 @@ def _radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummary
     )
 
 
-def _radar_detail_out(opportunity: RadarOpportunity, outcome: Optional[DecisionV2Outcome]) -> RadarOpportunityDetailOut:
+def radar_detail_out(opportunity: RadarOpportunity, outcome: Optional[DecisionV2Outcome]) -> RadarOpportunityDetailOut:
     snapshot = opportunity.snapshot
-    summary = _radar_summary_out(opportunity)
+    summary = radar_summary_out(opportunity)
     component_scores = opportunity.stage1_component_scores or {}
     signals = opportunity.stage1_signals or []
     return RadarOpportunityDetailOut(
@@ -675,7 +679,7 @@ async def run_radar_v2_scan(
         stage2_executed=result.stage2_executed,
         stage2_stop_reason=result.stage2_stop_reason,
         scan_run_id=result.scan_run_id,
-        opportunities_emitted=[_radar_summary_out(o) for o in result.opportunities_emitted],
+        opportunities_emitted=[radar_summary_out(o) for o in result.opportunities_emitted],
         opportunities_suppressed_as_duplicate=result.opportunities_suppressed_as_duplicate,
     )
 
@@ -692,11 +696,8 @@ async def list_radar_v2_opportunities(
     descending -- a symbol that was re-emitted after a material change
     appears once, as its newest row, never as a duplicate alongside the
     stale one it replaced."""
-    query = session.query(RadarOpportunity).filter(RadarOpportunity.superseded_by_id.is_(None))
-    if classification:
-        query = query.filter(RadarOpportunity.classification == classification)
-    rows = query.order_by(RadarOpportunity.stage1_ranking_score.desc().nullslast()).limit(limit).all()
-    return [_radar_summary_out(o) for o in rows]
+    rows = list_live_opportunities(session, classification=classification, limit=limit)
+    return [radar_summary_out(o) for o in rows]
 
 
 @router.get("/radar-v2/opportunities/{opportunity_id}", response_model=RadarOpportunityDetailOut)
@@ -717,7 +718,7 @@ async def get_radar_v2_opportunity(
         .filter_by(decision_v2_snapshot_id=opportunity.decision_v2_snapshot_id)
         .first()
     )
-    return _radar_detail_out(opportunity, outcome)
+    return radar_detail_out(opportunity, outcome)
 
 
 @router.get("/radar-v2/summary", response_model=RadarV2SummaryOut)
