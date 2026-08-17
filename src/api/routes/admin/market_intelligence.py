@@ -30,7 +30,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
@@ -54,12 +54,20 @@ from src.api.schemas.market_intelligence import (
     ObservedFieldOut,
     ObservedFieldValueOut,
     PipelineStageOut,
+    RadarOpportunityDetailOut,
+    RadarOpportunitySummaryOut,
+    RadarStage1ComponentScoresOut,
+    RadarV2PerformanceOut,
+    RadarV2SahmkConsumptionOut,
+    RadarV2ScanOut,
+    RadarV2SummaryOut,
     RejectedOpportunityOut,
     RejectionReasonCountOut,
     RiskCountOut,
     SectorCoverageOut,
     SectorRankingOut,
     Stage1CandidateOut,
+    Stage1ComponentScoresOut,
     Stage1ScanOut,
     Stage1SignalOut,
     Stage2ValidateRequest,
@@ -75,6 +83,7 @@ from src.auth.rbac import require_any_staff_role, require_staff_role
 from src.auth.token_store import get_redis_client
 from src.core.db.database import get_db
 from src.domain.models import (
+    DecisionV2Outcome,
     DecisionV2Snapshot,
     Dividend,
     FundamentalSnapshot,
@@ -82,6 +91,7 @@ from src.domain.models import (
     MarketScanProgress,
     MarketScanRun,
     PriceBar,
+    RadarOpportunity,
     StaffRole,
     Stock,
     SymbolIntelligenceRecord,
@@ -89,7 +99,7 @@ from src.domain.models import (
 )
 from src.market_data.ingestion import config as ingestion_config
 from src.market_data.providers.sector_provider import get_sector_classification_provider
-from src.market_data.sahmk.operation_scope import ADMIN_DIAGNOSTICS, MARKET_SCAN, operation_scope
+from src.market_data.sahmk.operation_scope import ADMIN_DIAGNOSTICS, MARKET_SCAN, RADAR_V2, operation_scope
 from src.market_data.sahmk.rate_limiter import get_default_rate_limiter
 from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
 from src.market_data.strict_mode import StrictRealDataUnavailableError
@@ -97,8 +107,10 @@ from src.market_intelligence.config import (
     get_scan_min_background_quota_remaining,
     get_market_scan_symbols_per_cycle,
     get_max_scan_run_duration_hours,
+    get_radar_stage2_candidate_cap,
     get_scan_leader_lease_seconds,
 )
+from src.market_intelligence.radar_v2 import compute_radar_v2_performance, run_radar_v2_cycle
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 from src.market_intelligence.services.scan_job_runner import run_market_scan_job
@@ -347,7 +359,7 @@ async def trigger_diagnostic_scan(
 
 
 async def _run_one_bounded_background_cycle(
-    session: Session, caller: str, resolve_symbols,
+    session: Session, caller: str, resolve_symbols, *, operation: str = MARKET_SCAN,
 ) -> ContinueScanCycleOut:
     """Shared implementation behind every manually triggered scan
     cycle -- `/continue-scan-cycle` (stale-first rotation) and
@@ -373,6 +385,12 @@ async def _run_one_bounded_background_cycle(
       * priority_scope(BACKGROUND) around the scan job -- these SAHMK
         requests are background-eligible only; they can never draw on
         `reserved_for_critical`.
+
+    `operation` tags the run's SAHMK per-operation accounting (default
+    MARKET_SCAN, matching this function's original two callers below
+    unchanged); Radar V2's own route passes `operation=RADAR_V2` so its
+    consumption is separately attributable in `by_operation` without a
+    second accounting mechanism.
 
     `resolve_symbols` is called only after every zero-cost pre-flight
     check has already passed and the leader lock has been acquired --
@@ -438,7 +456,7 @@ async def _run_one_bounded_background_cycle(
     # reasoning src/api/routes/market.py's create_scan documents.
     from src.core.db.database import get_session_factory
 
-    with priority_scope(BACKGROUND), operation_scope(MARKET_SCAN):
+    with priority_scope(BACKGROUND), operation_scope(operation):
         await run_market_scan_job(run_id, get_session_factory(), provider, symbols)
 
     session.expire_all()
@@ -555,6 +573,230 @@ async def stage2_validate_candidates(
     return await _run_one_bounded_background_cycle(session, "stage2_validate_candidates", lambda: symbols)
 
 
+# ============================================================================
+# Basirah Radar V2 (2026-08-16) -- Phase D REST API
+# ============================================================================
+
+
+def _radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummaryOut:
+    snapshot = opportunity.snapshot
+    return RadarOpportunitySummaryOut(
+        id=opportunity.id,
+        symbol=opportunity.symbol,
+        company_name_ar=snapshot.company_name_ar,
+        company_name_en=snapshot.company_name_en,
+        classification=opportunity.classification,
+        classification_label_ar=opportunity.classification_label_ar,
+        confidence_score=float(opportunity.confidence_score),
+        price_at_signal=float(opportunity.price_at_signal) if opportunity.price_at_signal is not None else None,
+        entry_zone_low=float(snapshot.entry_zone_low) if snapshot.entry_zone_low is not None else None,
+        entry_zone_high=float(snapshot.entry_zone_high) if snapshot.entry_zone_high is not None else None,
+        stop_loss=float(snapshot.stop_loss) if snapshot.stop_loss is not None else None,
+        target_1=float(snapshot.target_1) if snapshot.target_1 is not None else None,
+        target_2=float(snapshot.target_2) if snapshot.target_2 is not None else None,
+        target_3=float(snapshot.target_3) if snapshot.target_3 is not None else None,
+        expected_return_target_1=(
+            float(snapshot.expected_return_target_1) if snapshot.expected_return_target_1 is not None else None
+        ),
+        risk_reward_target_1=(
+            float(snapshot.risk_reward_target_1) if snapshot.risk_reward_target_1 is not None else None
+        ),
+        risk_level=snapshot.risk_level,
+        risk_level_label_ar=snapshot.risk_level_label_ar,
+        data_freshness_status=snapshot.data_freshness_status,
+        stage1_rank=opportunity.stage1_rank,
+        stage1_ranking_score=(
+            float(opportunity.stage1_ranking_score) if opportunity.stage1_ranking_score is not None else None
+        ),
+        ranking_reason_ar=opportunity.ranking_reason_ar,
+        emitted_at=opportunity.emitted_at,
+        decision_v2_snapshot_id=opportunity.decision_v2_snapshot_id,
+    )
+
+
+def _radar_detail_out(opportunity: RadarOpportunity, outcome: Optional[DecisionV2Outcome]) -> RadarOpportunityDetailOut:
+    snapshot = opportunity.snapshot
+    summary = _radar_summary_out(opportunity)
+    component_scores = opportunity.stage1_component_scores or {}
+    signals = opportunity.stage1_signals or []
+    return RadarOpportunityDetailOut(
+        **summary.model_dump(),
+        stage1_component_scores=RadarStage1ComponentScoresOut(**component_scores),
+        stage1_signals=[Stage1SignalOut(name=s["name"], detail_ar=s["detail_ar"]) for s in signals],
+        stage1_risk_reward_ratio=(
+            float(opportunity.stage1_risk_reward_ratio) if opportunity.stage1_risk_reward_ratio is not None else None
+        ),
+        expected_holding_period_min_days=snapshot.expected_holding_period_min_days,
+        expected_holding_period_max_days=snapshot.expected_holding_period_max_days,
+        expected_holding_period_label_ar=snapshot.expected_holding_period_label_ar,
+        positive_reasons=snapshot.positive_reasons or [],
+        negative_reasons=snapshot.negative_reasons or [],
+        warnings=snapshot.warnings or [],
+        recommendation_basis=snapshot.recommendation_basis,
+        liquidity_quality_ar=snapshot.liquidity_quality_ar,
+        relative_volume=float(snapshot.relative_volume) if snapshot.relative_volume is not None else None,
+        accumulation_assessment_ar=snapshot.accumulation_assessment_ar,
+        decision_timestamp=snapshot.decision_timestamp,
+        market_status=snapshot.market_status,
+        outcome_status=outcome.status.value if outcome is not None else None,
+        outcome_return_pct=float(outcome.return_pct) if outcome is not None and outcome.return_pct is not None else None,
+        outcome_evaluated_at=outcome.evaluated_at if outcome is not None else None,
+    )
+
+
+@router.post("/radar-v2/scan", response_model=RadarV2ScanOut)
+async def run_radar_v2_scan(
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ADMIN, StaffRole.OWNER)),
+) -> RadarV2ScanOut:
+    """Basirah Radar V2 (2026-08-16): the full ranked-opportunity pass
+    -- Stage 1 (zero SAHMK cost) narrows and ranks the local universe,
+    then the top `get_radar_stage2_candidate_cap()` candidates (never
+    more, regardless of how many Stage 1 found) go through the exact
+    same bounded, quota-gated, leader-locked Stage 2 cycle
+    `/continue-scan-cycle`/`/stage2-validate-candidates` use -- tagged
+    `RADAR_V2` for separately attributable SAHMK accounting (see
+    `GET .../radar-v2/sahmk-consumption`). `stage2_executed=False`
+    always means Radar V2 degraded gracefully rather than spending
+    quota it did not have; `stage2_stop_reason` says why. See
+    `run_radar_v2_cycle`'s own docstring for the complete guarantee."""
+    result = await run_radar_v2_cycle(
+        session,
+        lambda s, caller, resolve_symbols: _run_one_bounded_background_cycle(
+            s, caller, resolve_symbols, operation=RADAR_V2
+        ),
+    )
+    return RadarV2ScanOut(
+        triggered_at=result.triggered_at,
+        stage1_universe_size=result.stage1_universe_size,
+        stage1_candidate_count=result.stage1_candidate_count,
+        stage2_candidate_cap=result.stage2_candidate_cap,
+        stage2_symbols_selected=result.stage2_symbols_selected,
+        stage2_executed=result.stage2_executed,
+        stage2_stop_reason=result.stage2_stop_reason,
+        scan_run_id=result.scan_run_id,
+        opportunities_emitted=[_radar_summary_out(o) for o in result.opportunities_emitted],
+        opportunities_suppressed_as_duplicate=result.opportunities_suppressed_as_duplicate,
+    )
+
+
+@router.get("/radar-v2/opportunities", response_model=List[RadarOpportunitySummaryOut])
+async def list_radar_v2_opportunities(
+    classification: Optional[str] = Query(default=None, description="Filter to one classification value, e.g. BUY_CANDIDATE."),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> List[RadarOpportunitySummaryOut]:
+    """The current, ranked radar: only each symbol's live opportunity
+    (`superseded_by_id IS NULL`) appears, ordered by stage1_ranking_score
+    descending -- a symbol that was re-emitted after a material change
+    appears once, as its newest row, never as a duplicate alongside the
+    stale one it replaced."""
+    query = session.query(RadarOpportunity).filter(RadarOpportunity.superseded_by_id.is_(None))
+    if classification:
+        query = query.filter(RadarOpportunity.classification == classification)
+    rows = query.order_by(RadarOpportunity.stage1_ranking_score.desc().nullslast()).limit(limit).all()
+    return [_radar_summary_out(o) for o in rows]
+
+
+@router.get("/radar-v2/opportunities/{opportunity_id}", response_model=RadarOpportunityDetailOut)
+async def get_radar_v2_opportunity(
+    opportunity_id: int,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> RadarOpportunityDetailOut:
+    """Full evidence for one radar opportunity, including its Stage 1
+    ranking breakdown and (once real forward market data exists) its
+    tracked outcome -- see RadarOpportunityDetailOut's own docstring
+    for exactly which fields this does and does not include."""
+    opportunity = session.query(RadarOpportunity).filter_by(id=opportunity_id).first()
+    if opportunity is None:
+        raise HTTPException(status_code=404, detail="Radar opportunity not found.")
+    outcome = (
+        session.query(DecisionV2Outcome)
+        .filter_by(decision_v2_snapshot_id=opportunity.decision_v2_snapshot_id)
+        .first()
+    )
+    return _radar_detail_out(opportunity, outcome)
+
+
+@router.get("/radar-v2/summary", response_model=RadarV2SummaryOut)
+async def get_radar_v2_summary(
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> RadarV2SummaryOut:
+    """The radar's current composition at a glance -- how many live
+    opportunities exist, their classification mix, and when the radar
+    last ran, without listing every opportunity."""
+    live = session.query(RadarOpportunity).filter(RadarOpportunity.superseded_by_id.is_(None)).all()
+    by_classification: Dict[str, int] = {}
+    for o in live:
+        by_classification[o.classification] = by_classification.get(o.classification, 0) + 1
+    average_confidence = (
+        round(sum(float(o.confidence_score) for o in live) / len(live), 1) if live else None
+    )
+    most_recent = max(live, key=lambda o: o.emitted_at, default=None)
+    return RadarV2SummaryOut(
+        generated_at=datetime.now(timezone.utc),
+        live_opportunity_count=len(live),
+        live_by_classification=by_classification,
+        average_confidence=average_confidence,
+        most_recent_scan_run_id=most_recent.scan_run_id if most_recent else None,
+        most_recent_emitted_at=most_recent.emitted_at if most_recent else None,
+        stage2_candidate_cap=get_radar_stage2_candidate_cap(),
+    )
+
+
+@router.get("/radar-v2/performance", response_model=RadarV2PerformanceOut)
+async def get_radar_v2_performance(
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> RadarV2PerformanceOut:
+    """Phase B forward-testing metrics -- see `compute_radar_v2_
+    performance`'s own docstring. Every rate is null, not 0.0, until
+    real forward market data has actually resolved outcomes; this
+    route never fabricates a rate from insufficient data."""
+    metrics = compute_radar_v2_performance(session)
+    return RadarV2PerformanceOut(
+        generated_at=datetime.now(timezone.utc),
+        total_opportunities_emitted=metrics.total_opportunities_emitted,
+        total_outcomes_tracked=metrics.total_outcomes_tracked,
+        pending_count=metrics.pending_count,
+        resolved_count=metrics.resolved_count,
+        target_hit_count=metrics.target_hit_count,
+        stop_loss_hit_count=metrics.stop_loss_hit_count,
+        partial_count=metrics.partial_count,
+        expired_count=metrics.expired_count,
+        data_unavailable_count=metrics.data_unavailable_count,
+        target_hit_rate=metrics.target_hit_rate,
+        stop_loss_hit_rate=metrics.stop_loss_hit_rate,
+        average_return_pct=metrics.average_return_pct,
+        live_opportunities_by_classification=metrics.live_opportunities_by_classification,
+    )
+
+
+@router.get("/radar-v2/sahmk-consumption", response_model=RadarV2SahmkConsumptionOut)
+async def get_radar_v2_sahmk_consumption(
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> RadarV2SahmkConsumptionOut:
+    """SAHMK quota consumption attributable specifically to Radar V2 --
+    read verbatim from the existing per-operation rate-limiter/cache
+    telemetry's "radar_v2" tag (see RADAR_V2 in operation_scope.py and
+    this route's own `/radar-v2/scan` handler, which is the only place
+    that tag is ever applied). No secrets: never includes the SAHMK API
+    key or any credential, matching every other admin diagnostics
+    route's existing contract."""
+    from src.market_data.caching.redis_shared_cache import get_default_sahmk_cache, get_observability_snapshot
+
+    rate_status = get_default_rate_limiter().get_status()
+    cache_status = get_observability_snapshot({"sahmk_market_data": get_default_sahmk_cache()})
+    return RadarV2SahmkConsumptionOut(
+        generated_at=datetime.now(timezone.utc),
+        rate_limiter_by_operation=(rate_status.get("by_operation") or {}).get(RADAR_V2),
+        cache_by_operation=(cache_status.get("by_operation") or {}).get(RADAR_V2),
+    )
+
+
 @router.get("/stage1-scan", response_model=Stage1ScanOut)
 async def get_stage1_scan(
     session: Session = Depends(get_db),
@@ -589,6 +831,16 @@ async def get_stage1_scan(
                 rsi_14=c.rsi_14,
                 atr_pct=c.atr_pct,
                 signals=[Stage1SignalOut(name=s.name, detail_ar=s.detail_ar) for s in c.signals],
+                ranking_score=c.ranking_score,
+                component_scores=Stage1ComponentScoresOut(
+                    trend=c.component_scores.trend,
+                    momentum=c.component_scores.momentum,
+                    volume=c.component_scores.volume,
+                    liquidity=c.component_scores.liquidity,
+                    volatility=c.component_scores.volatility,
+                    risk_reward=c.component_scores.risk_reward,
+                ),
+                risk_reward_ratio=c.risk_reward_ratio,
             )
             for c in result.candidates
         ],

@@ -35,6 +35,15 @@ PORTFOLIO = "portfolio"
 INGESTION = "ingestion"
 ADMIN_DIAGNOSTICS = "admin_diagnostics"
 
+# Basirah Radar V2 (2026-08-16): Radar V2's Stage 2 calls reuse the
+# exact same _run_one_bounded_background_cycle helper continue-scan-
+# cycle/stage2-validate-candidates already use, but tagged with this
+# operation instead of MARKET_SCAN -- Phase D's "SAHMK consumption
+# attributable specifically to Radar V2" requirement is answered
+# entirely by this tag's own by_operation breakdown (rate_limiter.py/
+# redis_shared_cache.py), with no separate accounting code needed.
+RADAR_V2 = "radar_v2"
+
 UNCLASSIFIED = "unclassified"
 
 _operation_var: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(

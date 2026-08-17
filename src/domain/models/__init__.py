@@ -67,6 +67,7 @@ from src.domain.models.decision_v2_outcome import (
     DecisionV2OutcomeStatus,
     NON_RESOLVING_STATUSES,
 )
+from src.domain.models.radar_opportunity import RadarOpportunity
 
 __all__ = [
     "Stock",
@@ -157,4 +158,5 @@ __all__ = [
     "DecisionV2Outcome",
     "DecisionV2OutcomeStatus",
     "NON_RESOLVING_STATUSES",
+    "RadarOpportunity",
 ]

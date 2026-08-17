@@ -784,6 +784,23 @@ class Stage1SignalOut(BaseModel):
     detail_ar: str
 
 
+class Stage1ComponentScoresOut(BaseModel):
+    """The six sub-scores (0-100, 50=neutral) behind `ranking_score` --
+    trend/momentum/volume/liquidity/volatility/risk_reward, exactly as
+    `src.analysis.decision_v2.scoring.opportunity_quality_score` combines
+    them for the live decision pipeline. `None` means genuinely not
+    computable for this symbol (excluded from the weighted blend, not
+    defaulted to a number) -- this is what lets a caller see WHY a
+    candidate ranked where it did, not just the final score."""
+
+    trend: Optional[float] = None
+    momentum: Optional[float] = None
+    volume: Optional[float] = None
+    liquidity: Optional[float] = None
+    volatility: Optional[float] = None
+    risk_reward: Optional[float] = None
+
+
 class Stage1CandidateOut(BaseModel):
     symbol: str
     latest_close: Optional[float] = None
@@ -794,6 +811,9 @@ class Stage1CandidateOut(BaseModel):
     rsi_14: Optional[float] = None
     atr_pct: Optional[float] = None
     signals: List[Stage1SignalOut] = Field(default_factory=list)
+    ranking_score: Optional[float] = None
+    component_scores: Stage1ComponentScoresOut = Field(default_factory=Stage1ComponentScoresOut)
+    risk_reward_ratio: Optional[float] = None
 
 
 class Stage1ScanOut(BaseModel):
@@ -822,3 +842,162 @@ class Stage2ValidateRequest(BaseModel):
     a candidate list larger than one cycle."""
 
     symbols: List[str]
+
+
+# ============================================================================
+# Basirah Radar V2 (2026-08-16) -- Phase D REST API
+# ============================================================================
+
+
+class RadarStage1ComponentScoresOut(BaseModel):
+    trend: Optional[float] = None
+    momentum: Optional[float] = None
+    volume: Optional[float] = None
+    liquidity: Optional[float] = None
+    volatility: Optional[float] = None
+    risk_reward: Optional[float] = None
+
+
+class RadarOpportunitySummaryOut(BaseModel):
+    """One row in the ranked opportunity list (GET .../radar-v2/
+    opportunities) -- only the currently-live (non-superseded)
+    opportunity per symbol appears here, ordered by stage1_ranking_score
+    descending."""
+
+    id: int
+    symbol: str
+    company_name_ar: Optional[str] = None
+    company_name_en: str
+
+    classification: str
+    classification_label_ar: str
+    confidence_score: float
+    confidence_disclaimer_ar: str = (
+        "درجة الثقة تقيس قوة واتساق الأدلة المتاحة، وليست احتمال ربح مضمون."
+    )
+
+    price_at_signal: Optional[float] = None
+    entry_zone_low: Optional[float] = None
+    entry_zone_high: Optional[float] = None
+    stop_loss: Optional[float] = None
+    target_1: Optional[float] = None
+    target_2: Optional[float] = None
+    target_3: Optional[float] = None
+    expected_return_target_1: Optional[float] = None
+    risk_reward_target_1: Optional[float] = None
+
+    risk_level: Optional[str] = None
+    risk_level_label_ar: Optional[str] = None
+    data_freshness_status: str
+
+    stage1_rank: Optional[int] = None
+    stage1_ranking_score: Optional[float] = None
+    ranking_reason_ar: Optional[str] = None
+
+    emitted_at: datetime
+    decision_v2_snapshot_id: int
+
+
+class RadarOpportunityDetailOut(RadarOpportunitySummaryOut):
+    """GET .../radar-v2/opportunities/{id} -- adds Stage 1's full
+    evidence breakdown, the linked decision's reasoning/risk-flags, and
+    (when it exists) this opportunity's real-market outcome so far.
+    Never a full ~90-column DecisionV2Snapshot dump -- only the fields
+    the Radar V2 mandate itself names (technical reasons, liquidity/
+    volume evidence, risk flags, horizon)."""
+
+    stage1_component_scores: RadarStage1ComponentScoresOut = Field(
+        default_factory=RadarStage1ComponentScoresOut
+    )
+    stage1_signals: List[Stage1SignalOut] = Field(default_factory=list)
+    stage1_risk_reward_ratio: Optional[float] = None
+
+    expected_holding_period_min_days: Optional[int] = None
+    expected_holding_period_max_days: Optional[int] = None
+    expected_holding_period_label_ar: Optional[str] = None
+
+    positive_reasons: List[str] = Field(default_factory=list)
+    negative_reasons: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    recommendation_basis: Optional[str] = None
+
+    liquidity_quality_ar: Optional[str] = None
+    relative_volume: Optional[float] = None
+    accumulation_assessment_ar: Optional[str] = None
+
+    decision_timestamp: datetime
+    market_status: str
+
+    outcome_status: Optional[str] = None
+    outcome_return_pct: Optional[float] = None
+    outcome_evaluated_at: Optional[datetime] = None
+
+
+class RadarV2ScanOut(BaseModel):
+    """POST .../radar-v2/scan -- one full Radar V2 pass: Stage 1
+    (always zero SAHMK cost) -> hard-capped candidate selection ->
+    bounded Stage 2 -> RadarOpportunity emission with dedup.
+    `stage2_executed=False` always means no live SAHMK quota was spent
+    this call beyond whatever Stage 2's own pre-flight checks already
+    cost (zero) -- `stage2_stop_reason` says why."""
+
+    triggered_at: datetime
+    stage1_universe_size: int
+    stage1_candidate_count: int
+    stage2_candidate_cap: int
+    stage2_symbols_selected: List[str] = Field(default_factory=list)
+    stage2_executed: bool
+    stage2_stop_reason: Optional[str] = None
+    scan_run_id: Optional[int] = None
+    opportunities_emitted: List[RadarOpportunitySummaryOut] = Field(default_factory=list)
+    opportunities_suppressed_as_duplicate: List[str] = Field(default_factory=list)
+
+
+class RadarV2SummaryOut(BaseModel):
+    """GET .../radar-v2/summary -- the current state of the radar at a
+    glance: how many live opportunities exist and their classification
+    mix, without listing each one."""
+
+    generated_at: datetime
+    live_opportunity_count: int
+    live_by_classification: Dict[str, int] = Field(default_factory=dict)
+    average_confidence: Optional[float] = None
+    most_recent_scan_run_id: Optional[int] = None
+    most_recent_emitted_at: Optional[datetime] = None
+    stage2_candidate_cap: int
+
+
+class RadarV2PerformanceOut(BaseModel):
+    """GET .../radar-v2/performance -- Phase B forward-testing metrics,
+    computed directly from real DecisionV2Outcome rows. Every rate is
+    null (never 0.0) when resolved_count is zero -- a genuine
+    not-enough-data-yet state is never presented as a measured 0%."""
+
+    generated_at: datetime
+    total_opportunities_emitted: int
+    total_outcomes_tracked: int
+    pending_count: int
+    resolved_count: int
+    target_hit_count: int
+    stop_loss_hit_count: int
+    partial_count: int
+    expired_count: int
+    data_unavailable_count: int
+    target_hit_rate: Optional[float] = None
+    stop_loss_hit_rate: Optional[float] = None
+    average_return_pct: Optional[float] = None
+    live_opportunities_by_classification: Dict[str, int] = Field(default_factory=dict)
+
+
+class RadarV2SahmkConsumptionOut(BaseModel):
+    """GET .../radar-v2/sahmk-consumption -- SAHMK quota consumption
+    attributable specifically to Radar V2, read verbatim from the
+    existing per-operation rate-limiter/cache telemetry's "radar_v2"
+    breakdown (see src.market_data.sahmk.operation_scope.RADAR_V2) --
+    no separate accounting mechanism, no secrets (never includes the
+    SAHMK API key or any credential, matching every other admin
+    diagnostics route's existing contract)."""
+
+    generated_at: datetime
+    rate_limiter_by_operation: Optional[Dict] = None
+    cache_by_operation: Optional[Dict] = None

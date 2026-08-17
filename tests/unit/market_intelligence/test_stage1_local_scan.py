@@ -17,8 +17,8 @@ from sqlalchemy.pool import StaticPool
 
 from src.core.db.database import Base
 from src.domain.models import PriceBar, Stock, Timeframe
+from src.market_intelligence.config import get_stage1_abnormal_volume_ratio
 from src.market_intelligence.stage1_local_scan import (
-    ABNORMAL_VOLUME_RATIO,
     MIN_INDICATOR_ROWS,
     run_stage1_local_scan,
 )
@@ -72,6 +72,32 @@ def _add_quiet_bars(session, stock: Stock, count: int, close=Decimal("20.0"), vo
                 volume=volume,
             )
         )
+    session.commit()
+
+
+def _add_uptrend_bars(session, stock: Stock, count: int, start_close=Decimal("20.0"), step=Decimal("0.30")) -> None:
+    """A steadily rising close (real, positive day-to-day moves, no
+    interpolation/lookahead) so ADX/SMA/EMA/SuperTrend/RSI/MACD all read
+    genuinely bullish -- used to build a Stage 1 candidate whose
+    ranking_score should clearly outrank a candidate whose only signal
+    is a bare volume spike on otherwise flat history."""
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    close = start_close
+    for i in range(count):
+        day_close = close + step
+        session.add(
+            PriceBar(
+                stock_id=stock.id,
+                timeframe=Timeframe.ONE_DAY,
+                timestamp=base + timedelta(days=i),
+                open=close,
+                high=day_close + Decimal("0.10"),
+                low=close - Decimal("0.05"),
+                close=day_close,
+                volume=50_000,
+            )
+        )
+        close = day_close
     session.commit()
 
 
@@ -158,7 +184,7 @@ class TestCandidateSelection:
         # the ratio is below a naive 60,000/10,000=6.0 -- only the
         # real threshold crossing (>= ABNORMAL_VOLUME_RATIO) is this
         # test's actual contract, not the SMA indicator's own internals.
-        assert r.relative_volume >= ABNORMAL_VOLUME_RATIO
+        assert r.relative_volume >= get_stage1_abnormal_volume_ratio()
 
     def test_below_liquidity_floor_never_becomes_a_candidate_even_with_a_signal(self, session):
         stock = _add_stock(session, "1111")
@@ -188,6 +214,62 @@ class TestCandidateSelection:
         # and every real candidate is present, not a specific order
         # this synthetic fixture can't meaningfully differentiate.
         assert {c.symbol for c in result.candidates} == {"1111", "2222"}
+
+
+class TestRankingScore:
+    def test_non_candidate_has_no_ranking_score(self, session):
+        stock = _add_stock(session, "1111")
+        _add_quiet_bars(session, stock, count=40)
+
+        result = run_stage1_local_scan(session, symbols=["1111"])
+        assert result.all_results[0].ranking_score is None
+
+    def test_candidate_ranking_score_and_components_are_within_bounds(self, session):
+        stock = _add_stock(session, "1111")
+        _add_quiet_bars(session, stock, count=39)
+        _add_volume_spike_bar(session, stock, after_count=39)
+
+        result = run_stage1_local_scan(session, symbols=["1111"])
+        r = result.candidates[0]
+        assert r.ranking_score is not None
+        assert 0.0 <= r.ranking_score <= 100.0
+        for component in (
+            r.component_scores.trend,
+            r.component_scores.momentum,
+            r.component_scores.volume,
+            r.component_scores.liquidity,
+            r.component_scores.volatility,
+            r.component_scores.risk_reward,
+        ):
+            assert component is None or 0.0 <= component <= 100.0
+
+    def test_a_strong_uptrend_outranks_a_bare_volume_spike(self, session):
+        """Deterministic regression: a symbol with a real, sustained
+        uptrend (bullish trend/momentum on top of the same volume
+        signal) must rank above a symbol whose only evidence is a bare
+        volume spike on flat history -- proves ranking_score reflects
+        more than just signal count."""
+        strong = _add_stock(session, "1111")
+        _add_uptrend_bars(session, strong, count=39)
+        _add_volume_spike_bar(session, strong, after_count=39, close=Decimal("32.0"))
+
+        weak = _add_stock(session, "2222")
+        _add_quiet_bars(session, weak, count=39)
+        _add_volume_spike_bar(session, weak, after_count=39)
+
+        result = run_stage1_local_scan(session, symbols=["1111", "2222"])
+        assert result.candidate_count == 2
+        assert result.candidates[0].symbol == "1111"
+        assert result.candidates[0].ranking_score > result.candidates[1].ranking_score
+
+    def test_ranking_score_is_deterministic_for_identical_inputs(self, session):
+        stock = _add_stock(session, "1111")
+        _add_uptrend_bars(session, stock, count=39)
+        _add_volume_spike_bar(session, stock, after_count=39, close=Decimal("32.0"))
+
+        first = run_stage1_local_scan(session, symbols=["1111"]).candidates[0].ranking_score
+        second = run_stage1_local_scan(session, symbols=["1111"]).candidates[0].ranking_score
+        assert first == second
 
 
 class TestFullUniverseAggregation:
