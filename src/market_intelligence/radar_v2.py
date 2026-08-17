@@ -102,18 +102,34 @@ def _as_naive_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=None) if value.tzinfo is not None else value
 
 
-def _current_live_opportunity(session: Session, symbol: str) -> Optional[RadarOpportunity]:
+def current_live_opportunity(session: Session, symbol: str) -> Optional[RadarOpportunity]:
     """The opportunity currently shown as "the" radar call for this
     symbol -- superseded_by_id IS NULL. At most one such row should
     ever exist per symbol by construction (every emission either
     creates the first one or supersedes the previous one), but
-    `.order_by(...).first()` is used defensively rather than `.one()`."""
+    `.order_by(...).first()` is used defensively rather than `.one()`.
+    Public: also used by `src.api.routes.watchlist` to surface a
+    watched symbol's live radar state."""
     return (
         session.query(RadarOpportunity)
         .filter(RadarOpportunity.symbol == symbol, RadarOpportunity.superseded_by_id.is_(None))
         .order_by(RadarOpportunity.emitted_at.desc())
         .first()
     )
+
+
+def list_live_opportunities(
+    session: Session, classification: Optional[str] = None, limit: int = 50
+) -> List[RadarOpportunity]:
+    """The current, ranked radar: only each symbol's live opportunity
+    (superseded_by_id IS NULL) appears, ordered by stage1_ranking_score
+    descending. Shared by the staff admin routes
+    (`src.api.routes.admin.market_intelligence`) and the consumer-facing
+    radar routes (`src.api.routes.radar`) -- one query, not duplicated."""
+    query = session.query(RadarOpportunity).filter(RadarOpportunity.superseded_by_id.is_(None))
+    if classification:
+        query = query.filter(RadarOpportunity.classification == classification)
+    return query.order_by(RadarOpportunity.stage1_ranking_score.desc().nullslast()).limit(limit).all()
 
 
 def _is_material_change(
@@ -201,7 +217,7 @@ def emit_radar_opportunities(
         create_pending_decision_v2_outcome(session, snapshot)
 
         confidence = float(snapshot.confidence_score)
-        prior = _current_live_opportunity(session, candidate.symbol)
+        prior = current_live_opportunity(session, candidate.symbol)
         if (
             prior is not None
             and _as_naive_utc(prior.emitted_at) >= _as_naive_utc(window_cutoff)

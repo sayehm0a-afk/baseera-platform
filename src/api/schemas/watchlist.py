@@ -36,6 +36,18 @@ class WatchlistItemOut(BaseModel):
     latest_data_freshness_status: Optional[str] = None
     latest_decision_timestamp: Optional[datetime] = None
 
+    # Basirah Radar V2 (Phase B/D, 2026-08-17): populated only when a
+    # live (non-superseded) RadarOpportunity row exists for this
+    # symbol -- most of the Radar mandate's requested fields
+    # (classification, confidence, entry zone, targets, stop,
+    # freshness) already exist above, sourced from the same
+    # DecisionV2Snapshot a live RadarOpportunity is itself linked to;
+    # these three are the genuinely Radar-specific fields with no
+    # existing equivalent.
+    radar_is_live_opportunity: bool = False
+    radar_stage1_rank: Optional[int] = None
+    radar_ranking_reason_ar: Optional[str] = None
+
 
 class WatchlistOut(BaseModel):
     generated_at: datetime

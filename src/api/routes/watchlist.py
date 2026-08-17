@@ -22,8 +22,9 @@ from src.api.exceptions import StockNotFoundError, WatchlistItemAlreadyExistsErr
 from src.api.schemas.auth import MessageOut
 from src.api.schemas.watchlist import AddWatchlistItemRequest, WatchlistItemOut, WatchlistOut
 from src.core.db.database import get_db
-from src.domain.models import DecisionV2Snapshot, Stock, User, UserWatchlist, UserWatchlistItem
+from src.domain.models import DecisionV2Snapshot, RadarOpportunity, Stock, User, UserWatchlist, UserWatchlistItem
 from src.market_data.validators.symbol_validator import InvalidSymbolError, validate_symbol_format
+from src.market_intelligence.radar_v2 import current_live_opportunity
 
 router = APIRouter(prefix="/api/v1/watchlist", tags=["watchlist"])
 
@@ -40,7 +41,12 @@ def _get_or_create_watchlist(session: Session, user_id: int) -> UserWatchlist:
     return watchlist
 
 
-def _item_out(item: UserWatchlistItem, stock: Stock, latest: DecisionV2Snapshot | None) -> WatchlistItemOut:
+def _item_out(
+    item: UserWatchlistItem,
+    stock: Stock,
+    latest: DecisionV2Snapshot | None,
+    radar: RadarOpportunity | None,
+) -> WatchlistItemOut:
     return WatchlistItemOut(
         symbol=item.symbol,
         added_at=item.added_at,
@@ -62,6 +68,9 @@ def _item_out(item: UserWatchlistItem, stock: Stock, latest: DecisionV2Snapshot 
         latest_stop_loss=float(latest.stop_loss) if latest and latest.stop_loss is not None else None,
         latest_data_freshness_status=latest.data_freshness_status if latest else None,
         latest_decision_timestamp=latest.decision_timestamp if latest else None,
+        radar_is_live_opportunity=radar is not None,
+        radar_stage1_rank=radar.stage1_rank if radar else None,
+        radar_ranking_reason_ar=radar.ranking_reason_ar if radar else None,
     )
 
 
@@ -87,7 +96,8 @@ def get_watchlist(
             .order_by(DecisionV2Snapshot.decision_timestamp.desc())
             .first()
         )
-        out_items.append(_item_out(item, stock, latest))
+        radar = current_live_opportunity(session, item.symbol)
+        out_items.append(_item_out(item, stock, latest, radar))
 
     return WatchlistOut(generated_at=datetime.now(timezone.utc), items=out_items)
 
@@ -128,7 +138,8 @@ def add_watchlist_item(
         .order_by(DecisionV2Snapshot.decision_timestamp.desc())
         .first()
     )
-    return _item_out(item, stock, latest)
+    radar = current_live_opportunity(session, symbol)
+    return _item_out(item, stock, latest, radar)
 
 
 @router.delete("/items/{symbol}", response_model=MessageOut)

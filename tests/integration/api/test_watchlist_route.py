@@ -14,7 +14,7 @@ import pytest
 
 import main
 from src.api.dependencies import get_current_user
-from src.domain.models import DecisionV2Snapshot, Stock, User, UserWatchlist, UserWatchlistItem
+from src.domain.models import DecisionV2Snapshot, RadarOpportunity, Stock, User, UserWatchlist, UserWatchlistItem
 
 
 @pytest.fixture
@@ -71,6 +71,27 @@ def _add_decision_v2(db_session, symbol, decision="BUY", confidence=75.0):
     db_session.add(snapshot)
     db_session.commit()
     return snapshot
+
+
+def _add_radar_opportunity(db_session, snapshot, stage1_rank=1, ranking_reason_ar="سبب الترتيب", superseded_by_id=None):
+    stock = db_session.query(Stock).filter(Stock.id == snapshot.stock_id).one()
+    opportunity = RadarOpportunity(
+        symbol=snapshot.symbol,
+        stock_id=stock.id,
+        decision_v2_snapshot_id=snapshot.id,
+        scan_run_id=1,
+        classification=snapshot.decision,
+        classification_label_ar=snapshot.decision_label_ar,
+        confidence_score=snapshot.confidence_score,
+        price_at_signal=snapshot.current_price,
+        stage1_rank=stage1_rank,
+        ranking_reason_ar=ranking_reason_ar,
+        emitted_at=datetime.now(timezone.utc),
+        superseded_by_id=superseded_by_id,
+    )
+    db_session.add(opportunity)
+    db_session.commit()
+    return opportunity
 
 
 # --- authentication ---------------------------------------------------
@@ -136,6 +157,74 @@ def test_add_item_includes_the_real_latest_decision_v2_snapshot(client, db_sessi
     assert body["latest_current_price"] == pytest.approx(30.5)
     assert body["latest_target_1"] == pytest.approx(32.0)
     assert body["latest_stop_loss"] == pytest.approx(29.0)
+
+
+# --- Radar V2 join (Basirah Radar V2 mandate, Phase B/D 2026-08-17) ------
+
+
+def test_watchlist_item_has_no_radar_state_when_none_exists(client, db_session, as_user):
+    _make_stock(db_session, "2222")
+    _add_decision_v2(db_session, "2222")
+
+    response = client.post("/api/v1/watchlist/items", json={"symbol": "2222"})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["radar_is_live_opportunity"] is False
+    assert body["radar_stage1_rank"] is None
+    assert body["radar_ranking_reason_ar"] is None
+
+
+def test_watchlist_item_reflects_a_live_radar_opportunity(client, db_session, as_user):
+    _make_stock(db_session, "2222")
+    snapshot = _add_decision_v2(db_session, "2222")
+    _add_radar_opportunity(db_session, snapshot, stage1_rank=2, ranking_reason_ar="اختراق مستوى المقاومة")
+
+    response = client.post("/api/v1/watchlist/items", json={"symbol": "2222"})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["radar_is_live_opportunity"] is True
+    assert body["radar_stage1_rank"] == 2
+    assert body["radar_ranking_reason_ar"] == "اختراق مستوى المقاومة"
+
+
+def test_get_watchlist_reflects_a_live_radar_opportunity(client, db_session, as_user):
+    _make_stock(db_session, "2222")
+    snapshot = _add_decision_v2(db_session, "2222")
+    _add_radar_opportunity(db_session, snapshot, stage1_rank=1)
+    client.post("/api/v1/watchlist/items", json={"symbol": "2222"})
+
+    response = client.get("/api/v1/watchlist")
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["radar_is_live_opportunity"] is True
+    assert items[0]["radar_stage1_rank"] == 1
+
+
+def test_watchlist_item_ignores_a_superseded_radar_opportunity(client, db_session, as_user):
+    """A watched symbol whose only RadarOpportunity row has been
+    superseded must read as "no live radar call" -- never surface a
+    stale, replaced opportunity as if it were current."""
+    _make_stock(db_session, "2222")
+    old_snapshot = _add_decision_v2(db_session, "2222", confidence=60.0)
+    old_opportunity = _add_radar_opportunity(db_session, old_snapshot, stage1_rank=3)
+
+    new_snapshot = _add_decision_v2(db_session, "2222", confidence=85.0)
+    new_opportunity = _add_radar_opportunity(db_session, new_snapshot, stage1_rank=1)
+
+    old_opportunity.superseded_by_id = new_opportunity.id
+    db_session.add(old_opportunity)
+    db_session.commit()
+
+    response = client.post("/api/v1/watchlist/items", json={"symbol": "2222"})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["radar_is_live_opportunity"] is True
+    assert body["radar_stage1_rank"] == 1  # the new, live opportunity -- not the superseded one
 
 
 def test_add_item_rejects_an_unknown_symbol(client, db_session, as_user):
