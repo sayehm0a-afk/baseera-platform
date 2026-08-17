@@ -16,7 +16,7 @@ export default function SplashPage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchSession().then((user) => {
-        router.replace(user ? "/dashboard" : "/login");
+        router.replace(user ? "/radar" : "/login");
       });
     }, SPLASH_DURATION_MS);
     return () => clearTimeout(timer);

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AiStar } from "@/components/ai/AiStar";
@@ -139,13 +140,17 @@ export function TopBar() {
             <path d="M10 21a2 2 0 0 0 4 0" strokeLinecap="round" />
           </svg>
         </button>
-        <button
-          type="button"
-          aria-label="الملف الشخصي"
+        {/* RADAR-C/E: primary nav no longer carries a Settings item
+         * (nav-items.ts) -- account/settings remain reachable here,
+         * de-emphasized next to the four investment surfaces rather
+         * than competing with them in SideNav/MobileTabBar. */}
+        <Link
+          href="/settings"
+          aria-label="الإعدادات والملف الشخصي"
           className="flex h-9 w-9 items-center justify-center rounded-bsr-full bg-bsr-surface-raised text-sm font-semibold text-bsr-text-primary"
         >
           م
-        </button>
+        </Link>
       </div>
     </header>
   );

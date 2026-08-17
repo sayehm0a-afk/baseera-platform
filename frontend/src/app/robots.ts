@@ -13,6 +13,8 @@ export default function robots(): MetadataRoute.Robots {
       allow: ["/", "/login", "/register", "/forgot-password"],
       disallow: [
         "/dashboard",
+        "/today",
+        "/radar",
         "/scan",
         "/watchlist",
         "/opportunities",
