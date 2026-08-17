@@ -476,3 +476,42 @@ export interface AdminSubscriptionList {
   total: number;
   subscriptions: AdminSubscription[];
 }
+
+/** Mirrors RadarV2SummaryOut/RadarV2PerformanceOut/RadarV2SahmkConsumptionOut
+ * (src/api/schemas/market_intelligence.py) -- the staff-only Radar V2
+ * diagnostics already exposed by /admin/market-intelligence/radar-v2/*
+ * (src/api/routes/admin/market_intelligence.py); the consumer-facing
+ * RadarHomeSummary in ./radar-types.ts is a separate, deliberately
+ * smaller shape without these staff-only operational fields. */
+export interface AdminRadarV2Summary {
+  generated_at: string;
+  live_opportunity_count: number;
+  live_by_classification: Record<string, number>;
+  average_confidence: number | null;
+  most_recent_scan_run_id: number | null;
+  most_recent_emitted_at: string | null;
+  stage2_candidate_cap: number;
+}
+
+export interface AdminRadarV2Performance {
+  generated_at: string;
+  total_opportunities_emitted: number;
+  total_outcomes_tracked: number;
+  pending_count: number;
+  resolved_count: number;
+  target_hit_count: number;
+  stop_loss_hit_count: number;
+  partial_count: number;
+  expired_count: number;
+  data_unavailable_count: number;
+  target_hit_rate: number | null;
+  stop_loss_hit_rate: number | null;
+  average_return_pct: number | null;
+  live_opportunities_by_classification: Record<string, number>;
+}
+
+export interface AdminRadarV2SahmkConsumption {
+  generated_at: string;
+  rate_limiter_by_operation: Record<string, unknown> | null;
+  cache_by_operation: Record<string, unknown> | null;
+}

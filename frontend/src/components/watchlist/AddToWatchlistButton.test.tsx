@@ -28,6 +28,9 @@ describe("AddToWatchlistButton", () => {
       latest_stop_loss: null,
       latest_data_freshness_status: null,
       latest_decision_timestamp: null,
+      radar_is_live_opportunity: false,
+      radar_stage1_rank: null,
+      radar_ranking_reason_ar: null,
     });
 
     render(<AddToWatchlistButton symbol="2222" />);

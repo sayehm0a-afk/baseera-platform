@@ -22,6 +22,10 @@ export interface WatchlistItem {
   latest_stop_loss: number | null;
   latest_data_freshness_status: string | null;
   latest_decision_timestamp: string | null;
+
+  radar_is_live_opportunity: boolean;
+  radar_stage1_rank: number | null;
+  radar_ranking_reason_ar: string | null;
 }
 
 export interface MyWatchlist {

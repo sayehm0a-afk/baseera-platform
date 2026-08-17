@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { AiStar } from "@/components/ai/AiStar";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { getMyWatchlist, removeFromWatchlist } from "@/lib/api/watchlist";
@@ -110,6 +111,19 @@ export function MyWatchlistPanel() {
           ) : (
             <p className="text-sm text-bsr-text-secondary">لم يتم تحليل هذا السهم بعد.</p>
           )}
+
+          {item.radar_is_live_opportunity ? (
+            <div className="flex items-center gap-bsr-2 text-xs text-bsr-teal-500">
+              <AiStar size="sm" />
+              <span>
+                فرصة حية في الرادار الذكي
+                {item.radar_stage1_rank != null ? ` · الترتيب #${item.radar_stage1_rank}` : ""}
+              </span>
+            </div>
+          ) : null}
+          {item.radar_is_live_opportunity && item.radar_ranking_reason_ar ? (
+            <p className="text-xs text-bsr-text-secondary">{item.radar_ranking_reason_ar}</p>
+          ) : null}
 
           {item.latest_target_1 != null || item.latest_stop_loss != null ? (
             <div className="flex flex-wrap gap-bsr-4 text-xs text-bsr-text-secondary">
