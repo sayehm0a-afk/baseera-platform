@@ -8,6 +8,7 @@ import type {
   Quote,
   Recommendation,
   Stock,
+  StockDirectory,
   StockSearch,
   TechnicalAnalysis,
 } from "./stocks-types";
@@ -25,6 +26,25 @@ export function getStock(symbol: string): Promise<Stock> {
 export function searchStocks(query: string, limit = 20): Promise<StockSearch> {
   const search = new URLSearchParams({ q: query, limit: String(limit) });
   return apiFetch<StockSearch>(`/api/v1/stocks/search?${search.toString()}`);
+}
+
+/** All-Stocks directory (Phase F): every active symbol with its
+ * current price + daily change %, computed entirely from already-
+ * persisted data (GET /api/v1/stocks/directory) -- never a live
+ * SAHMK call. */
+export function getStockDirectory(params?: {
+  q?: string;
+  sector?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<StockDirectory> {
+  const search = new URLSearchParams();
+  if (params?.q) search.set("q", params.q);
+  if (params?.sector) search.set("sector", params.sector);
+  if (params?.limit != null) search.set("limit", String(params.limit));
+  if (params?.offset != null) search.set("offset", String(params.offset));
+  const query = search.toString() ? `?${search.toString()}` : "";
+  return apiFetch<StockDirectory>(`/api/v1/stocks/directory${query}`);
 }
 
 export function getQuote(symbol: string): Promise<Quote> {

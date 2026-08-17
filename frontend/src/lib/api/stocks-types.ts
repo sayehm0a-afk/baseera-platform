@@ -388,6 +388,29 @@ export interface StockSearch {
   results: StockSearchResult[];
 }
 
+/** GET /api/v1/stocks/directory (Phase F: All-Stocks). `current_price`/
+ * `change_amount`/`change_pct` are null (not fabricated) until at
+ * least one, respectively two, persisted daily bars exist. */
+export interface StockDirectoryItem {
+  symbol: string;
+  name_en: string;
+  name_ar: string | null;
+  sector: string | null;
+  sector_ar: string | null;
+  current_price: number | null;
+  change_amount: number | null;
+  change_pct: number | null;
+  price_as_of: string | null;
+  freshness_label_ar: string;
+}
+
+export interface StockDirectory {
+  total: number;
+  limit: number;
+  offset: number;
+  results: StockDirectoryItem[];
+}
+
 export interface AnalystReport {
   symbol: string;
   recommendation: string;

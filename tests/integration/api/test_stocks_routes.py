@@ -608,3 +608,117 @@ def test_search_is_registered_before_the_symbol_wildcard_route(client, db_sessio
     response = client.get("/api/v1/stocks/search", params={"q": "x"})
     assert response.status_code == 200
     assert "results" in response.json()
+
+
+# --- GET /api/v1/stocks/directory (Phase F: All-Stocks) ---------------
+
+
+def test_directory_is_registered_before_the_symbol_wildcard_route(client, db_session):
+    response = client.get("/api/v1/stocks/directory")
+    assert response.status_code == 200
+    assert "results" in response.json()
+
+
+def test_directory_lists_active_stocks_with_no_price_yet(client, db_session):
+    _make_stock(db_session)
+    response = client.get("/api/v1/stocks/directory")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    row = body["results"][0]
+    assert row["symbol"] == "2222"
+    assert row["current_price"] is None
+    assert row["change_amount"] is None
+    assert row["change_pct"] is None
+    assert row["freshness_label_ar"] == "غير معروف"
+
+
+def test_directory_computes_current_price_and_change_from_the_two_most_recent_bars(client, db_session):
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=3)
+    # _add_bars writes close = 30.5, 30.6, 30.7 for days 0,1,2 (ascending
+    # by day) -- the two most recent are day2 (30.7, "current") and
+    # day1 (30.6, "previous").
+    response = client.get("/api/v1/stocks/directory")
+    assert response.status_code == 200
+    row = response.json()["results"][0]
+    assert row["current_price"] == pytest.approx(30.7)
+    assert row["change_amount"] == pytest.approx(0.1)
+    assert row["change_pct"] == pytest.approx(round((0.1 / 30.6) * 100.0, 4))
+    assert row["freshness_label_ar"] == "آخر جلسة"
+
+
+def test_directory_single_bar_has_price_but_no_change(client, db_session):
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=1)
+    response = client.get("/api/v1/stocks/directory")
+    row = response.json()["results"][0]
+    assert row["current_price"] == pytest.approx(30.5)
+    assert row["change_amount"] is None
+    assert row["change_pct"] is None
+
+
+def test_directory_excludes_inactive_stocks(client, db_session):
+    stock = _make_stock(db_session)
+    stock.is_active = False
+    db_session.commit()
+    response = client.get("/api/v1/stocks/directory")
+    assert response.json()["total"] == 0
+
+
+def test_directory_search_by_arabic_name_matches_the_hamza_variant(client, db_session):
+    stock = _make_stock(db_session)
+    stock.name_ar = "أرامكو السعودية"
+    db_session.commit()
+    response = client.get("/api/v1/stocks/directory", params={"q": "ارامكو"})
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert len(results) == 1
+    assert results[0]["symbol"] == "2222"
+
+
+def test_directory_filters_by_sector(client, db_session):
+    _make_stock(db_session, symbol="2222")  # sector="Energy"
+    other = Stock(symbol="1120", name_en="Al Rajhi Bank", sector="Banks")
+    db_session.add(other)
+    db_session.commit()
+
+    response = client.get("/api/v1/stocks/directory", params={"sector": "Banks"})
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert [r["symbol"] for r in results] == ["1120"]
+
+
+def test_directory_pagination(client, db_session):
+    for i in range(5):
+        db_session.add(Stock(symbol=f"100{i}", name_en=f"Stock {i}"))
+    db_session.commit()
+
+    response = client.get("/api/v1/stocks/directory", params={"limit": 2, "offset": 2})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 5
+    assert body["limit"] == 2
+    assert body["offset"] == 2
+    assert len(body["results"]) == 2
+    assert [r["symbol"] for r in body["results"]] == ["1002", "1003"]
+
+
+def test_directory_never_calls_the_market_data_provider(client, db_session, monkeypatch):
+    """Browsing the All-Stocks directory must be zero-SAHMK -- it only
+    ever reads already-persisted PriceBar rows, never the injected
+    market-data provider."""
+    from main import app
+    from src.api.dependencies import get_market_provider
+
+    def _fail_if_called():
+        raise AssertionError("get_stock_directory must never resolve a live market-data provider")
+
+    app.dependency_overrides[get_market_provider] = _fail_if_called
+    try:
+        stock = _make_stock(db_session)
+        _add_bars(db_session, stock, count=2)
+        response = client.get("/api/v1/stocks/directory")
+        assert response.status_code == 200
+    finally:
+        del app.dependency_overrides[get_market_provider]

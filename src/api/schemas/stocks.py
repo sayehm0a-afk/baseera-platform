@@ -59,6 +59,39 @@ class StockSearchOut(BaseModel):
     results: List[StockSearchResultOut]
 
 
+class StockDirectoryItemOut(BaseModel):
+    """One row of the All-Stocks directory (Phase F). `current_price`/
+    `change_amount`/`change_pct` come from the two most recent
+    already-persisted daily `PriceBar` rows for this symbol -- never a
+    live SAHMK call (see the /directory route's own docstring). All
+    three are `None`, not fabricated zeros, when fewer than the needed
+    bars exist yet."""
+
+    symbol: str
+    name_en: str
+    name_ar: Optional[str] = None
+    sector: Optional[str] = None
+    sector_ar: Optional[str] = None
+    current_price: Optional[float] = None
+    change_amount: Optional[float] = None
+    change_pct: Optional[float] = None
+    price_as_of: Optional[datetime] = None
+    freshness_label_ar: str
+
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "StockDirectoryItemOut":
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
+
+
+class StockDirectoryOut(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    results: List[StockDirectoryItemOut]
+
+
 class QuoteOut(BaseModel):
     symbol: str
     # open/high/low/volume are None when the only source available is

@@ -58,6 +58,7 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.analysis.analyst.analyst_engine_factory import get_analyst_engine
@@ -106,6 +107,8 @@ from src.api.schemas.stocks import (
     RejectedAlternativeOut,
     ScoreContributionOut,
     SignalOut,
+    StockDirectoryItemOut,
+    StockDirectoryOut,
     StockOut,
     StockSearchOut,
     StockSearchResultOut,
@@ -256,6 +259,116 @@ def search_stocks(
             for s in stocks
         ],
     )
+
+
+@router.get("/directory", response_model=StockDirectoryOut)
+def get_stock_directory(
+    q: Optional[str] = Query(default=None, min_length=1, max_length=64),
+    sector: Optional[str] = Query(default=None, max_length=64),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> StockDirectoryOut:
+    """RADAR-C Phase F: the All-Stocks browse/search directory --
+    every active Tadawul symbol with its current price and daily
+    change %, computed entirely from the two most-recent already-
+    persisted daily `PriceBar` rows per symbol (a single windowed
+    query below, not one query per symbol). Zero new SAHMK requests
+    are ever made by this route: browsing the full market never costs
+    live-provider quota, matching the once-daily post-close OHLCV
+    ingestion this platform already runs (see market_data.ingestion).
+
+    `q` reuses `/search`'s exact case-insensitive symbol/Arabic-name/
+    English-name substring match (including the normalized-Arabic
+    fallback for hamza/spacing variants) -- the same real identifiers,
+    not a second search implementation. `sector` filters on the plain
+    English `Stock.sector` value already stored (the same field every
+    other sector-carrying response in this codebase filters/labels
+    from); no separate "list of sectors" endpoint exists yet, so the
+    frontend does not offer a sector dropdown in this phase.
+    """
+    stocks_query = session.query(Stock).filter(Stock.is_active.is_(True))
+    if sector:
+        stocks_query = stocks_query.filter(Stock.sector == sector)
+
+    if q:
+        query = q.strip()
+        like = f"%{query}%"
+        matched = (
+            stocks_query.filter(
+                Stock.symbol.ilike(like) | Stock.name_ar.ilike(like) | Stock.name_en.ilike(like)
+            )
+            .order_by(Stock.symbol)
+            .all()
+        )
+        matched_symbols = {s.symbol for s in matched}
+        normalized_query = normalize_arabic(query)
+        if normalized_query:
+            for candidate in stocks_query.order_by(Stock.symbol).all():
+                if candidate.symbol in matched_symbols:
+                    continue
+                if candidate.name_ar and normalized_query in normalize_arabic(candidate.name_ar):
+                    matched.append(candidate)
+                    matched_symbols.add(candidate.symbol)
+        matched.sort(key=lambda s: s.symbol)
+        total = len(matched)
+        page = matched[offset:offset + limit]
+    else:
+        total = stocks_query.count()
+        page = stocks_query.order_by(Stock.symbol).offset(offset).limit(limit).all()
+
+    stock_ids = [s.id for s in page]
+    latest_by_stock_id: Dict[int, list] = {}
+    if stock_ids:
+        ranked = (
+            session.query(
+                PriceBar.stock_id,
+                PriceBar.close,
+                PriceBar.timestamp,
+                func.row_number()
+                .over(partition_by=PriceBar.stock_id, order_by=PriceBar.timestamp.desc())
+                .label("rn"),
+            )
+            .filter(PriceBar.stock_id.in_(stock_ids), PriceBar.timeframe == Timeframe.ONE_DAY)
+            .subquery()
+        )
+        rows = session.query(ranked).filter(ranked.c.rn <= 2).all()
+        for row in rows:
+            latest_by_stock_id.setdefault(row.stock_id, []).append(row)
+
+    results = []
+    for stock in page:
+        bars = sorted(latest_by_stock_id.get(stock.id, []), key=lambda r: r.rn)
+        current_price: Optional[float] = None
+        change_amount: Optional[float] = None
+        change_pct: Optional[float] = None
+        price_as_of: Optional[datetime] = None
+        freshness_label_ar = "غير معروف"
+        if bars:
+            current_price = float(bars[0].close)
+            price_as_of = bars[0].timestamp
+            freshness_label_ar = "آخر جلسة"
+            if len(bars) > 1 and bars[1].close:
+                previous_close = float(bars[1].close)
+                if previous_close > 0:
+                    change_amount = round(current_price - previous_close, 4)
+                    change_pct = round((current_price - previous_close) / previous_close * 100.0, 4)
+        results.append(
+            StockDirectoryItemOut(
+                symbol=stock.symbol,
+                name_en=stock.name_en,
+                name_ar=stock.name_ar,
+                sector=stock.sector,
+                current_price=current_price,
+                change_amount=change_amount,
+                change_pct=change_pct,
+                price_as_of=price_as_of,
+                freshness_label_ar=freshness_label_ar,
+            )
+        )
+
+    return StockDirectoryOut(total=total, limit=limit, offset=offset, results=results)
 
 
 @router.get("/{symbol}", response_model=StockOut)
