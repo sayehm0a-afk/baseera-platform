@@ -250,6 +250,14 @@ async def get_dashboard_summary(
         database_health=database_health,
         redis_health=redis_health,
         ingestion_scheduler_running=main.ingestion_scheduler is not None and main.ingestion_scheduler.is_running,
+        ingestion_scheduler_is_leader=(
+            main.ingestion_scheduler is not None and main.ingestion_scheduler.is_leader
+        ),
+        ingestion_scheduler_skipped_due_to_not_leader_count=(
+            main.ingestion_scheduler.skipped_due_to_not_leader_count
+            if main.ingestion_scheduler is not None
+            else 0
+        ),
         ingestion_deferred_job_count=ingestion_deferred_job_count,
         ingestion_next_retry_at=(
             ingestion_next_retry_at.isoformat() if ingestion_next_retry_at is not None else None

@@ -134,6 +134,34 @@ def get_ingestion_job_retry_base_delay_seconds() -> float:
     return float(os.getenv("INGESTION_JOB_RETRY_BASE_DELAY_SECONDS", "5"))
 
 
+def get_ingestion_leader_lease_seconds() -> float:
+    """TTL of the Redis leader lease `IngestionScheduler` uses so only
+    one of Gunicorn's worker processes actually performs scheduled
+    ingestion work at a time -- mirrors `MarketIntelligenceScheduler`'s
+    own `MARKET_SCAN_LEADER_LEASE_SECONDS` lease/renewal pattern
+    (`scheduler_leader_lock.SchedulerLeaderLock`), applied to a second,
+    independent lease key so the two schedulers' leaderships are
+    tracked separately. Renewed on its own short heartbeat
+    (`get_ingestion_leader_heartbeat_seconds`), deliberately independent
+    of any single ingestion job's own (often much longer, e.g. daily or
+    weekly) recurring interval -- a worker that crashes without
+    releasing the lease simply lets it expire, so leadership fails over
+    to another worker automatically."""
+    return float(os.getenv("INGESTION_SCHEDULER_LEADER_LEASE_SECONDS", "180"))
+
+
+def get_ingestion_leader_heartbeat_seconds() -> float:
+    """How often `IngestionScheduler`'s dedicated leadership heartbeat
+    task re-attempts/renews its Redis lease. Deliberately independent
+    of any ingestion job's own interval (which can be as long as 7
+    days) -- leadership itself transfers to a new worker within roughly
+    this many seconds after the previous leader's process dies, even
+    though the new leader's first actual job run still waits for that
+    job's own normal schedule (never runs a job early just because
+    leadership just changed hands)."""
+    return float(os.getenv("INGESTION_SCHEDULER_LEADER_HEARTBEAT_SECONDS", "30"))
+
+
 def get_max_ingestion_job_run_duration_hours() -> float:
     """Mirrors src.market_intelligence.config.get_max_scan_run_duration_hours's
     reap_stale_runs pattern for the same underlying failure mode: a
