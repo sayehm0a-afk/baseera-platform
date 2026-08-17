@@ -12,6 +12,7 @@ import { DecisionTransparencyPanel } from "@/components/decision/DecisionTranspa
 import { ExecutiveDecisionCard } from "@/components/decision/ExecutiveDecisionCard";
 import { CategoryTabs } from "@/components/patterns/CategoryTabs";
 import { EmptyState } from "@/components/patterns/EmptyState";
+import { ExpandableSection } from "@/components/patterns/ExpandableSection";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { RadarStockSection } from "@/components/radar/RadarStockSection";
 import { RecommendationHistoryPanel } from "@/components/recommendation-history/RecommendationHistoryPanel";
@@ -252,11 +253,13 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
       </div>
 
       {/* Executive decision (Decision Engine V2, Phase 1 foundation) --
-          plus the Phase 2E deep-dive transparency panel underneath it,
-          for every field DecisionV2 already computes that the
-          immediate-answer card above deliberately keeps out of the way.
-          Phase 2G adds an opt-in beginner-mode summary alongside these,
-          never replacing them. */}
+          decision / confidence / entry / targets / stop / duration /
+          risk / "لماذا؟" reasons, all in one immediate-answer card.
+          Phase 2G adds an opt-in beginner-mode summary alongside it,
+          never replacing it. The deep-dive transparency panel, the
+          committee debate, and the radar context move below the chart
+          into an expandable "advanced" section (RADAR-C Phase G:
+          simple outside, sophisticated inside). */}
       {decisionV2.status === "ready" ? (
         <>
           <div className="flex justify-end">
@@ -270,9 +273,6 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           </div>
           {beginnerMode ? <BeginnerSummaryCard decision={decisionV2.data} /> : null}
           <ExecutiveDecisionCard decision={decisionV2.data} />
-          <DecisionTransparencyPanel decision={decisionV2.data} />
-          <CommitteePanel committee={decisionV2.data.committee} />
-          <RadarStockSection opportunity={radar.status === "ready" ? radar.data : null} />
         </>
       ) : decisionV2.status === "loading" ? (
         <LoadingScreen />
@@ -293,7 +293,9 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
         />
       )}
 
-      {/* Chart */}
+      {/* Chart -- the real price history right after the decision, so
+          the "لماذا؟" reasons above have a chart to point at before any
+          advanced detail. */}
       <div id="chart" className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-3">
         {history.status === "loading" ? <LoadingScreen /> : null}
         {history.status === "insufficient_data" || history.status === "not_found" ? (
@@ -313,6 +315,18 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           )
         ) : null}
       </div>
+
+      {/* Advanced detail: full gate list, sub-score breakdown, the AI
+          committee's debate, and radar context -- everything the
+          immediate-answer card above deliberately keeps out of the way,
+          collapsed by default. */}
+      {decisionV2.status === "ready" ? (
+        <ExpandableSection title="التحليل الكامل والشفافية" subtitle="بوابات النشر، تفصيل الثقة، لجنة الذكاء الاصطناعي">
+          <DecisionTransparencyPanel decision={decisionV2.data} />
+          <CommitteePanel committee={decisionV2.data.committee} />
+          <RadarStockSection opportunity={radar.status === "ready" ? radar.data : null} />
+        </ExpandableSection>
+      ) : null}
 
       <CategoryTabs categories={[...TABS]} labels={TAB_LABELS} active={tab} onChange={(t) => setTab(t as Tab)} />
 

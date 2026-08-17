@@ -109,6 +109,8 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
     why_not_buy_reasons: [],
     fundamental_summary: {},
     fundamental_summary_ar: "",
+    news_impact: "NO_RELEVANT_NEWS",
+    news_impact_summary_ar: "لا توجد أخبار محلَّلة حديثة ذات صلة بهذا السهم.",
     committee: null,
     entry_confirmation_conditions_ar: ["اختراق حقيقي لمستوى 27.90 مدعوم بحجم تداول أعلى من المتوسط يعزز الفرضية."],
     watch_next_session_ar: ["رد فعل السعر عند مستوى المقاومة القريب (27.90)."],

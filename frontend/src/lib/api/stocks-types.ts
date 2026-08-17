@@ -325,6 +325,12 @@ export interface DecisionV2 {
   fundamental_summary: Record<string, number | null>;
   fundamental_summary_ar: string;
 
+  /** Section 11: real news-sentiment aggregate over analyzed news
+   * events (src.analysis.decision_v2.news_impact) -- never fabricated,
+   * "NO_RELEVANT_NEWS" when no analyzed news exists for this symbol. */
+  news_impact: "POSITIVE" | "NEGATIVE" | "NEUTRAL" | "NO_RELEVANT_NEWS";
+  news_impact_summary_ar: string;
+
   /** AI Multi-Agent Investment Committee -- present only on a
    * successful, best-effort committee run alongside this decision
    * (see src.ai_evolution.committee). Null when the committee could

@@ -29,6 +29,26 @@ function fmtPct(value: number | null): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
 }
 
+/** RADAR-C Phase G: a decision this card treats as bullish-leaning
+ * (i.e. one where negative news is a genuine contradiction worth
+ * surfacing) vs. bearish-leaning (REDUCE/EXIT, where it's positive
+ * news that would contradict). Mirrors the same direction test the
+ * backend's confidence cap already applies
+ * (src.analysis.decision_v2.engine's news_contradicts_direction). */
+const BULLISH_LEANING_DECISIONS: DecisionV2["decision"][] = [
+  "STRONG_BUY_CANDIDATE",
+  "BUY_CANDIDATE",
+  "WAIT_FOR_ENTRY",
+  "WATCH",
+];
+const BEARISH_LEANING_DECISIONS: DecisionV2["decision"][] = ["REDUCE", "EXIT"];
+
+function newsContradictsDecision(decision: DecisionV2): boolean {
+  if (decision.news_impact === "NEGATIVE") return BULLISH_LEANING_DECISIONS.includes(decision.decision);
+  if (decision.news_impact === "POSITIVE") return BEARISH_LEANING_DECISIONS.includes(decision.decision);
+  return false;
+}
+
 /**
  * Phase 1 Decision Engine V2's executive-decision section for the
  * stock analysis page: the twelve explainability elements the spec
@@ -93,9 +113,18 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
         <p className="text-[11px] leading-4 text-bsr-text-secondary">{decision.market_risk_basis_ar}</p>
       </div>
 
-      {/* Freshness / market status */}
+      {/* Freshness / market status -- STALE/UNKNOWN data is a material
+          risk in its own right (the numbers above may no longer reflect
+          the real market), so it gets a warning treatment instead of
+          blending into the other neutral pills. */}
       <div className="flex flex-wrap items-center gap-bsr-2 text-xs text-bsr-text-secondary">
-        <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">
+        <span
+          className={`rounded-bsr-full px-bsr-2 py-bsr-0.5 ${
+            decision.data_freshness_status === "STALE" || decision.data_freshness_status === "UNKNOWN"
+              ? "bg-bsr-action-watch/15 font-semibold text-bsr-action-watch"
+              : "bg-bsr-surface-overlay"
+          }`}
+        >
           {FRESHNESS_LABELS_AR[decision.data_freshness_status]}
         </span>
         <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">
@@ -105,6 +134,17 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
           <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">{decision.sector_ar}</span>
         ) : null}
       </div>
+
+      {/* Material risk: news sentiment actively contradicts this
+          decision's direction. Deliberately kept outside any
+          expandable/advanced section -- this must stay visible
+          whenever it's true, per RADAR-C Phase G. */}
+      {newsContradictsDecision(decision) ? (
+        <div className="flex flex-col gap-0.5 rounded-bsr-md bg-bsr-action-sell/10 p-bsr-2">
+          <span className="text-xs font-semibold text-bsr-action-sell">تعارض مع الأخبار الأخيرة</span>
+          <p className="text-[11px] leading-4 text-bsr-text-secondary">{decision.news_impact_summary_ar}</p>
+        </div>
+      ) : null}
 
       {/* Entry / stop / targets */}
       {hasEntryZone || decision.stop_loss != null || decision.target_1 != null ? (

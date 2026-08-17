@@ -49,9 +49,7 @@ export function DecisionTransparencyPanel({ decision }: { decision: DecisionV2 }
   );
 
   return (
-    <div className="flex flex-col gap-bsr-4 rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
-      <h2 className="text-sm font-semibold text-bsr-text-primary">التحليل الكامل والشفافية</h2>
-
+    <div className="flex flex-col gap-bsr-4">
       {/* 1: why not stronger */}
       {decision.why_not_stronger_ar ? (
         <div>

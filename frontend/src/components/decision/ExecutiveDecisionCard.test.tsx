@@ -110,6 +110,8 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
     why_not_buy_reasons: [],
     fundamental_summary: {},
     fundamental_summary_ar: "",
+    news_impact: "NO_RELEVANT_NEWS",
+    news_impact_summary_ar: "لا توجد أخبار محلَّلة حديثة ذات صلة بهذا السهم.",
     committee: null,
     entry_confirmation_conditions_ar: ["اختراق حقيقي لمستوى 27.90 مدعوم بحجم تداول أعلى من المتوسط يعزز الفرضية."],
     watch_next_session_ar: ["رد فعل السعر عند مستوى المقاومة القريب (27.90)."],
@@ -288,5 +290,36 @@ describe("ExecutiveDecisionCard", () => {
     );
     expect(screen.getByText("دخول قوي")).toBeInTheDocument();
     expect(screen.queryByText(/آخر جلسة/)).not.toBeInTheDocument();
+  });
+
+  it("shows the news-contradiction material risk banner when negative news opposes a bullish-leaning decision", () => {
+    render(
+      <ExecutiveDecisionCard
+        decision={buildDecision({
+          decision: "BUY_CANDIDATE",
+          news_impact: "NEGATIVE",
+          news_impact_summary_ar: "أخبار سلبية حديثة تتعارض مع اتجاه هذا القرار.",
+        })}
+      />
+    );
+    expect(screen.getByText("تعارض مع الأخبار الأخيرة")).toBeInTheDocument();
+    expect(screen.getByText("أخبار سلبية حديثة تتعارض مع اتجاه هذا القرار.")).toBeInTheDocument();
+  });
+
+  it("shows the news-contradiction banner when positive news opposes a bearish-leaning decision", () => {
+    render(<ExecutiveDecisionCard decision={buildDecision({ decision: "EXIT", news_impact: "POSITIVE" })} />);
+    expect(screen.getByText("تعارض مع الأخبار الأخيرة")).toBeInTheDocument();
+  });
+
+  it("omits the news-contradiction banner when news agrees with the decision's direction", () => {
+    render(<ExecutiveDecisionCard decision={buildDecision({ decision: "BUY_CANDIDATE", news_impact: "POSITIVE" })} />);
+    expect(screen.queryByText("تعارض مع الأخبار الأخيرة")).not.toBeInTheDocument();
+  });
+
+  it("omits the news-contradiction banner when there is no relevant news at all", () => {
+    render(
+      <ExecutiveDecisionCard decision={buildDecision({ decision: "BUY_CANDIDATE", news_impact: "NO_RELEVANT_NEWS" })} />
+    );
+    expect(screen.queryByText("تعارض مع الأخبار الأخيرة")).not.toBeInTheDocument();
   });
 });
