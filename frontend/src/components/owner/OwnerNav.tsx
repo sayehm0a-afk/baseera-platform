@@ -23,6 +23,7 @@ const LINKS: { href: string; label: string }[] = [
   { href: "/owner/recommendation-history", label: "سجل التوصيات" },
   { href: "/owner/personal-performance", label: "أداء الفرص اليومية" },
   { href: "/owner/market-coverage", label: "تغطية السوق" },
+  { href: "/owner/radar-v2", label: "الرادار الذكي" },
   { href: "/owner/subscriptions", label: "الاشتراكات" },
 ];
 

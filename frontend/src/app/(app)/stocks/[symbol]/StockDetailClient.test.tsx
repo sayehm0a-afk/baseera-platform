@@ -21,7 +21,12 @@ vi.mock("@/lib/api/stocks", () => ({
   getAnalystReport: vi.fn(),
 }));
 
+vi.mock("@/lib/api/radar", () => ({
+  getRadarOpportunityBySymbol: vi.fn(),
+}));
+
 import { ApiError } from "@/lib/api/client";
+import { getRadarOpportunityBySymbol } from "@/lib/api/radar";
 import {
   getAnalystReport,
   getDecision,
@@ -55,6 +60,7 @@ describe("StockDetailClient", () => {
     vi.mocked(getTechnicalAnalysis).mockImplementation(providerUnavailable);
     vi.mocked(getFundamentalAnalysis).mockImplementation(providerUnavailable);
     vi.mocked(getAnalystReport).mockImplementation(providerUnavailable);
+    vi.mocked(getRadarOpportunityBySymbol).mockResolvedValue(null);
 
     render(<StockDetailClient symbol="6004" />);
 
@@ -90,6 +96,7 @@ describe("StockDetailClient", () => {
     vi.mocked(getTechnicalAnalysis).mockImplementation(providerUnavailable);
     vi.mocked(getFundamentalAnalysis).mockImplementation(providerUnavailable);
     vi.mocked(getAnalystReport).mockImplementation(providerUnavailable);
+    vi.mocked(getRadarOpportunityBySymbol).mockResolvedValue(null);
 
     render(<StockDetailClient symbol="9999" />);
 

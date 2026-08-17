@@ -28,6 +28,9 @@ function buildItem(overrides: Partial<WatchlistItem> = {}): WatchlistItem {
     latest_stop_loss: 29.0,
     latest_data_freshness_status: "LIVE",
     latest_decision_timestamp: "2026-08-01T12:00:00Z",
+    radar_is_live_opportunity: false,
+    radar_stage1_rank: null,
+    radar_ranking_reason_ar: null,
     ...overrides,
   };
 }
@@ -71,6 +74,36 @@ describe("MyWatchlistPanel", () => {
     render(<MyWatchlistPanel />);
 
     expect(await screen.findByText("لم يتم تحليل هذا السهم بعد.")).toBeInTheDocument();
+  });
+
+  it("shows a live radar badge and ranking reason for a symbol on the radar", async () => {
+    vi.mocked(getMyWatchlist).mockResolvedValue({
+      generated_at: "2026-08-01T00:00:00Z",
+      items: [
+        buildItem({
+          radar_is_live_opportunity: true,
+          radar_stage1_rank: 2,
+          radar_ranking_reason_ar: "اختراق مستوى المقاومة بحجم تداول مرتفع",
+        }),
+      ],
+    });
+
+    render(<MyWatchlistPanel />);
+
+    expect(await screen.findByText("فرصة حية في الرادار الذكي · الترتيب #2")).toBeInTheDocument();
+    expect(screen.getByText("اختراق مستوى المقاومة بحجم تداول مرتفع")).toBeInTheDocument();
+  });
+
+  it("does not show the radar badge for a symbol not currently on the radar", async () => {
+    vi.mocked(getMyWatchlist).mockResolvedValue({
+      generated_at: "2026-08-01T00:00:00Z",
+      items: [buildItem()],
+    });
+
+    render(<MyWatchlistPanel />);
+    await screen.findByText("2222");
+
+    expect(screen.queryByText(/الرادار الذكي/)).not.toBeInTheDocument();
   });
 
   it("shows an error state when the fetch fails", async () => {

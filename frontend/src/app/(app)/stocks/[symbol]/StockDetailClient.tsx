@@ -13,8 +13,10 @@ import { ExecutiveDecisionCard } from "@/components/decision/ExecutiveDecisionCa
 import { CategoryTabs } from "@/components/patterns/CategoryTabs";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
+import { RadarStockSection } from "@/components/radar/RadarStockSection";
 import { RecommendationHistoryPanel } from "@/components/recommendation-history/RecommendationHistoryPanel";
 import { AddToWatchlistButton } from "@/components/watchlist/AddToWatchlistButton";
+import { getRadarOpportunityBySymbol } from "@/lib/api/radar";
 import {
   getAnalystReport,
   getDecision,
@@ -76,6 +78,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
   const decisionV2 = useResource(symbol, getDecisionV2);
   const fundamentals = useResource(symbol, getFundamentalAnalysis);
   const analystReport = useResource(symbol, getAnalystReport);
+  const radar = useResource(symbol, getRadarOpportunityBySymbol);
 
   const priceLevels = useMemo<PriceLevel[]>(() => {
     const levels: PriceLevel[] = [];
@@ -269,6 +272,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <ExecutiveDecisionCard decision={decisionV2.data} />
           <DecisionTransparencyPanel decision={decisionV2.data} />
           <CommitteePanel committee={decisionV2.data.committee} />
+          <RadarStockSection opportunity={radar.status === "ready" ? radar.data : null} />
         </>
       ) : decisionV2.status === "loading" ? (
         <LoadingScreen />

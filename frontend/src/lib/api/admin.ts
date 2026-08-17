@@ -1,6 +1,9 @@
 import { apiFetch } from "./client";
 import type {
   AdminDashboardSummary,
+  AdminRadarV2Performance,
+  AdminRadarV2SahmkConsumption,
+  AdminRadarV2Summary,
   AdminSessionList,
   AdminSubscriptionList,
   AdminUser,
@@ -22,6 +25,7 @@ import type {
   StaffRoleValue,
   SystemHealth,
 } from "./admin-types";
+import type { RadarOpportunitySummary } from "./radar-types";
 
 /** Direct, unmodified calls to the existing staff-gated
  * /api/v1/admin/system/* routes (src/api/routes/admin/system.py). */
@@ -195,4 +199,26 @@ export function triggerFullDiscovery(): Promise<FullDiscoveryTrigger> {
  * so this only ever reflects trial/paid lifecycle state, never real transactions. */
 export function listSubscriptions(limit = 50, offset = 0): Promise<AdminSubscriptionList> {
   return apiFetch<AdminSubscriptionList>(`/api/v1/admin/subscriptions?limit=${limit}&offset=${offset}`);
+}
+
+/** Direct, unmodified calls to the existing staff-gated
+ * /api/v1/admin/market-intelligence/radar-v2/* diagnostics routes
+ * (src/api/routes/admin/market_intelligence.py) -- the same real
+ * RadarOpportunity/forward-testing data the consumer-facing /radar
+ * routes read from, plus operational fields (scan run id, candidate
+ * cap, SAHMK consumption) intentionally kept out of the consumer API. */
+export function getAdminRadarV2Summary(): Promise<AdminRadarV2Summary> {
+  return apiFetch<AdminRadarV2Summary>("/api/v1/admin/market-intelligence/radar-v2/summary");
+}
+
+export function getAdminRadarV2Performance(): Promise<AdminRadarV2Performance> {
+  return apiFetch<AdminRadarV2Performance>("/api/v1/admin/market-intelligence/radar-v2/performance");
+}
+
+export function getAdminRadarV2SahmkConsumption(): Promise<AdminRadarV2SahmkConsumption> {
+  return apiFetch<AdminRadarV2SahmkConsumption>("/api/v1/admin/market-intelligence/radar-v2/sahmk-consumption");
+}
+
+export function listAdminRadarV2Opportunities(limit = 50): Promise<RadarOpportunitySummary[]> {
+  return apiFetch<RadarOpportunitySummary[]>(`/api/v1/admin/market-intelligence/radar-v2/opportunities?limit=${limit}`);
 }
