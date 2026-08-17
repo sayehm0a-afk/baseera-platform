@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+import src.market_intelligence.scheduler_leader_lock as leader_lock_module
 from src.core.db.database import Base
 from src.domain.models import IngestionJobStatus, IngestionRunLog, Stock
 from src.market_data.ingestion._common import IngestionResult
@@ -49,6 +50,24 @@ def _instant_sleep(monkeypatch):
         return None
 
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_shared_redis_for_leader_lock(monkeypatch):
+    """IngestionScheduler's default (no explicit leader_lock= override)
+    constructs a real SchedulerLeaderLock backed by the same
+    process-wide shared Redis singleton production uses -- mirrors
+    tests/unit/market_intelligence/test_scheduler.py's own isolation
+    fixture for the identical reason: without this, a test environment
+    that actually has Redis reachable would let this file's tests
+    acquire/renew a REAL lease under the real production lease key
+    (basirah:ingestion_scheduler:leader), leaking leadership state
+    across test runs and (in a shared dev/CI Redis) across processes
+    entirely unrelated to this test suite. Tests that need real
+    cross-instance leadership handoff behavior pass their own fake
+    Redis via a SchedulerLeaderLock(redis_client=...) instance, which
+    is unaffected by this fixture."""
+    monkeypatch.setattr(leader_lock_module, "_get_shared_redis_client", lambda: None)
 
 
 # --- _NonDisconnectingProviderProxy -----------------------------------------
@@ -352,7 +371,12 @@ async def test_scheduler_loop_survives_a_job_exception_and_keeps_scheduling(
         calls.append(1)
         raise RuntimeError("simulated failure")
 
+    # _loop() gates real work on self._is_leader, which is only ever set
+    # by start()/the heartbeat task -- this test calls _loop() directly,
+    # bypassing both, so it must set leadership explicitly to exercise
+    # "job actually runs" (see the module docstring's 2026-08-17 fix).
     scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._is_leader = True
     task = asyncio.ensure_future(scheduler._loop("flaky", lambda: 0.01, always_fails))
     try:
         await _REAL_ASYNCIO_SLEEP(0.15)  # enough real time for several 0.01s-interval iterations
@@ -786,7 +810,10 @@ async def test_loop_reschedules_a_deferred_job_at_next_retry_at_not_the_normal_i
     async def always_deferred():
         raise SahmkQuotaReservedForCriticalError("background dip into critical reserve")
 
+    # Must be leader for the job (and thus its DEFERRED rescheduling
+    # logic) to run at all -- see _loop's leadership gate.
     scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._is_leader = True
     with pytest.raises(asyncio.CancelledError):
         await scheduler._loop("test_job", lambda: 999999, always_deferred)
 
@@ -811,7 +838,11 @@ async def test_loop_uses_the_normal_interval_after_a_successful_run(session_fact
     async def succeeds():
         return IngestionResult(symbols_requested=1, symbols_succeeded=1)
 
+    # Leader, so the job genuinely runs (and succeeds) -- keeps this
+    # test's "after a successful run" intent real rather than
+    # incidentally true because the job never ran at all.
     scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._is_leader = True
     with pytest.raises(asyncio.CancelledError):
         await scheduler._loop("test_job", lambda: 123.0, succeeds)
 
@@ -924,7 +955,17 @@ async def test_start_passes_the_resumed_initial_delay_into_each_loop(session_fac
         seen_delays[job_name] = initial_delay_seconds
         raise asyncio.CancelledError()
 
+    async def _stub_heartbeat_loop(self):
+        # start() also spawns a dedicated leadership-heartbeat task (its
+        # own real `while True: await asyncio.sleep(...)` body) -- left
+        # un-stubbed, the real_asyncio_sleep(0) below would give it a
+        # genuine first tick, and its own `await asyncio.sleep(...)`
+        # resolves to this module's non-yielding instant-sleep mock, so
+        # it would spin forever and hang this test.
+        raise asyncio.CancelledError()
+
     monkeypatch.setattr(IngestionScheduler, "_loop", _recording_loop)
+    monkeypatch.setattr(IngestionScheduler, "_leadership_heartbeat_loop", _stub_heartbeat_loop)
 
     scheduler = IngestionScheduler(session_factory=session_factory)
     scheduler.start()

@@ -32,6 +32,24 @@ module's concern -- they're guaranteed one layer down, by each
 ingestion job (get_or_create_stock, upsert_price_bar, PriceBar's/
 FundamentalSnapshot's/Dividend's own unique constraints). This module
 only decides *when* to call them and *what happened* when it did.
+
+2026-08-17 SAHMK quota-waste root-cause fix: `main.py`'s
+`@app.on_event("startup")` runs independently in every one of
+Gunicorn's worker processes (Dockerfile: `--workers 4`), so
+`IngestionScheduler.start()` ran four times, each driving its own full,
+redundant set of the four job loops against the identical symbol
+universe -- real production evidence the same day showed ~2.8x-3.6x
+the expected per-symbol SAHMK call count for OHLCV/fundamentals/
+dividends. `MarketIntelligenceScheduler` already closed the identical
+2026-08-13 incident for the market-scan loop via a Redis-backed
+`SchedulerLeaderLock`; `IngestionScheduler` never received the same
+fix. `_leader_lock` (a second `SchedulerLeaderLock` instance, its own
+independent lease key) now gates real job execution the same way: a
+dedicated, fast heartbeat task (independent of any single job's own,
+often much longer, interval) keeps `self._is_leader` current, and each
+job loop skips its own tick's work entirely (zero SAHMK cost, no
+`IngestionRunLog` row written) whenever this worker does not currently
+hold the lease.
 """
 
 import asyncio
@@ -59,8 +77,16 @@ from src.market_data.sahmk.rate_limiter import (
 )
 from src.market_data.sahmk.operation_scope import INGESTION, operation_scope
 from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
+from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 
 logger = logging.getLogger(__name__)
+
+# Independent of MarketIntelligenceScheduler's own
+# "basirah:scheduler:market_intelligence:leader" lease -- the two
+# schedulers' leaderships are tracked separately (a worker could
+# legitimately lead one but not the other), each via its own
+# SchedulerLeaderLock instance/key.
+_INGESTION_LEASE_KEY = "basirah:ingestion_scheduler:leader"
 
 # Added on top of the quota governor's own reset instant so a job
 # deferred right at the boundary doesn't retry a few seconds early
@@ -339,11 +365,16 @@ class IngestionScheduler:
         session_factory: Optional[Callable[[], Session]] = None,
         market_provider_getter: Optional[Callable[[], Awaitable[object]]] = None,
         fundamental_provider_getter: Optional[Callable[[], Awaitable[object]]] = None,
+        leader_lock: Optional[SchedulerLeaderLock] = None,
     ):
         self._session_factory = session_factory or self._default_session_factory
         self._get_market_provider = market_provider_getter or get_market_data_provider
         self._get_fundamental_provider = fundamental_provider_getter or get_fundamental_data_provider
+        self._leader_lock = leader_lock or SchedulerLeaderLock(lease_key=_INGESTION_LEASE_KEY)
         self._tasks: List[asyncio.Task] = []
+        self._leadership_task: Optional[asyncio.Task] = None
+        self._is_leader: bool = False
+        self._skipped_due_to_not_leader_count: int = 0
 
     @staticmethod
     def _default_session_factory() -> Session:
@@ -352,6 +383,27 @@ class IngestionScheduler:
     @property
     def is_running(self) -> bool:
         return len(self._tasks) > 0
+
+    @property
+    def is_leader(self) -> bool:
+        """Whether THIS process currently holds the ingestion-scheduler
+        lease -- real, current state, not cached across a long window
+        (the heartbeat task renews/re-checks it every
+        `get_ingestion_leader_heartbeat_seconds()`). A caller polling
+        this across multiple requests to a multi-worker deployment will
+        see it True on whichever single worker happens to serve that
+        request only if that worker is the leader -- exactly the signal
+        needed to prove "only one worker leads" from outside the
+        process."""
+        return self._is_leader
+
+    @property
+    def skipped_due_to_not_leader_count(self) -> int:
+        """How many job ticks this process has skipped (zero SAHMK
+        cost, no IngestionRunLog row written) because it was not the
+        leader at that tick -- observability only, never used for any
+        scheduling decision."""
+        return self._skipped_due_to_not_leader_count
 
     async def run_all_jobs_once(self) -> List[IngestionRunLog]:
         """Runs the same four jobs `start()`'s recurring loops would
@@ -382,6 +434,15 @@ class IngestionScheduler:
 
         self._reap_stale_runs_once()
 
+        # Synchronous first attempt so `is_leader` reflects real state
+        # the instant start() returns, rather than depending on
+        # asyncio's task-scheduling order to run the heartbeat task's
+        # first iteration before any job loop's first tick.
+        self._is_leader = self._leader_lock.try_acquire_or_renew(
+            ingestion_config.get_ingestion_leader_lease_seconds()
+        )
+        self._leadership_task = asyncio.ensure_future(self._leadership_heartbeat_loop())
+
         job_specs = [
             ("symbols", ingestion_config.get_symbols_sync_interval_seconds, self._run_symbols),
             (
@@ -401,16 +462,53 @@ class IngestionScheduler:
             task = asyncio.ensure_future(self._loop(job_name, interval_fn, job_fn, initial_delay))
             self._tasks.append(task)
 
-        logger.info("IngestionScheduler started %d job loop(s): %s", len(self._tasks), [s[0] for s in job_specs])
+        logger.info(
+            "IngestionScheduler started %d job loop(s) (is_leader=%s): %s",
+            len(self._tasks), self._is_leader, [s[0] for s in job_specs],
+        )
 
     async def stop(self) -> None:
+        # Cancel every task -- leadership heartbeat AND all job loops --
+        # before awaiting any of them. Awaiting one task hands control
+        # back to the event loop, which would otherwise get a chance to
+        # run any not-yet-cancelled task's *first* real step; cancelling
+        # everything up front guarantees every task is already marked
+        # cancelled by the time any of them actually runs.
+        if self._leadership_task is not None:
+            self._leadership_task.cancel()
         for task in self._tasks:
             task.cancel()
+        if self._leadership_task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._leadership_task
+            self._leadership_task = None
         for task in self._tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._tasks.clear()
+        self._leader_lock.release()
+        self._is_leader = False
         logger.info("IngestionScheduler stopped.")
+
+    async def _leadership_heartbeat_loop(self) -> None:
+        """Renews (or re-attempts) this worker's ingestion-scheduler
+        lease on a short, fixed cadence -- deliberately independent of
+        any single job's own (often much longer) interval, so
+        leadership itself fails over to another worker within roughly
+        one heartbeat interval of the previous leader's process dying,
+        even though that new leader's first actual job run still waits
+        for that job's own normal schedule (see `_loop`)."""
+        heartbeat_seconds = ingestion_config.get_ingestion_leader_heartbeat_seconds()
+        lease_seconds = ingestion_config.get_ingestion_leader_lease_seconds()
+        while True:
+            await asyncio.sleep(heartbeat_seconds)
+            try:
+                self._is_leader = self._leader_lock.try_acquire_or_renew(lease_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 -- a heartbeat failure must never crash the process; fail closed instead
+                logger.exception("IngestionScheduler: unexpected error during leadership heartbeat.")
+                self._is_leader = False
 
     def _compute_initial_delay(self, job_name: str) -> float:
         """Persisted-retry-state on restart: if this job's most recent
@@ -480,21 +578,34 @@ class IngestionScheduler:
         while True:
             next_sleep_seconds = interval_fn()
             try:
-                run_log = await run_ingestion_job(job_name, job_fn, self._session_factory)
-                if run_log.status is IngestionJobStatus.DEFERRED and run_log.next_retry_at is not None:
-                    # Quota-deferred: retry when the quota governor says
-                    # background capacity will be available again, not
-                    # on this job's normal (possibly much longer, e.g.
-                    # daily/weekly) recurring interval -- otherwise a
-                    # symbols/fundamentals job deferred once could stay
-                    # stale for a full extra day/week even after the
-                    # quota reset.
-                    next_retry_at = run_log.next_retry_at
-                    if next_retry_at.tzinfo is None:
-                        next_retry_at = next_retry_at.replace(tzinfo=timezone.utc)
-                    next_sleep_seconds = max(
-                        0.0, (next_retry_at - datetime.now(timezone.utc)).total_seconds()
+                if not self._is_leader:
+                    # Another worker holds the ingestion-scheduler
+                    # lease -- this tick is skipped entirely: zero SAHMK
+                    # cost, no IngestionRunLog row written. See the
+                    # module docstring for the 2026-08-17 incident this
+                    # closes (multi-worker duplicate ingestion).
+                    self._skipped_due_to_not_leader_count += 1
+                    logger.debug(
+                        "Ingestion job '%s' skipped this tick -- this worker is not the "
+                        "ingestion-scheduler leader.",
+                        job_name,
                     )
+                else:
+                    run_log = await run_ingestion_job(job_name, job_fn, self._session_factory)
+                    if run_log.status is IngestionJobStatus.DEFERRED and run_log.next_retry_at is not None:
+                        # Quota-deferred: retry when the quota governor says
+                        # background capacity will be available again, not
+                        # on this job's normal (possibly much longer, e.g.
+                        # daily/weekly) recurring interval -- otherwise a
+                        # symbols/fundamentals job deferred once could stay
+                        # stale for a full extra day/week even after the
+                        # quota reset.
+                        next_retry_at = run_log.next_retry_at
+                        if next_retry_at.tzinfo is None:
+                            next_retry_at = next_retry_at.replace(tzinfo=timezone.utc)
+                        next_sleep_seconds = max(
+                            0.0, (next_retry_at - datetime.now(timezone.utc)).total_seconds()
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception:

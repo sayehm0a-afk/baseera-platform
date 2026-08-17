@@ -224,6 +224,22 @@ class AdminDashboardSummaryOut(BaseModel):
     database_health: str
     redis_health: str
     ingestion_scheduler_running: bool
+    # True only for the single Gunicorn worker currently holding the
+    # Redis leader lease (basirah:ingestion_scheduler:leader) -- see
+    # src.market_intelligence.scheduler_leader_lock.SchedulerLeaderLock
+    # and IngestionScheduler's leadership heartbeat. False on every
+    # other worker sharing the same process pool: they keep
+    # ingestion_scheduler_running=True (their job loops are alive and
+    # ticking) but skip the actual SAHMK-consuming work, so a fleet of
+    # N workers never multiplies ingestion quota usage by N.
+    ingestion_scheduler_is_leader: bool = False
+    # Cumulative count of job-loop ticks this worker skipped doing real
+    # ingestion work on because it was not the leader at that moment
+    # (see ingestion_scheduler_is_leader). Only ever non-zero on
+    # follower workers; a healthy leader's own count stays 0. Resets to
+    # 0 on process restart -- a per-worker-lifetime counter, not a
+    # historical total.
+    ingestion_scheduler_skipped_due_to_not_leader_count: int = 0
     # How many of the four ingestion jobs (symbols/historical_ohlcv/
     # fundamentals/dividends) most recently ran and are currently
     # DEFERRED (SAHMK background-quota protection, not a genuine
