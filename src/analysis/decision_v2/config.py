@@ -60,6 +60,37 @@ class DecisionV2Tuning:
     near_resistance_confidence_cap: float = 70.0
     missed_entry_confidence_cap: float = 60.0
 
+    # --- RADAR-C additions: market regime is real risk evidence but,
+    # unlike REDUCE_POSITIONS/PARTIAL_EXIT/DEFENSIVE_EXIT (which already
+    # block entry outright via gates.py's market_risk_permits_entry
+    # gate), CAUTION explicitly still permits an entry (market_risk.py's
+    # own docstring: "entries permitted, just flagged") -- so nothing in
+    # the pipeline previously reflected that flag in the number a user
+    # actually reads. Binary, matching every other regime-adjacent gate
+    # in this codebase. -----------------------------------------------
+    market_caution_confidence_cap: float = 75.0
+
+    # Graduated, not binary: volatility_score already scores a
+    # "sweet spot" band highest (see scoring.volatility_score) -- this
+    # reuses that same already-computed value rather than a new
+    # indicator. Below `volatility_confidence_cap_threshold`, confidence
+    # is capped at `100 - (threshold - volatility_score) *
+    # volatility_confidence_cap_slope`, so a symbol sitting just under
+    # the threshold loses little while one deep in "too little/too much
+    # movement" territory (but not yet excessive enough to trip the
+    # hard volatility_acceptable gate) loses more, continuously rather
+    # than as one abrupt step.
+    volatility_confidence_cap_threshold: float = 50.0
+    volatility_confidence_cap_slope: float = 0.6
+
+    # News sentiment that actively contradicts the decision's own
+    # direction (NEGATIVE news on a BUY-like decision, or POSITIVE news
+    # on a SELL-like one) is real, checkable conflicting evidence --
+    # the same "evidence disagrees" principle already applied to
+    # trend/momentum conflict, extended to a source that previously had
+    # no effect on confidence at all (see news_impact.py).
+    contradictory_news_confidence_cap: float = 70.0
+
     # --- holding period ranges (days), by horizon_type ------------------
     short_term_min_days: int = 1
     short_term_max_days: int = 15  # "من جلسة إلى 3 جلسات" .. up to ~3 weeks depending on conviction

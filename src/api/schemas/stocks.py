@@ -282,6 +282,14 @@ class DecisionV2Out(BaseModel):
 
     confidence_score: float
     confidence_disclaimer_ar: str
+    # RADAR-C: the empirical calibration of confidence_score against
+    # real DecisionV2Outcome history, when a real ACTIVE
+    # decision_v2-source calibration model exists -- both None (not a
+    # fabricated fallback) until enough resolved outcomes accumulate.
+    # A disclosed companion figure, never a silent replacement for
+    # confidence_score.
+    calibrated_confidence_score: Optional[float] = None
+    calibration_version: Optional[str] = None
     opportunity_quality_score: float
     risk_score: float
     data_quality_score: float

@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from src.ai_evolution.agents.orchestrator import AgentPanelOrchestrator
 from src.ai_evolution.config import is_agent_panel_enabled, is_paper_trading_enabled
-from src.ai_evolution.confidence_calibration import get_effective_confidence
+from src.ai_evolution.confidence_calibration import TRAINING_SOURCE_DECISION_V2, get_effective_confidence
 from src.ai_evolution.decision_v2_outcome_evaluation import (
     create_pending_decision_v2_outcome,
     is_actionable_buy_decision,
@@ -462,6 +462,9 @@ class MarketIntelligenceRepository:
             if outcome.decision_v2 is not None:
                 try:
                     result = outcome.decision_v2
+                    decision_v2_calibrated_probability, decision_v2_calibration_version = get_effective_confidence(
+                        session, result.confidence_score, source=TRAINING_SOURCE_DECISION_V2
+                    )
                     decision_v2_snapshot = DecisionV2Snapshot(
                         stock_id=stock_id,
                         symbol=result.symbol,
@@ -581,6 +584,15 @@ class MarketIntelligenceRepository:
                         fundamental_summary_ar=result.fundamental_summary_ar,
                         news_impact=result.news_impact,
                         news_impact_summary_ar=result.news_impact_summary_ar,
+                        # RADAR-C: same disclosed, additive calibration
+                        # companion figure as the /decision-v2 route --
+                        # see get_effective_confidence's own docstring.
+                        calibrated_confidence_score=_f(
+                            round(decision_v2_calibrated_probability * 100.0, 1)
+                            if decision_v2_calibrated_probability is not None
+                            else None
+                        ),
+                        calibration_version=decision_v2_calibration_version,
                     )
                     session.add(decision_v2_snapshot)
                     # M10: only issue an outcome-tracking row while an

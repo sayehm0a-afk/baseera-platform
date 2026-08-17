@@ -88,6 +88,7 @@ from src.api.exceptions import (
 from src.api.middleware.rate_limiting import limiter
 from src.ai_evolution.committee.orchestrator import InvestmentCommitteeOrchestrator
 from src.ai_evolution.committee.types import ConsensusResult
+from src.ai_evolution.confidence_calibration import TRAINING_SOURCE_DECISION_V2, get_effective_confidence
 from src.api.schemas.stocks import (
     AnalystReportOut,
     CommitteeAgentOpinionOut,
@@ -694,6 +695,15 @@ async def get_decision_v2(
     snapshot = None
     committee_consensus = None
     try:
+        # RADAR-C: empirical calibration of confidence_score, when a
+        # real ACTIVE decision_v2-source model exists (see
+        # src.ai_evolution.confidence_calibration) -- both fields stay
+        # None until real DecisionV2Outcome history is enough to fit
+        # and activate one; this never modifies `result.confidence_score`
+        # itself, only adds a disclosed companion figure.
+        calibrated_probability, calibration_version = get_effective_confidence(
+            session, result.confidence_score, source=TRAINING_SOURCE_DECISION_V2
+        )
         snapshot = DecisionV2Snapshot(
             stock_id=stock.id,
             symbol=result.symbol,
@@ -803,6 +813,10 @@ async def get_decision_v2(
             fundamental_summary_ar=result.fundamental_summary_ar,
             news_impact=result.news_impact,
             news_impact_summary_ar=result.news_impact_summary_ar,
+            calibrated_confidence_score=_f(
+                round(calibrated_probability * 100.0, 1) if calibrated_probability is not None else None
+            ),
+            calibration_version=calibration_version,
         )
         session.add(snapshot)
         session.commit()
@@ -837,6 +851,12 @@ async def get_decision_v2(
         decision_label_ar=result.decision_label_ar,
         confidence_score=result.confidence_score,
         confidence_disclaimer_ar=CONFIDENCE_DISCLAIMER_AR,
+        # Read back from the persisted snapshot (rather than the local
+        # `calibrated_probability` variable computed inside the
+        # best-effort try/except above) so a persistence failure can
+        # never leave these referencing an unset name.
+        calibrated_confidence_score=_f(snapshot.calibrated_confidence_score) if snapshot is not None else None,
+        calibration_version=snapshot.calibration_version if snapshot is not None else None,
         opportunity_quality_score=result.opportunity_quality_score,
         risk_score=result.risk_score,
         data_quality_score=result.data_quality_score,

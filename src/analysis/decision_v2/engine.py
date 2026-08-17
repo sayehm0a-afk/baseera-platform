@@ -16,7 +16,7 @@ from src.analysis.decision_v2.fundamental_summary import build_fundamental_summa
 from src.analysis.decision_v2.news_impact import build_news_impact
 from src.analysis.decision_v2.config import DecisionV2Tuning
 from src.analysis.decision_v2.gates import GateInputs, evaluate_decision
-from src.analysis.decision_v2.market_risk import classify_market_risk
+from src.analysis.decision_v2.market_risk import MarketRiskState, classify_market_risk
 from src.analysis.decision_v2.types import (
     DECISION_LABELS_AR,
     ENTRY_STATUS_LABELS_AR,
@@ -172,6 +172,12 @@ class DecisionEngineV2:
             investment_decision.time_horizon.value, holding_min_days, holding_max_days, momentum, volatility
         )
 
+        # Computed here (rather than after the confidence block, where
+        # this used to live) so the RADAR-C news-conflict cap below can
+        # use it -- the classification itself is unchanged, only its
+        # position moved.
+        news_impact, news_impact_summary_ar = build_news_impact(context.extra.get("news_sentiment"))
+
         confidence = investment_decision.confidence
         warnings: list = []
         if market_is_open is False:
@@ -193,6 +199,33 @@ class DecisionEngineV2:
             confidence = min(confidence, tuning.near_resistance_confidence_cap)
         if missed_entry:
             confidence = min(confidence, tuning.missed_entry_confidence_cap)
+        # RADAR-C: market regime is CAUTION -- entries are still
+        # permitted (see market_risk.py), so this never changes the
+        # decision itself, only how much confidence the number conveys.
+        if market_risk.state is MarketRiskState.CAUTION:
+            confidence = min(confidence, tuning.market_caution_confidence_cap)
+            warnings.append("حالة مخاطر السوق الحالية تدعو للحذر -- تم تخفيض مستوى الثقة تبعًا لذلك.")
+        # RADAR-C: graduated volatility cap, reusing the already-computed
+        # volatility_score (see DecisionV2Tuning.volatility_confidence_cap_*
+        # for the exact shape) -- the hard volatility_acceptable gate in
+        # gates.py still handles the excessive-volatility case outright;
+        # this only softens confidence for the milder "below sweet spot"
+        # zone that gate does not touch.
+        if volatility is not None and volatility < tuning.volatility_confidence_cap_threshold:
+            deficit = tuning.volatility_confidence_cap_threshold - volatility
+            volatility_cap = 100.0 - deficit * tuning.volatility_confidence_cap_slope
+            if confidence > volatility_cap:
+                confidence = volatility_cap
+                warnings.append("مستوى تقلب السهم الحالي أضعف من أن يدعم مستوى ثقة أعلى.")
+        # RADAR-C: news sentiment that actively contradicts this
+        # decision's direction -- previously news_impact was displayed
+        # but never affected confidence at all.
+        news_contradicts_direction = (news_impact == "NEGATIVE" and direction > 0) or (
+            news_impact == "POSITIVE" and direction < 0
+        )
+        if news_contradicts_direction:
+            confidence = min(confidence, tuning.contradictory_news_confidence_cap)
+            warnings.append("الأثر الإخباري الأخير يتعارض مع اتجاه القرار الحالي -- تم تخفيض مستوى الثقة تبعًا لذلك.")
         confidence = round(max(0.0, min(100.0, confidence)), 1)
 
         gate_inputs = GateInputs(
@@ -304,7 +337,6 @@ class DecisionEngineV2:
             evaluation.decision, negative_reasons, evaluation.gates
         )
         fundamental_summary, fundamental_summary_ar = build_fundamental_summary(context.fundamental_result)
-        news_impact, news_impact_summary_ar = build_news_impact(context.extra.get("news_sentiment"))
         entry_confirmation_conditions_ar = reasoning.build_entry_confirmation_conditions(
             evaluation.decision, entry_status, sr_evidence.nearest_resistance, entry_high
         )
