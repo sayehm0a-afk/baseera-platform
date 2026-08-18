@@ -1,0 +1,45 @@
+name: Check Market Scan Interval Config (temporary, one-shot, read-only, zero SAHMK cost)
+
+# Real-market validation audit: confirms the production value of a
+# small, named allowlist of non-secret scheduler config vars (never
+# the full `railway variable list` dump, which contains real secrets)
+# instead of assuming the code's own default. Prints only the
+# allowlisted keys below; the raw variable dump is deleted immediately
+# after extraction and never printed or uploaded.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Print allowlisted non-secret scheduler config vars
+        run: |
+          railway variable list --service backend --json > /tmp/vars.json
+          python3 -c "
+          import json
+          allowlist = [
+              'MARKET_INTELLIGENCE_SCAN_INTERVAL',
+              'MARKET_INTELLIGENCE_SCHEDULER_ENABLED',
+              'LIVE_MARKET_MODE_ENABLED',
+              'LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS',
+              'MARKET_SCAN_SYMBOLS_PER_CYCLE',
+              'RADAR_STAGE2_CANDIDATE_CAP',
+          ]
+          d = json.load(open('/tmp/vars.json'))
+          for k in allowlist:
+              print(f'{k}={d.get(k, \"<unset, code default applies>\")}')"
+          rm -f /tmp/vars.json
