@@ -1,0 +1,37 @@
+name: Check AI Evolution Layer Scheduler Env Flags (temporary, one-shot, read-only)
+
+# VAL-6 real-market validation audit: the AI Evolution Layer's 5
+# background schedulers (OutcomeEvaluationScheduler,
+# PatternDiscoveryScheduler, DailyReflectionScheduler,
+# DailyIntelligenceAggregationScheduler, DecisionV2OutcomeScheduler)
+# are all off-by-default, env-flag-gated, and have ZERO admin/API
+# observability -- unlike ingestion_scheduler_running/
+# market_intelligence_scheduler_running in admin/system/summary, there
+# is no field anywhere that reports whether these are actually
+# running. This reads the real Railway env var names directly (no
+# values that aren't already boolean flags) so real evidence, not
+# assumption, determines whether Radar V2's forward-test ledger
+# (DecisionV2Outcome evaluation) can ever resolve in production.
+# Read-only: never touches SAHMK, never triggers a scan/evaluation.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: List backend service scheduler-enable flags
+        run: |
+          railway variables --service backend --kv \
+            | grep -iE "SCHEDULER_ENABLED|PAPER_TRADING_ENABLED" \
+            || echo "no matching scheduler-enable vars found (all AI Evolution schedulers default to disabled)"
