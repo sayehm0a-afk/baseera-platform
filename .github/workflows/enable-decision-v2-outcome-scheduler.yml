@@ -1,0 +1,91 @@
+name: Enable DecisionV2Outcome Scheduler (one-shot, production env change)
+
+# VAL-6 follow-up, explicitly requested by the user: sets
+# DECISION_V2_OUTCOME_SCHEDULER_ENABLED=true on the backend Railway
+# service so DecisionV2Outcome rows (Radar V2's forward-test ledger)
+# actually get evaluated from PENDING to resolved -- confirmed unset
+# in production by check-ai-evolution-schedulers.yml run 32140081444.
+# Read-only against already-ingested price data once running (see
+# src/ai_evolution/config.py's is_decision_v2_outcome_scheduler_enabled
+# docstring) -- this workflow itself makes no SAHMK calls.
+#
+# `railway variable set` triggers a real redeploy by default (needed
+# here -- the flag is only read at process startup) and does NOT
+# unset any other variable deploy-railway.yml already manages, so
+# this persists across future ordinary deploys without needing to be
+# added there.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not readable by this job."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Confirm current state (before)
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -i "DECISION_V2_OUTCOME_SCHEDULER_ENABLED" \
+            || echo "DECISION_V2_OUTCOME_SCHEDULER_ENABLED not currently set (defaults to false)."
+
+      - name: Set DECISION_V2_OUTCOME_SCHEDULER_ENABLED=true (triggers a redeploy)
+        run: railway variable set "DECISION_V2_OUTCOME_SCHEDULER_ENABLED=true" --service "$RAILWAY_BACKEND_SERVICE"
+
+      - name: Confirm the variable is now set
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -i "DECISION_V2_OUTCOME_SCHEDULER_ENABLED"
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Wait for backend to become healthy again after the redeploy
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          echo "Polling $BACKEND_URL/health/live ..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Backend did not become healthy within the timeout after setting the variable."
+          exit 1
+
+      - name: Real evidence the scheduler actually started (grep the live deployment's own stdout)
+        run: |
+          sleep 10
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" --deployment --lines 500 2>&1 \
+            | grep -i "DecisionV2OutcomeScheduler" \
+            || echo "No 'DecisionV2OutcomeScheduler' log line found yet in the last 500 lines -- may need a later re-check if the deployment just rolled over."
+
+      - name: Confirm application health (DB/Redis, deployed commit) after the restart
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/ready" -w "\nHTTP %{http_code}\n"
