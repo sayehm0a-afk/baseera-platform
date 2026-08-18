@@ -272,6 +272,51 @@ class TestRankingScore:
         assert first == second
 
 
+class TestNativeFloatTypes:
+    """2026-08-18 real-market validation audit finding: every numeric
+    field here previously arrived as `numpy.float64` (from the
+    pandas/numpy-backed TechnicalAnalysisEngine and scoring functions)
+    despite the dataclass declaring plain `float`. In production this
+    reached `emit_radar_opportunities`'s `RadarOpportunity` insert as a
+    bare, unadapted numpy scalar -- NumPy 2.x's `repr()` for it
+    (`np.float64(82.6)`) got embedded as literal, unquoted SQL text,
+    and Postgres parsed it as a schema-qualified function call,
+    failing with `psycopg2.errors.InvalidSchemaName: schema "np" does
+    not exist` on every single candidate, silently swallowed by the
+    scheduler's own `except Exception` handler -- so a real, successful
+    scan run produced zero RadarOpportunity rows with no visible error
+    anywhere. These tests assert the actual runtime type, not just the
+    value, so this exact regression can never reach production again
+    unnoticed."""
+
+    def test_ranking_score_and_component_scores_are_native_float(self, session):
+        stock = _add_stock(session, "1111")
+        _add_uptrend_bars(session, stock, count=39)
+        _add_volume_spike_bar(session, stock, after_count=39, close=Decimal("32.0"))
+
+        r = run_stage1_local_scan(session, symbols=["1111"]).candidates[0]
+        assert type(r.ranking_score) is float
+        assert type(r.risk_reward_ratio) is float
+        for component in (
+            r.component_scores.trend,
+            r.component_scores.momentum,
+            r.component_scores.volume,
+            r.component_scores.liquidity,
+            r.component_scores.volatility,
+            r.component_scores.risk_reward,
+        ):
+            assert component is None or type(component) is float
+
+    def test_indicator_derived_fields_are_native_float(self, session):
+        stock = _add_stock(session, "1111")
+        _add_quiet_bars(session, stock, count=39)
+        _add_volume_spike_bar(session, stock, after_count=39)
+
+        r = run_stage1_local_scan(session, symbols=["1111"]).all_results[0]
+        for field_value in (r.relative_volume, r.adx_14, r.rsi_14, r.atr_pct):
+            assert field_value is None or type(field_value) is float
+
+
 class TestFullUniverseAggregation:
     def test_universe_size_and_counts_are_consistent(self, session):
         a = _add_stock(session, "1111")
