@@ -143,3 +143,21 @@ class WatchlistItemNotFoundError(APIError):
 
     status_code = 404
     code = "watchlist_item_not_found"
+
+
+class PortfolioHoldingNotFoundError(APIError):
+    """No PortfolioHolding row matches this (portfolio, holding) pair
+    for the requesting user's portfolio."""
+
+    status_code = 404
+    code = "portfolio_holding_not_found"
+
+
+class DuplicateHoldingError(APIError):
+    """This portfolio already has a holding for this symbol --
+    PortfolioHolding's own `uq_portfolio_holding_identity` constraint
+    (one row per portfolio/stock pair); adding more of the same stock
+    is an edit (PATCH) to the existing holding, not a second row."""
+
+    status_code = 409
+    code = "duplicate_holding"

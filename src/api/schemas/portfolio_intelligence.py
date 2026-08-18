@@ -214,3 +214,100 @@ class PortfolioAnalysisOut(BaseModel):
     risk_profile: RiskProfileOut
     recommendations: PortfolioRecommendationsOut
     health_score: HealthScoreOut
+
+
+# --- RADAR-C Phase H: real per-holding CRUD + DB-only P&L + Decision V2
+# holder guidance -- distinct from the POST /analyze + PortfolioAnalysisOut
+# pair above, which requires a live market-data provider call and
+# recomputes the full multi-engine analysis every time. These schemas
+# back a lighter, always-DB-only surface: list/create/edit/delete one
+# holding at a time, and read live-free unrealized P&L plus an
+# "I already own this -- what now" guidance read (never a raw "should
+# I buy" recommendation) straight from already-persisted PriceBar/
+# DecisionV2Snapshot rows.
+
+
+class PortfolioSummaryOut(BaseModel):
+    id: int
+    name: str
+    cash_balance: float
+    holdings_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class PortfolioListOut(BaseModel):
+    portfolios: List[PortfolioSummaryOut]
+
+
+class PortfolioCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    cash_balance: float = Field(default=0.0, ge=0)
+
+
+class HoldingCreateIn(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=16)
+    quantity: float = Field(..., gt=0)
+    average_cost: Optional[float] = Field(default=None, ge=0)
+
+
+class HoldingUpdateIn(BaseModel):
+    quantity: Optional[float] = Field(default=None, gt=0)
+    average_cost: Optional[float] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "HoldingUpdateIn":
+        if self.quantity is None and self.average_cost is None:
+            raise ValueError("Provide quantity and/or average_cost to update.")
+        return self
+
+
+class PortfolioHoldingDetailOut(BaseModel):
+    id: int
+    symbol: str
+    name_ar: Optional[str] = None
+    name_en: str
+    sector: Optional[str] = None
+    sector_ar: Optional[str] = None
+
+    quantity: float
+    average_cost: Optional[float] = None
+
+    current_price: Optional[float] = None
+    price_as_of: Optional[datetime] = None
+    freshness_label_ar: str
+
+    invested_cost: Optional[float] = None
+    current_value: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    unrealized_pnl_pct: Optional[float] = None
+
+    # "I already own this -- what now" guidance, derived from the most
+    # recently persisted DecisionV2Snapshot for this symbol (see
+    # src.api.routes.portfolio's _holder_guidance_from_decision) --
+    # None (never fabricated) when no Decision V2 snapshot exists yet
+    # for this symbol.
+    guidance_decision: Optional[str] = None
+    guidance_label_ar: Optional[str] = None
+    guidance_basis_ar: Optional[str] = None
+    guidance_confidence: Optional[float] = None
+    guidance_evaluated_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "PortfolioHoldingDetailOut":
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
+
+
+class PortfolioHoldingsOut(BaseModel):
+    portfolio_id: int
+    name: str
+    cash_balance: float
+    holdings: List[PortfolioHoldingDetailOut]
+
+    total_invested_cost: float
+    total_current_value: float
+    total_unrealized_pnl: Optional[float] = None
+    total_unrealized_pnl_pct: Optional[float] = None
+    total_value_with_cash: float

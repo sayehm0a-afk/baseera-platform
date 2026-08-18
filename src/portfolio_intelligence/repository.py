@@ -16,6 +16,7 @@ duplicating that lookup-or-create logic.
 
 from typing import List, Optional, Tuple
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.domain.models import Portfolio, PortfolioAnalysisSnapshot, PortfolioHolding
@@ -64,6 +65,14 @@ class PortfolioRepository:
         session.query(Portfolio).filter_by(id=portfolio_id).update({"cash_balance": cash_balance})
         session.commit()
 
+    def delete_portfolio(self, session: Session, portfolio: Portfolio) -> None:
+        """`Portfolio.holdings`/`analysis_snapshots` are both declared
+        `cascade="all, delete-orphan"` (src/domain/models/portfolio.py),
+        so this alone removes every owned holding and analysis snapshot
+        row too -- no separate cleanup query needed."""
+        session.delete(portfolio)
+        session.commit()
+
     # --- holdings ------------------------------------------------------------
 
     def replace_holdings(self, session: Session, portfolio_id: int, holdings: List[Holding]) -> None:
@@ -92,6 +101,64 @@ class PortfolioRepository:
             )
             for row in rows
         ]
+
+    def list_holding_rows(self, session: Session, portfolio_id: int) -> List[PortfolioHolding]:
+        """The ORM rows themselves (not the `Holding` dataclass
+        `get_holdings` returns) -- for the RADAR-C Phase H per-holding
+        CRUD routes, which need each row's own `id`/`stock_id`, not
+        just its symbol/quantity/cost."""
+        return (
+            session.query(PortfolioHolding)
+            .filter_by(portfolio_id=portfolio_id)
+            .order_by(PortfolioHolding.symbol)
+            .all()
+        )
+
+    def get_holding_for_portfolio(
+        self, session: Session, portfolio_id: int, holding_id: int
+    ) -> Optional[PortfolioHolding]:
+        return session.query(PortfolioHolding).filter_by(id=holding_id, portfolio_id=portfolio_id).one_or_none()
+
+    def add_holding(
+        self, session: Session, portfolio_id: int, symbol: str, quantity: float, average_cost: Optional[float]
+    ) -> PortfolioHolding:
+        """A single new position -- distinct from `replace_holdings`
+        (which wholesale-replaces the entire holdings list for
+        POST /analyze). Raises IntegrityError, translated by the route
+        layer into DuplicateHoldingError, if this portfolio already
+        holds `symbol` (the model's own `uq_portfolio_holding_identity`
+        constraint) -- the caller should PATCH the existing holding
+        instead of adding a second row for the same stock."""
+        stock = get_or_create_stock(session, symbol)
+        holding = PortfolioHolding(
+            portfolio_id=portfolio_id, stock_id=stock.id, symbol=stock.symbol,
+            quantity=quantity, average_cost=average_cost,
+        )
+        session.add(holding)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            raise
+        return holding
+
+    def update_holding(
+        self,
+        session: Session,
+        holding: PortfolioHolding,
+        quantity: Optional[float] = None,
+        average_cost: Optional[float] = None,
+    ) -> PortfolioHolding:
+        if quantity is not None:
+            holding.quantity = quantity
+        if average_cost is not None:
+            holding.average_cost = average_cost
+        session.commit()
+        return holding
+
+    def delete_holding(self, session: Session, holding: PortfolioHolding) -> None:
+        session.delete(holding)
+        session.commit()
 
     # --- analysis snapshots -------------------------------------------------
 

@@ -39,12 +39,23 @@ customer looping this endpoint would otherwise incur unbounded DB
 writes (a new `PortfolioAnalysisSnapshot` row per call) with no cap.
 """
 
-from fastapi import APIRouter, Depends, Request
+from datetime import datetime
+from typing import Dict, List, Optional
+
+from fastapi import APIRouter, Depends, Request, Response, status
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_market_provider
 from src.market_data.sahmk.operation_scope import PORTFOLIO, operation_scope
-from src.api.exceptions import InvalidPortfolioConfigError, NoPortfolioAnalysisError, PortfolioNotFoundError
+from src.api.exceptions import (
+    DuplicateHoldingError,
+    InvalidPortfolioConfigError,
+    NoPortfolioAnalysisError,
+    PortfolioHoldingNotFoundError,
+    PortfolioNotFoundError,
+)
 from src.api.middleware.rate_limiting import limiter
 from src.api.schemas.news import PortfolioNewsAlertListOut, PortfolioNewsAlertOut
 from src.api.schemas.portfolio_intelligence import (
@@ -52,15 +63,31 @@ from src.api.schemas.portfolio_intelligence import (
     CorrelationMatrixOut,
     DiversificationOut,
     HealthScoreOut,
+    HoldingCreateIn,
+    HoldingUpdateIn,
     PortfolioAnalysisOut,
     PortfolioAnalyzeRequest,
+    PortfolioCreateIn,
+    PortfolioHoldingDetailOut,
+    PortfolioHoldingsOut,
+    PortfolioListOut,
     PortfolioRecommendationsOut,
+    PortfolioSummaryOut,
     RebalancePlanOut,
     RiskProfileOut,
 )
 from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
-from src.domain.models import Portfolio, PortfolioAnalysisSnapshot, PortfolioNewsAlert, User
+from src.domain.models import (
+    DecisionV2Snapshot,
+    Portfolio,
+    PortfolioAnalysisSnapshot,
+    PortfolioHolding,
+    PortfolioNewsAlert,
+    PriceBar,
+    Timeframe,
+    User,
+)
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.news_intelligence.portfolio_alerts import PortfolioNewsAlertEngine
 from src.portfolio_intelligence.config import get_max_holdings_per_portfolio
@@ -80,6 +107,37 @@ def _get_portfolio_or_404(session: Session, portfolio_id: int, user_id: int) -> 
     return portfolio
 
 
+# --- RADAR-C Phase H: "I already own this -- what now" guidance ------------
+#
+# Deliberately NOT the same value as a fresh "should I buy this now"
+# recommendation: an existing holder's four real options are
+# احتفاظ (hold) / مراقبة (watch) / تخفيف (reduce) / خروج (exit), never
+# "buy more" framed as if it were a new-entry decision. This maps
+# Decision Engine V2's own `decision` value (already gate-checked,
+# already evidence-backed -- src.analysis.decision_v2) onto that
+# four-way holder framing; it introduces no new number or signal of
+# its own, only relabels what the engine already concluded for a
+# holder's context.
+_HOLDER_GUIDANCE_MAP: Dict[str, tuple] = {
+    "STRONG_BUY_CANDIDATE": ("HOLD", "احتفاظ"),
+    "BUY_CANDIDATE": ("HOLD", "احتفاظ"),
+    "WAIT_FOR_ENTRY": ("WATCH", "مراقبة"),
+    "WATCH": ("WATCH", "مراقبة"),
+    "HOLD": ("HOLD", "احتفاظ"),
+    "REDUCE": ("REDUCE", "تخفيف"),
+    "EXIT": ("EXIT", "خروج"),
+    "REJECT": ("EXIT", "خروج"),
+}
+
+
+def _holder_guidance_from_decision(decision: str) -> Optional[tuple]:
+    """Returns (code, label_ar) or None (never fabricated) for a
+    decision this map has no defensible mapping for yet, e.g.
+    INSUFFICIENT_DATA -- an unmapped decision must render as "no
+    guidance available", not silently default to any one of the four."""
+    return _HOLDER_GUIDANCE_MAP.get(decision)
+
+
 def _get_latest_analysis_json(session: Session, portfolio_id: int, user_id: int) -> dict:
     _get_portfolio_or_404(session, portfolio_id, user_id)
     snapshot: PortfolioAnalysisSnapshot = _repository.get_latest_analysis_snapshot(session, portfolio_id)
@@ -88,6 +146,260 @@ def _get_latest_analysis_json(session: Session, portfolio_id: int, user_id: int)
             f"Portfolio {portfolio_id} has never been analyzed -- POST /api/v1/portfolio/analyze first."
         )
     return snapshot.analysis_json
+
+
+def _summarize(portfolio: Portfolio, holdings_count: int) -> PortfolioSummaryOut:
+    return PortfolioSummaryOut(
+        id=portfolio.id, name=portfolio.name, cash_balance=float(portfolio.cash_balance),
+        holdings_count=holdings_count, created_at=portfolio.created_at, updated_at=portfolio.updated_at,
+    )
+
+
+@router.get("", response_model=PortfolioListOut)
+def list_my_portfolios(
+    session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
+) -> PortfolioListOut:
+    """DB-only -- reads only already-persisted `Portfolio`/`PortfolioHolding`
+    rows, never a live market-data call (RADAR-C Phase H)."""
+    _total, portfolios = _repository.list_portfolios_for_user(session, current_user.id, limit=100, offset=0)
+    holding_rows = (
+        session.query(PortfolioHolding.portfolio_id, func.count(PortfolioHolding.id))
+        .filter(PortfolioHolding.portfolio_id.in_([p.id for p in portfolios]))
+        .group_by(PortfolioHolding.portfolio_id)
+        .all()
+        if portfolios
+        else []
+    )
+    counts = dict(holding_rows)
+    return PortfolioListOut(
+        portfolios=[_summarize(p, counts.get(p.id, 0)) for p in portfolios]
+    )
+
+
+@router.post("", response_model=PortfolioSummaryOut, status_code=status.HTTP_201_CREATED)
+def create_my_portfolio(
+    body: PortfolioCreateIn,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_active_subscription()),
+) -> PortfolioSummaryOut:
+    """Creates an empty portfolio -- no holdings, no analysis run, no
+    live market-data call. Distinct from `POST /analyze`, which
+    creates-or-updates a portfolio *and* immediately runs a full paid
+    analysis; this is the zero-cost "start a portfolio" action the
+    Phase H holdings CRUD flow builds on."""
+    portfolio = _repository.create_portfolio(session, body.name, body.cash_balance, user_id=current_user.id)
+    return _summarize(portfolio, holdings_count=0)
+
+
+@router.delete("/{portfolio_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_my_portfolio(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
+) -> Response:
+    portfolio = _get_portfolio_or_404(session, portfolio_id, current_user.id)
+    _repository.delete_portfolio(session, portfolio)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _latest_price_by_stock_id(session: Session, stock_ids: List[int]) -> Dict[int, tuple]:
+    """(price, as_of) per stock_id from the single most recent
+    already-persisted daily `PriceBar` -- the same zero-SAHMK windowed-
+    query pattern `GET /api/v1/stocks/directory` uses (Phase F)."""
+    if not stock_ids:
+        return {}
+    ranked = (
+        session.query(
+            PriceBar.stock_id,
+            PriceBar.close,
+            PriceBar.timestamp,
+            func.row_number().over(partition_by=PriceBar.stock_id, order_by=PriceBar.timestamp.desc()).label("rn"),
+        )
+        .filter(PriceBar.stock_id.in_(stock_ids), PriceBar.timeframe == Timeframe.ONE_DAY)
+        .subquery()
+    )
+    rows = session.query(ranked).filter(ranked.c.rn == 1).all()
+    return {row.stock_id: (float(row.close), row.timestamp) for row in rows}
+
+
+def _latest_decision_by_stock_id(session: Session, stock_ids: List[int]) -> Dict[int, DecisionV2Snapshot]:
+    """Most recent already-persisted `DecisionV2Snapshot` per stock_id
+    -- written best-effort whenever `GET /stocks/{symbol}/decision-v2`
+    computes a real decision (see that model's own docstring). Never
+    triggers a new decision computation itself: a holding whose symbol
+    nobody has looked up recently simply has no guidance yet, which the
+    route surfaces honestly rather than silently computing one here."""
+    if not stock_ids:
+        return {}
+    ranked_ids = (
+        session.query(
+            DecisionV2Snapshot.id,
+            DecisionV2Snapshot.stock_id,
+            func.row_number()
+            .over(partition_by=DecisionV2Snapshot.stock_id, order_by=DecisionV2Snapshot.decision_timestamp.desc())
+            .label("rn"),
+        )
+        .filter(DecisionV2Snapshot.stock_id.in_(stock_ids))
+        .subquery()
+    )
+    latest_ids = [row.id for row in session.query(ranked_ids).filter(ranked_ids.c.rn == 1).all()]
+    if not latest_ids:
+        return {}
+    snapshots = session.query(DecisionV2Snapshot).filter(DecisionV2Snapshot.id.in_(latest_ids)).all()
+    return {s.stock_id: s for s in snapshots}
+
+
+def _holding_detail(
+    holding: PortfolioHolding,
+    prices: Dict[int, tuple],
+    decisions: Dict[int, DecisionV2Snapshot],
+) -> PortfolioHoldingDetailOut:
+    stock = holding.stock
+    quantity = float(holding.quantity)
+    average_cost = float(holding.average_cost) if holding.average_cost is not None else None
+
+    price_row = prices.get(holding.stock_id)
+    current_price, price_as_of = price_row if price_row else (None, None)
+    freshness_label_ar = "آخر جلسة" if price_row else "غير معروف"
+
+    invested_cost = quantity * average_cost if average_cost is not None else None
+    current_value = quantity * current_price if current_price is not None else None
+    unrealized_pnl: Optional[float] = None
+    unrealized_pnl_pct: Optional[float] = None
+    if invested_cost is not None and current_value is not None:
+        unrealized_pnl = round(current_value - invested_cost, 4)
+        if invested_cost > 0:
+            unrealized_pnl_pct = round(unrealized_pnl / invested_cost * 100.0, 4)
+
+    guidance_decision = guidance_label_ar = guidance_basis_ar = None
+    guidance_confidence: Optional[float] = None
+    guidance_evaluated_at: Optional[datetime] = None
+    snapshot = decisions.get(holding.stock_id)
+    if snapshot is not None:
+        mapped = _holder_guidance_from_decision(snapshot.decision)
+        if mapped is not None:
+            guidance_decision, guidance_label_ar = mapped
+            guidance_basis_ar = snapshot.decision_summary_ar or snapshot.recommendation_basis
+            guidance_confidence = float(snapshot.confidence_score)
+            guidance_evaluated_at = snapshot.decision_timestamp
+
+    return PortfolioHoldingDetailOut(
+        id=holding.id,
+        symbol=holding.symbol,
+        name_ar=stock.name_ar if stock else None,
+        name_en=stock.name_en if stock else holding.symbol,
+        sector=stock.sector if stock else None,
+        quantity=quantity,
+        average_cost=average_cost,
+        current_price=current_price,
+        price_as_of=price_as_of,
+        freshness_label_ar=freshness_label_ar,
+        invested_cost=round(invested_cost, 4) if invested_cost is not None else None,
+        current_value=round(current_value, 4) if current_value is not None else None,
+        unrealized_pnl=unrealized_pnl,
+        unrealized_pnl_pct=unrealized_pnl_pct,
+        guidance_decision=guidance_decision,
+        guidance_label_ar=guidance_label_ar,
+        guidance_basis_ar=guidance_basis_ar,
+        guidance_confidence=guidance_confidence,
+        guidance_evaluated_at=guidance_evaluated_at,
+    )
+
+
+@router.get("/{portfolio_id}/holdings", response_model=PortfolioHoldingsOut)
+def get_portfolio_holdings(
+    portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
+) -> PortfolioHoldingsOut:
+    """RADAR-C Phase H: real per-position P&L and "already own this --
+    what now" guidance, computed entirely from already-persisted data
+    -- zero SAHMK requests, ever (mirrors GET /api/v1/stocks/directory's
+    own zero-SAHMK guarantee). Distinct from `GET /{portfolio_id}`
+    (the full multi-engine `PortfolioAnalysisOut`), which only exists
+    after a paid `POST /analyze` call; this route always has an answer
+    for a portfolio's own holdings, even one that has never been
+    analyzed."""
+    portfolio = _get_portfolio_or_404(session, portfolio_id, current_user.id)
+    rows = _repository.list_holding_rows(session, portfolio_id)
+
+    stock_ids = [row.stock_id for row in rows]
+    prices = _latest_price_by_stock_id(session, stock_ids)
+    decisions = _latest_decision_by_stock_id(session, stock_ids)
+
+    holdings = [_holding_detail(row, prices, decisions) for row in rows]
+
+    total_invested_cost = sum(h.invested_cost for h in holdings if h.invested_cost is not None)
+    total_current_value = sum(h.current_value for h in holdings if h.current_value is not None)
+    priced_and_costed = [h for h in holdings if h.invested_cost is not None and h.current_value is not None]
+    total_unrealized_pnl = (
+        round(sum(h.unrealized_pnl for h in priced_and_costed), 4) if priced_and_costed else None
+    )
+    total_unrealized_pnl_pct = (
+        round(total_unrealized_pnl / sum(h.invested_cost for h in priced_and_costed) * 100.0, 4)
+        if total_unrealized_pnl is not None and sum(h.invested_cost for h in priced_and_costed) > 0
+        else None
+    )
+
+    return PortfolioHoldingsOut(
+        portfolio_id=portfolio.id,
+        name=portfolio.name,
+        cash_balance=float(portfolio.cash_balance),
+        holdings=holdings,
+        total_invested_cost=round(total_invested_cost, 4),
+        total_current_value=round(total_current_value, 4),
+        total_unrealized_pnl=total_unrealized_pnl,
+        total_unrealized_pnl_pct=total_unrealized_pnl_pct,
+        total_value_with_cash=round(total_current_value + float(portfolio.cash_balance), 4),
+    )
+
+
+@router.post("/{portfolio_id}/holdings", response_model=PortfolioHoldingDetailOut, status_code=status.HTTP_201_CREATED)
+def add_portfolio_holding(
+    portfolio_id: int,
+    body: HoldingCreateIn,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_active_subscription()),
+) -> PortfolioHoldingDetailOut:
+    _get_portfolio_or_404(session, portfolio_id, current_user.id)
+    try:
+        holding = _repository.add_holding(session, portfolio_id, body.symbol, body.quantity, body.average_cost)
+    except IntegrityError:
+        raise DuplicateHoldingError(
+            f"Portfolio {portfolio_id} already holds {body.symbol.upper()} -- PATCH the existing holding instead."
+        )
+    prices = _latest_price_by_stock_id(session, [holding.stock_id])
+    decisions = _latest_decision_by_stock_id(session, [holding.stock_id])
+    return _holding_detail(holding, prices, decisions)
+
+
+@router.patch("/{portfolio_id}/holdings/{holding_id}", response_model=PortfolioHoldingDetailOut)
+def update_portfolio_holding(
+    portfolio_id: int,
+    holding_id: int,
+    body: HoldingUpdateIn,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_active_subscription()),
+) -> PortfolioHoldingDetailOut:
+    _get_portfolio_or_404(session, portfolio_id, current_user.id)
+    holding = _repository.get_holding_for_portfolio(session, portfolio_id, holding_id)
+    if holding is None:
+        raise PortfolioHoldingNotFoundError(f"No holding {holding_id} in portfolio {portfolio_id}.")
+    holding = _repository.update_holding(session, holding, quantity=body.quantity, average_cost=body.average_cost)
+    prices = _latest_price_by_stock_id(session, [holding.stock_id])
+    decisions = _latest_decision_by_stock_id(session, [holding.stock_id])
+    return _holding_detail(holding, prices, decisions)
+
+
+@router.delete("/{portfolio_id}/holdings/{holding_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_portfolio_holding(
+    portfolio_id: int,
+    holding_id: int,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_active_subscription()),
+) -> Response:
+    _get_portfolio_or_404(session, portfolio_id, current_user.id)
+    holding = _repository.get_holding_for_portfolio(session, portfolio_id, holding_id)
+    if holding is None:
+        raise PortfolioHoldingNotFoundError(f"No holding {holding_id} in portfolio {portfolio_id}.")
+    _repository.delete_holding(session, holding)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/analyze", response_model=PortfolioAnalysisOut)
