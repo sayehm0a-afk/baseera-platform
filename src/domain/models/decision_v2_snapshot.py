@@ -197,6 +197,14 @@ class DecisionV2Snapshot(Base):
     news_impact = Column(String(32), nullable=True)
     news_impact_summary_ar = Column(Text, nullable=True)
 
+    # RADAR-C: the confidence_calibration_models("decision_v2" source)
+    # empirical calibration of `confidence_score`, when an ACTIVE model
+    # exists -- see src.ai_evolution.confidence_calibration. Both NULL
+    # (not a fabricated fallback) until real DecisionV2Outcome history
+    # accumulates enough to fit and activate a model.
+    calibrated_confidence_score = Column(Numeric(6, 2), nullable=True)
+    calibration_version = Column(String(64), nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

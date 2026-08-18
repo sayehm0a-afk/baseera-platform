@@ -325,6 +325,12 @@ export interface DecisionV2 {
   fundamental_summary: Record<string, number | null>;
   fundamental_summary_ar: string;
 
+  /** Section 11: real news-sentiment aggregate over analyzed news
+   * events (src.analysis.decision_v2.news_impact) -- never fabricated,
+   * "NO_RELEVANT_NEWS" when no analyzed news exists for this symbol. */
+  news_impact: "POSITIVE" | "NEGATIVE" | "NEUTRAL" | "NO_RELEVANT_NEWS";
+  news_impact_summary_ar: string;
+
   /** AI Multi-Agent Investment Committee -- present only on a
    * successful, best-effort committee run alongside this decision
    * (see src.ai_evolution.committee). Null when the committee could
@@ -386,6 +392,29 @@ export interface StockSearchResult {
 export interface StockSearch {
   query: string;
   results: StockSearchResult[];
+}
+
+/** GET /api/v1/stocks/directory (Phase F: All-Stocks). `current_price`/
+ * `change_amount`/`change_pct` are null (not fabricated) until at
+ * least one, respectively two, persisted daily bars exist. */
+export interface StockDirectoryItem {
+  symbol: string;
+  name_en: string;
+  name_ar: string | null;
+  sector: string | null;
+  sector_ar: string | null;
+  current_price: number | null;
+  change_amount: number | null;
+  change_pct: number | null;
+  price_as_of: string | null;
+  freshness_label_ar: string;
+}
+
+export interface StockDirectory {
+  total: number;
+  limit: number;
+  offset: number;
+  results: StockDirectoryItem[];
 }
 
 export interface AnalystReport {

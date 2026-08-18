@@ -30,7 +30,7 @@ export default function LoginPage() {
     setIsSubmitting(true);
     try {
       await login(email.trim(), password);
-      router.replace("/dashboard");
+      router.replace("/radar");
     } catch (err) {
       const code = err instanceof ApiError ? err.code : null;
       setError(

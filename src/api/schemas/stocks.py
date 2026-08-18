@@ -59,6 +59,39 @@ class StockSearchOut(BaseModel):
     results: List[StockSearchResultOut]
 
 
+class StockDirectoryItemOut(BaseModel):
+    """One row of the All-Stocks directory (Phase F). `current_price`/
+    `change_amount`/`change_pct` come from the two most recent
+    already-persisted daily `PriceBar` rows for this symbol -- never a
+    live SAHMK call (see the /directory route's own docstring). All
+    three are `None`, not fabricated zeros, when fewer than the needed
+    bars exist yet."""
+
+    symbol: str
+    name_en: str
+    name_ar: Optional[str] = None
+    sector: Optional[str] = None
+    sector_ar: Optional[str] = None
+    current_price: Optional[float] = None
+    change_amount: Optional[float] = None
+    change_pct: Optional[float] = None
+    price_as_of: Optional[datetime] = None
+    freshness_label_ar: str
+
+    @model_validator(mode="after")
+    def _fill_sector_ar(self) -> "StockDirectoryItemOut":
+        if self.sector_ar is None:
+            self.sector_ar = sector_label_ar(self.sector)
+        return self
+
+
+class StockDirectoryOut(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    results: List[StockDirectoryItemOut]
+
+
 class QuoteOut(BaseModel):
     symbol: str
     # open/high/low/volume are None when the only source available is
@@ -282,6 +315,14 @@ class DecisionV2Out(BaseModel):
 
     confidence_score: float
     confidence_disclaimer_ar: str
+    # RADAR-C: the empirical calibration of confidence_score against
+    # real DecisionV2Outcome history, when a real ACTIVE
+    # decision_v2-source calibration model exists -- both None (not a
+    # fabricated fallback) until enough resolved outcomes accumulate.
+    # A disclosed companion figure, never a silent replacement for
+    # confidence_score.
+    calibrated_confidence_score: Optional[float] = None
+    calibration_version: Optional[str] = None
     opportunity_quality_score: float
     risk_score: float
     data_quality_score: float

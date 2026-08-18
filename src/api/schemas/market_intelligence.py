@@ -989,6 +989,36 @@ class RadarV2PerformanceOut(BaseModel):
     live_opportunities_by_classification: Dict[str, int] = Field(default_factory=dict)
 
 
+class RadarV2GroupPerformanceOut(BaseModel):
+    label: str
+    signal_count: int
+    win_rate: Optional[float] = None
+    average_return_pct: Optional[float] = None
+
+
+class RadarV2ExtendedPerformanceOut(BaseModel):
+    """GET .../radar-v2/performance/extended -- RADAR-C Phase D: the
+    mandate's explicit breakdown questions (win rate by classification/
+    confidence-band/market-regime, performance by sector/holding-
+    horizon, MFE/MAE, calibration) over the FULL RadarOpportunity/
+    DecisionV2Outcome history, not one ValidationSession window. Every
+    group's win_rate/average_return_pct is null, not 0.0, until real
+    resolved outcomes exist for it."""
+
+    generated_at: datetime
+    win_rate_by_classification: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
+    win_rate_by_confidence_band: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
+    win_rate_by_market_regime: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
+    performance_by_sector: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
+    performance_by_holding_horizon: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
+    average_return_pct: Optional[float] = None
+    median_return_pct: Optional[float] = None
+    average_favorable_excursion_pct: Optional[float] = None
+    average_adverse_excursion_pct: Optional[float] = None
+    calibration_pair_count: int = 0
+    expected_calibration_error: Optional[float] = None
+
+
 class RadarV2SahmkConsumptionOut(BaseModel):
     """GET .../radar-v2/sahmk-consumption -- SAHMK quota consumption
     attributable specifically to Radar V2, read verbatim from the

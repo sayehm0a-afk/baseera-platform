@@ -26,7 +26,7 @@ export function RequireStaff({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (session !== undefined && (session === null || !session.is_staff)) {
-      router.replace("/dashboard");
+      router.replace("/radar");
     }
   }, [session, router]);
 

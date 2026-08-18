@@ -3,10 +3,18 @@ import type {
   Allocation,
   Diversification,
   HealthScore,
+  HoldingCreateInput,
+  HoldingUpdateInput,
+  MessageResponse,
   PortfolioAnalysis,
   PortfolioAnalyzeRequestBody,
+  PortfolioCreateInput,
+  PortfolioHoldingDetail,
+  PortfolioHoldings,
+  PortfolioList,
   PortfolioNewsAlertList,
   PortfolioRecommendations,
+  PortfolioSummary,
   RebalancePlan,
   RiskProfile,
 } from "./portfolio-types";
@@ -80,5 +88,71 @@ export function refreshPortfolioNewsAlerts(
   return apiFetch<PortfolioNewsAlertList>(
     `/api/v1/portfolio/${portfolioId}/news-alerts/refresh`,
     { method: "POST" }
+  );
+}
+
+/** RADAR-C Phase H: real per-holding CRUD + DB-only P&L + Decision V2
+ * holder guidance -- distinct from analyzePortfolio() above, which
+ * requires a live market-data provider call. Every function here maps
+ * 1:1 onto the lighter, always-DB-only routes added alongside the
+ * existing POST /analyze surface. */
+
+export function listMyPortfolios(): Promise<PortfolioList> {
+  return apiFetch<PortfolioList>("/api/v1/portfolio");
+}
+
+export function createPortfolio(
+  body: PortfolioCreateInput
+): Promise<PortfolioSummary> {
+  return apiFetch<PortfolioSummary>("/api/v1/portfolio", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deletePortfolio(
+  portfolioId: number
+): Promise<MessageResponse> {
+  return apiFetch<MessageResponse>(`/api/v1/portfolio/${portfolioId}`, {
+    method: "DELETE",
+  });
+}
+
+export function getPortfolioHoldings(
+  portfolioId: number
+): Promise<PortfolioHoldings> {
+  return apiFetch<PortfolioHoldings>(
+    `/api/v1/portfolio/${portfolioId}/holdings`
+  );
+}
+
+export function addPortfolioHolding(
+  portfolioId: number,
+  body: HoldingCreateInput
+): Promise<PortfolioHoldingDetail> {
+  return apiFetch<PortfolioHoldingDetail>(
+    `/api/v1/portfolio/${portfolioId}/holdings`,
+    { method: "POST", body: JSON.stringify(body) }
+  );
+}
+
+export function updatePortfolioHolding(
+  portfolioId: number,
+  holdingId: number,
+  body: HoldingUpdateInput
+): Promise<PortfolioHoldingDetail> {
+  return apiFetch<PortfolioHoldingDetail>(
+    `/api/v1/portfolio/${portfolioId}/holdings/${holdingId}`,
+    { method: "PATCH", body: JSON.stringify(body) }
+  );
+}
+
+export function deletePortfolioHolding(
+  portfolioId: number,
+  holdingId: number
+): Promise<MessageResponse> {
+  return apiFetch<MessageResponse>(
+    `/api/v1/portfolio/${portfolioId}/holdings/${holdingId}`,
+    { method: "DELETE" }
   );
 }

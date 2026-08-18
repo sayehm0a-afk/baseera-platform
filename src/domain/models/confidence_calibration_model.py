@@ -49,6 +49,14 @@ class ConfidenceCalibrationModel(Base):
     status = Column(Enum(ConfidenceCalibrationStatus), nullable=False, default=ConfidenceCalibrationStatus.DRAFT)
     method = Column(Enum(ConfidenceCalibrationMethod), nullable=False)
 
+    # RADAR-C: which outcome ledger this model was trained on --
+    # 'legacy_v1' (RecommendationSnapshot/RecommendationOutcome, the
+    # original E3 scope) or 'decision_v2' (DecisionV2Snapshot/
+    # DecisionV2Outcome, Decision Engine V2 / Radar V2's own ledger).
+    # "At most one ACTIVE row" is enforced per source, not globally --
+    # the two pipelines calibrate independently.
+    training_source = Column(String(32), nullable=False, default="legacy_v1", server_default="legacy_v1")
+
     # Platt: {"coef": float, "intercept": float} (a fitted logistic
     # regression, applied as sigmoid(coef * confidence + intercept)).
     # Isotonic: {"x_thresholds": [...], "y_thresholds": [...]} (the

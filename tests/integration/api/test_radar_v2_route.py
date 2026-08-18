@@ -159,6 +159,20 @@ def test_radar_v2_performance_on_an_empty_database_reports_null_rates(client, se
     assert body["stop_loss_hit_rate"] is None
 
 
+def test_radar_v2_extended_performance_on_an_empty_database_reports_empty_groups(client, session_factory, as_staff):
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/performance/extended")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["win_rate_by_classification"] == []
+    assert body["average_return_pct"] is None
+    assert body["expected_calibration_error"] is None
+
+
+def test_radar_v2_extended_performance_requires_staff_role(client, session_factory):
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/performance/extended")
+    assert response.status_code in (401, 403)
+
+
 def test_radar_v2_sahmk_consumption_never_leaks_the_api_key(client, session_factory, as_staff):
     response = client.get("/api/v1/admin/market-intelligence/radar-v2/sahmk-consumption")
     assert response.status_code == 200

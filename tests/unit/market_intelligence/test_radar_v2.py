@@ -19,6 +19,7 @@ from sqlalchemy.pool import StaticPool
 from src.core.db.database import Base
 from src.domain.models import DecisionV2Outcome, DecisionV2Snapshot, PriceBar, RadarOpportunity, Stock, Timeframe
 from src.market_intelligence.radar_v2 import (
+    compute_radar_v2_extended_performance,
     compute_radar_v2_performance,
     emit_radar_opportunities,
     run_radar_v2_cycle,
@@ -61,11 +62,15 @@ def _candidate(symbol="1111", rank_score=80.0, signals=None):
     )
 
 
-def _snapshot(session, stock, scan_run_id, decision="BUY_CANDIDATE", confidence=70.0, current_price=100.0):
+def _snapshot(
+    session, stock, scan_run_id, decision="BUY_CANDIDATE", confidence=70.0, current_price=100.0,
+    market_risk_state=None, sector_ar=None, horizon_type=None,
+):
     row = DecisionV2Snapshot(
         stock_id=stock.id,
         symbol=stock.symbol,
         company_name_en=stock.name_en,
+        sector_ar=sector_ar,
         decision=decision,
         decision_label_ar="شراء",
         confidence_score=confidence,
@@ -79,6 +84,8 @@ def _snapshot(session, stock, scan_run_id, decision="BUY_CANDIDATE", confidence=
         analysis_version="2.0.0",
         data_source="test",
         scan_run_id=scan_run_id,
+        market_risk_state=market_risk_state,
+        horizon_type=horizon_type,
     )
     session.add(row)
     session.commit()
@@ -385,3 +392,107 @@ class TestComputeRadarV2Performance:
         assert metrics.target_hit_rate == 1.0
         assert metrics.stop_loss_hit_rate == 0.0
         assert metrics.average_return_pct == 8.5
+
+
+class TestComputeRadarV2ExtendedPerformance:
+    """RADAR-C Phase D: the mandate's explicit breakdown questions
+    (win rate by classification/confidence-band/market-regime,
+    performance by sector/horizon, MFE/MAE, calibration) over the full
+    RadarOpportunity/DecisionV2Outcome history."""
+
+    def test_empty_database_reports_empty_groups_and_none_aggregates(self, session):
+        metrics = compute_radar_v2_extended_performance(session)
+        assert metrics.win_rate_by_classification == []
+        assert metrics.average_return_pct is None
+        assert metrics.median_return_pct is None
+        assert metrics.expected_calibration_error is None
+
+    def test_pending_outcome_is_excluded_from_every_breakdown(self, session):
+        stock = _stock(session)
+        _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE", confidence=75.0)
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)])
+
+        metrics = compute_radar_v2_extended_performance(session)
+        # The group still appears (a real signal was issued) but its
+        # win_rate is honestly None, not a fabricated 0% or 100% --
+        # PENDING is neither a win nor a loss yet, matching the same
+        # discipline validation_metrics.py already applies.
+        assert len(metrics.win_rate_by_classification) == 1
+        assert metrics.win_rate_by_classification[0].signal_count == 1
+        assert metrics.win_rate_by_classification[0].win_rate is None
+
+    def test_target_hit_and_stop_hit_split_by_classification(self, session):
+        stock_a = _stock(session, symbol="1111")
+        stock_b = _stock(session, symbol="2222")
+
+        snap_a = _snapshot(session, stock_a, scan_run_id=1, decision="BUY_CANDIDATE", confidence=72.0)
+        emit_radar_opportunities(session, 1, [_candidate(stock_a.symbol)])
+        outcome_a = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_a.id).one()
+        outcome_a.status = "TARGET_1_HIT"
+        outcome_a.return_pct = 6.0
+        outcome_a.max_favorable_excursion_pct = 7.5
+        outcome_a.max_adverse_excursion_pct = -1.0
+
+        snap_b = _snapshot(session, stock_b, scan_run_id=2, decision="STRONG_BUY_CANDIDATE", confidence=88.0)
+        emit_radar_opportunities(session, 2, [_candidate(stock_b.symbol)])
+        outcome_b = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_b.id).one()
+        outcome_b.status = "STOP_LOSS_HIT"
+        outcome_b.return_pct = -4.0
+        outcome_b.max_favorable_excursion_pct = 1.0
+        outcome_b.max_adverse_excursion_pct = -4.5
+        session.commit()
+
+        metrics = compute_radar_v2_extended_performance(session)
+
+        by_class = {g.label: g for g in metrics.win_rate_by_classification}
+        assert by_class["BUY_CANDIDATE"].win_rate == 1.0
+        assert by_class["STRONG_BUY_CANDIDATE"].win_rate == 0.0
+
+        by_band = {g.label: g for g in metrics.win_rate_by_confidence_band}
+        assert by_band["70-79"].win_rate == 1.0
+        assert by_band["80-89"].win_rate == 0.0
+
+        assert metrics.average_return_pct == pytest.approx(1.0)  # (6.0 + -4.0) / 2
+        assert metrics.median_return_pct == pytest.approx(1.0)
+        assert metrics.average_favorable_excursion_pct == pytest.approx(4.25)
+        assert metrics.average_adverse_excursion_pct == pytest.approx(-2.75)
+        assert metrics.calibration_pair_count == 2
+
+    def test_groups_by_market_regime_sector_and_horizon(self, session):
+        stock = _stock(session)
+        snapshot = _snapshot(
+            session, stock, scan_run_id=1, decision="BUY_CANDIDATE", confidence=70.0,
+            market_risk_state="STRONG_ENTRY", sector_ar="الطاقة", horizon_type="SHORT_TERM",
+        )
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)])
+        outcome = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        outcome.status = "TARGET_1_HIT"
+        outcome.return_pct = 5.0
+        session.commit()
+
+        metrics = compute_radar_v2_extended_performance(session)
+        assert {g.label for g in metrics.win_rate_by_market_regime} == {"STRONG_ENTRY"}
+        assert {g.label for g in metrics.performance_by_sector} == {"الطاقة"}
+        assert {g.label for g in metrics.performance_by_holding_horizon} == {"SHORT_TERM"}
+
+    def test_superseded_opportunities_still_count_toward_breakdowns(self, session):
+        # Unlike compute_radar_v2_performance's live_opportunities_by_
+        # classification (current composition only), the extended
+        # breakdowns are historical -- a superseded opportunity's real
+        # resolved outcome must still be counted.
+        stock = _stock(session)
+        t0 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        snap_1 = _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE", confidence=71.0)
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)], emitted_at=t0)
+        outcome_1 = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_1.id).one()
+        outcome_1.status = "TARGET_1_HIT"
+        outcome_1.return_pct = 3.0
+        session.commit()
+
+        _snapshot(session, stock, scan_run_id=2, decision="STRONG_BUY_CANDIDATE", confidence=90.0)
+        emit_radar_opportunities(session, 2, [_candidate(stock.symbol)], emitted_at=t0 + timedelta(hours=1))
+
+        metrics = compute_radar_v2_extended_performance(session)
+        by_class = {g.label: g for g in metrics.win_rate_by_classification}
+        assert "BUY_CANDIDATE" in by_class
+        assert by_class["BUY_CANDIDATE"].win_rate == 1.0

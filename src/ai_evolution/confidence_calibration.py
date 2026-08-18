@@ -39,6 +39,9 @@ from src.domain.models import (
     ConfidenceCalibrationMethod,
     ConfidenceCalibrationModel,
     ConfidenceCalibrationStatus,
+    DecisionV2Outcome,
+    DecisionV2OutcomeStatus,
+    DecisionV2Snapshot,
     RecommendationOutcome,
     RecommendationOutcomeStatus,
     RecommendationSnapshot,
@@ -67,6 +70,25 @@ _CONFIDENCE_BUCKET_EDGES = [0, 20, 40, 60, 80, 100]
 # ambiguous label would launder that ambiguity into false precision.
 _SUCCESS_STATUS = RecommendationOutcomeStatus.SUCCESSFUL
 _FAILURE_STATUS = RecommendationOutcomeStatus.FAILED
+
+# RADAR-C: which outcome ledger a given ConfidenceCalibrationModel was
+# trained on -- see that model's own docstring for why "at most one
+# ACTIVE row" is scoped per source rather than globally.
+TRAINING_SOURCE_LEGACY_V1 = "legacy_v1"
+TRAINING_SOURCE_DECISION_V2 = "decision_v2"
+
+# DecisionV2Outcome's equivalent of _SUCCESS_STATUS/_FAILURE_STATUS
+# above -- a target hit (any of the three) counts as a success, a stop
+# hit as a failure; PENDING/PARTIAL/EXPIRED/CANCELLED/DATA_UNAVAILABLE
+# are excluded for the same "don't launder ambiguity" reason.
+_DECISION_V2_SUCCESS_STATUSES = frozenset(
+    {
+        DecisionV2OutcomeStatus.TARGET_1_HIT,
+        DecisionV2OutcomeStatus.TARGET_2_HIT,
+        DecisionV2OutcomeStatus.TARGET_3_HIT,
+    }
+)
+_DECISION_V2_FAILURE_STATUS = DecisionV2OutcomeStatus.STOP_LOSS_HIT
 
 
 def _generate_version() -> str:
@@ -123,6 +145,34 @@ def _load_training_pairs(
     return [(float(confidence), 1 if status is _SUCCESS_STATUS else 0) for confidence, status in rows]
 
 
+def _load_training_pairs_decision_v2(
+    session: Session,
+    training_period_start: date,
+    training_period_end: date,
+) -> List[Tuple[float, int]]:
+    """Decision V2 / Radar V2's own ledger (`decision_v2_snapshots` +
+    `decision_v2_outcomes`) -- distinct from `_load_training_pairs`
+    above, which reads the older `RecommendationSnapshot`/
+    `RecommendationOutcome` pair. Filters by `DecisionV2Outcome.
+    evaluated_at` (when the outcome actually resolved, not when the
+    snapshot was issued -- the same "judge it once real forward data
+    exists" timing `_load_training_pairs` uses via `evaluated_at`
+    above)."""
+    rows = (
+        session.query(DecisionV2Snapshot.confidence_score, DecisionV2Outcome.status)
+        .join(DecisionV2Outcome, DecisionV2Outcome.decision_v2_snapshot_id == DecisionV2Snapshot.id)
+        .filter(
+            DecisionV2Outcome.status.in_([*_DECISION_V2_SUCCESS_STATUSES, _DECISION_V2_FAILURE_STATUS]),
+            DecisionV2Outcome.evaluated_at >= training_period_start,
+            DecisionV2Outcome.evaluated_at <= training_period_end,
+        )
+        .all()
+    )
+    return [
+        (float(confidence), 1 if status in _DECISION_V2_SUCCESS_STATUSES else 0) for confidence, status in rows
+    ]
+
+
 def _fit_platt(pairs: List[Tuple[float, int]]) -> Dict[str, float]:
     labels = {label for _, label in pairs}
     if len(labels) < 2:
@@ -173,37 +223,47 @@ def apply_calibration(model_row: ConfidenceCalibrationModel, raw_confidence: flo
     return y_thresholds[-1]  # pragma: no cover -- unreachable given the bounds checks above
 
 
-def get_effective_confidence(session: Session, raw_confidence: float) -> Tuple[Optional[float], Optional[str]]:
+def get_effective_confidence(
+    session: Session, raw_confidence: float, source: str = TRAINING_SOURCE_LEGACY_V1
+) -> Tuple[Optional[float], Optional[str]]:
     """The one real integration point between this engine and the live
     recommendation pipeline: looks up whichever ConfidenceCalibrationModel
-    is currently ACTIVE and, if one exists, applies it to `raw_confidence`
-    (0-100), returning the calibrated success probability (0-1) and that
-    model's version string. When no model is active yet -- the honest,
-    expected state until enough real outcome history accumulates (see
-    DEFAULT_MIN_SAMPLE_SIZE) -- returns `(None, None)` rather than
-    fabricating a calibration that was never actually fit.
+    is currently ACTIVE for `source` and, if one exists, applies it to
+    `raw_confidence` (0-100), returning the calibrated success
+    probability (0-1) and that model's version string. When no model is
+    active yet -- the honest, expected state until enough real outcome
+    history accumulates (see DEFAULT_MIN_SAMPLE_SIZE) -- returns
+    `(None, None)` rather than fabricating a calibration that was never
+    actually fit.
 
     Called from MarketIntelligenceRepository.save_symbol_records (the
     one place in the live scan pipeline that already holds an open
     Session) to populate RecommendationSnapshot.calibrated_confidence_score/
     calibration_version, and to feed publication_gate.evaluate_publication's
-    optional `calibrated_success_probability` parameter.
+    optional `calibrated_success_probability` parameter (`source=
+    TRAINING_SOURCE_LEGACY_V1`, the default, preserves that exact
+    existing behavior); and from the two places a `DecisionV2Snapshot`
+    row is persisted (`src.api.routes.stocks`'s `/decision-v2` route
+    and `MarketIntelligenceRepository.save_symbol_records`'s Decision
+    V2 block) with `source=TRAINING_SOURCE_DECISION_V2` (RADAR-C).
     """
-    active_model = ConfidenceCalibrationEngine().get_active_model(session)
+    active_model = ConfidenceCalibrationEngine().get_active_model(session, source=source)
     if active_model is None:
         return None, None
     return apply_calibration(active_model, raw_confidence), active_model.version
 
 
-def compute_calibrated_confidences(session: Session, raw_confidences: Dict[str, float]) -> Dict[str, float]:
+def compute_calibrated_confidences(
+    session: Session, raw_confidences: Dict[str, float], source: str = TRAINING_SOURCE_LEGACY_V1
+) -> Dict[str, float]:
     """The batch counterpart to `get_effective_confidence()`, for
     read-time callers that evaluate many symbols per request
     (RankingEngine.rank/WatchlistEngine.build, called once per
     /rankings, /opportunities, /watchlists request -- see
     src.api.routes.market) rather than one symbol per write. Fetches
-    whichever model is ACTIVE exactly once (not once per symbol) and
-    applies it to every entry in `raw_confidences` (symbol -> raw 0-100
-    confidence, already known to the caller from its own
+    whichever model is ACTIVE for `source` exactly once (not once per
+    symbol) and applies it to every entry in `raw_confidences` (symbol
+    -> raw 0-100 confidence, already known to the caller from its own
     SymbolScanOutcome list -- this module intentionally has no
     dependency on market_intelligence's types, the same layering
     src.domain keeps relative to src.analysis).
@@ -214,7 +274,7 @@ def compute_calibrated_confidences(session: Session, raw_confidences: Dict[str, 
     for the single-symbol write path; a caller checking `symbol in
     result` gets the correct answer either way.
     """
-    active_model = ConfidenceCalibrationEngine().get_active_model(session)
+    active_model = ConfidenceCalibrationEngine().get_active_model(session, source=source)
     if active_model is None:
         return {}
     return {
@@ -225,10 +285,12 @@ def compute_calibrated_confidences(session: Session, raw_confidences: Dict[str, 
 
 
 class ConfidenceCalibrationEngine:
-    def get_active_model(self, session: Session) -> Optional[ConfidenceCalibrationModel]:
+    def get_active_model(
+        self, session: Session, source: str = TRAINING_SOURCE_LEGACY_V1
+    ) -> Optional[ConfidenceCalibrationModel]:
         return (
             session.query(ConfidenceCalibrationModel)
-            .filter_by(status=ConfidenceCalibrationStatus.ACTIVE)
+            .filter_by(status=ConfidenceCalibrationStatus.ACTIVE, training_source=source)
             .one_or_none()
         )
 
@@ -238,11 +300,22 @@ class ConfidenceCalibrationEngine:
         training_period_start: date,
         training_period_end: date,
         reference_horizon_days: int = DEFAULT_REFERENCE_HORIZON_DAYS,
+        source: str = TRAINING_SOURCE_LEGACY_V1,
         min_sample_size: int = DEFAULT_MIN_SAMPLE_SIZE,
         isotonic_threshold: int = ISOTONIC_SAMPLE_SIZE_THRESHOLD,
         notes: Optional[str] = None,
     ) -> ConfidenceCalibrationModel:
-        pairs = _load_training_pairs(session, training_period_start, training_period_end, reference_horizon_days)
+        if source == TRAINING_SOURCE_DECISION_V2:
+            # DecisionV2Outcome has no fixed evaluation_horizon_days
+            # concept (per-row due_at instead, see that model's own
+            # docstring) -- reference_horizon_days is a legacy_v1-only
+            # parameter, silently unused here rather than threaded
+            # through a loader that has nothing to filter on.
+            pairs = _load_training_pairs_decision_v2(session, training_period_start, training_period_end)
+        else:
+            pairs = _load_training_pairs(
+                session, training_period_start, training_period_end, reference_horizon_days
+            )
         n = len(pairs)
         if n < min_sample_size:
             raise ValueError(
@@ -259,6 +332,7 @@ class ConfidenceCalibrationEngine:
             version=_generate_version(),
             status=ConfidenceCalibrationStatus.DRAFT,
             method=method,
+            training_source=source,
             model_params=model_params,
             training_period_start=training_period_start,
             training_period_end=training_period_end,
@@ -302,7 +376,7 @@ class ConfidenceCalibrationEngine:
         if row.status != ConfidenceCalibrationStatus.VALIDATED:
             raise ValueError(f"Confidence calibration {version!r} must be VALIDATED to activate (currently {row.status}).")
 
-        current_active = self.get_active_model(session)
+        current_active = self.get_active_model(session, source=row.training_source)
         if current_active is not None:
             current_active.status = ConfidenceCalibrationStatus.SUPERSEDED
             current_active.deactivated_at = datetime.now(timezone.utc)
@@ -312,8 +386,10 @@ class ConfidenceCalibrationEngine:
         session.commit()
         return row
 
-    def rollback(self, session: Session, to_version: Optional[str] = None) -> Optional[ConfidenceCalibrationModel]:
-        current_active = self.get_active_model(session)
+    def rollback(
+        self, session: Session, to_version: Optional[str] = None, source: str = TRAINING_SOURCE_LEGACY_V1
+    ) -> Optional[ConfidenceCalibrationModel]:
+        current_active = self.get_active_model(session, source=source)
         if current_active is not None:
             current_active.status = ConfidenceCalibrationStatus.ROLLED_BACK
             current_active.deactivated_at = datetime.now(timezone.utc)

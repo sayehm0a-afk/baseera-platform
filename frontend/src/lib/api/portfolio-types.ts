@@ -182,3 +182,90 @@ export interface PortfolioAnalysis {
   recommendations: PortfolioRecommendations;
   health_score: HealthScore;
 }
+
+/** RADAR-C Phase H: the real per-holding CRUD + DB-only P&L surface --
+ * distinct from PortfolioAnalysis above, which requires a live
+ * market-data provider call via POST /analyze. Never fabricates a
+ * price/P&L figure: every nullable field here is null exactly when
+ * the backend had no already-persisted PriceBar/DecisionV2Snapshot
+ * row to compute it from. */
+export interface PortfolioSummary {
+  id: number;
+  name: string;
+  cash_balance: number;
+  holdings_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PortfolioList {
+  portfolios: PortfolioSummary[];
+}
+
+/** "I already own this -- what now" guidance, four options only:
+ * HOLD (احتفاظ) / WATCH (مراقبة) / REDUCE (تخفيف) / EXIT (خروج) --
+ * never the raw "should I buy" Decision V2 value reused as-is. */
+export type HolderGuidanceValue = "HOLD" | "WATCH" | "REDUCE" | "EXIT";
+
+export interface PortfolioHoldingDetail {
+  id: number;
+  symbol: string;
+  name_ar: string | null;
+  name_en: string;
+  sector: string | null;
+  sector_ar: string | null;
+
+  quantity: number;
+  average_cost: number | null;
+
+  current_price: number | null;
+  price_as_of: string | null;
+  freshness_label_ar: string;
+
+  invested_cost: number | null;
+  current_value: number | null;
+  unrealized_pnl: number | null;
+  unrealized_pnl_pct: number | null;
+
+  guidance_decision: HolderGuidanceValue | null;
+  guidance_label_ar: string | null;
+  guidance_basis_ar: string | null;
+  guidance_confidence: number | null;
+  guidance_evaluated_at: string | null;
+}
+
+export interface PortfolioHoldings {
+  portfolio_id: number;
+  name: string;
+  cash_balance: number;
+  holdings: PortfolioHoldingDetail[];
+
+  total_invested_cost: number;
+  total_current_value: number;
+  total_unrealized_pnl: number | null;
+  total_unrealized_pnl_pct: number | null;
+  total_value_with_cash: number;
+}
+
+export interface PortfolioCreateInput {
+  name: string;
+  cash_balance?: number;
+}
+
+export interface HoldingCreateInput {
+  symbol: string;
+  quantity: number;
+  average_cost?: number;
+}
+
+export interface HoldingUpdateInput {
+  quantity?: number;
+  average_cost?: number;
+}
+
+/** DELETE .../{portfolio_id} and DELETE .../holdings/{holding_id} both
+ * return this (matching src.api.schemas.auth.MessageOut, the same
+ * shape every other DELETE route in this backend already uses). */
+export interface MessageResponse {
+  message: string;
+}
