@@ -157,6 +157,11 @@ def test_radar_v2_performance_on_an_empty_database_reports_null_rates(client, se
     assert body["total_opportunities_emitted"] == 0
     assert body["target_hit_rate"] is None
     assert body["stop_loss_hit_rate"] is None
+    # Post-VAL-8 accumulation phase: the explicit minimum-sample gate
+    # must reach the real HTTP response too.
+    assert body["minimum_sample_size_required"] == 30
+    assert body["sample_size_adequate"] is False
+    assert body["accumulation_status"] == "INSUFFICIENT_DATA"
 
 
 def test_radar_v2_extended_performance_on_an_empty_database_reports_empty_groups(client, session_factory, as_staff):
@@ -251,6 +256,8 @@ def test_radar_v2_extended_performance_exposes_the_new_cohort_fields(client, ses
     assert group["average_risk_reward_realized"] == pytest.approx(3.0)
     assert group["expectancy_pct"] == pytest.approx(6.0)
     assert group["max_adverse_outcome_pct"] == pytest.approx(6.0)
+    # 1 resolved outcome is real, but far below the 30-sample gate.
+    assert group["sample_size_adequate"] is False
 
     market_group = next(g for g in body["performance_by_market"] if g["label"] == "Main Market")
     assert market_group["signal_count"] == 1

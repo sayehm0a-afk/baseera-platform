@@ -43,7 +43,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from src.ai_evolution.confidence_calibration import expected_calibration_error
+from src.ai_evolution.confidence_calibration import DEFAULT_MIN_SAMPLE_SIZE, expected_calibration_error
 from src.ai_evolution.decision_v2_outcome_evaluation import create_pending_decision_v2_outcome
 from src.domain.models import (
     NON_RESOLVING_STATUSES,
@@ -360,6 +360,33 @@ class RadarV2PerformanceMetrics:
     stop_loss_hit_rate: Optional[float]
     average_return_pct: Optional[float]
     live_opportunities_by_classification: dict
+    # Post-VAL-8 accumulation phase: the explicit minimum-sample gate
+    # below (not an arbitrary small number) before optimization/
+    # calibration may begin. `resolved_count` reaching this floor is
+    # `sample_size_adequate`; `accumulation_status` names the same
+    # threshold in the three states the mandate asks for.
+    minimum_sample_size_required: int
+    sample_size_adequate: bool
+    accumulation_status: str
+
+
+# The minimum resolved-outcome count before any statistical claim about
+# Basirah's real forward-test accuracy is taken seriously -- reused
+# verbatim from the platform's own existing statistical floor
+# (src.backtesting.calibration.statistical_calibration.DEFAULT_MIN_
+# SAMPLE_SIZE / src.ai_evolution.confidence_calibration.DEFAULT_MIN_
+# SAMPLE_SIZE = 30, the conventional threshold for the normal
+# approximation to be trustworthy), not a new, arbitrary number invented
+# for this report.
+MINIMUM_SAMPLE_GATE = DEFAULT_MIN_SAMPLE_SIZE
+
+
+def _accumulation_status(resolved_count: int) -> str:
+    if resolved_count == 0:
+        return "INSUFFICIENT_DATA"
+    if resolved_count < MINIMUM_SAMPLE_GATE:
+        return "PRELIMINARY"
+    return "READY_FOR_CALIBRATION"
 
 
 def compute_radar_v2_performance(session: Session) -> RadarV2PerformanceMetrics:
@@ -403,6 +430,9 @@ def compute_radar_v2_performance(session: Session) -> RadarV2PerformanceMetrics:
         stop_loss_hit_rate=round(stop_hits / resolved_count, 4) if resolved_count > 0 else None,
         average_return_pct=round(sum(returns) / len(returns), 4) if returns else None,
         live_opportunities_by_classification=live_by_classification,
+        minimum_sample_size_required=MINIMUM_SAMPLE_GATE,
+        sample_size_adequate=resolved_count >= MINIMUM_SAMPLE_GATE,
+        accumulation_status=_accumulation_status(resolved_count),
     )
 
 
@@ -460,6 +490,11 @@ class GroupPerformance:
     # outcome," distinct from average_adverse_excursion_pct (which averages
     # each trade's own worst intra-trade drawdown).
     max_adverse_outcome_pct: Optional[float]
+    # Whether this cohort alone has reached MINIMUM_SAMPLE_GATE resolved
+    # outcomes -- a cohort's own rates can be individually premature even
+    # while the platform-wide resolved_count has not yet named the whole
+    # forward test PRELIMINARY/READY_FOR_CALIBRATION.
+    sample_size_adequate: bool
 
 
 @dataclass(frozen=True)
@@ -558,6 +593,7 @@ def _group_performance(
                 average_risk_reward_realized=round(sum(rr_realized) / len(rr_realized), 4) if rr_realized else None,
                 expectancy_pct=round(sum(decisive_returns) / len(decisive_returns), 4) if decisive_returns else None,
                 max_adverse_outcome_pct=round(min(returns), 4) if returns else None,
+                sample_size_adequate=len(resolved) >= MINIMUM_SAMPLE_GATE,
             )
         )
     return results
