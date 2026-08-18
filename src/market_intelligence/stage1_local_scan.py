@@ -85,6 +85,27 @@ from src.market_intelligence.symbol_selector import SymbolSelector
 MIN_INDICATOR_ROWS = 35
 
 
+def _to_native_float(value: Optional[float]) -> Optional[float]:
+    """`TechnicalAnalysisEngine`'s indicators and `scoring.*_score` are
+    pandas/numpy-backed, so several of `Stage1SymbolResult`'s fields
+    arrive as `numpy.float64` even though the dataclass declares plain
+    `float` -- 2026-08-18 real-market validation audit finding: NumPy
+    2.x's `numpy.float64` reaches psycopg2 as a bare, unadapted scalar
+    when written straight to a `RadarOpportunity` column
+    (`emit_radar_opportunities`), and its `repr()` (`np.float64(82.6)`)
+    gets embedded as literal, unquoted SQL text -- Postgres then parses
+    `np.float64(...)` as a schema-qualified function call and fails with
+    `psycopg2.errors.InvalidSchemaName: schema "np" does not exist`,
+    silently swallowed by the scheduler's own `except Exception` in
+    `_loop()`, so every Radar V2 opportunity for the run was lost with
+    no visible error. Converting every numeric field to a real Python
+    `float` right here, at `Stage1SymbolResult`'s single construction
+    site, makes the dataclass's own `Optional[float]` annotation
+    actually true for every consumer (DB writes, tests, comparisons),
+    not just a patch at one call site."""
+    return None if value is None else float(value)
+
+
 @dataclass(frozen=True)
 class Stage1Signal:
     name: str
@@ -234,21 +255,21 @@ def _score_symbol(symbol: str, session: Session, stock_id: int) -> Stage1SymbolR
         latest_close=latest_close,
         latest_bar_timestamp=latest_bar_timestamp,
         dollar_volume=dollar_volume,
-        relative_volume=relative_volume,
-        adx_14=adx,
-        rsi_14=rsi,
-        atr_pct=atr_pct,
+        relative_volume=_to_native_float(relative_volume),
+        adx_14=_to_native_float(adx),
+        rsi_14=_to_native_float(rsi),
+        atr_pct=_to_native_float(atr_pct),
         signals=signals,
-        ranking_score=ranking_score if is_candidate else None,
+        ranking_score=_to_native_float(ranking_score) if is_candidate else None,
         component_scores=Stage1ComponentScores(
-            trend=trend_component,
-            momentum=momentum_component,
-            volume=volume_component,
-            liquidity=liquidity_component,
-            volatility=volatility_component,
-            risk_reward=risk_reward_component,
+            trend=_to_native_float(trend_component),
+            momentum=_to_native_float(momentum_component),
+            volume=_to_native_float(volume_component),
+            liquidity=_to_native_float(liquidity_component),
+            volatility=_to_native_float(volatility_component),
+            risk_reward=_to_native_float(risk_reward_component),
         ),
-        risk_reward_ratio=risk_reward_ratio,
+        risk_reward_ratio=_to_native_float(risk_reward_ratio),
     )
 
 
