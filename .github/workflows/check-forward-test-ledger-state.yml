@@ -1,0 +1,94 @@
+name: Check Forward-Test Ledger State (temporary, one-shot, read-only, zero SAHMK cost)
+
+# VAL-8 continuation: real production evidence for whether Radar V2's
+# forward-test ledger (DecisionV2Outcome, via ValidationSession-scoped
+# DecisionV2Snapshot rows) is currently accumulating real recommendations,
+# and whether any ValidationSession is presently RUNNING. Every route
+# hit here is a pure Postgres read (validation-sessions list,
+# radar-v2/summary, radar-v2/opportunities) -- none call SAHMK.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet requests
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Log in and inspect forward-test ledger state
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import requests
+
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          session = requests.Session()
+          r = session.post(
+              f"{backend_url}/api/v1/auth/login",
+              json={"email": os.environ["STAFF_EMAIL"], "password": os.environ["STAFF_PASSWORD"]},
+              timeout=30,
+          )
+          r.raise_for_status()
+          csrf = session.cookies.get("csrf_token")
+          if csrf:
+              session.headers.update({"X-CSRF-Token": csrf})
+
+          print("=== validation-sessions (all) ===")
+          resp = session.get(f"{backend_url}/api/v1/admin/ai-evolution/validation-sessions", timeout=30)
+          print(f"HTTP {resp.status_code}")
+          data = resp.json()
+          sessions = data.get("sessions", [])
+          print(f"total sessions: {len(sessions)}")
+          running = [s for s in sessions if s.get("status") == "RUNNING"]
+          print(f"RUNNING sessions: {len(running)}")
+          for s in sessions:
+              print(f"  id={s['id']} name={s['name']!r} status={s['status']} is_dry_run={s['is_dry_run']} "
+                    f"started_at={s['started_at']} ended_at={s.get('ended_at')} commit={s.get('source_production_commit')}")
+
+          print("\n=== radar-v2/summary (consumer route, zero SAHMK) ===")
+          resp = session.get(f"{backend_url}/api/v1/radar/summary", timeout=30)
+          print(f"HTTP {resp.status_code}")
+          print(resp.json())
+
+          print("\n=== radar-v2/opportunities (top 10 live) ===")
+          resp = session.get(f"{backend_url}/api/v1/radar/opportunities?limit=10", timeout=30)
+          print(f"HTTP {resp.status_code}")
+          opps = resp.json()
+          print(f"live opportunity count returned: {len(opps)}")
+          for o in opps[:10]:
+              print(f"  id={o['id']} symbol={o['symbol']} classification={o['classification']} "
+                    f"confidence_score={o['confidence_score']} calibrated_confidence_score={o.get('calibrated_confidence_score')} "
+                    f"calibration_version={o.get('calibration_version')} emitted_at={o['emitted_at']} "
+                    f"decision_v2_snapshot_id={o['decision_v2_snapshot_id']}")
+
+          print("\n=== admin ai-evolution dashboard (validation/forward-test related fields) ===")
+          resp = session.get(f"{backend_url}/api/v1/admin/ai-evolution/dashboard", timeout=30)
+          print(f"HTTP {resp.status_code}")
+          print(resp.json())
+          PYEOF

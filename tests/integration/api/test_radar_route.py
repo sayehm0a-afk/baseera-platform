@@ -256,6 +256,46 @@ def test_opportunity_detail_includes_stage1_evidence_and_reasoning(client, db_se
     assert body["outcome_status"] is None  # no real outcome tracked yet -- not fabricated
 
 
+def test_opportunities_list_exposes_calibrated_confidence_when_the_snapshot_has_one(
+    client, db_session, authenticated_as_staff
+):
+    """RADAR-C/VAL-8: the linked DecisionV2Snapshot's calibrated
+    confidence companion figure must reach the radar API alongside the
+    raw score, not be silently dropped -- confidence_score stays the
+    raw value regardless."""
+    stock = _make_stock(db_session, "2222")
+    snapshot = _make_snapshot(db_session, stock, confidence=82.5)
+    snapshot.calibrated_confidence_score = Decimal("77.3")
+    snapshot.calibration_version = "decision_v2-v3"
+    db_session.add(snapshot)
+    db_session.commit()
+    _make_opportunity(db_session, stock, snapshot)
+
+    response = client.get(_OPPORTUNITIES_ROUTE)
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["confidence_score"] == pytest.approx(82.5)
+    assert row["calibrated_confidence_score"] == pytest.approx(77.3)
+    assert row["calibration_version"] == "decision_v2-v3"
+
+
+def test_opportunities_list_calibrated_confidence_is_honestly_none_without_an_active_model(
+    client, db_session, authenticated_as_staff
+):
+    """No active confidence_calibration_models row for the decision_v2
+    source -- the companion field must be null, never fabricated or
+    defaulted to the raw score."""
+    stock = _make_stock(db_session, "2222")
+    snapshot = _make_snapshot(db_session, stock)
+    _make_opportunity(db_session, stock, snapshot)
+
+    response = client.get(_OPPORTUNITIES_ROUTE)
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["calibrated_confidence_score"] is None
+    assert row["calibration_version"] is None
+
+
 def test_summary_reflects_a_real_live_opportunity(client, db_session, authenticated_as_staff):
     stock = _make_stock(db_session, "2222")
     snapshot = _make_snapshot(db_session, stock, confidence=90.0)

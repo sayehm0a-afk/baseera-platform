@@ -595,6 +595,10 @@ def radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummaryO
         classification=opportunity.classification,
         classification_label_ar=opportunity.classification_label_ar,
         confidence_score=float(opportunity.confidence_score),
+        calibrated_confidence_score=(
+            float(snapshot.calibrated_confidence_score) if snapshot.calibrated_confidence_score is not None else None
+        ),
+        calibration_version=snapshot.calibration_version,
         price_at_signal=float(opportunity.price_at_signal) if opportunity.price_at_signal is not None else None,
         entry_zone_low=float(snapshot.entry_zone_low) if snapshot.entry_zone_low is not None else None,
         entry_zone_high=float(snapshot.entry_zone_high) if snapshot.entry_zone_high is not None else None,

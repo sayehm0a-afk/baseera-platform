@@ -875,6 +875,15 @@ class RadarOpportunitySummaryOut(BaseModel):
     confidence_disclaimer_ar: str = (
         "درجة الثقة تقيس قوة واتساق الأدلة المتاحة، وليست احتمال ربح مضمون."
     )
+    # RADAR-C/VAL-8: the same disclosed, additive calibration companion
+    # figure the /decision-v2 and /recommendation-history routes already
+    # expose -- read straight from the linked DecisionV2Snapshot, which
+    # already computes it honestly (None whenever no ACTIVE
+    # confidence_calibration_models row exists for the "decision_v2"
+    # source; never fabricated). confidence_score above is always the
+    # raw score and is never overwritten by this.
+    calibrated_confidence_score: Optional[float] = None
+    calibration_version: Optional[str] = None
 
     price_at_signal: Optional[float] = None
     entry_zone_low: Optional[float] = None

@@ -196,6 +196,50 @@ class TestEvaluatePendingOutcomes:
         assert row.return_pct == pytest.approx(10.0)
         assert summary.evaluated_terminal == 1
 
+    def test_re_evaluating_a_terminal_row_is_a_no_op_and_never_mutates_the_snapshot(self, session, stock):
+        """VAL-8: repeated scheduler cycles must not corrupt or alter an
+        already-resolved outcome, and must never touch the immutable
+        original DecisionV2Snapshot -- a terminal row is excluded from
+        the PENDING query entirely on every subsequent pass."""
+        snapshot = _make_snapshot(session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, datetime(2026, 1, 2), high=112.0, low=98.0, close=111.0)
+        session.commit()
+
+        first_summary = evaluate_pending_outcomes(session, now=datetime(2026, 1, 3, tzinfo=timezone.utc))
+        assert first_summary.evaluated_terminal == 1
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        first_status = row.status
+        first_return_pct = row.return_pct
+        first_target_1_hit_at = row.target_1_hit_at
+        first_evaluated_at = row.evaluated_at
+
+        snapshot_before = (
+            snapshot.current_price, snapshot.target_1, snapshot.target_2,
+            snapshot.target_3, snapshot.stop_loss, snapshot.decision,
+        )
+
+        # A later scheduler cycle, with the exact same real price data
+        # still the only evidence available.
+        second_summary = evaluate_pending_outcomes(session, now=datetime(2026, 1, 10, tzinfo=timezone.utc))
+        assert second_summary.evaluated_terminal == 0  # already-terminal row never re-picked-up
+
+        session.refresh(row)
+        assert row.status == first_status
+        assert row.return_pct == first_return_pct
+        assert row.target_1_hit_at == first_target_1_hit_at
+        assert row.evaluated_at == first_evaluated_at  # never re-stamped by the no-op pass
+
+        session.refresh(snapshot)
+        snapshot_after = (
+            snapshot.current_price, snapshot.target_1, snapshot.target_2,
+            snapshot.target_3, snapshot.stop_loss, snapshot.decision,
+        )
+        assert snapshot_after == snapshot_before
+
     def test_stop_loss_hit_before_target(self, session, stock):
         snapshot = _make_snapshot(session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc))
         create_pending_decision_v2_outcome(session, snapshot)
