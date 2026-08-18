@@ -148,3 +148,19 @@ class PortfolioAlert:
     message: str
     generated_at: datetime
     id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class WatchlistAlert:
+    """The watchlist-side mirror of `PortfolioAlert` -- same shape,
+    scoped to a `watchlist_id` instead of a `portfolio_id` (RADAR-C
+    Phase I)."""
+
+    watchlist_id: int
+    symbol: str
+    news_event_id: int
+    alert_type: PortfolioAlertType
+    severity: AlertSeverity
+    message: str
+    generated_at: datetime
+    id: Optional[int] = None

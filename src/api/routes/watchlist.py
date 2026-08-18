@@ -20,11 +20,26 @@ from sqlalchemy.orm import Session
 from src.api.dependencies import get_current_user
 from src.api.exceptions import StockNotFoundError, WatchlistItemAlreadyExistsError, WatchlistItemNotFoundError
 from src.api.schemas.auth import MessageOut
-from src.api.schemas.watchlist import AddWatchlistItemRequest, WatchlistItemOut, WatchlistOut
+from src.api.schemas.watchlist import (
+    AddWatchlistItemRequest,
+    WatchlistItemOut,
+    WatchlistNewsAlertListOut,
+    WatchlistNewsAlertOut,
+    WatchlistOut,
+)
 from src.core.db.database import get_db
-from src.domain.models import DecisionV2Snapshot, RadarOpportunity, Stock, User, UserWatchlist, UserWatchlistItem
+from src.domain.models import (
+    DecisionV2Snapshot,
+    RadarOpportunity,
+    Stock,
+    User,
+    UserWatchlist,
+    UserWatchlistItem,
+    WatchlistNewsAlert,
+)
 from src.market_data.validators.symbol_validator import InvalidSymbolError, validate_symbol_format
 from src.market_intelligence.radar_v2 import current_live_opportunity
+from src.news_intelligence.watchlist_alerts import WatchlistNewsAlertEngine
 
 router = APIRouter(prefix="/api/v1/watchlist", tags=["watchlist"])
 
@@ -160,3 +175,60 @@ def remove_watchlist_item(
     session.delete(item)
     session.commit()
     return MessageOut(message=f"تمت إزالة السهم '{symbol}' من قائمة المتابعة.")
+
+
+def _news_alert_out(a: WatchlistNewsAlert) -> WatchlistNewsAlertOut:
+    return WatchlistNewsAlertOut(
+        id=a.id, watchlist_id=a.watchlist_id, symbol=a.symbol, news_event_id=a.news_event_id,
+        alert_type=a.alert_type.value, severity=a.severity.value, message=a.message,
+        generated_at=a.generated_at, acknowledged_at=a.acknowledged_at,
+    )
+
+
+@router.get("/news-alerts", response_model=WatchlistNewsAlertListOut)
+def get_watchlist_news_alerts(
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> WatchlistNewsAlertListOut:
+    """Already-persisted alerts for the caller's own watchlist -- see
+    `POST .../news-alerts/refresh` to generate new ones from the
+    latest news."""
+    watchlist = _get_or_create_watchlist(session, current_user.id)
+    rows = (
+        session.query(WatchlistNewsAlert)
+        .filter_by(watchlist_id=watchlist.id)
+        .order_by(WatchlistNewsAlert.generated_at.desc())
+        .all()
+    )
+    return WatchlistNewsAlertListOut(alerts=[_news_alert_out(a) for a in rows])
+
+
+@router.post("/news-alerts/refresh", response_model=WatchlistNewsAlertListOut)
+def refresh_watchlist_news_alerts(
+    session: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> WatchlistNewsAlertListOut:
+    """Re-evaluates every symbol on the caller's watchlist against the
+    latest analyzed news and persists any new Upgrade/Downgrade/High
+    Risk/Major Opportunity alerts -- idempotent, never duplicates an
+    alert already generated for the same (watchlist, news event) pair.
+    Does not itself collect new news -- pair with
+    `POST /api/v1/news/refresh` (or a scheduled job calling both) to
+    pick up genuinely new articles first."""
+    watchlist = _get_or_create_watchlist(session, current_user.id)
+    symbols = [
+        item.symbol
+        for item in session.query(UserWatchlistItem).filter(UserWatchlistItem.watchlist_id == watchlist.id).all()
+    ]
+
+    alerts = WatchlistNewsAlertEngine().generate_and_persist(session, watchlist, symbols)
+    return WatchlistNewsAlertListOut(
+        alerts=[
+            WatchlistNewsAlertOut(
+                id=a.id, watchlist_id=a.watchlist_id, symbol=a.symbol, news_event_id=a.news_event_id,
+                alert_type=a.alert_type.value, severity=a.severity.value, message=a.message,
+                generated_at=a.generated_at, acknowledged_at=None,
+            )
+            for a in alerts
+        ]
+    )

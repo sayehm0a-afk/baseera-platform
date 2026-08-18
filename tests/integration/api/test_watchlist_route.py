@@ -14,7 +14,22 @@ import pytest
 
 import main
 from src.api.dependencies import get_current_user
-from src.domain.models import DecisionV2Snapshot, RadarOpportunity, Stock, User, UserWatchlist, UserWatchlistItem
+from src.domain.models import (
+    AlertSeverity,
+    DecisionV2Snapshot,
+    NewsCategory,
+    NewsEntity,
+    NewsEntityType,
+    NewsEvent,
+    Notification,
+    PortfolioAlertType,
+    RadarOpportunity,
+    Stock,
+    User,
+    UserWatchlist,
+    UserWatchlistItem,
+    WatchlistNewsAlert,
+)
 
 
 @pytest.fixture
@@ -306,3 +321,104 @@ def test_user_cannot_remove_another_users_watchlist_item(client, db_session, as_
     assert response.status_code == 404  # not found in *this* user's watchlist -- never another's
     remaining = db_session.query(UserWatchlistItem).filter_by(watchlist_id=other_watchlist.id).all()
     assert len(remaining) == 1  # the other user's item was never touched
+
+
+# --- GET/POST news-alerts (RADAR-C Phase I) --------------------------------
+
+
+def _seed_analyzed_news_event(db_session, symbol, category, sentiment_score, confidence, external_key="k1"):
+    event = NewsEvent(
+        external_key=external_key, headline=f"Breaking news about {symbol}", source="sahmk", category=category,
+        sentiment_score=sentiment_score, confidence=confidence, analyzed_at=datetime.now(timezone.utc),
+        published_at=datetime.now(timezone.utc),
+    )
+    db_session.add(event)
+    db_session.commit()
+    db_session.add(NewsEntity(news_event_id=event.id, entity_type=NewsEntityType.COMPANY, symbol=symbol))
+    db_session.commit()
+    return event
+
+
+def test_get_watchlist_news_alerts_is_empty_before_any_refresh(client, db_session, as_user):
+    response = client.get("/api/v1/watchlist/news-alerts")
+    assert response.status_code == 200
+    assert response.json()["alerts"] == []
+
+
+def test_get_watchlist_news_alerts_requires_authentication(client, db_session):
+    response = client.get("/api/v1/watchlist/news-alerts")
+    assert response.status_code == 401
+
+
+def test_refresh_watchlist_news_alerts_requires_authentication(client, db_session):
+    response = client.post("/api/v1/watchlist/news-alerts/refresh")
+    assert response.status_code == 401
+
+
+def test_refresh_watchlist_news_alerts_generates_an_alert_for_a_watched_symbol_with_critical_news(
+    client, db_session, as_user
+):
+    _make_stock(db_session, "2222")
+    client.post("/api/v1/watchlist/items", json={"symbol": "2222"})
+    _seed_analyzed_news_event(db_session, "2222", NewsCategory.LAWSUIT, -0.7, 90.0)
+
+    response = client.post("/api/v1/watchlist/news-alerts/refresh")
+
+    assert response.status_code == 200
+    alerts = response.json()["alerts"]
+    assert len(alerts) == 1
+    assert alerts[0]["symbol"] == "2222"
+    assert alerts[0]["alert_type"] == "HIGH_RISK"
+    assert alerts[0]["id"] is not None
+
+    persisted = client.get("/api/v1/watchlist/news-alerts")
+    assert len(persisted.json()["alerts"]) == 1
+
+    notification = db_session.query(Notification).filter_by(user_id=as_user.id).one()
+    assert notification.type.value == "MARKET_ALERT"
+
+
+def test_refresh_watchlist_news_alerts_is_idempotent_on_rerun(client, db_session, as_user):
+    _make_stock(db_session, "2222")
+    client.post("/api/v1/watchlist/items", json={"symbol": "2222"})
+    _seed_analyzed_news_event(db_session, "2222", NewsCategory.LAWSUIT, -0.7, 90.0)
+
+    first = client.post("/api/v1/watchlist/news-alerts/refresh")
+    second = client.post("/api/v1/watchlist/news-alerts/refresh")
+
+    assert len(first.json()["alerts"]) == 1
+    assert len(second.json()["alerts"]) == 0
+
+
+def test_refresh_watchlist_news_alerts_ignores_symbols_not_watched(client, db_session, as_user):
+    _make_stock(db_session, "2222")
+    client.post("/api/v1/watchlist/items", json={"symbol": "2222"})
+    db_session.add(Stock(symbol="1120", name_en="Al Rajhi", sector="Banks"))
+    db_session.commit()
+    _seed_analyzed_news_event(db_session, "1120", NewsCategory.LAWSUIT, -0.7, 90.0)
+
+    response = client.post("/api/v1/watchlist/news-alerts/refresh")
+
+    assert response.status_code == 200
+    assert response.json()["alerts"] == []
+
+
+def test_user_cannot_see_another_users_watchlist_news_alerts(client, db_session, as_user, other_user):
+    _make_stock(db_session, "2222")
+    other_watchlist = UserWatchlist(user_id=other_user.id, name="other")
+    db_session.add(other_watchlist)
+    db_session.commit()
+    event = _seed_analyzed_news_event(db_session, "2222", NewsCategory.LAWSUIT, -0.7, 90.0)
+    db_session.add(
+        WatchlistNewsAlert(
+            watchlist_id=other_watchlist.id, symbol="2222", news_event_id=event.id,
+            alert_type=PortfolioAlertType.HIGH_RISK, severity=AlertSeverity.CRITICAL, message="x",
+            generated_at=datetime.now(timezone.utc),
+        )
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/watchlist/news-alerts")
+
+    assert response.status_code == 200
+    assert response.json()["alerts"] == []

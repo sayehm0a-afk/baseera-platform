@@ -56,3 +56,19 @@ class WatchlistOut(BaseModel):
 
 class AddWatchlistItemRequest(BaseModel):
     symbol: str
+
+
+class WatchlistNewsAlertOut(BaseModel):
+    id: int
+    watchlist_id: int
+    symbol: str
+    news_event_id: int
+    alert_type: str
+    severity: str
+    message: str
+    generated_at: datetime
+    acknowledged_at: Optional[datetime] = None
+
+
+class WatchlistNewsAlertListOut(BaseModel):
+    alerts: List[WatchlistNewsAlertOut] = Field(default_factory=list)

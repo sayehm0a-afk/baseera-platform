@@ -58,6 +58,7 @@ from src.domain.models.news_event import NewsEvent, NewsCategory, SentimentLabel
 from src.domain.models.news_entity import NewsEntity, NewsEntityType
 from src.domain.models.news_source_reliability import NewsSourceReliability
 from src.domain.models.portfolio_news_alert import PortfolioNewsAlert, PortfolioAlertType
+from src.domain.models.watchlist_news_alert import WatchlistNewsAlert
 from src.domain.models.decision_v2_snapshot import DecisionV2Snapshot
 from src.domain.models.committee_opinion import CommitteeAgentOpinion
 from src.domain.models.committee_session import CommitteeConsensus
@@ -150,6 +151,7 @@ __all__ = [
     "NewsSourceReliability",
     "PortfolioNewsAlert",
     "PortfolioAlertType",
+    "WatchlistNewsAlert",
     "DecisionV2Snapshot",
     "CommitteeAgentOpinion",
     "CommitteeConsensus",

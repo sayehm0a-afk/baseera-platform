@@ -161,3 +161,12 @@ class DuplicateHoldingError(APIError):
 
     status_code = 409
     code = "duplicate_holding"
+
+
+class NotificationNotFoundError(APIError):
+    """No Notification row matches this id for the requesting user --
+    covers both a genuinely unknown id and another user's notification
+    (never revealed which, to avoid leaking existence across users)."""
+
+    status_code = 404
+    code = "notification_not_found"
