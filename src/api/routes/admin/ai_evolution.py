@@ -23,7 +23,10 @@ from src.admin.exceptions import (
     ValidationSessionConflictError,
     ValidationSessionNotFoundError,
 )
-from src.ai_evolution.confidence_calibration import ConfidenceCalibrationEngine
+from src.ai_evolution.confidence_calibration import (
+    TRAINING_SOURCE_DECISION_V2,
+    ConfidenceCalibrationEngine,
+)
 from src.ai_evolution.paper_trading import (
     DEFAULT_EVALUATION_HORIZON_DAYS,
     compare_champion_vs_challenger,
@@ -98,6 +101,15 @@ def get_calibration_status(
 ) -> CalibrationStatusOut:
     active_weight = session.query(CalibrationConfig).filter_by(status=CalibrationStatus.ACTIVE).one_or_none()
     active_confidence = ConfidenceCalibrationEngine().get_active_model(session)
+    # 2026-08-18 real-market validation audit finding: this route only
+    # ever checked the default (legacy_v1) source -- it was silently
+    # blind to whether the Decision V2 / Radar V2 confidence
+    # calibration model (get_effective_confidence's TRAINING_SOURCE_
+    # DECISION_V2 source) is active, so staff had no way to see Radar
+    # V2's own calibration state here. Queried explicitly now.
+    active_decision_v2_confidence = ConfidenceCalibrationEngine().get_active_model(
+        session, source=TRAINING_SOURCE_DECISION_V2
+    )
     challenger = get_latest_challenger_config(session)
 
     return CalibrationStatusOut(
@@ -106,6 +118,15 @@ def get_calibration_status(
         active_confidence_calibration_version=active_confidence.version if active_confidence else None,
         active_confidence_calibration_method=active_confidence.method.value if active_confidence else None,
         active_confidence_calibration_activated_at=active_confidence.activated_at if active_confidence else None,
+        active_decision_v2_confidence_calibration_version=(
+            active_decision_v2_confidence.version if active_decision_v2_confidence else None
+        ),
+        active_decision_v2_confidence_calibration_method=(
+            active_decision_v2_confidence.method.value if active_decision_v2_confidence else None
+        ),
+        active_decision_v2_confidence_calibration_activated_at=(
+            active_decision_v2_confidence.activated_at if active_decision_v2_confidence else None
+        ),
         latest_validated_challenger_version=challenger.version if challenger else None,
     )
 

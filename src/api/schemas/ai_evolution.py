@@ -94,6 +94,15 @@ class CalibrationStatusOut(BaseModel):
     active_confidence_calibration_version: Optional[str] = None
     active_confidence_calibration_method: Optional[str] = None
     active_confidence_calibration_activated_at: Optional[datetime] = None
+    # 2026-08-18 real-market validation audit finding: the fields above
+    # only ever reflect TRAINING_SOURCE_LEGACY_V1 -- the source Decision
+    # V2 / Radar V2 confidence calibration actually trains and activates
+    # under (TRAINING_SOURCE_DECISION_V2, see get_effective_confidence's
+    # callers) was never surfaced here, so this dashboard could never
+    # show staff whether Radar V2's confidence scores are calibrated.
+    active_decision_v2_confidence_calibration_version: Optional[str] = None
+    active_decision_v2_confidence_calibration_method: Optional[str] = None
+    active_decision_v2_confidence_calibration_activated_at: Optional[datetime] = None
     latest_validated_challenger_version: Optional[str] = None
 
 

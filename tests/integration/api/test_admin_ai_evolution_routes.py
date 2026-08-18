@@ -175,6 +175,40 @@ def test_calibration_status_reports_active_and_challenger_configs(client, admin,
     assert body["latest_validated_challenger_version"] == "w-challenger"
 
 
+def test_calibration_status_reports_the_decision_v2_source_separately(client, admin, session):
+    """Regression test for a real production gap (2026-08-18 real-market
+    validation audit): the route used to call get_active_model() with no
+    `source` argument, defaulting to legacy_v1 -- it could never show
+    whether Decision V2 / Radar V2's own confidence calibration model
+    (training_source="decision_v2") is active, even when one is."""
+    session.add(
+        ConfidenceCalibrationModel(
+            version="c-legacy-active", status=ConfidenceCalibrationStatus.ACTIVE,
+            method=ConfidenceCalibrationMethod.PLATT, training_source="legacy_v1",
+            model_params={"coef": 1.0, "intercept": 0.0}, training_sample_size=50,
+            activated_at=datetime.now(timezone.utc),
+        )
+    )
+    session.add(
+        ConfidenceCalibrationModel(
+            version="c-decision-v2-active", status=ConfidenceCalibrationStatus.ACTIVE,
+            method=ConfidenceCalibrationMethod.ISOTONIC, training_source="decision_v2",
+            model_params={"x_thresholds": [0.0, 1.0], "y_thresholds": [0.0, 1.0]}, training_sample_size=1200,
+            activated_at=datetime.now(timezone.utc),
+        )
+    )
+    session.commit()
+
+    _as(admin)
+    response = client.get("/api/v1/admin/ai-evolution/calibration-status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["active_confidence_calibration_version"] == "c-legacy-active"
+    assert body["active_confidence_calibration_method"] == "PLATT"
+    assert body["active_decision_v2_confidence_calibration_version"] == "c-decision-v2-active"
+    assert body["active_decision_v2_confidence_calibration_method"] == "ISOTONIC"
+
+
 def test_list_patterns_defaults_to_every_pattern(client, admin, session):
     session.add(
         DiscoveredPattern(
