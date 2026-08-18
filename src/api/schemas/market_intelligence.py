@@ -996,6 +996,15 @@ class RadarV2PerformanceOut(BaseModel):
     stop_loss_hit_rate: Optional[float] = None
     average_return_pct: Optional[float] = None
     live_opportunities_by_classification: Dict[str, int] = Field(default_factory=dict)
+    # Post-VAL-8 accumulation phase: the explicit minimum-sample gate
+    # (reused from the platform's own DEFAULT_MIN_SAMPLE_SIZE=30, not an
+    # arbitrary number) before any statistical claim -- let alone
+    # optimization/calibration -- is warranted. accumulation_status is
+    # one of INSUFFICIENT_DATA (0 resolved) / PRELIMINARY (below gate) /
+    # READY_FOR_CALIBRATION (at or above gate).
+    minimum_sample_size_required: int = 30
+    sample_size_adequate: bool = False
+    accumulation_status: str = "INSUFFICIENT_DATA"
 
 
 class RadarV2GroupPerformanceOut(BaseModel):
@@ -1021,6 +1030,9 @@ class RadarV2GroupPerformanceOut(BaseModel):
     average_risk_reward_realized: Optional[float] = None
     expectancy_pct: Optional[float] = None
     max_adverse_outcome_pct: Optional[float] = None
+    # Whether this cohort alone has reached the platform's minimum
+    # sample gate (30 resolved outcomes) -- see RadarV2PerformanceOut.
+    sample_size_adequate: bool = False
 
 
 class RadarV2ExtendedPerformanceOut(BaseModel):

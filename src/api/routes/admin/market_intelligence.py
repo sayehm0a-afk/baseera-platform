@@ -780,6 +780,9 @@ async def get_radar_v2_performance(
         stop_loss_hit_rate=metrics.stop_loss_hit_rate,
         average_return_pct=metrics.average_return_pct,
         live_opportunities_by_classification=metrics.live_opportunities_by_classification,
+        minimum_sample_size_required=metrics.minimum_sample_size_required,
+        sample_size_adequate=metrics.sample_size_adequate,
+        accumulation_status=metrics.accumulation_status,
     )
 
 
@@ -811,6 +814,7 @@ async def get_radar_v2_extended_performance(
                 average_risk_reward_realized=g.average_risk_reward_realized,
                 expectancy_pct=g.expectancy_pct,
                 max_adverse_outcome_pct=g.max_adverse_outcome_pct,
+                sample_size_adequate=g.sample_size_adequate,
             )
             for g in items
         ]

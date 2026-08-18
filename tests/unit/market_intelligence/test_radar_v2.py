@@ -19,6 +19,8 @@ from sqlalchemy.pool import StaticPool
 from src.core.db.database import Base
 from src.domain.models import DecisionV2Outcome, DecisionV2Snapshot, PriceBar, RadarOpportunity, Stock, Timeframe
 from src.market_intelligence.radar_v2 import (
+    MINIMUM_SAMPLE_GATE,
+    _accumulation_status,
     compute_radar_v2_extended_performance,
     compute_radar_v2_performance,
     emit_radar_opportunities,
@@ -341,6 +343,27 @@ class TestRunRadarV2Cycle:
         assert session.query(RadarOpportunity).count() == 1
 
 
+class TestAccumulationStatus:
+    """Post-VAL-8 accumulation phase: the explicit, statistically
+    defensible minimum-sample gate (reused from the platform's own
+    DEFAULT_MIN_SAMPLE_SIZE=30, not an arbitrary new number) before
+    optimization/calibration may begin."""
+
+    def test_minimum_sample_gate_is_the_platforms_existing_statistical_floor(self):
+        assert MINIMUM_SAMPLE_GATE == 30
+
+    def test_zero_resolved_is_insufficient_data(self):
+        assert _accumulation_status(0) == "INSUFFICIENT_DATA"
+
+    def test_below_gate_is_preliminary(self):
+        assert _accumulation_status(1) == "PRELIMINARY"
+        assert _accumulation_status(MINIMUM_SAMPLE_GATE - 1) == "PRELIMINARY"
+
+    def test_at_or_above_gate_is_ready_for_calibration(self):
+        assert _accumulation_status(MINIMUM_SAMPLE_GATE) == "READY_FOR_CALIBRATION"
+        assert _accumulation_status(MINIMUM_SAMPLE_GATE + 100) == "READY_FOR_CALIBRATION"
+
+
 class TestComputeRadarV2Performance:
     def test_empty_database_reports_none_rates_not_zero(self, session):
         metrics = compute_radar_v2_performance(session)
@@ -349,6 +372,9 @@ class TestComputeRadarV2Performance:
         assert metrics.target_hit_rate is None
         assert metrics.stop_loss_hit_rate is None
         assert metrics.average_return_pct is None
+        assert metrics.minimum_sample_size_required == MINIMUM_SAMPLE_GATE
+        assert metrics.sample_size_adequate is False
+        assert metrics.accumulation_status == "INSUFFICIENT_DATA"
 
     def test_pending_actionable_opportunity_is_tracked_but_not_resolved(self, session):
         stock = _stock(session)
@@ -393,6 +419,10 @@ class TestComputeRadarV2Performance:
         assert metrics.target_hit_rate == 1.0
         assert metrics.stop_loss_hit_rate == 0.0
         assert metrics.average_return_pct == 8.5
+        # 1 resolved outcome is real signal, but far below the 30-sample
+        # gate -- honestly PRELIMINARY, not treated as calibration-ready.
+        assert metrics.sample_size_adequate is False
+        assert metrics.accumulation_status == "PRELIMINARY"
 
 
 class TestComputeRadarV2ExtendedPerformance:
@@ -458,6 +488,28 @@ class TestComputeRadarV2ExtendedPerformance:
         assert metrics.average_favorable_excursion_pct == pytest.approx(4.25)
         assert metrics.average_adverse_excursion_pct == pytest.approx(-2.75)
         assert metrics.calibration_pair_count == 2
+        # 1 resolved outcome per classification cohort -- real signal,
+        # but nowhere near the 30-sample gate.
+        assert by_class["BUY_CANDIDATE"].sample_size_adequate is False
+        assert by_class["STRONG_BUY_CANDIDATE"].sample_size_adequate is False
+
+    def test_group_sample_size_adequate_flips_true_at_the_gate(self, session):
+        # Distinct symbols -- avoids the dedup/supersession window
+        # entirely, so all MINIMUM_SAMPLE_GATE rows really land as
+        # separate, independently-resolved outcomes.
+        for i in range(MINIMUM_SAMPLE_GATE):
+            stock = _stock(session, symbol=f"{1000 + i}")
+            snap = _snapshot(session, stock, scan_run_id=i + 1, decision="BUY_CANDIDATE", confidence=70.0)
+            emit_radar_opportunities(session, i + 1, [_candidate(stock.symbol)])
+            outcome = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap.id).one()
+            outcome.status = "TARGET_1_HIT"
+            outcome.return_pct = 5.0
+        session.commit()
+
+        metrics = compute_radar_v2_extended_performance(session)
+        group = {g.label: g for g in metrics.win_rate_by_classification}["BUY_CANDIDATE"]
+        assert group.resolved_count == MINIMUM_SAMPLE_GATE
+        assert group.sample_size_adequate is True
 
     def test_groups_by_market_regime_sector_and_horizon(self, session):
         stock = _stock(session)
