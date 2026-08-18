@@ -1,0 +1,109 @@
+name: Check Price Accuracy (temporary, one-shot, small real SAHMK cost)
+
+# Real-market validation audit (VAL-4, price accuracy): for a small,
+# fixed sample of symbols already emitted as real RadarOpportunity rows
+# in the latest scan, fetches a FRESH live quote (GET .../quote) and
+# the most recent ingested daily bars (GET .../history) and prints:
+# real price, is_synthetic/source flags, and the day-over-day percent
+# change against the prior close -- so a genuinely out-of-range or
+# synthetic price is caught by evidence, not assumption. Each quote
+# call is a real SAHMK request (short cache TTL), bounded to 5 symbols
+# -- a small, justified cost for the mandate's explicit price-accuracy
+# requirement, not a routine/automatic job.
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Comma-separated symbols to check (default: 5 symbols from the latest Radar V2 scan)"
+        required: false
+        default: "2330,4143,2381,4009,1180"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      SYMBOLS_INPUT: ${{ inputs.symbols }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet requests
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Fetch quote + recent history per symbol and print consistency evidence
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import requests
+
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          symbols = [s.strip() for s in os.environ["SYMBOLS_INPUT"].split(",") if s.strip()]
+
+          # A fresh Python requests.Session() re-authenticates here rather
+          # than reusing the prior curl step's cookie jar file -- that step
+          # only proved the credentials work.
+          session = requests.Session()
+          r = session.post(
+              f"{backend_url}/api/v1/auth/login",
+              json={"email": os.environ["STAFF_EMAIL"], "password": os.environ["STAFF_PASSWORD"]},
+              timeout=30,
+          )
+          r.raise_for_status()
+          csrf = session.cookies.get("csrf_token")
+          if csrf:
+              session.headers.update({"X-CSRF-Token": csrf})
+
+          for symbol in symbols:
+              print(f"\n=== {symbol} ===")
+              qr = session.get(f"{backend_url}/api/v1/stocks/{symbol}/quote", timeout=30)
+              if qr.status_code != 200:
+                  print(f"  quote: HTTP {qr.status_code} {qr.text[:300]}")
+                  continue
+              quote = qr.json()
+              print(f"  quote.close={quote.get('close')} open={quote.get('open')} high={quote.get('high')} low={quote.get('low')} volume={quote.get('volume')}")
+              print(f"  quote.source={quote.get('source')} is_synthetic={quote.get('is_synthetic')} timestamp={quote.get('timestamp')}")
+
+              hr = session.get(f"{backend_url}/api/v1/stocks/{symbol}/history", timeout=30)
+              if hr.status_code != 200:
+                  print(f"  history: HTTP {hr.status_code} {hr.text[:300]}")
+                  continue
+              bars = hr.json().get("bars") or []
+              bars_sorted = sorted(bars, key=lambda b: b["timestamp"])
+              print(f"  history_bar_count={len(bars_sorted)}")
+              if len(bars_sorted) >= 2:
+                  prev_close = float(bars_sorted[-2]["close"])
+                  last_bar = bars_sorted[-1]
+                  print(f"  prev_bar: date={bars_sorted[-2]['timestamp']} close={prev_close}")
+                  print(f"  last_bar: date={last_bar['timestamp']} close={last_bar['close']}")
+                  close = quote.get("close")
+                  if close is not None and prev_close:
+                      pct_change = (float(close) - prev_close) / prev_close * 100.0
+                      flag = "SUSPICIOUS (>15% move)" if abs(pct_change) > 15.0 else "within normal range"
+                      print(f"  pct_change_vs_prev_close={pct_change:.2f}% -- {flag}")
+              elif len(bars_sorted) == 1:
+                  print(f"  only 1 bar ingested: {bars_sorted[0]}")
+              else:
+                  print("  no ingested bars at all")
+          PYEOF
+
