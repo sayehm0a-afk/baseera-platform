@@ -32,3 +32,22 @@ export interface MyWatchlist {
   generated_at: string;
   items: WatchlistItem[];
 }
+
+/** Matches src.api.schemas.watchlist.WatchlistNewsAlertOut -- the
+ * watchlist-side mirror of PortfolioNewsAlert in ./portfolio-types.ts
+ * (RADAR-C Phase I). */
+export interface WatchlistNewsAlert {
+  id: number;
+  watchlist_id: number;
+  symbol: string;
+  news_event_id: number;
+  alert_type: string;
+  severity: string;
+  message: string;
+  generated_at: string;
+  acknowledged_at: string | null;
+}
+
+export interface WatchlistNewsAlertList {
+  alerts: WatchlistNewsAlert[];
+}

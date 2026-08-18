@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AiStar } from "@/components/ai/AiStar";
+import { NotificationBell } from "@/components/shell/NotificationBell";
 import { searchStocks } from "@/lib/api/stocks";
 import type { StockSearchResult } from "@/lib/api/stocks-types";
 
@@ -130,16 +131,7 @@ export function TopBar() {
       </form>
 
       <div className="ms-auto flex items-center gap-bsr-3">
-        <button
-          type="button"
-          aria-label="التنبيهات"
-          className="flex h-9 w-9 items-center justify-center rounded-bsr-full text-bsr-text-secondary hover:bg-bsr-surface-raised"
-        >
-          <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} aria-hidden>
-            <path d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2v1h16v-1l-2-2Z" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M10 21a2 2 0 0 0 4 0" strokeLinecap="round" />
-          </svg>
-        </button>
+        <NotificationBell />
         {/* RADAR-C/E: primary nav no longer carries a Settings item
          * (nav-items.ts) -- account/settings remain reachable here,
          * de-emphasized next to the four investment surfaces rather

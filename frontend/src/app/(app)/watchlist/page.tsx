@@ -9,6 +9,7 @@ import { RunScanButton } from "@/components/dashboard/RunScanButton";
 import { RecommendationBadge } from "@/components/badges/RecommendationBadge";
 import type { RecommendationValue } from "@/components/badges/RecommendationBadge";
 import { MyWatchlistPanel } from "@/components/watchlist/MyWatchlistPanel";
+import { WatchlistNewsAlertsSection } from "@/components/watchlist/WatchlistNewsAlertsSection";
 import { getWatchlists } from "@/lib/api/market";
 import { useCategoryFetch } from "@/lib/hooks/useCategoryFetch";
 import {
@@ -51,9 +52,12 @@ export default function WatchlistPage() {
       />
 
       {category === MY_LIST_TAB ? (
-        <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-2 md:p-bsr-4">
-          <MyWatchlistPanel />
-        </section>
+        <div className="flex flex-col gap-bsr-4">
+          <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-2 md:p-bsr-4">
+            <MyWatchlistPanel />
+          </section>
+          <WatchlistNewsAlertsSection />
+        </div>
       ) : (
       <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-2 md:p-bsr-4">
         {state.status === "loading" ? <LoadingScreen /> : null}
