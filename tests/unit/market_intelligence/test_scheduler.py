@@ -1,7 +1,16 @@
 """Unit tests for IntervalMarketIntelligenceScheduler -- verifies the
-start/stop lifecycle and that one loop iteration creates a
-MarketScanRun and hands off to run_market_scan_job, without ever
-running a real scan (run_market_scan_job is monkeypatched to a stub).
+start/stop lifecycle and that one loop iteration delegates to
+run_radar_v2_cycle (Stage 1 local ranking -> Stage 2 bounded live
+validation -> RadarOpportunity emission), without ever running a real
+Stage 1 scan or a real SAHMK call (run_radar_v2_cycle and
+run_market_scan_job are both monkeypatched/injected as fakes).
+`_stage2_runner` -- the scheduler's own Stage 2 callable, the one part
+of this module that actually creates a MarketScanRun and calls
+run_market_scan_job -- is exercised directly in the tests that need
+to observe that behavior, so this file doesn't need real OHLCV/
+technical fixtures for Stage 1's ranking logic (already covered by
+tests/unit/market_intelligence/test_stage1_local_scan.py and
+tests/unit/market_intelligence/test_radar_v2.py).
 
 2026-08-13 SAHMK quota-exhaustion incident fix coverage: leader-lock
 gating (only the leader actually scans), the quota circuit breaker
@@ -12,10 +21,20 @@ this file stays isolated from every other test module's mutations of
 those process-wide singletons (the exact class of bug that made
 `_no_real_shared_redis_by_default` necessary in
 tests/unit/market_data/sahmk/test_rate_limiter.py).
+
+2026-08-18 real-market validation audit fix coverage: this scheduler
+used to pick its own stale-first symbol batch and never wrote a
+RadarOpportunity row, so a real user's Radar page was always empty
+even while this scheduler ran continuously -- see scheduler.py's own
+module docstring. The tests below verify the scheduler now delegates
+to run_radar_v2_cycle (real by default, injectable here) with
+_stage2_runner as the Stage 2 callable.
 """
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import List, Optional
 
 import pytest
 from sqlalchemy import create_engine
@@ -25,11 +44,53 @@ from sqlalchemy.pool import StaticPool
 import src.market_intelligence.scheduler as scheduler_module
 from src.core.db.database import Base
 from src.domain.models import MarketScanRun, MarketScanStatus, Stock
+from src.market_data.sahmk.operation_scope import get_current_operation
 from src.market_data.sahmk.rate_limiter import SahmkRateLimiter
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scheduler import IMarketIntelligenceScheduler, IntervalMarketIntelligenceScheduler
 from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 from src.market_intelligence.types import ScheduleInterval
+
+
+@dataclass
+class _FakeRadarV2Result:
+    """Scheduler-side double of `radar_v2.RadarV2RunResult`, matching
+    only the fields `_run_one_cycle` actually reads."""
+
+    stage2_executed: bool
+    stage1_candidate_count: int = 0
+    stage1_universe_size: int = 0
+    stage2_stop_reason: Optional[str] = None
+    scan_run_id: Optional[int] = None
+    opportunities_emitted: list = None
+    opportunities_suppressed_as_duplicate: list = None
+
+    def __post_init__(self):
+        if self.opportunities_emitted is None:
+            self.opportunities_emitted = []
+        if self.opportunities_suppressed_as_duplicate is None:
+            self.opportunities_suppressed_as_duplicate = []
+
+
+def _fake_run_radar_v2_cycle_calling_stage2(symbols: List[str]):
+    """Builds a fake `run_radar_v2_cycle` that skips real Stage 1
+    entirely and calls the injected Stage 2 runner (the scheduler's
+    real `_stage2_runner`) with a fixed candidate list -- proving
+    `_run_one_cycle` wires the real Stage 2 callable through
+    correctly, without needing real price-history fixtures for Stage
+    1's own ranking logic."""
+
+    async def _fake(session, stage2_runner):
+        result = await stage2_runner(session, "scheduled_radar_v2", lambda: symbols)
+        return _FakeRadarV2Result(
+            stage2_executed=result.executed,
+            stage1_candidate_count=len(symbols),
+            stage1_universe_size=len(symbols),
+            stage2_stop_reason=result.stop_reason,
+            scan_run_id=result.run_id,
+        )
+
+    return _fake
 
 
 @pytest.fixture(autouse=True)
@@ -200,7 +261,12 @@ async def test_starting_twice_is_a_no_op(factory):
 
 
 @pytest.mark.asyncio
-async def test_run_one_cycle_creates_a_run_and_delegates_to_the_job_runner(factory, monkeypatch):
+async def test_run_one_cycle_delegates_to_run_radar_v2_cycle_and_its_stage2_creates_a_run(factory, monkeypatch):
+    """`_run_one_cycle` no longer selects symbols itself -- it hands
+    off to `run_radar_v2_cycle`, which (via the scheduler's real
+    `_stage2_runner`, exercised here through the fake Stage 1) still
+    ends up creating a real MarketScanRun and calling
+    `run_market_scan_job`, exactly as the pre-Radar-V2 wiring did."""
     monkeypatch.setenv("MARKET_SCAN_REQUIRE_PRICE_HISTORY", "false")
     calls = []
 
@@ -215,6 +281,7 @@ async def test_run_one_cycle_creates_a_run_and_delegates_to_the_job_runner(facto
         market_provider_getter=_fake_market_provider_getter,
         repository=repo,
         rate_limiter=_always_allows_rate_limiter(),
+        run_radar_v2_cycle=_fake_run_radar_v2_cycle_calling_stage2(["2222"]),
     )
 
     await scheduler._run_one_cycle()
@@ -227,6 +294,32 @@ async def test_run_one_cycle_creates_a_run_and_delegates_to_the_job_runner(facto
     run = repo.get_run(session, run_id)
     assert run is not None
     session.close()
+
+
+@pytest.mark.asyncio
+async def test_run_one_cycle_uses_the_real_run_radar_v2_cycle_by_default(factory, monkeypatch):
+    """Without an injected double, `_run_one_cycle` must go through the
+    real `run_radar_v2_cycle` (real Stage 1) -- with the single-stock,
+    no-price-history fixture this module's `factory` provides, Stage 1
+    finds no candidates, so this proves the real wiring is reached and
+    degrades to zero SAHMK calls rather than silently doing nothing."""
+    monkeypatch.setenv("MARKET_SCAN_REQUIRE_PRICE_HISTORY", "false")
+    calls = []
+
+    async def _fake_run_job(run_id, session_factory, market_provider, symbols=None, **kwargs):
+        calls.append((run_id, symbols))
+
+    monkeypatch.setattr(scheduler_module, "run_market_scan_job", _fake_run_job)
+
+    scheduler = IntervalMarketIntelligenceScheduler(
+        session_factory=factory,
+        market_provider_getter=_fake_market_provider_getter,
+        rate_limiter=_always_allows_rate_limiter(),
+    )
+
+    await scheduler._run_one_cycle()
+
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -308,32 +401,52 @@ async def test_run_one_cycle_skips_when_a_scan_is_already_in_flight(factory, mon
 
 
 @pytest.mark.asyncio
-async def test_run_one_cycle_runs_under_background_priority(factory, monkeypatch):
+async def test_stage2_runner_runs_under_background_priority_and_radar_v2_operation(factory, monkeypatch):
     """The 2026-08-13 incident's primary root cause: this call path
     must be tagged BACKGROUND so it is subject to
     `reserved_for_critical`'s reserve, unlike the unmarked (CRITICAL by
-    default) priority it ran under before this fix."""
-    from src.market_data.sahmk.request_priority import get_current_priority
+    default) priority it ran under before that fix. Separately, the
+    2026-08-18 Radar V2 wiring must tag its SAHMK usage `RADAR_V2` (not
+    the old `MARKET_SCAN`) so it is attributable in
+    `GET .../radar-v2/sahmk-consumption` -- both observed directly from
+    `_stage2_runner`, the one piece of this module that still calls
+    `run_market_scan_job`."""
+    from src.market_data.sahmk.request_priority import BACKGROUND, get_current_priority
 
     monkeypatch.setenv("MARKET_SCAN_REQUIRE_PRICE_HISTORY", "false")
-    observed_priority = {}
+    observed = {}
 
     async def _fake_run_job(run_id, session_factory, market_provider, symbols=None, **kwargs):
-        observed_priority["value"] = get_current_priority()
+        observed["priority"] = get_current_priority()
+        observed["operation"] = get_current_operation()
 
     monkeypatch.setattr(scheduler_module, "run_market_scan_job", _fake_run_job)
 
     scheduler = IntervalMarketIntelligenceScheduler(
         session_factory=factory,
         market_provider_getter=_fake_market_provider_getter,
-        rate_limiter=_always_allows_rate_limiter(),
     )
 
-    await scheduler._run_one_cycle()
+    session = factory()
+    result = await scheduler._stage2_runner(session, "scheduled_radar_v2", lambda: ["2222"])
+    session.close()
 
-    from src.market_data.sahmk.request_priority import BACKGROUND
+    assert result.executed is True
+    assert observed["priority"] == BACKGROUND
+    assert observed["operation"] == "radar_v2"
 
-    assert observed_priority["value"] == BACKGROUND
+
+@pytest.mark.asyncio
+async def test_stage2_runner_reports_no_candidates_without_touching_the_db(factory):
+    scheduler = IntervalMarketIntelligenceScheduler(
+        session_factory=factory, market_provider_getter=_fake_market_provider_getter
+    )
+    session = factory()
+    result = await scheduler._stage2_runner(session, "scheduled_radar_v2", lambda: [])
+    session.close()
+
+    assert result.executed is False
+    assert result.stop_reason == "no_candidates"
 
 
 @pytest.mark.asyncio
