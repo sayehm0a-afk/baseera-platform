@@ -39,7 +39,7 @@ safety logic but by composition:
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -51,6 +51,7 @@ from src.domain.models import (
     DecisionV2OutcomeStatus,
     DecisionV2Snapshot,
     RadarOpportunity,
+    Stock,
 )
 from src.market_intelligence.config import (
     get_confidence_change_threshold,
@@ -422,19 +423,62 @@ _CONFIDENCE_BANDS = [(0.0, 60.0, "0-59"), (60.0, 70.0, "60-69"), (70.0, 80.0, "7
 
 @dataclass(frozen=True)
 class GroupPerformance:
+    """One cohort's forward-test statistics. `signal_count` is every real
+    DecisionV2Outcome row in the cohort (resolved + unresolved); always
+    report it alongside any rate below so a tiny-sample rate is never read
+    as if it were backed by a large one (mandate: "do not report
+    percentages from tiny samples without showing the raw sample size").
+    `target_hit_rate`/`stop_loss_hit_rate` use `resolved_count` as their
+    denominator (matching `compute_radar_v2_performance`'s own top-level
+    convention); `win_rate`/`expectancy_pct` use the decisive-only
+    denominator (TARGET_x_HIT vs STOP_LOSS_HIT, excluding EXPIRED/PARTIAL --
+    matching `validation_metrics.py`'s convention), so the two families of
+    rate never silently disagree with the platform's other two metrics
+    surfaces about what a resolved outcome even means. Every rate is
+    `None`, never a fabricated 0.0, when its own denominator is zero."""
+
     label: str
     signal_count: int
+    resolved_count: int
+    unresolved_count: int
+    target_hit_rate: Optional[float]
+    stop_loss_hit_rate: Optional[float]
     win_rate: Optional[float]
     average_return_pct: Optional[float]
+    median_return_pct: Optional[float]
+    average_favorable_excursion_pct: Optional[float]
+    average_adverse_excursion_pct: Optional[float]
+    # Realized return divided by the originally-planned risk
+    # (DecisionV2Snapshot.downside_to_stop, the entry-to-stop % planned at
+    # signal time) -- the R-multiple actually achieved, not a re-derived/
+    # retuned risk figure. None for a row missing either value or whose
+    # planned risk was recorded as exactly 0.
+    average_risk_reward_realized: Optional[float]
+    expectancy_pct: Optional[float]
+    # The single worst realized return in the cohort (most negative
+    # return_pct among resolved rows) -- the mandate's "maximum adverse
+    # outcome," distinct from average_adverse_excursion_pct (which averages
+    # each trade's own worst intra-trade drawdown).
+    max_adverse_outcome_pct: Optional[float]
 
 
 @dataclass(frozen=True)
 class RadarV2ExtendedPerformanceMetrics:
+    # Every RadarOpportunity ever emitted, grouped by classification --
+    # including WATCH/HOLD/REJECT/etc, which never get a DecisionV2Outcome
+    # row (nothing to grade) and so never appear in win_rate_by_
+    # classification below. This is the only field here that answers "how
+    # many recommendations of each type has Basirah actually issued,"
+    # independent of whether that type is outcome-tracked.
+    total_signals_by_classification: Dict[str, int]
     win_rate_by_classification: List[GroupPerformance]
     win_rate_by_confidence_band: List[GroupPerformance]
     win_rate_by_market_regime: List[GroupPerformance]
     performance_by_sector: List[GroupPerformance]
     performance_by_holding_horizon: List[GroupPerformance]
+    # Stock.instrument_bucket-derived: "Main Market" / "Nomu" / "Unknown"
+    # (a symbol whose directory sync never resolved a segment).
+    performance_by_market: List[GroupPerformance]
     average_return_pct: Optional[float]
     median_return_pct: Optional[float]
     average_favorable_excursion_pct: Optional[float]
@@ -459,21 +503,61 @@ def _confidence_band(confidence: float) -> str:
     return _CONFIDENCE_BANDS[-1][2]
 
 
+_MARKET_SEGMENT_LABELS = {
+    "MAIN_MARKET_EQUITY": "Main Market",
+    "MAIN_MARKET_EQUITY_SEGMENT_UNCONFIRMED": "Main Market",
+    "NOMU_EQUITY": "Nomu",
+}
+
+
+def _market_segment_label(instrument_bucket: Optional[str]) -> str:
+    return _MARKET_SEGMENT_LABELS.get(instrument_bucket, "Unknown")
+
+
 def _group_performance(
-    groups: Dict[str, List[DecisionV2Outcome]]
+    groups: Dict[str, List[Tuple[DecisionV2Outcome, DecisionV2Snapshot]]]
 ) -> List[GroupPerformance]:
     results = []
     for label in sorted(groups):
-        rows = groups[label]
-        decisive = [o for o in rows if o.status in _TARGET_HIT_STATUSES or o.status == DecisionV2OutcomeStatus.STOP_LOSS_HIT]
-        wins = [o for o in decisive if o.status in _TARGET_HIT_STATUSES]
-        returns = [float(o.return_pct) for o in rows if o.return_pct is not None]
+        pairs = groups[label]
+        resolved = [(o, s) for o, s in pairs if o.status not in NON_RESOLVING_STATUSES]
+        decisive = [
+            (o, s) for o, s in resolved
+            if o.status in _TARGET_HIT_STATUSES or o.status == DecisionV2OutcomeStatus.STOP_LOSS_HIT
+        ]
+        wins = [(o, s) for o, s in decisive if o.status in _TARGET_HIT_STATUSES]
+        stop_hits = [(o, s) for o, s in decisive if o.status == DecisionV2OutcomeStatus.STOP_LOSS_HIT]
+
+        returns = [float(o.return_pct) for o, _ in resolved if o.return_pct is not None]
+        decisive_returns = [float(o.return_pct) for o, _ in decisive if o.return_pct is not None]
+        mfe = [float(o.max_favorable_excursion_pct) for o, _ in pairs if o.max_favorable_excursion_pct is not None]
+        mae = [float(o.max_adverse_excursion_pct) for o, _ in pairs if o.max_adverse_excursion_pct is not None]
+
+        rr_realized: List[float] = []
+        for o, s in resolved:
+            if o.return_pct is None or s.downside_to_stop is None:
+                continue
+            planned_risk = float(s.downside_to_stop)
+            if planned_risk == 0:
+                continue
+            rr_realized.append(float(o.return_pct) / abs(planned_risk))
+
         results.append(
             GroupPerformance(
                 label=label,
-                signal_count=len(rows),
+                signal_count=len(pairs),
+                resolved_count=len(resolved),
+                unresolved_count=len(pairs) - len(resolved),
+                target_hit_rate=round(len(wins) / len(resolved), 4) if resolved else None,
+                stop_loss_hit_rate=round(len(stop_hits) / len(resolved), 4) if resolved else None,
                 win_rate=round(len(wins) / len(decisive), 4) if decisive else None,
                 average_return_pct=round(sum(returns) / len(returns), 4) if returns else None,
+                median_return_pct=round(_median(returns), 4) if returns else None,
+                average_favorable_excursion_pct=round(sum(mfe) / len(mfe), 4) if mfe else None,
+                average_adverse_excursion_pct=round(sum(mae) / len(mae), 4) if mae else None,
+                average_risk_reward_realized=round(sum(rr_realized) / len(rr_realized), 4) if rr_realized else None,
+                expectancy_pct=round(sum(decisive_returns) / len(decisive_returns), 4) if decisive_returns else None,
+                max_adverse_outcome_pct=round(min(returns), 4) if returns else None,
             )
         )
     return results
@@ -483,35 +567,43 @@ def compute_radar_v2_extended_performance(session: Session) -> RadarV2ExtendedPe
     """Every `RadarOpportunity` ever emitted (not only currently-live
     ones -- a superseded opportunity's own real outcome still counts
     toward these breakdowns), joined to its `DecisionV2Snapshot` (for
-    classification/confidence/market-regime/sector/horizon) and
-    `DecisionV2Outcome` (for the real resolved result)."""
+    classification/confidence/market-regime/sector/horizon/planned risk),
+    `DecisionV2Outcome` (for the real resolved result), and `Stock` (for
+    the Main-Market-vs-Nomu segment, via `instrument_bucket` -- see
+    `src.market_intelligence.universe_policy.classify_universe`)."""
     rows = (
-        session.query(RadarOpportunity, DecisionV2Snapshot, DecisionV2Outcome)
+        session.query(RadarOpportunity, DecisionV2Snapshot, DecisionV2Outcome, Stock)
         .join(DecisionV2Snapshot, DecisionV2Snapshot.id == RadarOpportunity.decision_v2_snapshot_id)
         .outerjoin(DecisionV2Outcome, DecisionV2Outcome.decision_v2_snapshot_id == DecisionV2Snapshot.id)
+        .outerjoin(Stock, Stock.id == RadarOpportunity.stock_id)
         .all()
     )
 
-    by_classification: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
-    by_confidence_band: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
-    by_market_regime: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
-    by_sector: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
-    by_horizon: Dict[str, List[DecisionV2Outcome]] = defaultdict(list)
+    total_by_classification: Dict[str, int] = defaultdict(int)
+    by_classification: Dict[str, List[Tuple[DecisionV2Outcome, DecisionV2Snapshot]]] = defaultdict(list)
+    by_confidence_band: Dict[str, List[Tuple[DecisionV2Outcome, DecisionV2Snapshot]]] = defaultdict(list)
+    by_market_regime: Dict[str, List[Tuple[DecisionV2Outcome, DecisionV2Snapshot]]] = defaultdict(list)
+    by_sector: Dict[str, List[Tuple[DecisionV2Outcome, DecisionV2Snapshot]]] = defaultdict(list)
+    by_horizon: Dict[str, List[Tuple[DecisionV2Outcome, DecisionV2Snapshot]]] = defaultdict(list)
+    by_market: Dict[str, List[Tuple[DecisionV2Outcome, DecisionV2Snapshot]]] = defaultdict(list)
 
     all_returns: List[float] = []
     mfe_values: List[float] = []
     mae_values: List[float] = []
     calibration_pairs: List[tuple] = []
 
-    for opportunity, snapshot, outcome in rows:
+    for opportunity, snapshot, outcome, stock in rows:
+        total_by_classification[opportunity.classification or "UNKNOWN"] += 1
         if outcome is None:
             continue
-        by_classification[opportunity.classification or "UNKNOWN"].append(outcome)
+        pair = (outcome, snapshot)
+        by_classification[opportunity.classification or "UNKNOWN"].append(pair)
         if snapshot.confidence_score is not None:
-            by_confidence_band[_confidence_band(float(snapshot.confidence_score))].append(outcome)
-        by_market_regime[snapshot.market_risk_state or "UNKNOWN"].append(outcome)
-        by_sector[snapshot.sector_ar or "غير محدد"].append(outcome)
-        by_horizon[snapshot.horizon_type or "UNKNOWN"].append(outcome)
+            by_confidence_band[_confidence_band(float(snapshot.confidence_score))].append(pair)
+        by_market_regime[snapshot.market_risk_state or "UNKNOWN"].append(pair)
+        by_sector[snapshot.sector_ar or "غير محدد"].append(pair)
+        by_horizon[snapshot.horizon_type or "UNKNOWN"].append(pair)
+        by_market[_market_segment_label(stock.instrument_bucket if stock is not None else None)].append(pair)
 
         if outcome.return_pct is not None:
             all_returns.append(float(outcome.return_pct))
@@ -526,11 +618,13 @@ def compute_radar_v2_extended_performance(session: Session) -> RadarV2ExtendedPe
             calibration_pairs.append((float(snapshot.confidence_score), label))
 
     return RadarV2ExtendedPerformanceMetrics(
+        total_signals_by_classification=dict(total_by_classification),
         win_rate_by_classification=_group_performance(by_classification),
         win_rate_by_confidence_band=_group_performance(by_confidence_band),
         win_rate_by_market_regime=_group_performance(by_market_regime),
         performance_by_sector=_group_performance(by_sector),
         performance_by_holding_horizon=_group_performance(by_horizon),
+        performance_by_market=_group_performance(by_market),
         average_return_pct=round(sum(all_returns) / len(all_returns), 4) if all_returns else None,
         median_return_pct=round(_median(all_returns), 4) if all_returns else None,
         average_favorable_excursion_pct=round(sum(mfe_values) / len(mfe_values), 4) if mfe_values else None,

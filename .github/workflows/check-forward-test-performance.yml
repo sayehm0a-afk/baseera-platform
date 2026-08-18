@@ -1,0 +1,107 @@
+name: Check Forward-Test Performance (temporary, one-shot, read-only, zero SAHMK cost)
+
+# NEXT PHASE: Real Forward-Test Performance Validation. Surfaces the
+# extended Radar V2 cohort metrics (win/target/stop-hit rates by
+# classification, confidence band, market regime, sector, holding
+# horizon, and Main-Market-vs-Nomu; MFE/MAE; realized risk/reward;
+# expectancy; calibration) directly from production, so the real
+# resolved-outcome state can be checked without consuming SAHMK quota.
+# Every route hit here is a pure Postgres read.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet requests
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Log in and inspect forward-test performance
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import requests
+
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          session = requests.Session()
+          r = session.post(
+              f"{backend_url}/api/v1/auth/login",
+              json={"email": os.environ["STAFF_EMAIL"], "password": os.environ["STAFF_PASSWORD"]},
+              timeout=30,
+          )
+          r.raise_for_status()
+          csrf = session.cookies.get("csrf_token")
+          if csrf:
+              session.headers.update({"X-CSRF-Token": csrf})
+
+          print("=== /api/v1/admin/market-intelligence/radar-v2/performance (global) ===")
+          resp = session.get(f"{backend_url}/api/v1/admin/market-intelligence/radar-v2/performance", timeout=30)
+          print(f"HTTP {resp.status_code}")
+          perf = resp.json()
+          print(perf)
+
+          print("\n=== /api/v1/admin/market-intelligence/radar-v2/performance/extended (cohorts) ===")
+          resp = session.get(
+              f"{backend_url}/api/v1/admin/market-intelligence/radar-v2/performance/extended", timeout=30
+          )
+          print(f"HTTP {resp.status_code}")
+          ext = resp.json()
+
+          print(f"\ntotal_signals_by_classification: {ext.get('total_signals_by_classification')}")
+          print(f"average_return_pct: {ext.get('average_return_pct')}")
+          print(f"median_return_pct: {ext.get('median_return_pct')}")
+          print(f"calibration_pair_count: {ext.get('calibration_pair_count')}")
+          print(f"expected_calibration_error: {ext.get('expected_calibration_error')}")
+
+          def _print_groups(title, groups):
+              print(f"\n--- {title} ---")
+              if not groups:
+                  print("  (no groups -- no real outcomes tracked in this breakdown yet)")
+              for g in groups:
+                  print(
+                      f"  {g['label']}: signal_count={g['signal_count']} resolved={g['resolved_count']} "
+                      f"unresolved={g['unresolved_count']} target_hit_rate={g['target_hit_rate']} "
+                      f"stop_loss_hit_rate={g['stop_loss_hit_rate']} win_rate={g['win_rate']} "
+                      f"avg_return_pct={g['average_return_pct']} avg_rr_realized={g['average_risk_reward_realized']} "
+                      f"expectancy_pct={g['expectancy_pct']} max_adverse_outcome_pct={g['max_adverse_outcome_pct']}"
+                  )
+
+          _print_groups("win_rate_by_classification", ext.get("win_rate_by_classification", []))
+          _print_groups("win_rate_by_confidence_band", ext.get("win_rate_by_confidence_band", []))
+          _print_groups("win_rate_by_market_regime", ext.get("win_rate_by_market_regime", []))
+          _print_groups("performance_by_sector", ext.get("performance_by_sector", []))
+          _print_groups("performance_by_holding_horizon", ext.get("performance_by_holding_horizon", []))
+          _print_groups("performance_by_market", ext.get("performance_by_market", []))
+
+          total_resolved = sum(g["resolved_count"] for g in ext.get("win_rate_by_classification", []))
+          print(f"\n=== SUMMARY: total resolved outcomes across all classifications = {total_resolved} ===")
+          if total_resolved == 0:
+              print("WAITING_FOR_REAL_OUTCOMES: zero resolved DecisionV2Outcome rows exist yet -- "
+                    "all rates are honestly null, not fabricated zeros.")
+          PYEOF

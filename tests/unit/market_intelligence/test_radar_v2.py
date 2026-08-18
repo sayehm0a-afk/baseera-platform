@@ -43,8 +43,8 @@ def session():
     Base.metadata.drop_all(bind=engine)
 
 
-def _stock(session, symbol="1111"):
-    row = Stock(symbol=symbol, name_en=f"Stock {symbol}", is_active=True)
+def _stock(session, symbol="1111", instrument_bucket=None):
+    row = Stock(symbol=symbol, name_en=f"Stock {symbol}", is_active=True, instrument_bucket=instrument_bucket)
     session.add(row)
     session.commit()
     return row
@@ -64,7 +64,7 @@ def _candidate(symbol="1111", rank_score=80.0, signals=None):
 
 def _snapshot(
     session, stock, scan_run_id, decision="BUY_CANDIDATE", confidence=70.0, current_price=100.0,
-    market_risk_state=None, sector_ar=None, horizon_type=None,
+    market_risk_state=None, sector_ar=None, horizon_type=None, downside_to_stop=None,
 ):
     row = DecisionV2Snapshot(
         stock_id=stock.id,
@@ -86,6 +86,7 @@ def _snapshot(
         scan_run_id=scan_run_id,
         market_risk_state=market_risk_state,
         horizon_type=horizon_type,
+        downside_to_stop=downside_to_stop,
     )
     session.add(row)
     session.commit()
@@ -496,3 +497,116 @@ class TestComputeRadarV2ExtendedPerformance:
         by_class = {g.label: g for g in metrics.win_rate_by_classification}
         assert "BUY_CANDIDATE" in by_class
         assert by_class["BUY_CANDIDATE"].win_rate == 1.0
+
+    def test_total_signals_by_classification_counts_every_emitted_opportunity_including_non_actionable(self, session):
+        stock_a = _stock(session, symbol="1111")
+        stock_b = _stock(session, symbol="2222")
+        # WATCH is non-actionable -- gets a RadarOpportunity row but no
+        # DecisionV2Outcome, so it must never appear in win_rate_by_
+        # classification, yet it must still be counted here.
+        _snapshot(session, stock_a, scan_run_id=1, decision="WATCH", confidence=55.0)
+        emit_radar_opportunities(session, 1, [_candidate(stock_a.symbol)])
+
+        _snapshot(session, stock_b, scan_run_id=2, decision="BUY_CANDIDATE", confidence=75.0)
+        emit_radar_opportunities(session, 2, [_candidate(stock_b.symbol)])
+
+        metrics = compute_radar_v2_extended_performance(session)
+        assert metrics.total_signals_by_classification == {"WATCH": 1, "BUY_CANDIDATE": 1}
+        assert {g.label for g in metrics.win_rate_by_classification} == {"BUY_CANDIDATE"}
+
+    def test_resolved_and_unresolved_counts_and_hit_rates_use_the_resolved_denominator(self, session):
+        stock_a = _stock(session, symbol="1111")
+        stock_b = _stock(session, symbol="2222")
+        stock_c = _stock(session, symbol="3333")
+
+        snap_a = _snapshot(session, stock_a, scan_run_id=1, decision="BUY_CANDIDATE", confidence=70.0)
+        emit_radar_opportunities(session, 1, [_candidate(stock_a.symbol)])
+        outcome_a = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_a.id).one()
+        outcome_a.status = "TARGET_1_HIT"
+        outcome_a.return_pct = 5.0
+
+        snap_b = _snapshot(session, stock_b, scan_run_id=2, decision="BUY_CANDIDATE", confidence=71.0)
+        emit_radar_opportunities(session, 2, [_candidate(stock_b.symbol)])
+        outcome_b = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_b.id).one()
+        outcome_b.status = "STOP_LOSS_HIT"
+        outcome_b.return_pct = -3.0
+
+        # Still PENDING -- unresolved, must not count toward either
+        # denominator.
+        _snapshot(session, stock_c, scan_run_id=3, decision="BUY_CANDIDATE", confidence=72.0)
+        emit_radar_opportunities(session, 3, [_candidate(stock_c.symbol)])
+        session.commit()
+
+        metrics = compute_radar_v2_extended_performance(session)
+        group = {g.label: g for g in metrics.win_rate_by_classification}["BUY_CANDIDATE"]
+        assert group.signal_count == 3
+        assert group.resolved_count == 2
+        assert group.unresolved_count == 1
+        assert group.target_hit_rate == pytest.approx(0.5)
+        assert group.stop_loss_hit_rate == pytest.approx(0.5)
+        assert group.win_rate == pytest.approx(0.5)
+        assert group.max_adverse_outcome_pct == pytest.approx(-3.0)
+
+    def test_average_risk_reward_realized_divides_return_by_planned_risk(self, session):
+        stock = _stock(session)
+        # Planned entry-to-stop risk of 2% at signal time; realized a 6%
+        # return -- a 3.0 R-multiple.
+        snapshot = _snapshot(
+            session, stock, scan_run_id=1, decision="BUY_CANDIDATE", confidence=70.0, downside_to_stop=2.0,
+        )
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)])
+        outcome = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        outcome.status = "TARGET_1_HIT"
+        outcome.return_pct = 6.0
+        session.commit()
+
+        metrics = compute_radar_v2_extended_performance(session)
+        group = {g.label: g for g in metrics.win_rate_by_classification}["BUY_CANDIDATE"]
+        assert group.average_risk_reward_realized == pytest.approx(3.0)
+        assert group.expectancy_pct == pytest.approx(6.0)
+
+    def test_average_risk_reward_realized_is_none_without_planned_risk(self, session):
+        stock = _stock(session)
+        snapshot = _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE", confidence=70.0)
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)])
+        outcome = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        outcome.status = "TARGET_1_HIT"
+        outcome.return_pct = 6.0
+        session.commit()
+
+        metrics = compute_radar_v2_extended_performance(session)
+        group = {g.label: g for g in metrics.win_rate_by_classification}["BUY_CANDIDATE"]
+        assert group.average_risk_reward_realized is None
+
+    def test_performance_by_market_segments_main_market_vs_nomu_vs_unknown(self, session):
+        main_stock = _stock(session, symbol="1111", instrument_bucket="MAIN_MARKET_EQUITY")
+        nomu_stock = _stock(session, symbol="9999", instrument_bucket="NOMU_EQUITY")
+        unknown_stock = _stock(session, symbol="5555", instrument_bucket=None)
+
+        snap_main = _snapshot(session, main_stock, scan_run_id=1, decision="BUY_CANDIDATE", confidence=70.0)
+        emit_radar_opportunities(session, 1, [_candidate(main_stock.symbol)])
+        outcome_main = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_main.id).one()
+        outcome_main.status = "TARGET_1_HIT"
+        outcome_main.return_pct = 4.0
+
+        snap_nomu = _snapshot(session, nomu_stock, scan_run_id=2, decision="BUY_CANDIDATE", confidence=71.0)
+        emit_radar_opportunities(session, 2, [_candidate(nomu_stock.symbol)])
+        outcome_nomu = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_nomu.id).one()
+        outcome_nomu.status = "STOP_LOSS_HIT"
+        outcome_nomu.return_pct = -2.0
+
+        snap_unknown = _snapshot(session, unknown_stock, scan_run_id=3, decision="BUY_CANDIDATE", confidence=72.0)
+        emit_radar_opportunities(session, 3, [_candidate(unknown_stock.symbol)])
+        outcome_unknown = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_unknown.id).one()
+        outcome_unknown.status = "TARGET_1_HIT"
+        outcome_unknown.return_pct = 1.0
+        session.commit()
+
+        metrics = compute_radar_v2_extended_performance(session)
+        by_market = {g.label: g for g in metrics.performance_by_market}
+        assert set(by_market) == {"Main Market", "Nomu", "Unknown"}
+        assert by_market["Main Market"].signal_count == 1
+        assert by_market["Nomu"].signal_count == 1
+        assert by_market["Unknown"].signal_count == 1
+        assert by_market["Main Market"].win_rate == 1.0
+        assert by_market["Nomu"].win_rate == 0.0

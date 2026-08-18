@@ -797,19 +797,33 @@ async def get_radar_v2_extended_performance(
     def _groups(items):
         return [
             RadarV2GroupPerformanceOut(
-                label=g.label, signal_count=g.signal_count, win_rate=g.win_rate,
+                label=g.label,
+                signal_count=g.signal_count,
+                resolved_count=g.resolved_count,
+                unresolved_count=g.unresolved_count,
+                target_hit_rate=g.target_hit_rate,
+                stop_loss_hit_rate=g.stop_loss_hit_rate,
+                win_rate=g.win_rate,
                 average_return_pct=g.average_return_pct,
+                median_return_pct=g.median_return_pct,
+                average_favorable_excursion_pct=g.average_favorable_excursion_pct,
+                average_adverse_excursion_pct=g.average_adverse_excursion_pct,
+                average_risk_reward_realized=g.average_risk_reward_realized,
+                expectancy_pct=g.expectancy_pct,
+                max_adverse_outcome_pct=g.max_adverse_outcome_pct,
             )
             for g in items
         ]
 
     return RadarV2ExtendedPerformanceOut(
         generated_at=datetime.now(timezone.utc),
+        total_signals_by_classification=metrics.total_signals_by_classification,
         win_rate_by_classification=_groups(metrics.win_rate_by_classification),
         win_rate_by_confidence_band=_groups(metrics.win_rate_by_confidence_band),
         win_rate_by_market_regime=_groups(metrics.win_rate_by_market_regime),
         performance_by_sector=_groups(metrics.performance_by_sector),
         performance_by_holding_horizon=_groups(metrics.performance_by_holding_horizon),
+        performance_by_market=_groups(metrics.performance_by_market),
         average_return_pct=metrics.average_return_pct,
         median_return_pct=metrics.median_return_pct,
         average_favorable_excursion_pct=metrics.average_favorable_excursion_pct,

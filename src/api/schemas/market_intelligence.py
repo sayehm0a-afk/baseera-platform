@@ -999,27 +999,47 @@ class RadarV2PerformanceOut(BaseModel):
 
 
 class RadarV2GroupPerformanceOut(BaseModel):
+    """One cohort's forward-test statistics. `signal_count` is every real
+    DecisionV2Outcome row in the cohort (resolved + unresolved) -- always
+    shown alongside any rate so a tiny sample is never mistaken for a
+    large one. `target_hit_rate`/`stop_loss_hit_rate` use resolved_count
+    as their denominator; `win_rate`/`expectancy_pct` use the
+    decisive-only denominator (TARGET_x_HIT vs STOP_LOSS_HIT). Every rate
+    is null, never a fabricated 0.0, when its own denominator is zero."""
+
     label: str
     signal_count: int
+    resolved_count: int = 0
+    unresolved_count: int = 0
+    target_hit_rate: Optional[float] = None
+    stop_loss_hit_rate: Optional[float] = None
     win_rate: Optional[float] = None
     average_return_pct: Optional[float] = None
+    median_return_pct: Optional[float] = None
+    average_favorable_excursion_pct: Optional[float] = None
+    average_adverse_excursion_pct: Optional[float] = None
+    average_risk_reward_realized: Optional[float] = None
+    expectancy_pct: Optional[float] = None
+    max_adverse_outcome_pct: Optional[float] = None
 
 
 class RadarV2ExtendedPerformanceOut(BaseModel):
     """GET .../radar-v2/performance/extended -- RADAR-C Phase D: the
     mandate's explicit breakdown questions (win rate by classification/
     confidence-band/market-regime, performance by sector/holding-
-    horizon, MFE/MAE, calibration) over the FULL RadarOpportunity/
-    DecisionV2Outcome history, not one ValidationSession window. Every
-    group's win_rate/average_return_pct is null, not 0.0, until real
+    horizon/market segment, MFE/MAE, calibration) over the FULL
+    RadarOpportunity/DecisionV2Outcome history, not one ValidationSession
+    window. Every group's rate fields are null, not 0.0, until real
     resolved outcomes exist for it."""
 
     generated_at: datetime
+    total_signals_by_classification: Dict[str, int] = Field(default_factory=dict)
     win_rate_by_classification: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
     win_rate_by_confidence_band: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
     win_rate_by_market_regime: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
     performance_by_sector: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
     performance_by_holding_horizon: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
+    performance_by_market: List[RadarV2GroupPerformanceOut] = Field(default_factory=list)
     average_return_pct: Optional[float] = None
     median_return_pct: Optional[float] = None
     average_favorable_excursion_pct: Optional[float] = None
