@@ -34,10 +34,10 @@ workload an operator must opt into, not something that starts itself.
   3. Every cycle re-selected the ENTIRE active universe (372 symbols
      in production), each issuing a live SAHMK quote call with only a
      15s cache TTL -- no benefit at this cadence. `_run_one_cycle` now
-     selects a bounded, config-driven batch
-     (`get_market_scan_symbols_per_cycle`), oldest-data-first (see
-     SymbolSelector's `prioritize_stale`), so the full universe still
-     gets refreshed over successive cycles instead of every cycle.
+     selects a bounded, config-driven batch via Radar V2's own Stage 1
+     (see point 6 below), so the full universe still gets evaluated
+     every cycle at zero SAHMK cost, but only a capped, ranked subset
+     ever reaches a live SAHMK call.
   4. No overlap guard existed between cycles/workers at all (unlike
      POST /market/scan and the admin diagnostic-scan route, which
      both already checked this) -- `has_in_flight_run` now gates a new
@@ -48,34 +48,67 @@ workload an operator must opt into, not something that starts itself.
      cycle now checks `get_default_rate_limiter().get_status()` first
      and skips entirely (zero SAHMK calls) if background-eligible
      quota is low or upstream-confirmed-exhausted.
+
+2026-08-18 real-market validation audit finding, fixed here: this
+  scheduler used to select its per-cycle batch itself
+  (`SymbolSelector.select(prioritize_stale=True)`, oldest-scanned-first,
+  no ranking) and write only `MarketScanRun`/`DecisionV2Snapshot` rows --
+  never a `RadarOpportunity` row. The consumer-facing Radar page
+  (`GET /api/v1/radar/summary`) reads exclusively from
+  `RadarOpportunity`, which was otherwise populated only by the
+  admin-only `POST /admin/market-intelligence/radar-v2/scan` -- never
+  invoked automatically, so a real user's Radar was always empty.
+  `_run_one_cycle` now delegates symbol selection and the full
+  Stage 1 (zero-cost local ranking) -> Stage 2 (bounded live
+  validation) -> `RadarOpportunity` emission pass to
+  `run_radar_v2_cycle` (see `radar_v2.py`), via `_stage2_runner` below
+  as the injected Stage 2 callable -- reusing the identical
+  `run_market_scan_job`/`MarketScanRun` machinery this module already
+  used, so `MarketScanRun`/`DecisionV2Snapshot` rows and every existing
+  safety guard in this file are unchanged; only symbol selection
+  (ranked Stage 1 candidates instead of stale-first) and the addition
+  of a final `RadarOpportunity` emission step are new.
 """
 
 import asyncio
 import contextlib
 import logging
-from typing import Awaitable, Callable, List, Optional, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, List, Optional, Protocol, runtime_checkable
 
 from sqlalchemy.orm import Session
 
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.rate_limiter import SahmkRateLimiter, get_default_rate_limiter
-from src.market_data.sahmk.operation_scope import MARKET_SCAN, operation_scope
+from src.market_data.sahmk.operation_scope import RADAR_V2, operation_scope
 from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
 from src.market_intelligence.config import (
     get_market_intelligence_scan_interval,
-    get_market_scan_symbols_per_cycle,
     get_max_scan_run_duration_hours,
     get_scan_leader_lease_seconds,
     get_scan_min_background_quota_remaining,
     schedule_interval_seconds,
 )
+from src.market_intelligence.radar_v2 import run_radar_v2_cycle as _real_run_radar_v2_cycle
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 from src.market_intelligence.services.scan_job_runner import run_market_scan_job
-from src.market_intelligence.symbol_selector import SymbolSelector
 from src.market_intelligence.types import ScheduleInterval
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _SchedulerStage2Result:
+    """Satisfies the same minimal shape `run_radar_v2_cycle`'s injected
+    Stage 2 runner must return (`.executed`/`.stop_reason`/`.run_id`;
+    see `radar_v2.StageTwoRunner`) -- a scheduler-local double of
+    `ContinueScanCycleOut`, not that Pydantic API schema itself, since
+    this module has no reason to depend on `src.api.*`."""
+
+    executed: bool
+    stop_reason: Optional[str] = None
+    run_id: Optional[int] = None
 
 
 @runtime_checkable
@@ -104,17 +137,17 @@ class IntervalMarketIntelligenceScheduler:
         market_provider_getter: Optional[Callable[[], Awaitable[IMarketDataProvider]]] = None,
         interval: Optional[ScheduleInterval] = None,
         repository: Optional[MarketIntelligenceRepository] = None,
-        symbol_selector: Optional[SymbolSelector] = None,
         leader_lock: Optional[SchedulerLeaderLock] = None,
         rate_limiter: Optional[SahmkRateLimiter] = None,
+        run_radar_v2_cycle: Optional[Callable[..., Awaitable[Any]]] = None,
     ):
         self._session_factory = session_factory or self._default_session_factory
         self._get_market_provider = market_provider_getter or self._default_market_provider_getter
         self._interval = interval or get_market_intelligence_scan_interval()
         self._repository = repository or MarketIntelligenceRepository()
-        self._symbol_selector = symbol_selector or SymbolSelector()
         self._leader_lock = leader_lock or SchedulerLeaderLock()
         self._rate_limiter = rate_limiter or get_default_rate_limiter()
+        self._run_radar_v2_cycle = run_radar_v2_cycle or _real_run_radar_v2_cycle
         self._task: Optional[asyncio.Task] = None
 
     @staticmethod
@@ -216,6 +249,42 @@ class IntervalMarketIntelligenceScheduler:
             return False
         return True
 
+    async def _stage2_runner(
+        self, session: Session, caller: str, resolve_symbols: Callable[[], List[str]]
+    ) -> _SchedulerStage2Result:
+        """The `radar_v2.StageTwoRunner` this scheduler injects into
+        `run_radar_v2_cycle` -- Stage 1 (inside `run_radar_v2_cycle`,
+        zero SAHMK cost) has already picked and capped the candidate
+        list by the time this is called, so this only needs to do what
+        `_run_one_cycle` always did once it had a symbol list: create
+        the `MarketScanRun` row and hand off to `run_market_scan_job`,
+        under `operation_scope(RADAR_V2)` instead of `MARKET_SCAN` so
+        this cycle's SAHMK usage is separately attributable (see
+        `GET .../radar-v2/sahmk-consumption`). `caller` is accepted only
+        to satisfy `StageTwoRunner`'s shape (unused -- nothing here logs
+        it; `_run_one_bounded_background_cycle` is the caller that
+        actually uses it, for its own manually-triggered routes)."""
+        symbols = resolve_symbols()
+        if not symbols:
+            return _SchedulerStage2Result(executed=False, stop_reason="no_candidates")
+
+        run = self._repository.create_scan_run(session, symbols_requested=len(symbols))
+        run_id = run.id
+
+        with priority_scope(BACKGROUND), operation_scope(RADAR_V2):
+            provider = await self._get_market_provider()
+            await run_market_scan_job(run_id, self._session_factory, provider, symbols=symbols)
+
+        # `run_market_scan_job` wrote its DecisionV2Snapshot rows through
+        # its own session (via `self._session_factory`, not `session`);
+        # this scheduler's own outer `session` must see them fresh
+        # before `run_radar_v2_cycle`'s emit step queries by scan_run_id
+        # right after this returns -- the same reasoning
+        # `_run_one_bounded_background_cycle` documents for its own
+        # `session.expire_all()` call.
+        session.expire_all()
+        return _SchedulerStage2Result(executed=True, run_id=run_id)
+
     async def _run_one_cycle(self) -> None:
         if not self._quota_allows_a_new_cycle():
             return
@@ -232,16 +301,20 @@ class IntervalMarketIntelligenceScheduler:
                 )
                 return
 
-            symbols: List[str] = self._symbol_selector.select(
-                session, limit=get_market_scan_symbols_per_cycle(), prioritize_stale=True
-            )
-            if not symbols:
-                return
-            run = self._repository.create_scan_run(session, symbols_requested=len(symbols))
-            run_id = run.id
+            result = await self._run_radar_v2_cycle(session, self._stage2_runner)
+
+            if result.stage2_executed:
+                logger.info(
+                    "MarketIntelligenceScheduler: Radar V2 cycle complete (scan run %s) -- "
+                    "%d candidate(s) from a %d-symbol universe, %d opportunity(ies) emitted, "
+                    "%d suppressed as duplicate.",
+                    result.scan_run_id, result.stage1_candidate_count, result.stage1_universe_size,
+                    len(result.opportunities_emitted), len(result.opportunities_suppressed_as_duplicate),
+                )
+            elif result.stage2_stop_reason:
+                logger.info(
+                    "MarketIntelligenceScheduler: Radar V2 cycle did not execute Stage 2 this tick (%s).",
+                    result.stage2_stop_reason,
+                )
         finally:
             session.close()
-
-        with priority_scope(BACKGROUND), operation_scope(MARKET_SCAN):
-            provider = await self._get_market_provider()
-            await run_market_scan_job(run_id, self._session_factory, provider, symbols=symbols)
