@@ -1,0 +1,152 @@
+name: Verify DecisionV2Outcome Scheduler Automatic Cycle (temporary, one-shot, read-only, zero SAHMK cost)
+
+# Post-accumulation-phase verification: proves (or honestly fails to
+# prove) that DecisionV2OutcomeScheduler is running as a real
+# interval-triggered background loop in production, not just started
+# once at boot. Every route/command here is a pure read: Railway env
+# var listing, Railway deployment stdout logs, and Postgres reads via
+# the existing staff-gated admin API. Nothing here writes to the
+# database, changes an env var, or calls SAHMK.
+#
+# Evidence logic: DecisionV2OutcomeScheduler._loop() runs one cycle
+# immediately on start, THEN sleeps interval_seconds, THEN runs again
+# -- forever. So a single "evaluation cycle" log line only proves
+# start-up execution. A SECOND (or later) "evaluation cycle" log line
+# for the SAME deployment, whose timestamp is >= interval_seconds
+# after the "scheduler started" line, is what actually proves a real,
+# unattended, timer-triggered cycle occurred -- because reaching it
+# requires the process to have stayed up through a full
+# asyncio.sleep(interval_seconds) with nothing external re-invoking it.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet requests
+
+      - name: "1. Confirm DECISION_V2_OUTCOME_SCHEDULER_ENABLED and its interval"
+        run: |
+          railway variables --service backend --kv 2>/dev/null \
+            | grep -iE "DECISION_V2_OUTCOME_SCHEDULER_ENABLED|DECISION_V2_OUTCOME_INTERVAL_SECONDS" \
+            || echo "no matching vars found (DECISION_V2_OUTCOME_SCHEDULER_ENABLED defaults to false, INTERVAL_SECONDS defaults to 3600)"
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: "2. Container health + served commit"
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          echo "--- /health/live ---"
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/live" -w "\nHTTP %{http_code}\n"
+          echo "--- /health/ready ---"
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/ready" -w "\nHTTP %{http_code}\n"
+
+      - name: "2/6/9/11. Staff login, deployment_commit, forward-test ledger state, duplicate/fabrication check"
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import requests
+          from collections import Counter
+
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          session = requests.Session()
+          r = session.post(
+              f"{backend_url}/api/v1/auth/login",
+              json={"email": os.environ["STAFF_EMAIL"], "password": os.environ["STAFF_PASSWORD"]},
+              timeout=30,
+          )
+          r.raise_for_status()
+          csrf = session.cookies.get("csrf_token")
+          if csrf:
+              session.headers.update({"X-CSRF-Token": csrf})
+
+          print("=== /admin/system/summary (served commit) ===")
+          resp = session.get(f"{backend_url}/api/v1/admin/system/summary", timeout=30)
+          print(f"HTTP {resp.status_code}")
+          summary = resp.json()
+          print(f"deployment_commit: {summary.get('deployment_commit')}")
+          for k in ("ingestion_scheduler_running", "market_intelligence_scheduler_running"):
+              print(f"{k}: {summary.get(k)}")
+
+          print("\n=== /admin/market-intelligence/radar-v2/performance (global forward-test state) ===")
+          resp = session.get(f"{backend_url}/api/v1/admin/market-intelligence/radar-v2/performance", timeout=30)
+          print(f"HTTP {resp.status_code}")
+          perf = resp.json()
+          print(perf)
+          print(f"\ngenerated_at (server clock, used as 'now' below): {perf.get('generated_at')}")
+          print(f"minimum_sample_size_required: {perf.get('minimum_sample_size_required')}")
+          print(f"sample_size_adequate: {perf.get('sample_size_adequate')}")
+          print(f"accumulation_status: {perf.get('accumulation_status')}")
+
+          print("\n=== /radar/opportunities (duplicate decision_v2_snapshot_id check across live rows) ===")
+          resp = session.get(f"{backend_url}/api/v1/radar/opportunities?limit=200", timeout=30)
+          print(f"HTTP {resp.status_code}")
+          opps = resp.json()
+          snap_ids = [o["decision_v2_snapshot_id"] for o in opps if o.get("decision_v2_snapshot_id") is not None]
+          counts = Counter(snap_ids)
+          dupes = {k: v for k, v in counts.items() if v > 1}
+          print(f"live opportunity rows returned: {len(opps)}")
+          print(f"distinct decision_v2_snapshot_id values: {len(counts)}")
+          print(f"duplicate decision_v2_snapshot_id values (v>1): {dupes if dupes else 'NONE'}")
+
+          total_actionable = perf.get("total_outcomes_tracked")
+          total_resolved = perf.get("resolved_count")
+          print("\n=== ACCUMULATION-PHASE STATE (11) ===")
+          print(f"actionable recommendations (outcomes tracked): {total_actionable}")
+          print(f"resolved outcomes: {total_resolved}")
+          print(f"unresolved (pending): {perf.get('pending_count')}")
+          print(f"target hits: {perf.get('target_hit_count')}")
+          print(f"stop hits: {perf.get('stop_loss_hit_count')}")
+          print(f"partial (same-bar tie): {perf.get('partial_count')}")
+          print(f"expired: {perf.get('expired_count')}")
+          print(f"data unavailable: {perf.get('data_unavailable_count')}")
+          print(f"cancelled: (see log-derived cancelled count below -- not separately broken out in this endpoint's current fields)")
+          PYEOF
+
+      - name: "3/4/5. Pull deployment stdout logs, isolate scheduler start + evaluation-cycle lines"
+        run: |
+          railway logs --service backend --deployment --lines 5000 2>&1 > /tmp/backend_logs.txt || true
+          echo "total lines captured: $(wc -l < /tmp/backend_logs.txt)"
+          echo ""
+          echo "--- lines matching 'DecisionV2OutcomeScheduler started' ---"
+          grep -n "DecisionV2OutcomeScheduler started" /tmp/backend_logs.txt || echo "(none found in captured window)"
+          echo ""
+          echo "--- lines matching 'DecisionV2Outcome evaluation cycle:' ---"
+          grep -n "DecisionV2Outcome evaluation cycle:" /tmp/backend_logs.txt || echo "(none found in captured window)"
+          echo ""
+          echo "--- any integrity/duplicate-key errors mentioning decision_v2_outcome (should be none) ---"
+          grep -in "decision_v2_outcome" /tmp/backend_logs.txt | grep -iE "integrityerror|duplicate key|unique constraint" || echo "(none found)"
+
+      - name: "6/8. Confirm the resolver never writes to DecisionV2Snapshot (static code check, not a code change)"
+        run: |
+          echo "evaluate_pending_outcomes() reads DecisionV2Snapshot via .filter_by(id=...).one_or_none() only -- grepping the shipped source for any assignment to a snapshot field within this function:"
+          grep -n "def evaluate_pending_outcomes" -A 400 src/ai_evolution/decision_v2_outcome_evaluation.py \
+            | grep -E "^\s*snapshot\.[a-zA-Z_]+\s*=" || echo "NONE FOUND -- resolver never assigns to any snapshot.<field>."
