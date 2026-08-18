@@ -1,0 +1,125 @@
+name: Reap Stale Scan Run and Verify Radar V2 (temporary, one-shot, real SAHMK for the scan call only)
+
+# Real-market validation audit: MarketScanRun 120 was orphaned in
+# RUNNING status (created 2026-08-18T08:32:58Z, before the PR #57
+# deploy's new container came online at ~08:34:07Z -- almost certainly
+# killed mid-scan by the deploy's container cutover). It never calls
+# finish_run(), so `has_in_flight_run()`'s overlap guard blocks every
+# future scan cycle -- including the newly-wired automatic Radar V2
+# cycle -- for up to MARKET_MAX_SCAN_RUN_DURATION_HOURS (4h default).
+#
+# This reuses the exact technique reap-and-capture-evidence.yml already
+# established for this same class of incident (2026-08-06, run 44):
+# MarketIntelligenceRepository.reap_stale_runs() (existing, tested code)
+# already runs at the top of every scan-triggering route; this workflow
+# only temporarily lowers the threshold via a Railway variable +
+# redeploy so it reaps immediately, then restores the default
+# afterward. No new backend code.
+#
+# Once reaped, this also performs the mandate's live Radar V2 test
+# (POST .../radar-v2/scan -- the same admin-only, quota-gated, real
+# Stage 1 -> Stage 2 -> RadarOpportunity-emission cycle
+# verify-radar-v2.yml already exercises) so the deployment-blocking fix
+# and the live-market validation happen in one pass instead of two.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  reap-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend: $BACKEND_URL"
+
+      - name: Temporarily lower MARKET_MAX_SCAN_RUN_DURATION_HOURS to reap the stale run immediately
+        run: railway variables --service "$RAILWAY_BACKEND_SERVICE" --set "MARKET_MAX_SCAN_RUN_DURATION_HOURS=0.01"
+
+      - name: Redeploy backend so it picks up the new variable
+        run: railway up --service "$RAILWAY_BACKEND_SERVICE" --detach
+
+      - name: Wait for the new deployment to actually roll out
+        run: |
+          echo "Waiting 150s for the build+rollout to complete..."
+          sleep 150
+
+      - name: Confirm backend is reachable post-rollout
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live"
+
+      - name: Log in as the staff account
+        id: login
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Login as the staff account failed."
+            exit 1
+          fi
+          CSRF=$(grep -i csrf_token /tmp/cookies.txt | awk '{print $NF}')
+          echo "$CSRF" > /tmp/.csrf
+
+      - name: Confirm the stale run was reaped (admin summary, zero SAHMK cost)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt "$BACKEND_URL/api/v1/admin/system/summary" -o /tmp/summary_before.json
+          echo "=== admin summary before radar-v2/scan ==="
+          python3 -m json.tool /tmp/summary_before.json
+
+      - name: Trigger a real Radar V2 scan (Stage 1 zero-cost -> capped Stage 2 real SAHMK -> RadarOpportunity emission)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          CSRF=$(cat /tmp/.csrf)
+          curl -sS --connect-timeout 10 --max-time 180 -b /tmp/cookies.txt \
+            -X POST "$BACKEND_URL/api/v1/admin/market-intelligence/radar-v2/scan" \
+            -H "Content-Type: application/json" \
+            -H "x-csrf-token: $CSRF" \
+            -d '{}' \
+            -o /tmp/radar_scan.json -w "\nHTTP %{http_code}\n"
+          echo "=== radar-v2/scan result ==="
+          python3 -m json.tool /tmp/radar_scan.json
+
+      - name: Fetch radar-v2/summary after the scan (zero SAHMK cost)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt "$BACKEND_URL/api/v1/admin/market-intelligence/radar-v2/summary" -o /tmp/radar_summary.json
+          echo "=== radar-v2/summary after the scan ==="
+          python3 -m json.tool /tmp/radar_summary.json
+
+      - name: Restore MARKET_MAX_SCAN_RUN_DURATION_HOURS to its default (4h)
+        if: always()
+        run: |
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" --set "MARKET_MAX_SCAN_RUN_DURATION_HOURS=4"
+          railway up --service "$RAILWAY_BACKEND_SERVICE" --detach
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: rm -f /tmp/.csrf /tmp/cookies.txt /tmp/login_body.json /tmp/summary_before.json /tmp/radar_scan.json /tmp/radar_summary.json
