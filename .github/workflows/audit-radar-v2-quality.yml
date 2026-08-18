@@ -1,0 +1,112 @@
+name: Audit Radar V2 Recommendation Quality (temporary, one-shot, read-only, zero SAHMK cost)
+
+# Real-market validation audit (VAL-5, Phase 5-6): pulls the FULL
+# explainability detail (positive/negative reasons, warnings,
+# recommendation_basis, liquidity/accumulation assessment, entry/stop/
+# targets) for every currently-live RadarOpportunity, plus Radar V2's
+# own SAHMK consumption attribution and forward-test performance.
+# Every route here is a DB-only or in-memory-telemetry read (see each
+# route's own docstring) -- makes zero SAHMK requests.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet requests
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Pull full opportunity detail, quota attribution, and forward-test performance
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import requests
+
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          session = requests.Session()
+          r = session.post(
+              f"{backend_url}/api/v1/auth/login",
+              json={"email": os.environ["STAFF_EMAIL"], "password": os.environ["STAFF_PASSWORD"]},
+              timeout=30,
+          )
+          r.raise_for_status()
+          csrf = session.cookies.get("csrf_token")
+          if csrf:
+              session.headers.update({"X-CSRF-Token": csrf})
+
+          print("=== radar-v2/summary ===")
+          summary = session.get(f"{backend_url}/api/v1/admin/market-intelligence/radar-v2/summary", timeout=30).json()
+          print(summary)
+
+          print("\n=== radar-v2/opportunities (full live list) ===")
+          opps = session.get(
+              f"{backend_url}/api/v1/admin/market-intelligence/radar-v2/opportunities",
+              params={"limit": 50}, timeout=30,
+          ).json()
+          print(f"live_count={len(opps)}")
+
+          print("\n=== per-opportunity full detail ===")
+          for o in opps:
+              oid = o["id"]
+              d = session.get(
+                  f"{backend_url}/api/v1/admin/market-intelligence/radar-v2/opportunities/{oid}", timeout=30
+              ).json()
+              print(f"\n--- id={oid} symbol={d.get('symbol')} classification={d.get('classification')} confidence={d.get('confidence_score')} ---")
+              print(f"  price_at_signal={d.get('price_at_signal')} entry=[{d.get('entry_zone_low')},{d.get('entry_zone_high')}] "
+                    f"stop_loss={d.get('stop_loss')} targets=[{d.get('target_1')},{d.get('target_2')},{d.get('target_3')}] "
+                    f"risk_reward_target_1={d.get('risk_reward_target_1')} risk_level={d.get('risk_level')}")
+              print(f"  positive_reasons={d.get('positive_reasons')}")
+              print(f"  negative_reasons={d.get('negative_reasons')}")
+              print(f"  warnings={d.get('warnings')}")
+              print(f"  recommendation_basis={d.get('recommendation_basis')}")
+              print(f"  liquidity_quality_ar={d.get('liquidity_quality_ar')}")
+              print(f"  relative_volume={d.get('relative_volume')}")
+              print(f"  accumulation_assessment_ar={d.get('accumulation_assessment_ar')}")
+              print(f"  data_freshness_status={d.get('data_freshness_status')} market_status={d.get('market_status')}")
+              print(f"  outcome_status={d.get('outcome_status')}")
+
+              # Sound risk-management sanity check for actionable classifications.
+              cls = d.get("classification")
+              entry_low = d.get("entry_zone_low")
+              stop = d.get("stop_loss")
+              t1 = d.get("target_1")
+              if cls in ("BUY_CANDIDATE", "WAIT_FOR_ENTRY") and stop is not None and t1 is not None:
+                  ref_price = entry_low if entry_low is not None else d.get("price_at_signal")
+                  if ref_price is not None:
+                      ok = stop < ref_price < t1
+                      print(f"  RISK_SHAPE_CHECK (stop < entry/price < target_1): {ok} (stop={stop} ref={ref_price} t1={t1})")
+
+          print("\n=== radar-v2/sahmk-consumption ===")
+          consumption = session.get(f"{backend_url}/api/v1/admin/market-intelligence/radar-v2/sahmk-consumption", timeout=30).json()
+          print(consumption)
+
+          print("\n=== radar-v2/performance ===")
+          perf = session.get(f"{backend_url}/api/v1/admin/market-intelligence/radar-v2/performance", timeout=30).json()
+          print(perf)
+          PYEOF
