@@ -173,6 +173,90 @@ def test_radar_v2_extended_performance_requires_staff_role(client, session_facto
     assert response.status_code in (401, 403)
 
 
+def test_radar_v2_extended_performance_exposes_the_new_cohort_fields(client, session_factory, as_staff):
+    """RADAR-C Phase D extension: total_signals_by_classification and
+    performance_by_market, plus the extended per-group fields
+    (resolved_count/unresolved_count/target_hit_rate/stop_loss_hit_rate/
+    average_risk_reward_realized/expectancy_pct/max_adverse_outcome_pct),
+    must reach the real HTTP response, not just the dataclass."""
+    from src.domain.models import DecisionV2Outcome, DecisionV2Snapshot, RadarOpportunity
+
+    session = session_factory()
+    stock = Stock(symbol="1111", name_en="Stock 1111", is_active=True, instrument_bucket="MAIN_MARKET_EQUITY")
+    session.add(stock)
+    session.commit()
+
+    snapshot = DecisionV2Snapshot(
+        stock_id=stock.id,
+        symbol=stock.symbol,
+        company_name_en=stock.name_en,
+        decision="BUY_CANDIDATE",
+        decision_label_ar="شراء",
+        confidence_score=75.0,
+        opportunity_quality_score=60.0,
+        risk_score=30.0,
+        data_quality_score=90.0,
+        data_freshness_status="LIVE",
+        current_price=100.0,
+        market_status="OPEN",
+        decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        analysis_version="2.0.0",
+        data_source="test",
+        scan_run_id=1,
+        downside_to_stop=2.0,
+    )
+    session.add(snapshot)
+    session.commit()
+
+    opportunity = RadarOpportunity(
+        decision_v2_snapshot_id=snapshot.id,
+        stock_id=stock.id,
+        symbol=stock.symbol,
+        classification="BUY_CANDIDATE",
+        classification_label_ar="شراء",
+        confidence_score=75.0,
+        stage1_ranking_score=80.0,
+        stage1_rank=1,
+        stage1_signals=[],
+        scan_run_id=1,
+        emitted_at=datetime.now(timezone.utc),
+    )
+    session.add(opportunity)
+
+    outcome = DecisionV2Outcome(
+        decision_v2_snapshot_id=snapshot.id,
+        symbol=stock.symbol,
+        status="TARGET_1_HIT",
+        return_pct=6.0,
+        entry_price=100.0,
+        due_at=snapshot.decision_timestamp + timedelta(days=30),
+    )
+    session.add(outcome)
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/performance/extended")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["total_signals_by_classification"] == {"BUY_CANDIDATE": 1}
+
+    group = next(g for g in body["win_rate_by_classification"] if g["label"] == "BUY_CANDIDATE")
+    assert group["signal_count"] == 1
+    assert group["resolved_count"] == 1
+    assert group["unresolved_count"] == 0
+    assert group["target_hit_rate"] == 1.0
+    assert group["stop_loss_hit_rate"] == 0.0
+    assert group["win_rate"] == 1.0
+    assert group["average_risk_reward_realized"] == pytest.approx(3.0)
+    assert group["expectancy_pct"] == pytest.approx(6.0)
+    assert group["max_adverse_outcome_pct"] == pytest.approx(6.0)
+
+    market_group = next(g for g in body["performance_by_market"] if g["label"] == "Main Market")
+    assert market_group["signal_count"] == 1
+    assert market_group["win_rate"] == 1.0
+
+
 def test_radar_v2_sahmk_consumption_never_leaks_the_api_key(client, session_factory, as_staff):
     response = client.get("/api/v1/admin/market-intelligence/radar-v2/sahmk-consumption")
     assert response.status_code == 200
