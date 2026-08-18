@@ -42,7 +42,7 @@ writes (a new `PortfolioAnalysisSnapshot` row per call) with no cap.
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -57,6 +57,7 @@ from src.api.exceptions import (
     PortfolioNotFoundError,
 )
 from src.api.middleware.rate_limiting import limiter
+from src.api.schemas.auth import MessageOut
 from src.api.schemas.news import PortfolioNewsAlertListOut, PortfolioNewsAlertOut
 from src.api.schemas.portfolio_intelligence import (
     AllocationOut,
@@ -191,13 +192,13 @@ def create_my_portfolio(
     return _summarize(portfolio, holdings_count=0)
 
 
-@router.delete("/{portfolio_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{portfolio_id}", response_model=MessageOut)
 def delete_my_portfolio(
     portfolio_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
-) -> Response:
+) -> MessageOut:
     portfolio = _get_portfolio_or_404(session, portfolio_id, current_user.id)
     _repository.delete_portfolio(session, portfolio)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return MessageOut(message=f"تم حذف المحفظة '{portfolio.name}'.")
 
 
 def _latest_price_by_stock_id(session: Session, stock_ids: List[int]) -> Dict[int, tuple]:
@@ -387,19 +388,20 @@ def update_portfolio_holding(
     return _holding_detail(holding, prices, decisions)
 
 
-@router.delete("/{portfolio_id}/holdings/{holding_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{portfolio_id}/holdings/{holding_id}", response_model=MessageOut)
 def delete_portfolio_holding(
     portfolio_id: int,
     holding_id: int,
     session: Session = Depends(get_db),
     current_user: User = Depends(require_active_subscription()),
-) -> Response:
+) -> MessageOut:
     _get_portfolio_or_404(session, portfolio_id, current_user.id)
     holding = _repository.get_holding_for_portfolio(session, portfolio_id, holding_id)
     if holding is None:
         raise PortfolioHoldingNotFoundError(f"No holding {holding_id} in portfolio {portfolio_id}.")
+    symbol = holding.symbol
     _repository.delete_holding(session, holding)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return MessageOut(message=f"تمت إزالة السهم '{symbol}' من المحفظة.")
 
 
 @router.post("/analyze", response_model=PortfolioAnalysisOut)

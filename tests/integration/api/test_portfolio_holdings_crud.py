@@ -147,7 +147,8 @@ def test_delete_portfolio_removes_it_and_its_holdings(client, db_session):
     client.post(f"/api/v1/portfolio/{portfolio_id}/holdings", json={"symbol": stock.symbol, "quantity": 5})
 
     response = client.delete(f"/api/v1/portfolio/{portfolio_id}")
-    assert response.status_code == 204
+    assert response.status_code == 200
+    assert response.json()["message"]
     assert client.get("/api/v1/portfolio").json()["portfolios"] == []
     assert client.get(f"/api/v1/portfolio/{portfolio_id}/holdings").status_code == 404
 
@@ -310,7 +311,8 @@ def test_delete_holding_removes_it_from_the_list(client, db_session):
     ).json()["id"]
 
     response = client.delete(f"/api/v1/portfolio/{portfolio_id}/holdings/{holding_id}")
-    assert response.status_code == 204
+    assert response.status_code == 200
+    assert response.json()["message"]
     assert client.get(f"/api/v1/portfolio/{portfolio_id}/holdings").json()["holdings"] == []
 
 
