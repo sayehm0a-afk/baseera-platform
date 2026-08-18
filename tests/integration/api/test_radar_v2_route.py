@@ -181,6 +181,77 @@ def test_radar_v2_sahmk_consumption_never_leaks_the_api_key(client, session_fact
     assert "api_key" not in body_text.lower()
 
 
+def test_radar_v2_sahmk_consumption_extracts_the_compound_operation_keys(
+    client, session_factory, as_staff, monkeypatch
+):
+    """Regression test for a real production bug (2026-08-18 real-market
+    validation audit): the underlying rate-limiter/cache telemetry keys
+    its `by_operation` dict with compound "<operation>:<endpoint>"
+    strings (e.g. "radar_v2:quote"), never a bare "radar_v2" key. The
+    route must extract every radar_v2-prefixed entry -- and only those,
+    excluding other operations' entries -- rather than doing an exact-
+    match lookup that can never hit anything."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data.caching import redis_shared_cache as cache_module
+
+    class _FakeRateLimiter:
+        def get_status(self):
+            return {
+                "by_operation": {
+                    "radar_v2:quote": 32,
+                    "radar_v2:market_summary": 4,
+                    "market_scan:quote": 500,
+                }
+            }
+
+    monkeypatch.setattr(admin_mi_module, "get_default_rate_limiter", lambda: _FakeRateLimiter())
+    monkeypatch.setattr(
+        cache_module,
+        "get_observability_snapshot",
+        lambda caches: {
+            "by_operation": {
+                "radar_v2:quote": 10,
+                "ingestion:ohlcv": 999,
+            }
+        },
+    )
+
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/sahmk-consumption")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rate_limiter_by_operation"] == {"radar_v2:quote": 32, "radar_v2:market_summary": 4}
+    assert body["cache_by_operation"] == {"radar_v2:quote": 10}
+
+
+def test_radar_v2_sahmk_consumption_reports_none_when_nothing_attributable(
+    client, session_factory, as_staff, monkeypatch
+):
+    """When the telemetry has real data but none of it is radar_v2-
+    tagged, the route must honestly report None rather than an empty
+    dict or a fabricated zero."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+    from src.market_data.caching import redis_shared_cache as cache_module
+
+    class _FakeRateLimiter:
+        def get_status(self):
+            return {"by_operation": {"market_scan:quote": 500}}
+
+    monkeypatch.setattr(admin_mi_module, "get_default_rate_limiter", lambda: _FakeRateLimiter())
+    monkeypatch.setattr(
+        cache_module,
+        "get_observability_snapshot",
+        lambda caches: {"by_operation": {"ingestion:ohlcv": 999}},
+    )
+
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/sahmk-consumption")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rate_limiter_by_operation"] is None
+    assert body["cache_by_operation"] is None
+
+
 def test_radar_v2_scan_with_no_stage1_candidates_spends_zero_sahmk_and_writes_nothing(
     client, session_factory, as_staff, monkeypatch
 ):

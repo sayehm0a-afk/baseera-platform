@@ -825,15 +825,34 @@ async def get_radar_v2_sahmk_consumption(
     this route's own `/radar-v2/scan` handler, which is the only place
     that tag is ever applied). No secrets: never includes the SAHMK API
     key or any credential, matching every other admin diagnostics
-    route's existing contract."""
+    route's existing contract.
+
+    2026-08-18 real-market validation audit finding, fixed here: the
+    telemetry's `by_operation` keys are compound `"<operation>:
+    <endpoint>"` strings (e.g. `"radar_v2:quote"`,
+    `"radar_v2:market_summary"` -- confirmed against real production
+    data in `GET .../admin/system/summary`'s own `sahmk_quota_status.
+    by_operation`), never a bare `"radar_v2"` key. A plain `.get(RADAR_V2)`
+    could therefore never match anything and this route always returned
+    `None`/`None`, silently, since it was first built -- a real,
+    previously undetected observability gap, not a fabricated-data
+    concern (an honestly empty `None` is still not what the route's own
+    contract promises). Fixed by filtering every compound key that
+    starts with the `radar_v2:` prefix instead of looking for an exact
+    match."""
     from src.market_data.caching.redis_shared_cache import get_default_sahmk_cache, get_observability_snapshot
+
+    def _radar_v2_subset(by_operation: Optional[Dict]) -> Optional[Dict]:
+        prefix = f"{RADAR_V2}:"
+        subset = {k: v for k, v in (by_operation or {}).items() if k.startswith(prefix)}
+        return subset or None
 
     rate_status = get_default_rate_limiter().get_status()
     cache_status = get_observability_snapshot({"sahmk_market_data": get_default_sahmk_cache()})
     return RadarV2SahmkConsumptionOut(
         generated_at=datetime.now(timezone.utc),
-        rate_limiter_by_operation=(rate_status.get("by_operation") or {}).get(RADAR_V2),
-        cache_by_operation=(cache_status.get("by_operation") or {}).get(RADAR_V2),
+        rate_limiter_by_operation=_radar_v2_subset(rate_status.get("by_operation")),
+        cache_by_operation=_radar_v2_subset(cache_status.get("by_operation")),
     )
 
 
