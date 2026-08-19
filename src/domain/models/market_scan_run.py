@@ -44,6 +44,16 @@ class MarketScanRun(Base):
     # fact. Populated only when symbols_skipped > 0.
     skipped_symbols_summary = Column(Text, nullable=True)
 
+    # Radar V2 only (null for ordinary market scans): Stage 1's free,
+    # full-local-universe scan size and how many of those it ranked as
+    # real candidates, before Stage 2's paid live-validation cap
+    # (`get_radar_stage2_candidate_cap()`) truncated the list. Populated
+    # by `run_radar_v2_cycle` once Stage 2 actually executes for this
+    # run -- see that function's own docstring in
+    # `src.market_intelligence.radar_v2`.
+    stage1_universe_size = Column(Integer, nullable=True)
+    stage1_candidate_count = Column(Integer, nullable=True)
+
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
     duration_seconds = Column(Numeric(10, 3), nullable=True)

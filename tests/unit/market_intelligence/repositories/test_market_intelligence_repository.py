@@ -195,6 +195,40 @@ def test_get_latest_successful_run_before_run_id(session, repo):
     assert previous.id == run1.id
 
 
+def test_record_stage1_metrics_persists_onto_the_run_row(session, repo):
+    run = repo.create_scan_run(session, symbols_requested=15)
+    repo.record_stage1_metrics(session, run.id, universe_size=231, candidate_count=52)
+
+    reloaded = repo.get_run(session, run.id)
+    assert reloaded.stage1_universe_size == 231
+    assert reloaded.stage1_candidate_count == 52
+
+
+def test_record_stage1_metrics_on_an_unknown_run_id_is_a_harmless_no_op(session, repo):
+    # A defensive guard, not an expected call pattern -- an UPDATE
+    # against zero matching rows must never raise.
+    repo.record_stage1_metrics(session, 999999, universe_size=100, candidate_count=10)
+
+
+def test_get_latest_run_with_stage1_metrics_is_none_when_no_radar_v2_cycle_has_completed(session, repo):
+    ordinary_run = repo.create_scan_run(session, symbols_requested=1)
+    repo.finish_run(session, ordinary_run.id, MarketScanStatus.SUCCESS, symbols_succeeded=1, symbols_skipped=0, symbols_failed=0)
+    assert repo.get_latest_run_with_stage1_metrics(session) is None
+
+
+def test_get_latest_run_with_stage1_metrics_returns_the_most_recent_one(session, repo):
+    older = repo.create_scan_run(session, symbols_requested=1)
+    repo.record_stage1_metrics(session, older.id, universe_size=200, candidate_count=40)
+
+    newer = repo.create_scan_run(session, symbols_requested=1)
+    repo.record_stage1_metrics(session, newer.id, universe_size=231, candidate_count=52)
+
+    latest = repo.get_latest_run_with_stage1_metrics(session)
+    assert latest.id == newer.id
+    assert latest.stage1_universe_size == 231
+    assert latest.stage1_candidate_count == 52
+
+
 def test_has_in_flight_run_returns_none_when_nothing_is_running(session, repo):
     assert repo.has_in_flight_run(session) is None
 

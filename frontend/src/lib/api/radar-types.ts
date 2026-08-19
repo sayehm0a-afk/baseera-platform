@@ -102,4 +102,14 @@ export interface RadarHomeSummary {
   market_risk_is_live: boolean;
 
   top_opportunities: RadarOpportunitySummary[];
+
+  // Radar V2's real scan funnel: how many symbols were scanned locally
+  // at zero SAHMK cost, how many were ranked as real candidates, and
+  // how many the paid live-validation cap allows through per pass.
+  // stage1_universe_size/stage1_candidate_count are null only when no
+  // Radar V2 cycle has completed yet.
+  stage1_universe_size: number | null;
+  stage1_candidate_count: number | null;
+  stage2_candidate_cap: number;
+  last_full_scan_at: string | null;
 }

@@ -294,6 +294,32 @@ class MarketIntelligenceRepository:
             query = query.filter(MarketScanRun.id < before_run_id)
         return query.order_by(MarketScanRun.id.desc()).first()
 
+    def record_stage1_metrics(self, session: Session, run_id: int, universe_size: int, candidate_count: int) -> None:
+        """Persists Radar V2's Stage 1 funnel numbers (free, full-local-
+        universe scan size and ranked-candidate count) onto the
+        `MarketScanRun` row `run_id` already refers to -- called once by
+        `run_radar_v2_cycle` right after Stage 2 executes for that run.
+        A plain targeted UPDATE, not `finish_run` (which already ran and
+        must not be re-triggered here)."""
+        session.query(MarketScanRun).filter_by(id=run_id).update(
+            {"stage1_universe_size": universe_size, "stage1_candidate_count": candidate_count}
+        )
+        session.commit()
+
+    def get_latest_run_with_stage1_metrics(self, session: Session) -> Optional[MarketScanRun]:
+        """The most recent Radar V2 cycle that actually reached Stage 2
+        and had its Stage 1 funnel numbers recorded -- used by the
+        consumer-facing `/radar/summary` route to report real scan
+        coverage without spending any new SAHMK quota. Ordinary
+        (non-Radar-V2) `MarketScanRun` rows never get these columns
+        populated, so this query naturally skips them."""
+        return (
+            session.query(MarketScanRun)
+            .filter(MarketScanRun.stage1_universe_size.isnot(None))
+            .order_by(MarketScanRun.id.desc())
+            .first()
+        )
+
     # --- symbol intelligence records -----------------------------------
 
     async def save_symbol_records(self, session: Session, run_id: int, outcomes: List[SymbolScanOutcome]) -> None:

@@ -17,7 +17,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.core.db.database import Base
-from src.domain.models import DecisionV2Outcome, DecisionV2Snapshot, PriceBar, RadarOpportunity, Stock, Timeframe
+from src.domain.models import (
+    DecisionV2Outcome,
+    DecisionV2Snapshot,
+    MarketScanRun,
+    PriceBar,
+    RadarOpportunity,
+    Stock,
+    Timeframe,
+)
 from src.market_intelligence.radar_v2 import (
     MINIMUM_SAMPLE_GATE,
     _accumulation_status,
@@ -328,19 +336,32 @@ class TestRunRadarV2Cycle:
             )
         session.commit()
 
+        run = MarketScanRun(symbols_requested=1)
+        session.add(run)
+        session.commit()
+
         async def fake_stage2(session_, caller, resolve_symbols):
             symbols = resolve_symbols()
-            run_id = 42
             for sym in symbols:
-                _snapshot(session_, stock, scan_run_id=run_id)
-            return _FakeStage2Result(executed=True, run_id=run_id)
+                _snapshot(session_, stock, scan_run_id=run.id)
+            return _FakeStage2Result(executed=True, run_id=run.id)
 
         result = await run_radar_v2_cycle(session, fake_stage2)
         assert result.stage2_executed is True
-        assert result.scan_run_id == 42
+        assert result.scan_run_id == run.id
         assert len(result.opportunities_emitted) == 1
         assert result.opportunities_emitted[0].symbol == stock.symbol
         assert session.query(RadarOpportunity).count() == 1
+
+        # RADAR-Phase1 (43-phase mandate): Stage 1's real funnel numbers
+        # must be persisted onto the MarketScanRun row this cycle used,
+        # not just held in-memory and discarded -- this is what lets a
+        # later read-only route report "scanned N locally, ranked M
+        # candidates" honestly.
+        session.refresh(run)
+        assert run.stage1_universe_size == result.stage1_universe_size
+        assert run.stage1_candidate_count == result.stage1_candidate_count
+        assert run.stage1_candidate_count == 1  # the one real candidate built above
 
 
 class TestAccumulationStatus:
