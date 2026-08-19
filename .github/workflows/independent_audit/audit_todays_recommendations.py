@@ -97,6 +97,25 @@ for opp in todays:
 
 out["opportunities_detail_chronological"] = details
 
+# Every other currently-live opportunity (not emitted today) -- pulled in
+# full detail too, so a symbol requested for audit whose most recent live
+# call predates AUDIT_DATE (e.g. it wasn't re-evaluated today) can still
+# be reported honestly with its real fields, rather than omitted.
+non_today = [o for o in all_live_opportunities if o not in todays]
+non_today_details = []
+for opp in sorted(non_today, key=lambda o: o.get("emitted_at", "")):
+    r = session.get(
+        f"{BACKEND_URL}/api/v1/admin/market-intelligence/radar-v2/opportunities/{opp['id']}",
+        timeout=30,
+    )
+    if r.status_code != 200:
+        non_today_details.append({"id": opp["id"], "symbol": opp.get("symbol"), "ERROR": f"status={r.status_code} body={r.text[:300]}"})
+        continue
+    non_today_details.append(r.json())
+    symbols_seen.add(opp["symbol"])
+
+out["opportunities_detail_other_live_not_from_today"] = non_today_details
+
 price_histories = {}
 for symbol in sorted(symbols_seen):
     r = session.get(
@@ -109,7 +128,29 @@ for symbol in sorted(symbols_seen):
         continue
     price_histories[symbol] = r.json()
 
-out["price_history_from_signal_date"] = price_histories
+out["price_history_from_audit_date"] = price_histories
+
+# Separately: for every non-today live opportunity, also pull its price
+# history starting from ITS OWN signal date (not AUDIT_DATE) -- e.g.
+# 2330's signal was 2026-08-18, so its outcome evaluation needs bars from
+# 2026-08-18 forward, not from today.
+price_histories_from_own_signal_date = {}
+for opp in non_today:
+    symbol = opp.get("symbol")
+    signal_date = str(opp.get("emitted_at", ""))[:10]
+    if not symbol or not signal_date:
+        continue
+    r = session.get(
+        f"{BACKEND_URL}/api/v1/stocks/{symbol}/history",
+        params={"start": f"{signal_date}T00:00:00Z"},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        price_histories_from_own_signal_date[symbol] = {"ERROR": f"status={r.status_code} body={r.text[:300]}"}
+        continue
+    price_histories_from_own_signal_date[symbol] = r.json()
+
+out["price_history_from_own_signal_date_for_non_today_opportunities"] = price_histories_from_own_signal_date
 
 print("===AUDIT_JSON_START===")
 print(json.dumps(out, indent=2, default=str))
