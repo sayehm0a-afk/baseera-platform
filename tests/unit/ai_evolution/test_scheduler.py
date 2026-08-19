@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import src.ai_evolution.scheduler as scheduler_module
+import src.market_intelligence.scheduler_leader_lock as leader_lock_module
 from src.ai_evolution.scheduler import (
     DailyIntelligenceAggregationScheduler,
     DailyReflectionScheduler,
@@ -21,6 +22,7 @@ from src.ai_evolution.scheduler import (
     PatternDiscoveryScheduler,
 )
 from src.core.db.database import Base
+from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 
 
 @pytest.fixture
@@ -30,6 +32,45 @@ def factory():
     session_factory = sessionmaker(bind=engine)
     yield session_factory
     Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_shared_redis(monkeypatch):
+    """Isolates every test in this file from any real, process-wide
+    shared Redis client -- DecisionV2OutcomeScheduler's default
+    leader_lock would otherwise reach for a real Redis connection (and,
+    across a real Redis instance shared by CI, a stale lease key left
+    over from a previous test run), making leadership -- and therefore
+    whether a monkeypatched _run_one_cycle actually gets called --
+    nondeterministic. Mirrors tests/unit/market_data/ingestion/
+    test_scheduler_leadership.py's identical fixture."""
+    monkeypatch.setattr(leader_lock_module, "_get_shared_redis_client", lambda: None)
+
+
+class _FakeRedis:
+    """In-memory stand-in for redis.Redis -- covers exactly the
+    operations SchedulerLeaderLock uses. Guarantees deterministic
+    leadership for tests that need a scheduler to actually run its
+    cycle, independent of whether a real Redis happens to be reachable.
+    """
+
+    def __init__(self):
+        self._kv: dict = {}
+
+    def get(self, key):
+        return self._kv.get(key)
+
+    def set(self, key, value, nx=False, px=None):
+        if nx and key in self._kv:
+            return None
+        self._kv[key] = value
+        return True
+
+    def pexpire(self, key, ttl_ms):
+        return key in self._kv
+
+    def delete(self, key):
+        self._kv.pop(key, None)
 
 
 def test_satisfies_the_scheduler_protocol():
@@ -316,7 +357,13 @@ async def test_decision_v2_outcome_scheduler_loop_survives_an_exception(factory)
         call_count["n"] += 1
         raise RuntimeError("boom")
 
-    scheduler = DecisionV2OutcomeScheduler(session_factory=factory, interval_seconds=0.01)
+    scheduler = DecisionV2OutcomeScheduler(
+        session_factory=factory,
+        interval_seconds=0.01,
+        leader_lock=SchedulerLeaderLock(
+            redis_client=_FakeRedis(), lease_key="basirah:decision_v2_outcome_scheduler:leader:test"
+        ),
+    )
     scheduler._run_one_cycle = _raising_run_one_cycle
 
     scheduler.start()
@@ -324,3 +371,30 @@ async def test_decision_v2_outcome_scheduler_loop_survives_an_exception(factory)
     await scheduler.stop()
 
     assert call_count["n"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_decision_v2_outcome_scheduler_non_leader_never_runs_a_cycle(factory, monkeypatch):
+    """A follower (not holding the decision-v2-outcome-scheduler lease)
+    must never call evaluate_pending_outcomes -- zero DB work, only the
+    skip counter moves. Mirrors IngestionScheduler's TEST2."""
+    scheduler = DecisionV2OutcomeScheduler(session_factory=factory, interval_seconds=999999)
+    assert scheduler.is_leader is False  # never started -- default not-leader
+
+    calls = {"n": 0}
+
+    async def _counting_run_one_cycle():
+        calls["n"] += 1
+
+    scheduler._run_one_cycle = _counting_run_one_cycle
+
+    async def _recording_sleep(_seconds):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", _recording_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await scheduler._loop()
+
+    assert calls["n"] == 0
+    assert scheduler.skipped_due_to_not_leader_count == 1

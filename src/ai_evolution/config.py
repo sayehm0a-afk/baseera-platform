@@ -86,6 +86,32 @@ def get_decision_v2_outcome_interval_seconds() -> int:
     return int(os.getenv("DECISION_V2_OUTCOME_INTERVAL_SECONDS", "3600"))
 
 
+def get_decision_v2_outcome_leader_lease_seconds() -> float:
+    """TTL of the Redis leader lease `DecisionV2OutcomeScheduler` uses so
+    only one of Gunicorn's worker processes actually evaluates pending
+    DecisionV2Outcome rows at a time -- mirrors `IngestionScheduler`'s
+    own `INGESTION_SCHEDULER_LEADER_LEASE_SECONDS` lease/renewal pattern
+    (`scheduler_leader_lock.SchedulerLeaderLock`), applied to a third,
+    independent lease key. Deliberately short relative to the
+    scheduler's own 3600s (default) cycle interval and renewed on its
+    own short heartbeat (`get_decision_v2_outcome_leader_heartbeat_
+    seconds`) so a worker that crashes without releasing the lease lets
+    it expire and fail over within roughly one heartbeat interval, not
+    up to a full cycle interval later."""
+    return float(os.getenv("DECISION_V2_OUTCOME_SCHEDULER_LEADER_LEASE_SECONDS", "180"))
+
+
+def get_decision_v2_outcome_leader_heartbeat_seconds() -> float:
+    """How often `DecisionV2OutcomeScheduler`'s dedicated leadership
+    heartbeat task re-attempts/renews its Redis lease. Deliberately
+    independent of the scheduler's own (much longer) cycle interval --
+    leadership itself transfers to a new worker within roughly this many
+    seconds after the previous leader's process dies, even though the
+    new leader's first actual evaluation cycle still waits for the
+    scheduler's own normal schedule."""
+    return float(os.getenv("DECISION_V2_OUTCOME_SCHEDULER_LEADER_HEARTBEAT_SECONDS", "30"))
+
+
 def get_decision_v2_outcome_default_horizon_days() -> int:
     """Fallback `due_at` horizon (decision_timestamp + this many days)
     for a snapshot whose `expected_holding_period_max_days` is null --
