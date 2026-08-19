@@ -66,6 +66,16 @@ if r.status_code != 200:
     sys.exit(1)
 all_live_opportunities = r.json()
 out["total_live_opportunities_all_time"] = len(all_live_opportunities)
+out["all_live_opportunities_summary"] = [
+    {
+        "id": o.get("id"),
+        "symbol": o.get("symbol"),
+        "company_name_ar": o.get("company_name_ar"),
+        "classification": o.get("classification"),
+        "emitted_at": o.get("emitted_at"),
+    }
+    for o in sorted(all_live_opportunities, key=lambda o: o.get("emitted_at", ""))
+]
 
 todays = [o for o in all_live_opportunities if str(o.get("emitted_at", "")).startswith(AUDIT_DATE)]
 todays.sort(key=lambda o: o.get("emitted_at", ""))
