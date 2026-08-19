@@ -17,6 +17,10 @@ export interface RadarOpportunitySummary {
   confidence_score: number;
   confidence_disclaimer_ar: string;
 
+  // Phase 5: the platform's single unified 0-100 opportunity-quality
+  // composite, distinct from confidence_score (evidence strength).
+  basirah_score: number | null;
+
   price_at_signal: number | null;
   entry_zone_low: number | null;
   entry_zone_high: number | null;
@@ -73,6 +77,35 @@ export interface RadarOpportunityDetail extends RadarOpportunitySummary {
   liquidity_quality_ar: string | null;
   relative_volume: number | null;
   accumulation_assessment_ar: string | null;
+
+  // Phase 4 (Advanced Technical Engine exposure): already computed by
+  // Decision Engine V2 for every Stage 2 candidate, just not previously
+  // surfaced through the Radar API. No "intraday" fields (VWAP/opening
+  // range/HOD-LOD) exist -- the platform has no intraday OHLCV data.
+  trend_direction_ar: string | null;
+  trend_strength_label_ar: string | null;
+  nearest_support: number | null;
+  major_support: number | null;
+  nearest_resistance: number | null;
+  major_resistance: number | null;
+  breakout_level: number | null;
+  breakdown_level: number | null;
+  support_resistance_evidence_ar: string | null;
+  current_volume: number | null;
+  average_volume: number | null;
+  accumulation_score: number | null;
+  entry_quality_label_ar: string | null;
+  entry_status_label_ar: string | null;
+  why_now_ar: string | null;
+  why_not_stronger_ar: string | null;
+  why_not_buy_reasons: string[];
+
+  // Phase 5: per-opportunity market-risk read, sector, and any
+  // conditions that would invalidate this decision.
+  market_risk_state: string | null;
+  market_risk_label_ar: string | null;
+  sector_ar: string | null;
+  invalidation_conditions: string[];
 
   decision_timestamp: string;
   market_status: string;

@@ -885,6 +885,15 @@ class RadarOpportunitySummaryOut(BaseModel):
     calibrated_confidence_score: Optional[float] = None
     calibration_version: Optional[str] = None
 
+    # Phase 5 (BASIRAH Score): the platform's single unified 0-100
+    # opportunity-quality composite (src.analysis.decision_v2.scoring.
+    # opportunity_quality_score) -- already computed for every Stage 2
+    # candidate, just not previously denormalized onto the Radar API.
+    # Distinct from confidence_score (evidence strength/consistency):
+    # this blends trend/momentum/volume/liquidity/volatility/risk-reward/
+    # market-context/data-quality into one headline number.
+    basirah_score: Optional[float] = None
+
     price_at_signal: Optional[float] = None
     entry_zone_low: Optional[float] = None
     entry_zone_high: Optional[float] = None
@@ -966,6 +975,19 @@ class RadarOpportunityDetailOut(RadarOpportunitySummaryOut):
     why_now_ar: Optional[str] = None
     why_not_stronger_ar: Optional[str] = None
     why_not_buy_reasons: List[str] = Field(default_factory=list)
+
+    # Phase 5 (Risk Manager + Market/sector context + Signal
+    # invalidation exposure): market_risk_state/label_ar are the 9-state
+    # market-wide classifier's read at decision time (already computed
+    # and gating entries in gates.py -- this only exposes the per-
+    # opportunity value alongside the market-wide banner already shown
+    # on the Radar home page). sector_ar and invalidation_conditions are
+    # likewise pre-existing DecisionV2Snapshot fields with no prior
+    # Radar API exposure.
+    market_risk_state: Optional[str] = None
+    market_risk_label_ar: Optional[str] = None
+    sector_ar: Optional[str] = None
+    invalidation_conditions: List[str] = Field(default_factory=list)
 
     decision_timestamp: datetime
     market_status: str

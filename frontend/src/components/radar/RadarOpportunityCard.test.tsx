@@ -13,6 +13,7 @@ function buildOpportunity(overrides: Partial<RadarOpportunitySummary> = {}): Rad
     classification_label_ar: "شراء",
     confidence_score: 78.4,
     confidence_disclaimer_ar: "درجة الثقة تقيس قوة واتساق الأدلة المتاحة، وليست احتمال ربح مضمون.",
+    basirah_score: 81.2,
     price_at_signal: 30.5,
     entry_zone_low: 30.0,
     entry_zone_high: 30.6,
@@ -43,6 +44,7 @@ describe("RadarOpportunityCard", () => {
     expect(screen.getByText("#1")).toBeInTheDocument();
     expect(screen.getByText("شراء")).toBeInTheDocument();
     expect(screen.getByText("78%")).toBeInTheDocument();
+    expect(screen.getByText("81/100")).toBeInTheDocument();
     expect(screen.getByText("متوسطة")).toBeInTheDocument();
     expect(screen.getByText("اختراق مستوى المقاومة بحجم تداول مرتفع")).toBeInTheDocument();
     expect(
@@ -55,6 +57,12 @@ describe("RadarOpportunityCard", () => {
 
     const dashes = screen.getAllByText("--");
     expect(dashes.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("shows a placeholder rather than fabricating a missing Basirah Score", () => {
+    render(<RadarOpportunityCard opportunity={buildOpportunity({ basirah_score: null })} />);
+
+    expect(screen.getAllByText("--").length).toBeGreaterThanOrEqual(1);
   });
 
   it("omits the ranking-reason section when the backend supplied none", () => {

@@ -92,6 +92,58 @@ export function RadarStockSection({ opportunity }: RadarStockSectionProps) {
 
       {detail.status === "ready" ? (
         <div className="flex flex-col gap-bsr-2 border-t border-bsr-border-subtle pt-bsr-3">
+          {detail.detail.why_now_ar ? (
+            <div>
+              <p className="text-xs text-bsr-text-secondary">لماذا الآن؟</p>
+              <p className="text-sm text-bsr-text-primary">{detail.detail.why_now_ar}</p>
+            </div>
+          ) : null}
+          {detail.detail.entry_quality_label_ar || detail.detail.entry_status_label_ar ? (
+            <div className="flex flex-wrap gap-bsr-3 text-sm">
+              {detail.detail.entry_quality_label_ar ? (
+                <span className="text-bsr-text-secondary">
+                  جودة الدخول: <span className="font-semibold text-bsr-text-primary">{detail.detail.entry_quality_label_ar}</span>
+                </span>
+              ) : null}
+              {detail.detail.entry_status_label_ar ? (
+                <span className="text-bsr-text-secondary">
+                  حالة الدخول: <span className="font-semibold text-bsr-text-primary">{detail.detail.entry_status_label_ar}</span>
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          {detail.detail.trend_direction_ar || detail.detail.trend_strength_label_ar ? (
+            <p className="text-sm text-bsr-text-secondary">
+              الاتجاه:{" "}
+              <span className="font-semibold text-bsr-text-primary">
+                {[detail.detail.trend_direction_ar, detail.detail.trend_strength_label_ar].filter(Boolean).join(" -- ")}
+              </span>
+            </p>
+          ) : null}
+          {detail.detail.support_resistance_evidence_ar ? (
+            <p className="text-sm text-bsr-text-primary">{detail.detail.support_resistance_evidence_ar}</p>
+          ) : null}
+          {detail.detail.sector_ar ? (
+            <p className="text-xs text-bsr-text-secondary">
+              القطاع: <span className="font-semibold text-bsr-text-primary">{detail.detail.sector_ar}</span>
+            </p>
+          ) : null}
+          {detail.detail.why_not_stronger_ar ? (
+            <div>
+              <p className="text-xs text-bsr-text-secondary">لماذا ليست إشارة أقوى؟</p>
+              <p className="text-sm text-bsr-text-primary">{detail.detail.why_not_stronger_ar}</p>
+            </div>
+          ) : null}
+          {detail.detail.invalidation_conditions.length > 0 ? (
+            <div>
+              <p className="text-xs text-bsr-text-secondary">شروط إلغاء الإشارة</p>
+              <ul className="list-inside list-disc text-sm text-bsr-market-down">
+                {detail.detail.invalidation_conditions.map((condition) => (
+                  <li key={condition}>{condition}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {detail.detail.positive_reasons.length > 0 ? (
             <div>
               <p className="text-xs text-bsr-text-secondary">نقاط القوة</p>

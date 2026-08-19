@@ -23,6 +23,7 @@ function opportunity(symbol: string) {
     classification_label_ar: "شراء",
     confidence_score: 80,
     confidence_disclaimer_ar: "درجة الثقة تقيس قوة واتساق الأدلة المتاحة، وليست احتمال ربح مضمون.",
+    basirah_score: 84.0,
     price_at_signal: 30.0,
     entry_zone_low: 29.5,
     entry_zone_high: 30.2,

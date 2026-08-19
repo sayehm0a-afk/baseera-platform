@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { RequireStaff } from "@/components/auth/RequireStaff";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
+import { FRESHNESS_LABELS_AR } from "@/components/radar/RadarOpportunityCard";
 import { OwnerNav } from "@/components/owner/OwnerNav";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
@@ -105,6 +106,14 @@ function RadarV2PageInner() {
 
   const { summary, performance, sahmk, opportunities } = state;
 
+  // Derived client-side, never a second hardcoded Arabic mapping: every
+  // classification key already carries its own Arabic label on each
+  // opportunity row, so this is only a lookup over already-fetched data.
+  const classificationLabels: Record<string, string> = {};
+  for (const o of opportunities) {
+    classificationLabels[o.classification] = o.classification_label_ar;
+  }
+
   return (
     <div className="flex flex-col gap-bsr-4">
       <OwnerNav />
@@ -121,7 +130,7 @@ function RadarV2PageInner() {
           <div className="mt-bsr-3 flex flex-wrap gap-bsr-2">
             {Object.entries(summary.live_by_classification).map(([classification, count]) => (
               <span key={classification} className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-3 py-1 text-xs text-bsr-text-primary">
-                {classification}: <span className="bsr-numeric font-semibold">{count}</span>
+                {classificationLabels[classification] ?? classification}: <span className="bsr-numeric font-semibold">{count}</span>
               </span>
             ))}
           </div>
@@ -149,9 +158,38 @@ function RadarV2PageInner() {
 
       <Card title="استهلاك SAHMK الخاص بالرادار الذكي">
         {sahmk.rate_limiter_by_operation || sahmk.cache_by_operation ? (
-          <pre className="overflow-x-auto text-[11px] text-bsr-text-secondary" dir="ltr">
-            {JSON.stringify({ rate_limiter: sahmk.rate_limiter_by_operation, cache: sahmk.cache_by_operation }, null, 2)}
-          </pre>
+          <div className="flex flex-col gap-bsr-3">
+            {sahmk.rate_limiter_by_operation ? (
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-bsr-text-secondary">حد المعدل حسب العملية</p>
+                <div className="flex flex-col gap-1">
+                  {Object.entries(sahmk.rate_limiter_by_operation).map(([op, val]) => (
+                    <div key={op} className="flex items-start justify-between gap-bsr-2 text-[11px]">
+                      <span className="text-bsr-text-secondary">{op}</span>
+                      <span className="bsr-numeric text-bsr-text-primary" dir="ltr">
+                        {JSON.stringify(val)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {sahmk.cache_by_operation ? (
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-bsr-text-secondary">التخزين المؤقت حسب العملية</p>
+                <div className="flex flex-col gap-1">
+                  {Object.entries(sahmk.cache_by_operation).map(([op, val]) => (
+                    <div key={op} className="flex items-start justify-between gap-bsr-2 text-[11px]">
+                      <span className="text-bsr-text-secondary">{op}</span>
+                      <span className="bsr-numeric text-bsr-text-primary" dir="ltr">
+                        {JSON.stringify(val)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <p className="text-xs text-bsr-text-secondary">لا توجد بيانات استهلاك مسجّلة بعد لعملية الرادار الذكي.</p>
         )}
@@ -181,7 +219,7 @@ function RadarV2PageInner() {
                       <DecisionBadge value={o.classification} labelAr={o.classification_label_ar} />
                     </td>
                     <td className="bsr-numeric p-1">{Math.round(o.confidence_score)}%</td>
-                    <td className="p-1">{o.data_freshness_status}</td>
+                    <td className="p-1">{FRESHNESS_LABELS_AR[o.data_freshness_status]}</td>
                   </tr>
                 ))}
               </tbody>

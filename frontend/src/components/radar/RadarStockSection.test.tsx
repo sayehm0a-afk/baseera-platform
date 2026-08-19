@@ -19,6 +19,7 @@ function buildSummary(overrides: Partial<RadarOpportunitySummary> = {}): RadarOp
     classification_label_ar: "شراء",
     confidence_score: 70,
     confidence_disclaimer_ar: "درجة الثقة تقيس قوة واتساق الأدلة المتاحة، وليست احتمال ربح مضمون.",
+    basirah_score: 74.5,
     price_at_signal: 30.5,
     entry_zone_low: 30.0,
     entry_zone_high: 30.6,
@@ -56,6 +57,27 @@ function buildDetail(): RadarOpportunityDetail {
     liquidity_quality_ar: null,
     relative_volume: null,
     accumulation_assessment_ar: null,
+    trend_direction_ar: "صاعد",
+    trend_strength_label_ar: "قوي",
+    nearest_support: 29.5,
+    major_support: 28.0,
+    nearest_resistance: 31.0,
+    major_resistance: 33.0,
+    breakout_level: 31.0,
+    breakdown_level: 29.5,
+    support_resistance_evidence_ar: "اختبر مستوى 29.50 كدعم مرتين خلال آخر 20 جلسة",
+    current_volume: 1200000,
+    average_volume: 900000,
+    accumulation_score: 68,
+    entry_quality_label_ar: "جيدة",
+    entry_status_label_ar: "ضمن نطاق الدخول",
+    why_now_ar: "اختراق حقيقي بحجم تداول مرتفع فوق المقاومة",
+    why_not_stronger_ar: "السيولة ما زالت أقل من المتوسط التاريخي",
+    why_not_buy_reasons: [],
+    market_risk_state: "NEUTRAL",
+    market_risk_label_ar: "محايدة",
+    sector_ar: "الطاقة",
+    invalidation_conditions: ["إغلاق يومي دون 29.00"],
     decision_timestamp: "2026-08-17T09:00:00Z",
     market_status: "OPEN",
     outcome_status: null,
@@ -88,6 +110,9 @@ describe("RadarStockSection", () => {
     await waitFor(() => expect(screen.getByText("اختراق حقيقي للمقاومة")).toBeInTheDocument());
     expect(screen.getByText("السيولة أقل من المتوسط")).toBeInTheDocument();
     expect(screen.getByText("اتجاه صاعد قوي")).toBeInTheDocument();
+    expect(screen.getByText("اختراق حقيقي بحجم تداول مرتفع فوق المقاومة")).toBeInTheDocument();
+    expect(screen.getByText("جيدة")).toBeInTheDocument();
+    expect(screen.getByText("إغلاق يومي دون 29.00")).toBeInTheDocument();
     expect(getRadarOpportunity).toHaveBeenCalledWith(7);
   });
 });
