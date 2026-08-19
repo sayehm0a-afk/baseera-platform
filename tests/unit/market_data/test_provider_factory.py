@@ -4,6 +4,7 @@ no network call is ever made; these tests only exercise the selection
 policy (env var overrides, connectivity/auth outcomes, caching)."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -447,3 +448,164 @@ async def test_switching_from_dev_to_sahmk_does_not_attempt_to_disconnect_dev_in
     from src.market_data.providers.market_data_provider import ProviderHealth
 
     assert await dev_provider.health_check() == ProviderHealth.UNHEALTHY
+
+
+# --- regression: market_data_health/status reported "unavailable" on a
+# worker that never itself selected a provider, even while the fleet was
+# genuinely healthy (2026-08-19 production evidence: a market-open scan
+# succeeded, 15/15 symbols via real SAHMK calls, while the admin dashboard
+# -- served by a different Gunicorn worker -- reported market_data_health=
+# "unhealthy"/market_data_status="UNAVAILABLE"). Root cause: the
+# process-local _cached_provider_kind/_last_connectivity_* globals are
+# only ever populated in the one worker that actually ran the scan. These
+# tests lock in the fix: a best-effort Redis-shared snapshot that any
+# worker's get_market_data_health() call now prefers over its own,
+# possibly-never-populated local state.
+
+
+class _FakeRedis:
+    """In-memory stand-in for redis.Redis -- covers exactly the get/
+    set/delete operations provider_factory's shared-health snapshot
+    uses. Deliberately duplicated (not imported) from the equivalent
+    fakes in scheduler_leader_lock/rate_limiter tests, matching this
+    repo's established convention of keeping each test file
+    self-contained."""
+
+    def __init__(self):
+        self._kv: dict = {}
+
+    def get(self, key):
+        return self._kv.get(key)
+
+    def set(self, key, value, ex=None):
+        self._kv[key] = value
+
+    def delete(self, key):
+        self._kv.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_get_market_data_health_falls_back_to_local_state_when_redis_unavailable(monkeypatch):
+    """Unchanged pre-existing behavior: with no shared Redis reachable
+    at all, get_market_data_health() reports this process's own local
+    selection outcome, exactly as before this fix."""
+    monkeypatch.setattr(provider_factory, "_get_shared_redis_client", lambda: None)
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
+
+    await provider_factory.get_market_data_provider()
+    health = provider_factory.get_market_data_health()
+    assert health["current_provider_kind"] == "sahmk"
+    assert health["last_connectivity_status"] == "SUCCESS"
+
+
+@pytest.mark.asyncio
+async def test_get_market_data_provider_mirrors_a_successful_selection_to_the_shared_snapshot(monkeypatch):
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(provider_factory, "_get_shared_redis_client", lambda: fake_redis)
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
+
+    await provider_factory.get_market_data_provider()
+
+    raw = fake_redis.get(provider_factory._SHARED_HEALTH_REDIS_KEY)
+    assert raw is not None
+    payload = json.loads(raw)
+    assert payload["current_provider_kind"] == "sahmk"
+    assert payload["last_connectivity_status"] == "SUCCESS"
+    assert payload["last_connectivity_at"] is not None
+
+
+def test_get_market_data_health_prefers_the_shared_snapshot_from_another_worker(monkeypatch):
+    """The core regression this fixes: this process's own local state
+    has never selected anything (as if it's a Gunicorn worker that
+    never happened to run the scan cycle), but another worker's real,
+    successful selection is visible via the shared snapshot -- the
+    admin dashboard must report the fleet's real state, not this
+    worker's uninvolved local None."""
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(provider_factory, "_get_shared_redis_client", lambda: fake_redis)
+
+    other_worker_snapshot = json.dumps(
+        {
+            "current_provider_kind": "sahmk",
+            "last_connectivity_status": "SUCCESS",
+            "last_connectivity_at": "2026-08-19T07:01:04+00:00",
+            "last_real_data_at": "2026-08-19T07:01:04+00:00",
+        }
+    )
+    fake_redis.set(provider_factory._SHARED_HEALTH_REDIS_KEY, other_worker_snapshot, ex=900)
+
+    assert provider_factory.get_last_selected_provider_kind() is None  # this worker's own local state
+    health = provider_factory.get_market_data_health()
+    assert health["current_provider_kind"] == "sahmk"
+    assert health["last_connectivity_status"] == "SUCCESS"
+    assert health["last_real_data_at"] == "2026-08-19T07:01:04+00:00"
+
+
+@pytest.mark.asyncio
+async def test_get_market_data_health_keeps_local_state_when_it_is_more_recent_than_shared(monkeypatch):
+    """A stale/superseded shared snapshot (e.g. written by a worker that
+    has since restarted or gone idle) must never suppress this
+    process's own genuinely fresher local read."""
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(provider_factory, "_get_shared_redis_client", lambda: fake_redis)
+
+    stale_snapshot = json.dumps(
+        {
+            "current_provider_kind": "dev",
+            "last_connectivity_status": "FAILED",
+            "last_connectivity_at": "2020-01-01T00:00:00+00:00",
+            "last_real_data_at": None,
+        }
+    )
+    fake_redis.set(provider_factory._SHARED_HEALTH_REDIS_KEY, stale_snapshot, ex=900)
+
+    monkeypatch.setenv("SAHMK_API_KEY", "shmk_live_x")
+
+    async def _ok():
+        return True
+
+    _FakeSahmkProvider.check_connectivity = lambda self: _ok()
+
+    await provider_factory.get_market_data_provider()
+
+    health = provider_factory.get_market_data_health()
+    assert health["current_provider_kind"] == "sahmk"
+    assert health["last_connectivity_status"] == "SUCCESS"
+
+
+def test_get_market_data_health_ignores_a_malformed_shared_snapshot(monkeypatch):
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(provider_factory, "_get_shared_redis_client", lambda: fake_redis)
+    fake_redis.set(provider_factory._SHARED_HEALTH_REDIS_KEY, "not-json-at-all", ex=900)
+
+    health = provider_factory.get_market_data_health()
+    assert health["current_provider_kind"] is None  # falls back to local (unselected) state, never raises
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_failure_is_still_mirrored_to_the_shared_snapshot(monkeypatch):
+    """A genuine degraded/failed state must be visible fleet-wide too --
+    never suppressed just because the local StrictRealDataUnavailableError
+    path re-raises before reaching the success-path write."""
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(provider_factory, "_get_shared_redis_client", lambda: fake_redis)
+    monkeypatch.delenv("SAHMK_API_KEY", raising=False)
+    monkeypatch.setenv("ALLOW_SYNTHETIC_DATA", "false")
+
+    with pytest.raises(StrictRealDataUnavailableError):
+        await provider_factory.get_market_data_provider()
+
+    raw = fake_redis.get(provider_factory._SHARED_HEALTH_REDIS_KEY)
+    assert raw is not None
+    payload = json.loads(raw)
+    assert payload["last_connectivity_status"] == "FAILED"
