@@ -1,0 +1,50 @@
+name: Diagnose market_data_health shared-snapshot fix (temporary, read-only)
+
+# One-off diagnostic (no backend code change): pulls a deep window of real
+# Railway production logs and greps for the new provider_factory
+# shared-health-snapshot log lines (both the "failed to write/read" warnings
+# and the underlying "SAHMK is reachable" success line already logged by
+# _select_provider()), to determine whether the just-deployed Redis-shared
+# market_data_health fix (PR #73) is actually writing/reading successfully
+# in production, or silently failing. Zero SAHMK cost, zero writes.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Pull a deep window of real Railway production logs
+        run: |
+          railway logs --service backend --deployment --lines 5000 2>&1 > /tmp/backend_logs.txt || true
+          echo "Total lines captured: $(wc -l < /tmp/backend_logs.txt)"
+
+      - name: Grep for provider_factory shared-health-snapshot activity
+        run: |
+          echo "=== 'SAHMK is reachable' (real selection success, both old and new code) ==="
+          grep -n "SAHMK is reachable" /tmp/backend_logs.txt || echo "(none found)"
+          echo ""
+          echo "=== 'provider_factory: failed to write shared market-data health snapshot' ==="
+          grep -n "provider_factory: failed to write shared" /tmp/backend_logs.txt || echo "(none found)"
+          echo ""
+          echo "=== 'provider_factory: failed to read shared market-data health snapshot' ==="
+          grep -n "provider_factory: failed to read shared" /tmp/backend_logs.txt || echo "(none found)"
+          echo ""
+          echo "=== 'provider_factory: could not construct a Redis client' ==="
+          grep -n "provider_factory: could not construct" /tmp/backend_logs.txt || echo "(none found)"
+          echo ""
+          echo "=== Radar V2 cycle complete / scan lines (for timing correlation) ==="
+          grep -n "Radar V2 cycle complete\|MarketIntelligenceScheduler" /tmp/backend_logs.txt | tail -n 40 || echo "(none found)"
+          echo ""
+          echo "=== Any Traceback/Exception near provider_factory ==="
+          grep -n -B2 -A15 "provider_factory" /tmp/backend_logs.txt | grep -A15 -i "traceback\|exception" || echo "(none found)"
