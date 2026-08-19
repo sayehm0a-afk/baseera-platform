@@ -50,6 +50,7 @@ from src.api.schemas.radar import RadarHomeSummaryOut
 from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
 from src.domain.models import DecisionV2Outcome, RadarOpportunity, User
+from src.market_intelligence.config import get_radar_stage2_candidate_cap
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status, market_status_label_ar
 from src.market_intelligence.radar_v2 import list_live_opportunities
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -107,6 +108,8 @@ def get_radar_summary(
 
     top = list_live_opportunities(session, limit=_HOME_TOP_OPPORTUNITIES_LIMIT)
 
+    latest_stage1_run = _repository.get_latest_run_with_stage1_metrics(session)
+
     return RadarHomeSummaryOut(
         generated_at=datetime.now(timezone.utc),
         live_opportunity_count=len(live),
@@ -121,6 +124,10 @@ def get_radar_summary(
         entry_permitted=risk.entry_permitted,
         market_risk_is_live=risk.is_live,
         top_opportunities=[radar_summary_out(o) for o in top],
+        stage1_universe_size=latest_stage1_run.stage1_universe_size if latest_stage1_run else None,
+        stage1_candidate_count=latest_stage1_run.stage1_candidate_count if latest_stage1_run else None,
+        stage2_candidate_cap=get_radar_stage2_candidate_cap(),
+        last_full_scan_at=latest_stage1_run.finished_at if latest_stage1_run else None,
     )
 
 

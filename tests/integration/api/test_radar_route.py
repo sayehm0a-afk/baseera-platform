@@ -27,6 +27,8 @@ import main
 from src.api.dependencies import get_current_user
 from src.domain.models import (
     DecisionV2Snapshot,
+    MarketScanRun,
+    MarketScanStatus,
     RadarOpportunity,
     Stock,
     Subscription,
@@ -199,6 +201,14 @@ def test_summary_on_an_empty_database_is_an_honest_empty_state(client, db_sessio
     # never invented/guessed data alongside it.
     assert body["market_status"]
     assert body["market_risk_state"]
+    # No Radar V2 cycle has ever completed -- the real scan funnel is
+    # honestly absent, never a fabricated 0.
+    assert body["stage1_universe_size"] is None
+    assert body["stage1_candidate_count"] is None
+    assert body["last_full_scan_at"] is None
+    # The live-validation cap itself is a config constant, always
+    # available regardless of whether any cycle has run yet.
+    assert body["stage2_candidate_cap"] == 15
 
 
 def test_opportunities_list_on_an_empty_database_is_an_empty_list(client, db_session, authenticated_as_staff):
@@ -309,6 +319,57 @@ def test_summary_reflects_a_real_live_opportunity(client, db_session, authentica
     assert body["average_confidence"] == pytest.approx(90.0)
     assert len(body["top_opportunities"]) == 1
     assert body["top_opportunities"][0]["symbol"] == "2222"
+
+
+def test_summary_reports_the_real_stage1_scan_funnel_from_the_latest_radar_v2_run(
+    client, db_session, authenticated_as_staff
+):
+    """The exact gap this test guards: before this fix, a consumer only
+    ever saw the capped live-opportunity count (e.g. 15) with no way to
+    tell that Stage 1 had actually scanned the full local universe for
+    free -- reading as "the radar only checked 15 stocks." Once a Radar
+    V2 cycle has persisted its Stage 1 metrics, /summary must surface
+    them honestly."""
+    older_run = MarketScanRun(
+        status=MarketScanStatus.SUCCESS, symbols_requested=10,
+        stage1_universe_size=200, stage1_candidate_count=40,
+    )
+    db_session.add(older_run)
+    db_session.commit()
+
+    newer_run = MarketScanRun(
+        status=MarketScanStatus.SUCCESS, symbols_requested=15,
+        stage1_universe_size=231, stage1_candidate_count=52,
+        finished_at=datetime.now(timezone.utc),
+    )
+    db_session.add(newer_run)
+    db_session.commit()
+
+    response = client.get(_SUMMARY_ROUTE)
+    assert response.status_code == 200
+    body = response.json()
+    # The latest run's numbers win, not the first one found.
+    assert body["stage1_universe_size"] == 231
+    assert body["stage1_candidate_count"] == 52
+    assert body["stage2_candidate_cap"] == 15
+    assert body["last_full_scan_at"] is not None
+
+
+def test_summary_ignores_an_ordinary_market_scan_run_with_no_stage1_metrics(
+    client, db_session, authenticated_as_staff
+):
+    """A MarketScanRun created by an ordinary (non-Radar-V2) market
+    scan never gets stage1_universe_size/candidate_count populated --
+    it must never be mistaken for real Radar V2 funnel data."""
+    ordinary_run = MarketScanRun(status=MarketScanStatus.SUCCESS, symbols_requested=50)
+    db_session.add(ordinary_run)
+    db_session.commit()
+
+    response = client.get(_SUMMARY_ROUTE)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage1_universe_size"] is None
+    assert body["stage1_candidate_count"] is None
 
 
 def test_stale_data_freshness_is_disclosed_not_hidden(client, db_session, authenticated_as_staff):

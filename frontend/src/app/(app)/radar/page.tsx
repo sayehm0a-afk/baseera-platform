@@ -68,6 +68,34 @@ function MarketRiskBanner({ summary }: { summary: RadarHomeSummary }) {
   );
 }
 
+/** The real Radar V2 scan funnel -- Stage 1 scans the full local Saudi
+ * market universe at zero SAHMK cost and ranks candidates; Stage 2
+ * live-validates only the top-ranked ones, capped to protect paid
+ * SAHMK quota. Shown so "الفرص الحية" never reads as "only N stocks
+ * were checked" when the radar actually scanned far more. Renders
+ * nothing until a real Radar V2 cycle has completed at least once --
+ * never a fabricated count. */
+function ScanFunnelBanner({ summary }: { summary: RadarHomeSummary }) {
+  if (summary.stage1_universe_size == null || summary.stage1_candidate_count == null) {
+    return null;
+  }
+  return (
+    <div className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
+      <p className="text-xs text-bsr-text-secondary">
+        فحص الرادار{" "}
+        <span className="bsr-numeric font-semibold text-bsr-text-primary">{summary.stage1_universe_size}</span> سهمًا في السوق
+        السعودي محليًا (بدون تكلفة)، ورشّح منها{" "}
+        <span className="bsr-numeric font-semibold text-bsr-text-primary">{summary.stage1_candidate_count}</span> مرشحًا، ثم تحقّق
+        حيًا من أفضل{" "}
+        <span className="bsr-numeric font-semibold text-bsr-text-primary">
+          {Math.min(summary.stage1_candidate_count, summary.stage2_candidate_cap)}
+        </span>{" "}
+        منها لحماية رصيد الاستعلامات الحية.
+      </p>
+    </div>
+  );
+}
+
 export default function RadarPage() {
   const { data, reload } = useRadarData();
 
@@ -110,6 +138,7 @@ export default function RadarPage() {
       ) : null}
 
       {data.status === "ready" ? <MarketRiskBanner summary={data.summary} /> : null}
+      {data.status === "ready" ? <ScanFunnelBanner summary={data.summary} /> : null}
 
       {data.status === "ready" && data.summary.live_opportunity_count === 0 ? (
         <EmptyState

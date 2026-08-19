@@ -59,6 +59,7 @@ from src.market_intelligence.config import (
     get_radar_stage2_candidate_cap,
     get_score_change_threshold,
 )
+from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.stage1_local_scan import Stage1SymbolResult, run_stage1_local_scan
 
 # Matches _run_one_bounded_background_cycle(session, caller, resolve_symbols)
@@ -310,6 +311,9 @@ async def run_radar_v2_cycle(
         )
 
     scan_run_id = stage2_result.run_id
+    MarketIntelligenceRepository().record_stage1_metrics(
+        session, scan_run_id, stage1_result.universe_size, stage1_result.candidate_count
+    )
     emission = emit_radar_opportunities(session, scan_run_id, selected, emitted_at=triggered_at)
 
     return RadarV2RunResult(

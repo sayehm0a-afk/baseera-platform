@@ -45,3 +45,15 @@ class RadarHomeSummaryOut(BaseModel):
     market_risk_is_live: bool
 
     top_opportunities: List[RadarOpportunitySummaryOut] = Field(default_factory=list)
+
+    # Radar V2's real scan funnel -- how many symbols Stage 1 actually
+    # scanned locally at zero SAHMK cost, how many it ranked as real
+    # candidates, and how many of those the paid live-validation cap
+    # allows through in one pass. All three are None only when no
+    # Radar V2 cycle has completed yet (never fabricated as 0). See
+    # `src.market_intelligence.radar_v2.run_radar_v2_cycle` and
+    # `MarketIntelligenceRepository.get_latest_run_with_stage1_metrics`.
+    stage1_universe_size: Optional[int] = None
+    stage1_candidate_count: Optional[int] = None
+    stage2_candidate_cap: int
+    last_full_scan_at: Optional[datetime] = None
