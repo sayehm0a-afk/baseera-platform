@@ -46,14 +46,23 @@ class RadarHomeSummaryOut(BaseModel):
 
     top_opportunities: List[RadarOpportunitySummaryOut] = Field(default_factory=list)
 
-    # Radar V2's real scan funnel -- how many symbols Stage 1 actually
-    # scanned locally at zero SAHMK cost, how many it ranked as real
-    # candidates, and how many of those the paid live-validation cap
-    # allows through in one pass. All three are None only when no
-    # Radar V2 cycle has completed yet (never fabricated as 0). See
-    # `src.market_intelligence.radar_v2.run_radar_v2_cycle` and
-    # `MarketIntelligenceRepository.get_latest_run_with_stage1_metrics`.
+    # Radar V2's real, dynamic scan funnel (BASIRAH mandate Phase 2 --
+    # "never static"), from the most recent completed Radar V2 cycle:
+    #   universe_total        -> Stage 1's full local Saudi-market universe
+    #   universe_analyzable   -> of those, how many had enough price history
+    #                            to actually be scored (Stage 1's evaluated_count)
+    #   stage1_candidates     -> passed Stage 1's liquidity + signal filter
+    #   stage2_validated      -> of the (<=stage2_candidate_cap) candidates sent
+    #                            to Stage 2, how many a real live quote succeeded for
+    #   final_opportunities   -> real RadarOpportunity rows that cycle emitted
+    # Every field is None, never a fabricated 0, until a real Radar V2
+    # cycle has completed. See `src.market_intelligence.radar_v2.
+    # run_radar_v2_cycle` and `MarketIntelligenceRepository.
+    # get_latest_run_with_stage1_metrics`.
     stage1_universe_size: Optional[int] = None
+    stage1_evaluated_count: Optional[int] = None
     stage1_candidate_count: Optional[int] = None
     stage2_candidate_cap: int
+    stage2_validated_count: Optional[int] = None
+    final_opportunities_count: Optional[int] = None
     last_full_scan_at: Optional[datetime] = None

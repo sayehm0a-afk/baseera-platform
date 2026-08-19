@@ -294,15 +294,22 @@ class MarketIntelligenceRepository:
             query = query.filter(MarketScanRun.id < before_run_id)
         return query.order_by(MarketScanRun.id.desc()).first()
 
-    def record_stage1_metrics(self, session: Session, run_id: int, universe_size: int, candidate_count: int) -> None:
+    def record_stage1_metrics(
+        self, session: Session, run_id: int, universe_size: int, candidate_count: int, evaluated_count: int
+    ) -> None:
         """Persists Radar V2's Stage 1 funnel numbers (free, full-local-
-        universe scan size and ranked-candidate count) onto the
-        `MarketScanRun` row `run_id` already refers to -- called once by
-        `run_radar_v2_cycle` right after Stage 2 executes for that run.
-        A plain targeted UPDATE, not `finish_run` (which already ran and
-        must not be re-triggered here)."""
+        universe scan size, how many of those had enough price history
+        to actually be analyzed, and how many were ranked as real
+        candidates) onto the `MarketScanRun` row `run_id` already refers
+        to -- called once by `run_radar_v2_cycle` right after Stage 2
+        executes for that run. A plain targeted UPDATE, not `finish_run`
+        (which already ran and must not be re-triggered here)."""
         session.query(MarketScanRun).filter_by(id=run_id).update(
-            {"stage1_universe_size": universe_size, "stage1_candidate_count": candidate_count}
+            {
+                "stage1_universe_size": universe_size,
+                "stage1_evaluated_count": evaluated_count,
+                "stage1_candidate_count": candidate_count,
+            }
         )
         session.commit()
 

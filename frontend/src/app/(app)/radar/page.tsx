@@ -79,19 +79,32 @@ function ScanFunnelBanner({ summary }: { summary: RadarHomeSummary }) {
   if (summary.stage1_universe_size == null || summary.stage1_candidate_count == null) {
     return null;
   }
+  const validated = Math.min(summary.stage1_candidate_count, summary.stage2_candidate_cap);
   return (
-    <div className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
+    <div className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 space-y-1">
       <p className="text-xs text-bsr-text-secondary">
         فحص الرادار{" "}
         <span className="bsr-numeric font-semibold text-bsr-text-primary">{summary.stage1_universe_size}</span> سهمًا في السوق
-        السعودي محليًا (بدون تكلفة)، ورشّح منها{" "}
+        السعودي
+        {summary.stage1_evaluated_count != null && summary.stage1_evaluated_count !== summary.stage1_universe_size ? (
+          <>
+            {" "}
+            (<span className="bsr-numeric font-semibold text-bsr-text-primary">{summary.stage1_evaluated_count}</span> منها قابل
+            للتحليل حاليًا)
+          </>
+        ) : null}
+        {" "}محليًا بدون تكلفة، ورشّح منها{" "}
         <span className="bsr-numeric font-semibold text-bsr-text-primary">{summary.stage1_candidate_count}</span> مرشحًا، ثم تحقّق
         حيًا من أفضل{" "}
-        <span className="bsr-numeric font-semibold text-bsr-text-primary">
-          {Math.min(summary.stage1_candidate_count, summary.stage2_candidate_cap)}
-        </span>{" "}
-        منها لحماية رصيد الاستعلامات الحية.
+        <span className="bsr-numeric font-semibold text-bsr-text-primary">{validated}</span> لحماية رصيد الاستعلامات الحية.
       </p>
+      {summary.final_opportunities_count != null ? (
+        <p className="text-xs text-bsr-text-secondary">
+          نتج عن هذا الفحص{" "}
+          <span className="bsr-numeric font-semibold text-bsr-text-primary">{summary.final_opportunities_count}</span> فرصة
+          جديدة/محدّثة.
+        </p>
+      ) : null}
     </div>
   );
 }

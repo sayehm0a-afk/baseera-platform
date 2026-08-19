@@ -103,13 +103,16 @@ export interface RadarHomeSummary {
 
   top_opportunities: RadarOpportunitySummary[];
 
-  // Radar V2's real scan funnel: how many symbols were scanned locally
-  // at zero SAHMK cost, how many were ranked as real candidates, and
-  // how many the paid live-validation cap allows through per pass.
-  // stage1_universe_size/stage1_candidate_count are null only when no
-  // Radar V2 cycle has completed yet.
+  // Radar V2's real, dynamic scan funnel from the most recent completed
+  // cycle: full local universe -> analyzable (had enough price history)
+  // -> Stage 1 candidates -> Stage 2 live-validated -> final opportunities
+  // emitted. Null only when no Radar V2 cycle has completed yet -- never
+  // fabricated as 0.
   stage1_universe_size: number | null;
+  stage1_evaluated_count: number | null;
   stage1_candidate_count: number | null;
   stage2_candidate_cap: number;
+  stage2_validated_count: number | null;
+  final_opportunities_count: number | null;
   last_full_scan_at: string | null;
 }

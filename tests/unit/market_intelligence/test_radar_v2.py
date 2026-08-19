@@ -362,6 +362,7 @@ class TestRunRadarV2Cycle:
         assert run.stage1_universe_size == result.stage1_universe_size
         assert run.stage1_candidate_count == result.stage1_candidate_count
         assert run.stage1_candidate_count == 1  # the one real candidate built above
+        assert run.stage1_evaluated_count == 1  # the single symbol had enough history to be scored
 
 
 class TestAccumulationStatus:

@@ -197,17 +197,18 @@ def test_get_latest_successful_run_before_run_id(session, repo):
 
 def test_record_stage1_metrics_persists_onto_the_run_row(session, repo):
     run = repo.create_scan_run(session, symbols_requested=15)
-    repo.record_stage1_metrics(session, run.id, universe_size=231, candidate_count=52)
+    repo.record_stage1_metrics(session, run.id, universe_size=231, candidate_count=52, evaluated_count=228)
 
     reloaded = repo.get_run(session, run.id)
     assert reloaded.stage1_universe_size == 231
+    assert reloaded.stage1_evaluated_count == 228
     assert reloaded.stage1_candidate_count == 52
 
 
 def test_record_stage1_metrics_on_an_unknown_run_id_is_a_harmless_no_op(session, repo):
     # A defensive guard, not an expected call pattern -- an UPDATE
     # against zero matching rows must never raise.
-    repo.record_stage1_metrics(session, 999999, universe_size=100, candidate_count=10)
+    repo.record_stage1_metrics(session, 999999, universe_size=100, candidate_count=10, evaluated_count=95)
 
 
 def test_get_latest_run_with_stage1_metrics_is_none_when_no_radar_v2_cycle_has_completed(session, repo):
@@ -218,10 +219,10 @@ def test_get_latest_run_with_stage1_metrics_is_none_when_no_radar_v2_cycle_has_c
 
 def test_get_latest_run_with_stage1_metrics_returns_the_most_recent_one(session, repo):
     older = repo.create_scan_run(session, symbols_requested=1)
-    repo.record_stage1_metrics(session, older.id, universe_size=200, candidate_count=40)
+    repo.record_stage1_metrics(session, older.id, universe_size=200, candidate_count=40, evaluated_count=198)
 
     newer = repo.create_scan_run(session, symbols_requested=1)
-    repo.record_stage1_metrics(session, newer.id, universe_size=231, candidate_count=52)
+    repo.record_stage1_metrics(session, newer.id, universe_size=231, candidate_count=52, evaluated_count=228)
 
     latest = repo.get_latest_run_with_stage1_metrics(session)
     assert latest.id == newer.id

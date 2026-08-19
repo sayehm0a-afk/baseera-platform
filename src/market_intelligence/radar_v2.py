@@ -312,7 +312,11 @@ async def run_radar_v2_cycle(
 
     scan_run_id = stage2_result.run_id
     MarketIntelligenceRepository().record_stage1_metrics(
-        session, scan_run_id, stage1_result.universe_size, stage1_result.candidate_count
+        session,
+        scan_run_id,
+        stage1_result.universe_size,
+        stage1_result.candidate_count,
+        stage1_result.evaluated_count,
     )
     emission = emit_radar_opportunities(session, scan_run_id, selected, emitted_at=triggered_at)
 
