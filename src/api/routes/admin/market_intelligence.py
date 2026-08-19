@@ -599,6 +599,9 @@ def radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummaryO
             float(snapshot.calibrated_confidence_score) if snapshot.calibrated_confidence_score is not None else None
         ),
         calibration_version=snapshot.calibration_version,
+        basirah_score=(
+            float(snapshot.opportunity_quality_score) if snapshot.opportunity_quality_score is not None else None
+        ),
         price_at_signal=float(opportunity.price_at_signal) if opportunity.price_at_signal is not None else None,
         entry_zone_low=float(snapshot.entry_zone_low) if snapshot.entry_zone_low is not None else None,
         entry_zone_high=float(snapshot.entry_zone_high) if snapshot.entry_zone_high is not None else None,
@@ -666,6 +669,10 @@ def radar_detail_out(opportunity: RadarOpportunity, outcome: Optional[DecisionV2
         why_now_ar=snapshot.why_now_ar,
         why_not_stronger_ar=snapshot.why_not_stronger_ar,
         why_not_buy_reasons=snapshot.why_not_buy_reasons or [],
+        market_risk_state=snapshot.market_risk_state,
+        market_risk_label_ar=snapshot.market_risk_label_ar,
+        sector_ar=snapshot.sector_ar,
+        invalidation_conditions=snapshot.invalidation_conditions or [],
         decision_timestamp=snapshot.decision_timestamp,
         market_status=snapshot.market_status,
         outcome_status=outcome.status.value if outcome is not None else None,

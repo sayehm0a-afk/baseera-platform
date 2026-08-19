@@ -7,7 +7,7 @@ interface RadarOpportunityCardProps {
   opportunity: RadarOpportunitySummary;
 }
 
-const FRESHNESS_LABELS_AR: Record<RadarOpportunitySummary["data_freshness_status"], string> = {
+export const FRESHNESS_LABELS_AR: Record<RadarOpportunitySummary["data_freshness_status"], string> = {
   LIVE: "بيانات حيّة",
   LAST_SESSION: "بيانات آخر جلسة مكتملة",
   STALE: "بيانات قديمة",
@@ -42,9 +42,17 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
 
       <div className="grid grid-cols-2 gap-bsr-2 text-sm md:grid-cols-4">
         <div>
-          <p className="text-xs text-bsr-text-secondary">الثقة</p>
+          <p className="text-xs text-bsr-text-secondary">درجة بصيرة</p>
           <div className="flex items-center gap-bsr-2">
             <AiStar size="sm" />
+            <span className="bsr-numeric font-semibold text-bsr-gold-500">
+              {o.basirah_score != null ? `${Math.round(o.basirah_score)}/100` : "--"}
+            </span>
+          </div>
+        </div>
+        <div>
+          <p className="text-xs text-bsr-text-secondary">الثقة</p>
+          <div className="flex items-center gap-bsr-2">
             <span className="bsr-numeric font-semibold text-bsr-teal-500">
               {Math.round(o.confidence_score)}%
             </span>
