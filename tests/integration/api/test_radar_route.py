@@ -382,6 +382,55 @@ def test_summary_ignores_an_ordinary_market_scan_run_with_no_stage1_metrics(
     assert body["stage1_candidate_count"] is None
 
 
+def test_summary_funnel_is_honestly_null_for_a_real_radar_v2_run_that_predates_the_fix(
+    client, db_session, authenticated_as_staff
+):
+    """Reproduces the exact production failure mode found during the
+    BASIRAH Final Pre-Live Fix investigation (2026-08-19): a real Radar
+    V2 cycle ran and emitted real, live RadarOpportunity rows (proving
+    the pipeline executed end-to-end), but that specific MarketScanRun
+    row predates the stage1-funnel-persistence deploy (PR #75) and so
+    never had record_stage1_metrics called against it --
+    stage1_universe_size/evaluated_count/candidate_count/last_full_scan_at
+    stay genuinely None on that row forever, by design (a plain UPDATE
+    is never backfilled retroactively). /summary must keep reporting
+    the real live opportunities while being honest that the funnel
+    breakdown for that historical run was never recorded -- never
+    fabricating a number, and never crashing because
+    get_latest_run_with_stage1_metrics() correctly finds no matching row."""
+    pre_fix_run = MarketScanRun(
+        status=MarketScanStatus.SUCCESS,
+        symbols_requested=15,
+        symbols_succeeded=15,
+        symbols_failed=0,
+        finished_at=datetime.now(timezone.utc),
+    )
+    db_session.add(pre_fix_run)
+    db_session.commit()
+
+    stock = _make_stock(db_session, "2222")
+    snapshot = _make_snapshot(db_session, stock, scan_run_id=pre_fix_run.id)
+    _make_opportunity(db_session, stock, snapshot)
+
+    response = client.get(_SUMMARY_ROUTE)
+    assert response.status_code == 200
+    body = response.json()
+
+    # The real opportunity is still reported honestly.
+    assert body["live_opportunity_count"] == 1
+
+    # The funnel is honestly null for this run, not fabricated as 0 or
+    # silently matching some other run's numbers.
+    assert body["stage1_universe_size"] is None
+    assert body["stage1_evaluated_count"] is None
+    assert body["stage1_candidate_count"] is None
+    assert body["stage2_validated_count"] is None
+    assert body["final_opportunities_count"] is None
+    assert body["last_full_scan_at"] is None
+    # The cap itself is a static config value, always reported.
+    assert body["stage2_candidate_cap"] == 15
+
+
 def test_stale_data_freshness_is_disclosed_not_hidden(client, db_session, authenticated_as_staff):
     stock = _make_stock(db_session, "2222")
     snapshot = _make_snapshot(db_session, stock, freshness="STALE")
