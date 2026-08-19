@@ -204,7 +204,10 @@ def test_summary_on_an_empty_database_is_an_honest_empty_state(client, db_sessio
     # No Radar V2 cycle has ever completed -- the real scan funnel is
     # honestly absent, never a fabricated 0.
     assert body["stage1_universe_size"] is None
+    assert body["stage1_evaluated_count"] is None
     assert body["stage1_candidate_count"] is None
+    assert body["stage2_validated_count"] is None
+    assert body["final_opportunities_count"] is None
     assert body["last_full_scan_at"] is None
     # The live-validation cap itself is a config constant, always
     # available regardless of whether any cycle has run yet.
@@ -332,26 +335,33 @@ def test_summary_reports_the_real_stage1_scan_funnel_from_the_latest_radar_v2_ru
     them honestly."""
     older_run = MarketScanRun(
         status=MarketScanStatus.SUCCESS, symbols_requested=10,
-        stage1_universe_size=200, stage1_candidate_count=40,
+        stage1_universe_size=200, stage1_evaluated_count=198, stage1_candidate_count=40,
     )
     db_session.add(older_run)
     db_session.commit()
 
     newer_run = MarketScanRun(
-        status=MarketScanStatus.SUCCESS, symbols_requested=15,
-        stage1_universe_size=231, stage1_candidate_count=52,
+        status=MarketScanStatus.SUCCESS, symbols_requested=15, symbols_succeeded=13,
+        stage1_universe_size=231, stage1_evaluated_count=228, stage1_candidate_count=52,
         finished_at=datetime.now(timezone.utc),
     )
     db_session.add(newer_run)
     db_session.commit()
+
+    stock = _make_stock(db_session, "2222")
+    snapshot = _make_snapshot(db_session, stock, scan_run_id=newer_run.id)
+    _make_opportunity(db_session, stock, snapshot)
 
     response = client.get(_SUMMARY_ROUTE)
     assert response.status_code == 200
     body = response.json()
     # The latest run's numbers win, not the first one found.
     assert body["stage1_universe_size"] == 231
+    assert body["stage1_evaluated_count"] == 228
     assert body["stage1_candidate_count"] == 52
     assert body["stage2_candidate_cap"] == 15
+    assert body["stage2_validated_count"] == 13
+    assert body["final_opportunities_count"] == 1
     assert body["last_full_scan_at"] is not None
 
 

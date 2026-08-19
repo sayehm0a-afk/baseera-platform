@@ -109,6 +109,11 @@ def get_radar_summary(
     top = list_live_opportunities(session, limit=_HOME_TOP_OPPORTUNITIES_LIMIT)
 
     latest_stage1_run = _repository.get_latest_run_with_stage1_metrics(session)
+    final_opportunities_count = (
+        session.query(RadarOpportunity).filter_by(scan_run_id=latest_stage1_run.id).count()
+        if latest_stage1_run is not None
+        else None
+    )
 
     return RadarHomeSummaryOut(
         generated_at=datetime.now(timezone.utc),
@@ -125,8 +130,11 @@ def get_radar_summary(
         market_risk_is_live=risk.is_live,
         top_opportunities=[radar_summary_out(o) for o in top],
         stage1_universe_size=latest_stage1_run.stage1_universe_size if latest_stage1_run else None,
+        stage1_evaluated_count=latest_stage1_run.stage1_evaluated_count if latest_stage1_run else None,
         stage1_candidate_count=latest_stage1_run.stage1_candidate_count if latest_stage1_run else None,
         stage2_candidate_cap=get_radar_stage2_candidate_cap(),
+        stage2_validated_count=latest_stage1_run.symbols_succeeded if latest_stage1_run else None,
+        final_opportunities_count=final_opportunities_count,
         last_full_scan_at=latest_stage1_run.finished_at if latest_stage1_run else None,
     )
 

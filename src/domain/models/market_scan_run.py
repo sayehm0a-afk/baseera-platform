@@ -52,6 +52,7 @@ class MarketScanRun(Base):
     # run -- see that function's own docstring in
     # `src.market_intelligence.radar_v2`.
     stage1_universe_size = Column(Integer, nullable=True)
+    stage1_evaluated_count = Column(Integer, nullable=True)
     stage1_candidate_count = Column(Integer, nullable=True)
 
     started_at = Column(DateTime(timezone=True), nullable=True)
