@@ -26,11 +26,15 @@ loop does not re-probe connectivity on every call.
 """
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
+import redis as redis_lib
+
+from src.core.config import settings
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.market_data import config as market_data_config
 from src.market_data.provider_connectivity_retry import (
@@ -45,6 +49,102 @@ from src.market_data.sahmk.rate_limiter import SahmkRateLimitExceededError
 from src.market_data.strict_mode import StrictRealDataUnavailableError
 
 logger = logging.getLogger(__name__)
+
+# 2026-08-19 production evidence: GET /api/v1/admin/system/summary reported
+# market_data_health="unhealthy"/market_data_status="UNAVAILABLE" *during*
+# a market-open cycle that had just successfully scanned 15/15 symbols via
+# real SAHMK calls (confirmed via the SAHMK quota ledger). Root cause: the
+# module-level state below (_cached_provider_kind, _last_connectivity_*)
+# is explicitly process-local (see get_market_data_health()'s own
+# docstring) and is only ever written by whichever Gunicorn worker actually
+# ran the leader-locked scan cycle -- the other three workers' copies stay
+# at their process-start defaults (None) forever unless something in that
+# specific worker also happens to call get_market_data_provider(). Since
+# the admin dashboard request can land on any of the four workers, the
+# reported health reflected "did this specific, possibly-uninvolved worker
+# ever select a provider," not "is SAHMK actually reachable." This mirrors
+# the exact class of bug already fixed for the SAHMK quota ledger (see
+# SahmkRateLimiter's `quota_shared_across_workers`) -- the fix here is the
+# same shape: best-effort mirror the selection outcome into Redis so every
+# worker can report the fleet's real, current state, while still degrading
+# gracefully to this process's own local state if Redis is unavailable
+# (never raises, never blocks a real caller on Redis reachability).
+_SHARED_HEALTH_REDIS_KEY = "basirah:market_data_provider:shared_health"
+_SHARED_HEALTH_TTL_SECONDS = 900  # several multiples of the 60s Live Market
+# Mode poll interval, so a fleet that genuinely stops selecting a provider
+# (e.g. market closed, all workers idle) ages back out to "no shared state
+# known" instead of showing a permanently stale snapshot from hours ago.
+
+_shared_redis_client: "Optional[redis_lib.Redis]" = None
+_shared_redis_client_attempted = False
+
+
+def _get_shared_redis_client() -> "Optional[redis_lib.Redis]":
+    """Lazily constructs a Redis client from settings.redis_dsn once per
+    process, or returns None if that isn't possible -- same best-effort,
+    per-module pattern as SahmkRateLimiter._get_shared_redis_client() and
+    SchedulerLeaderLock's own client accessor. A missing/unreachable Redis
+    only means this module falls back to process-local state (its
+    pre-existing, still-fully-functional behavior), never an error."""
+    global _shared_redis_client, _shared_redis_client_attempted
+    if not _shared_redis_client_attempted:
+        _shared_redis_client_attempted = True
+        try:
+            _shared_redis_client = redis_lib.Redis.from_url(
+                settings.redis_dsn, decode_responses=True, socket_connect_timeout=2, socket_timeout=2
+            )
+        except Exception as exc:
+            logger.warning(
+                "provider_factory: could not construct a Redis client (%s) -- market-data "
+                "provider health will only be tracked in this process's own memory, not "
+                "shared across workers.",
+                exc,
+            )
+            _shared_redis_client = None
+    return _shared_redis_client
+
+
+def _write_shared_health_snapshot(
+    provider_kind: Optional[str],
+    connectivity_status: Optional[str],
+    connectivity_at: datetime,
+    real_data_at: Optional[datetime],
+) -> None:
+    """Best-effort mirror of this process's own just-observed selection
+    outcome into Redis, so any worker answering an admin/health request
+    can report it -- never raises, never blocks a real caller on this."""
+    client = _get_shared_redis_client()
+    if client is None:
+        return
+    try:
+        payload = json.dumps(
+            {
+                "current_provider_kind": provider_kind,
+                "last_connectivity_status": connectivity_status,
+                "last_connectivity_at": connectivity_at.isoformat(),
+                "last_real_data_at": real_data_at.isoformat() if real_data_at else None,
+            }
+        )
+        client.set(_SHARED_HEALTH_REDIS_KEY, payload, ex=_SHARED_HEALTH_TTL_SECONDS)
+    except Exception:
+        logger.warning("provider_factory: failed to write shared market-data health snapshot.", exc_info=True)
+
+
+def _read_shared_health_snapshot() -> Optional[dict]:
+    """Best-effort read of the fleet-wide snapshot; None if Redis is
+    unavailable, the key hasn't been written/has expired, or the stored
+    value is malformed -- every case degrading to the caller's own
+    process-local state, never raising."""
+    client = _get_shared_redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(_SHARED_HEALTH_REDIS_KEY)
+        return json.loads(raw) if raw else None
+    except Exception:
+        logger.warning("provider_factory: failed to read shared market-data health snapshot.", exc_info=True)
+        return None
+
 
 _cache_lock = asyncio.Lock()
 _cached_provider: Optional[IMarketDataProvider] = None
@@ -65,19 +165,54 @@ _last_real_data_at: Optional[datetime] = None
 
 
 def get_market_data_health() -> dict:
-    """Secret-free snapshot for GET /health/market-data. Never touches
-    the network itself -- reports the outcome of whatever the most
-    recent real selection attempt (by any caller) already found."""
+    """Secret-free snapshot for GET /health/market-data and the admin
+    dashboard. Never touches the network itself -- reports the outcome
+    of whatever the most recent real selection attempt (by any caller,
+    in any Gunicorn worker) already found.
+
+    Prefers the shared (Redis-backed) snapshot over this process's own
+    local state whenever the shared one is present and at least as
+    recent: with multiple worker processes, only whichever worker
+    actually ran the leader-locked scan cycle has fresh *local* state,
+    so a caller landing on a different worker would otherwise see stale
+    process-start defaults even while the fleet is genuinely healthy
+    (2026-08-19 production evidence -- see this module's own top-level
+    comment). Falls back to local state whenever Redis is unavailable
+    or the shared snapshot is missing/older, so behavior in
+    Redis-less environments (tests, CI) is unchanged."""
+    current_provider_kind = _cached_provider_kind
+    last_connectivity_status = _last_connectivity_status
+    last_connectivity_at = _last_connectivity_at
+    last_real_data_at = _last_real_data_at
+
+    shared = _read_shared_health_snapshot()
+    if shared is not None:
+        shared_at = _parse_iso(shared.get("last_connectivity_at"))
+        if shared_at is not None and (last_connectivity_at is None or shared_at >= last_connectivity_at):
+            current_provider_kind = shared.get("current_provider_kind")
+            last_connectivity_status = shared.get("last_connectivity_status")
+            last_connectivity_at = shared_at
+            last_real_data_at = _parse_iso(shared.get("last_real_data_at"))
+
     return {
         "configured_provider": market_data_config.get_configured_provider_name(),
         "strict_real_data": market_data_config.is_strict_real_data_enabled(),
         "synthetic_allowed": market_data_config.is_synthetic_data_allowed(),
         "sahmk_key_present": market_data_config.has_sahmk_credentials(),
-        "current_provider_kind": _cached_provider_kind,
-        "last_connectivity_status": _last_connectivity_status,
-        "last_connectivity_at": _last_connectivity_at.isoformat() if _last_connectivity_at else None,
-        "last_real_data_at": _last_real_data_at.isoformat() if _last_real_data_at else None,
+        "current_provider_kind": current_provider_kind,
+        "last_connectivity_status": last_connectivity_status,
+        "last_connectivity_at": last_connectivity_at.isoformat() if last_connectivity_at else None,
+        "last_real_data_at": last_real_data_at.isoformat() if last_real_data_at else None,
     }
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
 
 
 async def get_market_data_provider(force_refresh: bool = False) -> IMarketDataProvider:
@@ -119,12 +254,20 @@ async def get_market_data_provider(force_refresh: bool = False) -> IMarketDataPr
         except StrictRealDataUnavailableError:
             _last_connectivity_status = "FAILED"
             _last_connectivity_at = datetime.now(timezone.utc)
+            # A real, surfaced failure (re-raised below) -- still mirrored
+            # to the shared snapshot so every worker's dashboard reflects
+            # it too, not just the worker that happened to hit it.
+            _write_shared_health_snapshot(
+                _cached_provider_kind, _last_connectivity_status, _last_connectivity_at, _last_real_data_at
+            )
             raise
 
         _last_connectivity_status = "SUCCESS" if kind == "sahmk" else "FAILED"
         _last_connectivity_at = datetime.now(timezone.utc)
         if kind == "sahmk":
             _last_real_data_at = _last_connectivity_at
+
+        _write_shared_health_snapshot(kind, _last_connectivity_status, _last_connectivity_at, _last_real_data_at)
 
         if previous_provider is not None and previous_provider is not provider:
             _disconnect_with_grace(previous_provider)
@@ -315,7 +458,9 @@ async def _select_provider(
 
 
 def reset_provider_cache() -> None:
-    """Test-only: clears the cached provider selection."""
+    """Test-only: clears the cached provider selection (local and, if a
+    real Redis happens to be reachable, the shared snapshot too -- best
+    effort, never raises)."""
     global _cached_provider, _cached_provider_kind, _cached_at
     global _last_connectivity_status, _last_connectivity_at, _last_real_data_at
     _cached_provider = None
@@ -324,3 +469,9 @@ def reset_provider_cache() -> None:
     _last_connectivity_status = None
     _last_connectivity_at = None
     _last_real_data_at = None
+    client = _get_shared_redis_client()
+    if client is not None:
+        try:
+            client.delete(_SHARED_HEALTH_REDIS_KEY)
+        except Exception:
+            pass
