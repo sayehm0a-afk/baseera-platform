@@ -295,7 +295,10 @@ class TestRunRadarV2Cycle:
         stock = _stock(session)
         # Give this symbol a real Stage-1-worthy volume spike so it
         # becomes a genuine candidate.
-        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        # Anchored to end at "yesterday" relative to real wall-clock
+        # time (not a fixed calendar date) so Stage 1's OHLCV staleness
+        # Data Quality Gate (Phase 3) never rejects this fixture.
+        base = datetime.now(timezone.utc) - timedelta(days=40)
         for i in range(40):
             close = Decimal("20.0") + (Decimal("0.1") if i % 2 == 0 else Decimal("-0.1"))
             vol = 60_000 if i == 39 else 10_000
@@ -322,7 +325,10 @@ class TestRunRadarV2Cycle:
     @pytest.mark.asyncio
     async def test_a_successful_stage2_run_emits_opportunities(self, session):
         stock = _stock(session)
-        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        # Anchored to end at "yesterday" relative to real wall-clock
+        # time (not a fixed calendar date) so Stage 1's OHLCV staleness
+        # Data Quality Gate (Phase 3) never rejects this fixture.
+        base = datetime.now(timezone.utc) - timedelta(days=40)
         for i in range(40):
             close = Decimal("20.0") + (Decimal("0.1") if i % 2 == 0 else Decimal("-0.1"))
             vol = 60_000 if i == 39 else 10_000

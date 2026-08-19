@@ -55,8 +55,13 @@ def _add_quiet_bars(session, stock: Stock, count: int, close=Decimal("20.0"), vo
 
     `close * volume` ~= 200,000 SAR/day, safely above the liquidity
     floor, so a "no candidate" result proves the threshold logic (no
-    signal fired), not a liquidity exclusion."""
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    signal fired), not a liquidity exclusion.
+
+    Anchored to end at "yesterday" relative to real wall-clock time
+    (not a fixed calendar date) so the Data Quality Gate's OHLCV
+    staleness check (Phase 3) never rejects these fixtures as stale --
+    that gate is under test on its own in TestDataQualityGate below."""
+    base = datetime.now(timezone.utc) - timedelta(days=count)
     spread = close * Decimal("0.005")
     for i in range(count):
         day_close = close + (spread if i % 2 == 0 else -spread)
@@ -80,8 +85,10 @@ def _add_uptrend_bars(session, stock: Stock, count: int, start_close=Decimal("20
     interpolation/lookahead) so ADX/SMA/EMA/SuperTrend/RSI/MACD all read
     genuinely bullish -- used to build a Stage 1 candidate whose
     ranking_score should clearly outrank a candidate whose only signal
-    is a bare volume spike on otherwise flat history."""
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    is a bare volume spike on otherwise flat history. Anchored to end
+    at "yesterday" relative to real wall-clock time -- see
+    _add_quiet_bars's own docstring for why."""
+    base = datetime.now(timezone.utc) - timedelta(days=count)
     close = start_close
     for i in range(count):
         day_close = close + step
@@ -102,7 +109,13 @@ def _add_uptrend_bars(session, stock: Stock, count: int, start_close=Decimal("20
 
 
 def _add_volume_spike_bar(session, stock: Stock, after_count: int, close=Decimal("21.0"), volume: int = 60_000) -> None:
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    """Anchored so this single bar lands the same real-calendar day as
+    `_add_quiet_bars`/`_add_uptrend_bars`'s own last bar when called
+    with a matching `count`/`after_count` (both resolve `now -
+    timedelta(days=N) + timedelta(days=N)`), keeping the two fixtures
+    chronologically adjacent regardless of when the test actually
+    runs."""
+    base = datetime.now(timezone.utc) - timedelta(days=after_count)
     session.add(
         PriceBar(
             stock_id=stock.id,
@@ -155,6 +168,88 @@ class TestSkipping:
         assert result.skipped_count == 0
         assert result.evaluated_count == 1
         assert result.all_results[0].skip_reason is None
+
+
+class TestDataQualityGate:
+    """BASIRAH Radar Upgrade mandate Phase 3, Stage A: a symbol whose
+    ingestion has lagged behind the configured staleness threshold
+    must never be ranked as a candidate -- protects Stage 2's scarce
+    live-validation slots from being spent on outdated data."""
+
+    def test_a_symbol_whose_latest_bar_is_within_the_staleness_threshold_is_evaluated(self, session):
+        stock = _add_stock(session, "1111")
+        _add_quiet_bars(session, stock, count=40)  # ends "yesterday" -- fresh
+
+        result = run_stage1_local_scan(session, symbols=["1111"])
+        assert result.all_results[0].skip_reason is None
+        assert result.evaluated_count == 1
+        assert result.skipped_count == 0
+
+    def test_a_symbol_whose_latest_bar_is_older_than_the_staleness_threshold_is_skipped(self, session, monkeypatch):
+        monkeypatch.setenv("MARKET_MAX_OHLCV_STALENESS_DAYS", "5")
+        stock = _add_stock(session, "1111")
+        # Every bar ends 20 real days ago -- well past the 5-day
+        # threshold, even though there is plenty of real history and a
+        # genuine volume-spike signal on it.
+        base = datetime.now(timezone.utc) - timedelta(days=60)
+        for i in range(40):
+            close = Decimal("20.0") + (Decimal("0.1") if i % 2 == 0 else Decimal("-0.1"))
+            vol = 60_000 if i == 39 else 10_000
+            session.add(
+                PriceBar(
+                    stock_id=stock.id, timeframe=Timeframe.ONE_DAY, timestamp=base + timedelta(days=i),
+                    open=close, high=close + Decimal("0.2"), low=close - Decimal("0.2"), close=close, volume=vol,
+                )
+            )
+        session.commit()
+
+        result = run_stage1_local_scan(session, symbols=["1111"])
+        r = result.all_results[0]
+        assert r.is_candidate is False
+        assert r.skip_reason == "stale_data"
+        assert result.evaluated_count == 0
+        assert result.skipped_count == 1
+        assert result.candidate_count == 0
+
+    def test_stale_data_never_becomes_a_candidate_even_with_a_real_signal(self, session):
+        """The exact regression this gate guards: a symbol with a
+        genuine abnormal-volume signal on old history must not slip
+        through just because the signal condition itself is real."""
+        stock = _add_stock(session, "1111")
+        base = datetime.now(timezone.utc) - timedelta(days=100)
+        for i in range(40):
+            vol = 90_000 if i == 39 else 10_000  # a real ~9x volume spike, on stale history
+            session.add(
+                PriceBar(
+                    stock_id=stock.id, timeframe=Timeframe.ONE_DAY, timestamp=base + timedelta(days=i),
+                    open=Decimal("20.0"), high=Decimal("20.2"), low=Decimal("19.8"), close=Decimal("20.0"), volume=vol,
+                )
+            )
+        session.commit()
+
+        result = run_stage1_local_scan(session, symbols=["1111"])
+        assert result.candidate_count == 0
+        assert result.all_results[0].skip_reason == "stale_data"
+
+    def test_staleness_threshold_is_read_from_config_at_call_time(self, session, monkeypatch):
+        stock = _add_stock(session, "1111")
+        # Latest bar lands 11 real days old -- stale under the default
+        # 5-day threshold, but not under a widened one.
+        base = datetime.now(timezone.utc) - timedelta(days=50)
+        for i in range(40):
+            session.add(
+                PriceBar(
+                    stock_id=stock.id, timeframe=Timeframe.ONE_DAY, timestamp=base + timedelta(days=i),
+                    open=Decimal("20.0"), high=Decimal("20.2"), low=Decimal("19.8"), close=Decimal("20.0"), volume=10_000,
+                )
+            )
+        session.commit()
+
+        monkeypatch.setenv("MARKET_MAX_OHLCV_STALENESS_DAYS", "5")
+        assert run_stage1_local_scan(session, symbols=["1111"]).all_results[0].skip_reason == "stale_data"
+
+        monkeypatch.setenv("MARKET_MAX_OHLCV_STALENESS_DAYS", "30")
+        assert run_stage1_local_scan(session, symbols=["1111"]).all_results[0].skip_reason is None
 
 
 class TestCandidateSelection:

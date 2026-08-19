@@ -81,7 +81,11 @@ def _seed_stock_with_bars(session_factory, symbol, sector="Energy", count=80, pr
     stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector=sector)
     session.add(stock)
     session.commit()
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    # Anchored to end near "now" (real wall-clock time), not a fixed
+    # calendar date, so Stage 1's OHLCV staleness Data Quality Gate
+    # (BASIRAH Radar Upgrade mandate Phase 3) never rejects this
+    # fixture as stale regardless of when the suite actually runs.
+    base = datetime.now(timezone.utc) - timedelta(days=count)
     price = 30.0
     for i in range(count):
         price += price_step

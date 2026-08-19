@@ -100,7 +100,7 @@ def _detect_likely_suspended(df) -> Optional[bool]:
     return zero_volume and frozen_price
 
 
-def _ohlcv_latest_bar_age_days(df) -> Optional[float]:
+def ohlcv_latest_bar_age_days(df) -> Optional[float]:
     """How many calendar days old the most recent daily PriceBar row
     is -- distinct from the live-quote/scan-freshness check the
     `data_freshness` publication gate already does. The current price
@@ -219,7 +219,7 @@ async def build_analysis_context(
         **_news_sentiment_extra(session, symbol, news_service),
         "bars_used": len(df),
         "likely_suspended": _detect_likely_suspended(df),
-        "ohlcv_latest_bar_age_days": _ohlcv_latest_bar_age_days(df),
+        "ohlcv_latest_bar_age_days": ohlcv_latest_bar_age_days(df),
     }
 
     return AnalysisContext(

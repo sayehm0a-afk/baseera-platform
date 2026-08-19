@@ -99,7 +99,9 @@ def _seed_volume_spike_candidate(session_factory, symbol="2222"):
     stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector="Energy")
     session.add(stock)
     session.commit()
-    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    # Anchored near "now" (real wall-clock time) so Stage 1's OHLCV
+    # staleness Data Quality Gate never rejects this fixture.
+    base = datetime.now(timezone.utc) - timedelta(days=40)
     for i in range(40):
         close = Decimal("20.0") + (Decimal("0.1") if i % 2 == 0 else Decimal("-0.1"))
         volume = 60_000 if i == 39 else 10_000
