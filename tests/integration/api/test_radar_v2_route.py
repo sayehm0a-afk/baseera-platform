@@ -413,6 +413,32 @@ def test_radar_v2_scan_happy_path_emits_a_real_opportunity(client, session_facto
     assert detail["symbol"] == "2222"
     assert "stage1_component_scores" in detail
 
+    # Phase 4 (Advanced Technical Engine exposure): the already-computed
+    # DecisionV2Snapshot technical fields must reach the consumer detail
+    # response -- these are keys that must exist regardless of value,
+    # since some (e.g. support/resistance) are legitimately None when
+    # the real engine can't derive them from the seeded bar history.
+    for field in (
+        "trend_direction_ar",
+        "trend_strength_label_ar",
+        "nearest_support",
+        "major_support",
+        "nearest_resistance",
+        "major_resistance",
+        "breakout_level",
+        "breakdown_level",
+        "support_resistance_evidence_ar",
+        "current_volume",
+        "average_volume",
+        "accumulation_score",
+        "entry_quality_label_ar",
+        "entry_status_label_ar",
+        "why_now_ar",
+        "why_not_stronger_ar",
+        "why_not_buy_reasons",
+    ):
+        assert field in detail
+
     summary_response = client.get("/api/v1/admin/market-intelligence/radar-v2/summary")
     assert summary_response.status_code == 200
     assert summary_response.json()["live_opportunity_count"] == 1

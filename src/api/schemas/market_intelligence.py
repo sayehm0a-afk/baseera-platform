@@ -913,7 +913,18 @@ class RadarOpportunityDetailOut(RadarOpportunitySummaryOut):
     (when it exists) this opportunity's real-market outcome so far.
     Never a full ~90-column DecisionV2Snapshot dump -- only the fields
     the Radar V2 mandate itself names (technical reasons, liquidity/
-    volume evidence, risk flags, horizon)."""
+    volume evidence, risk flags, horizon).
+
+    Phase 4 (Advanced Technical Engine exposure): trend/support-resistance/
+    volume/accumulation/entry-quality/why-now fields below are all
+    pre-existing DecisionV2Snapshot columns already computed by Decision
+    Engine V2 for every Stage 2 candidate -- this only exposes them, it
+    computes nothing new and costs zero additional SAHMK calls. The
+    mandate's requested "Intraday" sub-component (VWAP distance, opening-
+    range breakout, HOD/LOD) is intentionally NOT included: the platform's
+    OHLCV ingestion is once-daily post-close only, so an intraday reading
+    cannot be honestly computed from real data today without a new
+    (likely paid) data source, which requires explicit user approval."""
 
     stage1_component_scores: RadarStage1ComponentScoresOut = Field(
         default_factory=RadarStage1ComponentScoresOut
@@ -933,6 +944,28 @@ class RadarOpportunityDetailOut(RadarOpportunitySummaryOut):
     liquidity_quality_ar: Optional[str] = None
     relative_volume: Optional[float] = None
     accumulation_assessment_ar: Optional[str] = None
+
+    trend_direction_ar: Optional[str] = None
+    trend_strength_label_ar: Optional[str] = None
+
+    nearest_support: Optional[float] = None
+    major_support: Optional[float] = None
+    nearest_resistance: Optional[float] = None
+    major_resistance: Optional[float] = None
+    breakout_level: Optional[float] = None
+    breakdown_level: Optional[float] = None
+    support_resistance_evidence_ar: Optional[str] = None
+
+    current_volume: Optional[float] = None
+    average_volume: Optional[float] = None
+    accumulation_score: Optional[float] = None
+
+    entry_quality_label_ar: Optional[str] = None
+    entry_status_label_ar: Optional[str] = None
+
+    why_now_ar: Optional[str] = None
+    why_not_stronger_ar: Optional[str] = None
+    why_not_buy_reasons: List[str] = Field(default_factory=list)
 
     decision_timestamp: datetime
     market_status: str
