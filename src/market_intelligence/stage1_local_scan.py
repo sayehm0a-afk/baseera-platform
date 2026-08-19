@@ -53,6 +53,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
+from src.analysis.context_builder import ohlcv_latest_bar_age_days
 from src.analysis.decision_v2 import scoring
 from src.analysis.decision_v2.config import DecisionV2Tuning
 from src.analysis.decision_v2.evidence import derive_accumulation_evidence, derive_support_resistance
@@ -60,6 +61,7 @@ from src.analysis.ohlcv_loader import load_price_bars
 from src.analysis.technical_analysis_engine import TechnicalAnalysisEngine
 from src.domain.models import Stock, Timeframe
 from src.market_intelligence.config import (
+    get_max_ohlcv_staleness_days,
     get_min_average_traded_value,
     get_min_risk_reward_ratio,
     get_stage1_abnormal_volume_ratio,
@@ -160,6 +162,20 @@ def _score_symbol(symbol: str, session: Session, stock_id: int) -> Stage1SymbolR
     df = load_price_bars(session, stock_id, Timeframe.ONE_DAY)
     if len(df) < MIN_INDICATOR_ROWS:
         return Stage1SymbolResult(symbol=symbol, is_candidate=False, skip_reason="insufficient_history")
+
+    # Data Quality Gate (BASIRAH mandate Phase 3, Stage A): a symbol
+    # whose ingestion has lagged behind must never be ranked as a
+    # candidate on stale history -- Stage 2's real Decision Engine V2
+    # pipeline already refuses to publish on data this old (see
+    # publication_gate.py's own freshness gate using the identical
+    # threshold); without this check here, Stage 1 could rank a
+    # stale-data symbol highly and spend one of Stage 2's scarce
+    # live-validation slots on it instead of a genuinely current
+    # candidate.
+    bar_age_days = ohlcv_latest_bar_age_days(df)
+    max_staleness_days = get_max_ohlcv_staleness_days()
+    if bar_age_days is not None and bar_age_days > max_staleness_days:
+        return Stage1SymbolResult(symbol=symbol, is_candidate=False, skip_reason="stale_data")
 
     result = TechnicalAnalysisEngine().analyze(df)
 
@@ -326,7 +342,7 @@ def run_stage1_local_scan(session: Session, symbols: Optional[List[str]] = None)
             continue
         scored = _score_symbol(symbol, session, stock_id)
         all_results.append(scored)
-        if scored.skip_reason == "insufficient_history":
+        if scored.skip_reason in ("insufficient_history", "stale_data"):
             skipped += 1
 
     candidates = sorted(
