@@ -1115,6 +1115,35 @@ class RadarV2ExtendedPerformanceOut(BaseModel):
     expected_calibration_error: Optional[float] = None
 
 
+class DailyValidationReportOut(BaseModel):
+    """GET .../radar-v2/daily-validation-report -- BASIRAH LIVE
+    VALIDATION TRACKING: every RadarOpportunity emitted on `report_date`
+    (one UTC calendar day), tracked to its real, sequence-verified
+    outcome resolution so far. `verified_win_rate`/`target_1_hit_rate`/
+    `stop_before_target_rate` all share the same rigorous denominator
+    (wins + losses among sequence-resolved trades only); an untriggered
+    entry, a same-day target/stop tie, and WATCH/HOLD/REJECT/
+    WAIT_FOR_ENTRY signals are never counted as failed BUY trades. Every
+    rate is null, never a fabricated 0.0, when its denominator is zero."""
+
+    report_date: str
+    total_opportunities: int
+    actionable_buy_signals: int
+    entries_triggered: int
+    target_1_wins: int
+    target_2_wins: int
+    target_3_wins: int
+    stop_before_target_losses: int
+    open_trades: int
+    entries_not_triggered: int
+    invalidated: int
+    non_actionable_counts: Dict[str, int] = Field(default_factory=dict)
+    verified_win_rate: Optional[float] = None
+    target_1_hit_rate: Optional[float] = None
+    stop_before_target_rate: Optional[float] = None
+    verified_sample_size: int = 0
+
+
 class RadarV2SahmkConsumptionOut(BaseModel):
     """GET .../radar-v2/sahmk-consumption -- SAHMK quota consumption
     attributable specifically to Radar V2, read verbatim from the

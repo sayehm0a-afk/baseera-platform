@@ -52,6 +52,7 @@ from src.api.schemas.market_intelligence import (
     MarketScanRequest,
     MarketScanRunOut,
     ObservedFieldOut,
+    DailyValidationReportOut,
     ObservedFieldValueOut,
     PipelineStageOut,
     RadarOpportunityDetailOut,
@@ -113,6 +114,7 @@ from src.market_intelligence.config import (
     get_scan_leader_lease_seconds,
 )
 from src.market_intelligence.radar_v2 import (
+    compute_daily_validation_report,
     compute_radar_v2_extended_performance,
     compute_radar_v2_performance,
     list_live_opportunities,
@@ -860,6 +862,47 @@ async def get_radar_v2_extended_performance(
         average_adverse_excursion_pct=metrics.average_adverse_excursion_pct,
         calibration_pair_count=metrics.calibration_pair_count,
         expected_calibration_error=metrics.expected_calibration_error,
+    )
+
+
+@router.get("/radar-v2/daily-validation-report", response_model=DailyValidationReportOut)
+async def get_daily_validation_report(
+    report_date: Optional[str] = Query(
+        default=None, description="UTC calendar date YYYY-MM-DD to report on. Defaults to today (UTC)."
+    ),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> DailyValidationReportOut:
+    """BASIRAH LIVE VALIDATION TRACKING -- see `compute_daily_validation_
+    report`'s own docstring for the exact cohort/denominator rules.
+    Read-only: never triggers a scan or an outcome re-evaluation, only
+    reads whatever `RadarOpportunity`/`DecisionV2Outcome` rows already
+    exist for the requested day."""
+    parsed_date: Optional[datetime] = None
+    if report_date is not None:
+        try:
+            parsed_date = datetime.strptime(report_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="report_date must be in YYYY-MM-DD format.")
+
+    report = compute_daily_validation_report(session, parsed_date)
+    return DailyValidationReportOut(
+        report_date=report.report_date,
+        total_opportunities=report.total_opportunities,
+        actionable_buy_signals=report.actionable_buy_signals,
+        entries_triggered=report.entries_triggered,
+        target_1_wins=report.target_1_wins,
+        target_2_wins=report.target_2_wins,
+        target_3_wins=report.target_3_wins,
+        stop_before_target_losses=report.stop_before_target_losses,
+        open_trades=report.open_trades,
+        entries_not_triggered=report.entries_not_triggered,
+        invalidated=report.invalidated,
+        non_actionable_counts=report.non_actionable_counts,
+        verified_win_rate=report.verified_win_rate,
+        target_1_hit_rate=report.target_1_hit_rate,
+        stop_before_target_rate=report.stop_before_target_rate,
+        verified_sample_size=report.verified_sample_size,
     )
 
 

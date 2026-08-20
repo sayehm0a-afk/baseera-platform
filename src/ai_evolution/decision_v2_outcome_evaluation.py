@@ -18,10 +18,18 @@ shape:
     every pass, so a target hit on day 2 is reported on day 2, not
     held back until the full expected-duration horizon elapses.
 
-Never invents forward price data: a row with no forward bars at all
-gets DATA_UNAVAILABLE only after `get_outcome_evaluation_stale_grace_
-days()` has passed with nothing to judge against -- never scored as a
-win or a loss (see `NON_RESOLVING_STATUSES`).
+BASIRAH LIVE VALIDATION TRACKING: target/stop/excursion tracking never
+assumes a fill at the signal price. A row only starts being judged
+against target_1/2/3/stop_loss once price has genuinely traded into
+`entry_zone_low..entry_zone_high` (`entry_triggered`/`entry_triggered_
+at`); until then the only two possible terminal outcomes are
+INVALIDATED (the stop level was reached before the zone ever was) and
+ENTRY_NEVER_TRIGGERED (the horizon elapsed with the zone never
+reached) -- neither is ever counted as a win or a loss (see
+`NON_RESOLVING_STATUSES`). Never invents forward price data: a row
+with no forward bars at all gets DATA_UNAVAILABLE only after
+`get_outcome_evaluation_stale_grace_days()` has passed with nothing to
+judge against.
 """
 
 from dataclasses import dataclass
@@ -75,7 +83,12 @@ def create_pending_decision_v2_outcome(
         symbol=snapshot.symbol,
         due_at=snapshot.decision_timestamp + timedelta(days=horizon_days),
         status=DecisionV2OutcomeStatus.PENDING,
-        entry_price=snapshot.current_price,
+        entry_triggered=False,
+        # entry_price is deliberately left unset here -- BASIRAH LIVE
+        # VALIDATION TRACKING only populates it once price genuinely
+        # trades into entry_zone_low..entry_zone_high (see
+        # evaluate_pending_outcomes below), never assumed to be the
+        # signal price.
     )
     session.add(outcome)
     return outcome
@@ -175,10 +188,10 @@ def evaluate_pending_outcomes(
 
         decision_timestamp = _as_utc(snapshot.decision_timestamp)
         window_start = decision_timestamp + timedelta(seconds=1)
-        horizon_df = load_price_bars(session, stock.id, Timeframe.ONE_DAY, start=window_start, end=now)
+        full_horizon_df = load_price_bars(session, stock.id, Timeframe.ONE_DAY, start=window_start, end=now)
         row.last_checked_at = now
 
-        if horizon_df.empty:
+        if full_horizon_df.empty:
             if (now - decision_timestamp).days > stale_cutoff_days:
                 row.status = DecisionV2OutcomeStatus.DATA_UNAVAILABLE
                 row.evaluated_at = now
@@ -187,13 +200,70 @@ def evaluate_pending_outcomes(
                 still_pending += 1
             continue
 
-        entry_price = float(snapshot.current_price) if snapshot.current_price is not None else None
         is_bullish = True  # every actionable decision this table tracks is BUY-like (see _ACTIONABLE_BUY_DECISIONS)
+        stop_loss = float(snapshot.stop_loss) if snapshot.stop_loss is not None else None
+
+        # BASIRAH LIVE VALIDATION TRACKING: never assume a fill at the
+        # signal price -- target/stop tracking below only ever runs
+        # once price has genuinely traded into the recommended entry
+        # zone. Until then, the only two possible terminal outcomes are
+        # INVALIDATED (stop level reached pre-entry -- the setup died
+        # before it was ever tradeable) or ENTRY_NEVER_TRIGGERED (the
+        # horizon elapsed with price never having reached the zone).
+        if not row.entry_triggered:
+            entry_low = float(snapshot.entry_zone_low) if snapshot.entry_zone_low is not None else None
+            entry_high = float(snapshot.entry_zone_high) if snapshot.entry_zone_high is not None else None
+
+            entered_at: Optional[datetime] = None
+            if entry_low is not None and entry_high is not None:
+                entered_mask = (full_horizon_df["low"] <= entry_high) & (full_horizon_df["high"] >= entry_low)
+                entered_idx = full_horizon_df.index[entered_mask]
+                if len(entered_idx) > 0:
+                    entered_at = _as_utc(pd.Timestamp(entered_idx[0]).to_pydatetime())
+
+            if entered_at is not None:
+                row.entry_triggered = True
+                row.entry_triggered_at = entered_at
+                # Conservative, disclosed assumption: daily OHLC cannot
+                # reveal the exact intraday fill, so the least
+                # favorable real price still inside the recommended
+                # zone (its top edge, for a long entry) is used rather
+                # than guessing a better one.
+                row.entry_price = entry_high
+            else:
+                pre_entry_stop_hit = stop_loss is not None and (full_horizon_df["low"] <= stop_loss).any()
+                if pre_entry_stop_hit:
+                    broken_idx = full_horizon_df.index[full_horizon_df["low"] <= stop_loss]
+                    row.invalidated = True
+                    row.invalidated_at = _as_utc(pd.Timestamp(broken_idx[0]).to_pydatetime())
+                    row.status = DecisionV2OutcomeStatus.INVALIDATED
+                    row.evaluated_at = now
+                    evaluated_terminal += 1
+                elif now >= _as_utc(row.due_at):
+                    row.status = DecisionV2OutcomeStatus.ENTRY_NEVER_TRIGGERED
+                    row.evaluated_at = now
+                    evaluated_terminal += 1
+                else:
+                    still_pending += 1
+                continue
+
+        # From here on row.entry_triggered is True (just now, or from a
+        # prior pass) -- target/stop/excursion tracking only ever looks
+        # at bars from the real entry moment forward, never earlier.
+        horizon_df = full_horizon_df[
+            full_horizon_df.index.map(lambda ts: _as_utc(pd.Timestamp(ts).to_pydatetime()) >= row.entry_triggered_at)
+        ]
+        if horizon_df.empty:
+            still_pending += 1
+            continue
+
+        entry_price = float(row.entry_price) if row.entry_price is not None else None
+        row.highest_price_after_entry = float(horizon_df["high"].max())
+        row.lowest_price_after_entry = float(horizon_df["low"].min())
 
         target_1 = float(snapshot.target_1) if snapshot.target_1 is not None else None
         target_2 = float(snapshot.target_2) if snapshot.target_2 is not None else None
         target_3 = float(snapshot.target_3) if snapshot.target_3 is not None else None
-        stop_loss = float(snapshot.stop_loss) if snapshot.stop_loss is not None else None
 
         target_1_hit, target_1_at = _first_touch(is_bullish, target_1, "target", horizon_df)
         target_2_hit, target_2_at = _first_touch(is_bullish, target_2, "target", horizon_df)
@@ -208,18 +278,21 @@ def evaluate_pending_outcomes(
         row.max_favorable_excursion_pct = mfe
         row.max_adverse_excursion_pct = mae
 
+        # These four are anchored to the SIGNAL (decision_timestamp),
+        # not to entry -- always computed off full_horizon_df, never
+        # the entry-gated `horizon_df` above.
         if row.first_price_after_signal is None:
-            row.first_price_after_signal = float(horizon_df["close"].iloc[0])
-            row.first_price_after_signal_at = _as_utc(pd.Timestamp(horizon_df.index[0]).to_pydatetime())
+            row.first_price_after_signal = float(full_horizon_df["close"].iloc[0])
+            row.first_price_after_signal_at = _as_utc(pd.Timestamp(full_horizon_df.index[0]).to_pydatetime())
         # "End of session" = the decision's own trading day close if it
         # exists yet, else the first forward close available -- never
         # a later re-evaluation's price mistaken for that day's own.
         if row.end_of_session_price is None:
             row.end_of_session_price = row.first_price_after_signal
-        if row.next_session_price is None and len(horizon_df) >= 2:
-            row.next_session_price = float(horizon_df["close"].iloc[1])
+        if row.next_session_price is None and len(full_horizon_df) >= 2:
+            row.next_session_price = float(full_horizon_df["close"].iloc[1])
         if row.price_at_expected_duration is None:
-            price_at_due = _price_on_or_before(horizon_df, row.due_at)
+            price_at_due = _price_on_or_before(full_horizon_df, row.due_at)
             if price_at_due is not None:
                 row.price_at_expected_duration = price_at_due
                 row.return_pct_at_expected_duration = (
