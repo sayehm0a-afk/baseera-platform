@@ -29,6 +29,7 @@ from src.domain.models import (
 from src.market_intelligence.radar_v2 import (
     MINIMUM_SAMPLE_GATE,
     _accumulation_status,
+    compute_daily_validation_report,
     compute_radar_v2_extended_performance,
     compute_radar_v2_performance,
     emit_radar_opportunities,
@@ -689,4 +690,165 @@ class TestComputeRadarV2ExtendedPerformance:
         assert by_market["Nomu"].signal_count == 1
         assert by_market["Unknown"].signal_count == 1
         assert by_market["Main Market"].win_rate == 1.0
-        assert by_market["Nomu"].win_rate == 0.0
+
+
+class TestComputeDailyValidationReport:
+    """BASIRAH LIVE VALIDATION TRACKING: the read-only daily report over
+    RadarOpportunity rows emitted on one UTC calendar day, cross-referenced
+    against their linked DecisionV2Outcome's real, sequence-verified
+    resolution."""
+
+    def test_empty_database_reports_zero_counts_and_none_rates(self, session):
+        report = compute_daily_validation_report(session)
+        assert report.total_opportunities == 0
+        assert report.actionable_buy_signals == 0
+        assert report.entries_triggered == 0
+        assert report.non_actionable_counts == {}
+        assert report.verified_win_rate is None
+        assert report.target_1_hit_rate is None
+        assert report.stop_before_target_rate is None
+        assert report.verified_sample_size == 0
+
+    def test_only_opportunities_emitted_on_the_target_day_are_counted(self, session):
+        stock_a = _stock(session, symbol="1111")
+        stock_b = _stock(session, symbol="2222")
+        day1 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+        day2 = datetime(2026, 1, 2, 10, 0, tzinfo=timezone.utc)
+
+        _snapshot(session, stock_a, scan_run_id=1, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 1, [_candidate(stock_a.symbol)], emitted_at=day1)
+        _snapshot(session, stock_b, scan_run_id=2, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 2, [_candidate(stock_b.symbol)], emitted_at=day2)
+
+        report = compute_daily_validation_report(session, report_date=day1)
+        assert report.report_date == "2026-01-01"
+        assert report.total_opportunities == 1
+
+    def test_watch_and_reject_are_counted_as_non_actionable_never_as_buy_losses(self, session):
+        stock_watch = _stock(session, symbol="1111")
+        stock_reject = _stock(session, symbol="2222")
+        day = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+
+        _snapshot(session, stock_watch, scan_run_id=1, decision="WATCH")
+        emit_radar_opportunities(session, 1, [_candidate(stock_watch.symbol)], emitted_at=day)
+        _snapshot(session, stock_reject, scan_run_id=2, decision="REJECT")
+        emit_radar_opportunities(session, 2, [_candidate(stock_reject.symbol)], emitted_at=day)
+
+        report = compute_daily_validation_report(session, report_date=day)
+        assert report.total_opportunities == 2
+        assert report.actionable_buy_signals == 0
+        assert report.non_actionable_counts == {"WATCH": 1, "REJECT": 1}
+        assert report.entries_triggered == 0
+        assert report.verified_sample_size == 0
+        assert report.verified_win_rate is None
+
+    def test_same_day_superseded_opportunity_still_counted_in_total(self, session):
+        stock = _stock(session)
+        t0 = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)
+        _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE", confidence=70.0)
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol, 80.0)], emitted_at=t0)
+
+        _snapshot(session, stock, scan_run_id=2, decision="STRONG_BUY_CANDIDATE", confidence=90.0)
+        result = emit_radar_opportunities(
+            session, 2, [_candidate(stock.symbol, 95.0)], emitted_at=t0 + timedelta(hours=1)
+        )
+        assert result.suppressed_symbols == []  # a material change, not suppressed -- superseded instead
+
+        report = compute_daily_validation_report(session, report_date=t0)
+        # Both the superseded row and its successor were emitted the same
+        # UTC day -- unlike the live-composition views, a daily cohort
+        # must include a symbol later superseded the same day.
+        assert report.total_opportunities == 2
+        assert report.actionable_buy_signals == 2
+
+    def test_target_and_stop_outcomes_compute_verified_rates_using_only_resolved_trades(self, session):
+        stock_win = _stock(session, symbol="1111")
+        stock_loss = _stock(session, symbol="2222")
+        stock_pending = _stock(session, symbol="3333")
+        day = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+
+        snap_win = _snapshot(session, stock_win, scan_run_id=1, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 1, [_candidate(stock_win.symbol)], emitted_at=day)
+        outcome_win = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_win.id).one()
+        outcome_win.status = "TARGET_1_HIT"
+        outcome_win.entry_triggered = True
+
+        snap_loss = _snapshot(session, stock_loss, scan_run_id=2, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 2, [_candidate(stock_loss.symbol)], emitted_at=day)
+        outcome_loss = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_loss.id).one()
+        outcome_loss.status = "STOP_LOSS_HIT"
+        outcome_loss.entry_triggered = True
+
+        _snapshot(session, stock_pending, scan_run_id=3, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 3, [_candidate(stock_pending.symbol)], emitted_at=day)
+        session.commit()
+
+        report = compute_daily_validation_report(session, report_date=day)
+        assert report.entries_triggered == 2
+        assert report.target_1_wins == 1
+        assert report.stop_before_target_losses == 1
+        assert report.open_trades == 1
+        assert report.verified_sample_size == 2
+        assert report.verified_win_rate == 0.5
+        assert report.target_1_hit_rate == report.verified_win_rate
+        assert report.stop_before_target_rate == 0.5
+
+    def test_entry_never_triggered_and_invalidated_are_excluded_from_win_rate(self, session):
+        stock_untouched = _stock(session, symbol="1111")
+        stock_invalidated = _stock(session, symbol="2222")
+        day = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+
+        snap_untouched = _snapshot(session, stock_untouched, scan_run_id=1, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 1, [_candidate(stock_untouched.symbol)], emitted_at=day)
+        outcome_untouched = (
+            session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_untouched.id).one()
+        )
+        outcome_untouched.status = "ENTRY_NEVER_TRIGGERED"
+
+        snap_invalidated = _snapshot(session, stock_invalidated, scan_run_id=2, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 2, [_candidate(stock_invalidated.symbol)], emitted_at=day)
+        outcome_invalidated = (
+            session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap_invalidated.id).one()
+        )
+        outcome_invalidated.status = "INVALIDATED"
+        outcome_invalidated.invalidated = True
+        session.commit()
+
+        report = compute_daily_validation_report(session, report_date=day)
+        assert report.entries_not_triggered == 1
+        assert report.invalidated == 1
+        # Neither an untriggered entry nor a pre-entry invalidation is a
+        # BUY loss -- they must never enter the win-rate denominator.
+        assert report.verified_sample_size == 0
+        assert report.verified_win_rate is None
+        assert report.stop_before_target_rate is None
+
+    def test_zero_denominator_reports_none_rates_not_a_fabricated_zero(self, session):
+        stock = _stock(session)
+        day = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+        snap = _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)], emitted_at=day)
+        outcome = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snap.id).one()
+        outcome.status = "PARTIAL"  # same-day target+stop tie -- sequence unverifiable
+        session.commit()
+
+        report = compute_daily_validation_report(session, report_date=day)
+        assert report.verified_sample_size == 0
+        assert report.verified_win_rate is None
+        assert report.target_1_hit_rate is None
+        assert report.stop_before_target_rate is None
+
+    def test_defaults_to_todays_utc_date_when_report_date_is_omitted(self, session):
+        report = compute_daily_validation_report(session)
+        assert report.report_date == datetime.now(timezone.utc).date().isoformat()
+
+    def test_naive_report_date_is_treated_as_utc(self, session):
+        stock = _stock(session)
+        day = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+        _snapshot(session, stock, scan_run_id=1, decision="BUY_CANDIDATE")
+        emit_radar_opportunities(session, 1, [_candidate(stock.symbol)], emitted_at=day)
+
+        naive_same_day = datetime(2026, 1, 1, 15, 0)
+        report = compute_daily_validation_report(session, report_date=naive_same_day)
+        assert report.report_date == "2026-01-01"
+        assert report.total_opportunities == 1

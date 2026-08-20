@@ -44,7 +44,10 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from src.ai_evolution.confidence_calibration import DEFAULT_MIN_SAMPLE_SIZE, expected_calibration_error
-from src.ai_evolution.decision_v2_outcome_evaluation import create_pending_decision_v2_outcome
+from src.ai_evolution.decision_v2_outcome_evaluation import (
+    create_pending_decision_v2_outcome,
+    is_actionable_buy_decision,
+)
 from src.domain.models import (
     NON_RESOLVING_STATUSES,
     DecisionV2Outcome,
@@ -441,6 +444,124 @@ def compute_radar_v2_performance(session: Session) -> RadarV2PerformanceMetrics:
         minimum_sample_size_required=MINIMUM_SAMPLE_GATE,
         sample_size_adequate=resolved_count >= MINIMUM_SAMPLE_GATE,
         accumulation_status=_accumulation_status(resolved_count),
+    )
+
+
+@dataclass(frozen=True)
+class DailyValidationReport:
+    """BASIRAH LIVE VALIDATION TRACKING: the read-only daily report --
+    every `RadarOpportunity` emitted on `report_date` (one UTC calendar
+    day), cross-referenced against its linked `DecisionV2Outcome`'s
+    real, sequence-verified resolution so far. `report_date` always
+    means "opportunities issued that day", tracked to whatever real
+    resolution they have reached by the time this is called -- a
+    target hit three days after a Monday signal still counts toward
+    Monday's cohort, not the day it resolved.
+
+    `verified_win_rate`/`target_1_hit_rate`/`stop_before_target_rate`
+    all share the same rigorous denominator: wins + losses among
+    sequence-resolved trades only (TARGET_x_HIT vs STOP_LOSS_HIT),
+    excluding PENDING/PARTIAL/EXPIRED/CANCELLED/DATA_UNAVAILABLE/
+    ENTRY_NEVER_TRIGGERED/INVALIDATED -- an untriggered entry is never
+    counted as a failed trade, and a same-day target+stop tie is never
+    guessed either way (see PARTIAL in `DecisionV2OutcomeStatus`).
+    `target_1_hit_rate` is numerically identical to `verified_win_rate`
+    under BASIRAH's monotonic target ordering (target_1 < target_2 <
+    target_3, so any resolved win necessarily touched target_1 first)
+    -- a disclosed equivalence, not an accidental duplicate field.
+    Every rate is `None`, never a fabricated 0.0, when its denominator
+    is zero."""
+
+    report_date: str
+    total_opportunities: int
+    actionable_buy_signals: int
+    entries_triggered: int
+    target_1_wins: int
+    target_2_wins: int
+    target_3_wins: int
+    stop_before_target_losses: int
+    open_trades: int
+    entries_not_triggered: int
+    invalidated: int
+    non_actionable_counts: Dict[str, int]
+    verified_win_rate: Optional[float]
+    target_1_hit_rate: Optional[float]
+    stop_before_target_rate: Optional[float]
+    verified_sample_size: int
+
+
+def compute_daily_validation_report(
+    session: Session, report_date: Optional[datetime] = None
+) -> DailyValidationReport:
+    """`report_date` may be any `datetime`; only its UTC calendar date
+    is used (defaults to today, UTC, when omitted). Reads every
+    `RadarOpportunity` row emitted that day regardless of its
+    `superseded_by_id` state -- unlike the live-opportunity views
+    elsewhere in this module, a daily cohort must include a symbol
+    later superseded the same day, not just its newest row."""
+    report_date = report_date or datetime.now(timezone.utc)
+    if report_date.tzinfo is None:
+        report_date = report_date.replace(tzinfo=timezone.utc)
+    day_start = datetime(report_date.year, report_date.month, report_date.day, tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
+
+    opportunities = (
+        session.query(RadarOpportunity)
+        .filter(RadarOpportunity.emitted_at >= day_start, RadarOpportunity.emitted_at < day_end)
+        .all()
+    )
+
+    snapshot_ids = [o.decision_v2_snapshot_id for o in opportunities]
+    outcomes = (
+        session.query(DecisionV2Outcome)
+        .filter(DecisionV2Outcome.decision_v2_snapshot_id.in_(snapshot_ids))
+        .all()
+        if snapshot_ids
+        else []
+    )
+
+    non_actionable_counts: Dict[str, int] = {}
+    actionable_buy_signals = 0
+    for opp in opportunities:
+        if is_actionable_buy_decision(opp.classification):
+            actionable_buy_signals += 1
+        else:
+            non_actionable_counts[opp.classification] = non_actionable_counts.get(opp.classification, 0) + 1
+
+    entries_triggered = sum(1 for o in outcomes if o.entry_triggered)
+    target_1_wins = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.TARGET_1_HIT)
+    target_2_wins = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.TARGET_2_HIT)
+    target_3_wins = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.TARGET_3_HIT)
+    stop_before_target_losses = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.STOP_LOSS_HIT)
+    open_trades = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.PENDING)
+    entries_not_triggered = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.ENTRY_NEVER_TRIGGERED)
+    invalidated_count = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.INVALIDATED)
+
+    wins = target_1_wins + target_2_wins + target_3_wins
+    losses = stop_before_target_losses
+    verified_sample_size = wins + losses
+
+    verified_win_rate = round(wins / verified_sample_size, 4) if verified_sample_size > 0 else None
+    target_1_hit_rate = verified_win_rate
+    stop_before_target_rate = round(losses / verified_sample_size, 4) if verified_sample_size > 0 else None
+
+    return DailyValidationReport(
+        report_date=day_start.date().isoformat(),
+        total_opportunities=len(opportunities),
+        actionable_buy_signals=actionable_buy_signals,
+        entries_triggered=entries_triggered,
+        target_1_wins=target_1_wins,
+        target_2_wins=target_2_wins,
+        target_3_wins=target_3_wins,
+        stop_before_target_losses=stop_before_target_losses,
+        open_trades=open_trades,
+        entries_not_triggered=entries_not_triggered,
+        invalidated=invalidated_count,
+        non_actionable_counts=non_actionable_counts,
+        verified_win_rate=verified_win_rate,
+        target_1_hit_rate=target_1_hit_rate,
+        stop_before_target_rate=stop_before_target_rate,
+        verified_sample_size=verified_sample_size,
     )
 
 

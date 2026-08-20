@@ -514,3 +514,116 @@ def test_radar_v2_scan_never_exceeds_the_configured_candidate_cap(
     assert body["stage1_candidate_count"] == 5
     assert body["stage2_candidate_cap"] == 2
     assert len(body["stage2_symbols_selected"]) == 2
+
+
+def test_radar_v2_daily_validation_report_requires_staff_role(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/daily-validation-report")
+    assert response.status_code in (401, 403)
+
+
+def test_radar_v2_daily_validation_report_on_an_empty_database(client, session_factory, as_staff):
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/daily-validation-report")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_opportunities"] == 0
+    assert body["actionable_buy_signals"] == 0
+    assert body["non_actionable_counts"] == {}
+    assert body["verified_win_rate"] is None
+    assert body["verified_sample_size"] == 0
+
+
+def test_radar_v2_daily_validation_report_rejects_a_malformed_date(client, session_factory, as_staff):
+    response = client.get(
+        "/api/v1/admin/market-intelligence/radar-v2/daily-validation-report", params={"report_date": "not-a-date"}
+    )
+    assert response.status_code == 422
+
+
+def test_radar_v2_daily_validation_report_for_a_specific_day_reflects_real_outcomes(
+    client, session_factory, as_staff
+):
+    """BASIRAH LIVE VALIDATION TRACKING: entries_triggered/target_1_wins/
+    stop_before_target_losses and the derived win rate must reach the
+    real HTTP response, scoped to the requested report_date."""
+    from src.domain.models import DecisionV2Outcome, DecisionV2Snapshot, RadarOpportunity
+
+    session = session_factory()
+    stock = Stock(symbol="1111", name_en="Stock 1111", is_active=True)
+    session.add(stock)
+    session.commit()
+
+    day = datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc)
+    snapshot = DecisionV2Snapshot(
+        stock_id=stock.id,
+        symbol=stock.symbol,
+        company_name_en=stock.name_en,
+        decision="BUY_CANDIDATE",
+        decision_label_ar="شراء",
+        confidence_score=75.0,
+        opportunity_quality_score=60.0,
+        risk_score=30.0,
+        data_quality_score=90.0,
+        data_freshness_status="LIVE",
+        current_price=100.0,
+        market_status="OPEN",
+        decision_timestamp=day,
+        analysis_version="2.0.0",
+        data_source="test",
+        scan_run_id=1,
+    )
+    session.add(snapshot)
+    session.commit()
+
+    session.add(
+        RadarOpportunity(
+            decision_v2_snapshot_id=snapshot.id,
+            stock_id=stock.id,
+            symbol=stock.symbol,
+            classification="BUY_CANDIDATE",
+            classification_label_ar="شراء",
+            confidence_score=75.0,
+            stage1_ranking_score=80.0,
+            stage1_rank=1,
+            stage1_signals=[],
+            scan_run_id=1,
+            emitted_at=day,
+        )
+    )
+    session.add(
+        DecisionV2Outcome(
+            decision_v2_snapshot_id=snapshot.id,
+            symbol=stock.symbol,
+            status="TARGET_1_HIT",
+            entry_triggered=True,
+            return_pct=6.0,
+            entry_price=100.0,
+            due_at=day + timedelta(days=30),
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get(
+        "/api/v1/admin/market-intelligence/radar-v2/daily-validation-report",
+        params={"report_date": "2026-01-05"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report_date"] == "2026-01-05"
+    assert body["total_opportunities"] == 1
+    assert body["actionable_buy_signals"] == 1
+    assert body["entries_triggered"] == 1
+    assert body["target_1_wins"] == 1
+    assert body["verified_sample_size"] == 1
+    assert body["verified_win_rate"] == 1.0
+    assert body["target_1_hit_rate"] == 1.0
+    assert body["stop_before_target_rate"] == 0.0
+
+    # A different day's report must not see this opportunity.
+    other_day_response = client.get(
+        "/api/v1/admin/market-intelligence/radar-v2/daily-validation-report",
+        params={"report_date": "2026-01-06"},
+    )
+    assert other_day_response.json()["total_opportunities"] == 0

@@ -61,6 +61,20 @@ class DecisionV2OutcomeStatus(str, enum.Enum):
     # excluded from win-rate/false-positive-rate math everywhere it is
     # computed (see src/ai_evolution/validation_metrics.py).
     DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
+    # BASIRAH LIVE VALIDATION TRACKING: price never traded into
+    # entry_zone_low..entry_zone_high before the horizon (due_at)
+    # elapsed -- no position was ever opened, so this is neither a win
+    # nor a loss. Distinct from PENDING (still might trigger) and from
+    # EXPIRED (which, after this change, only applies to a position
+    # that DID enter and then ran out the clock without hitting target
+    # or stop).
+    ENTRY_NEVER_TRIGGERED = "ENTRY_NEVER_TRIGGERED"
+    # The setup died before the entry zone was ever reached: price
+    # closed at/through stop_loss while still pre-entry. Distinct from
+    # STOP_LOSS_HIT, which by definition only fires after entry_
+    # triggered=True -- a pre-entry stop-level touch was never a real
+    # position, so it is not counted as a loss.
+    INVALIDATED = "INVALIDATED"
 
 
 # Never scored as a win or a loss by any M10 metric -- kept as a single
@@ -70,6 +84,8 @@ NON_RESOLVING_STATUSES = frozenset(
         DecisionV2OutcomeStatus.PENDING,
         DecisionV2OutcomeStatus.CANCELLED,
         DecisionV2OutcomeStatus.DATA_UNAVAILABLE,
+        DecisionV2OutcomeStatus.ENTRY_NEVER_TRIGGERED,
+        DecisionV2OutcomeStatus.INVALIDATED,
     }
 )
 
@@ -92,7 +108,27 @@ class DecisionV2Outcome(Base):
         Enum(DecisionV2OutcomeStatus), nullable=False, default=DecisionV2OutcomeStatus.PENDING, index=True
     )
 
+    # Populated only once price actually trades into entry_zone_low..
+    # entry_zone_high (see BASIRAH LIVE VALIDATION TRACKING below);
+    # target/stop/excursion tracking never begins before this is True.
+    # `entry_price` is set to entry_zone_high (the least favorable real
+    # fill inside the recommended zone, a disclosed conservative
+    # assumption -- daily OHLC cannot reveal the exact intraday fill)
+    # at the same moment entry_triggered flips True.
+    entry_triggered = Column(Boolean, nullable=False, default=False, server_default="0")
+    entry_triggered_at = Column(DateTime(timezone=True), nullable=True)
     entry_price = Column(Numeric(18, 4), nullable=True)
+
+    # True only for the pre-entry INVALIDATED case (see status enum) --
+    # the setup died before ever becoming a real position.
+    invalidated = Column(Boolean, nullable=False, default=False, server_default="0")
+    invalidated_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Raw post-entry price extremes (literal, not just the pct-based
+    # MFE/MAE below) -- computed once entry_triggered=True, over the
+    # window starting at entry_triggered_at.
+    highest_price_after_entry = Column(Numeric(18, 4), nullable=True)
+    lowest_price_after_entry = Column(Numeric(18, 4), nullable=True)
 
     first_price_after_signal = Column(Numeric(18, 4), nullable=True)
     first_price_after_signal_at = Column(DateTime(timezone=True), nullable=True)

@@ -19,7 +19,15 @@ from src.ai_evolution.decision_v2_outcome_evaluation import (
     is_actionable_buy_decision,
 )
 from src.core.db.database import Base
-from src.domain.models import DecisionV2Outcome, DecisionV2OutcomeStatus, DecisionV2Snapshot, PriceBar, Stock, Timeframe
+from src.domain.models import (
+    NON_RESOLVING_STATUSES,
+    DecisionV2Outcome,
+    DecisionV2OutcomeStatus,
+    DecisionV2Snapshot,
+    PriceBar,
+    Stock,
+    Timeframe,
+)
 
 
 @pytest.fixture
@@ -47,6 +55,8 @@ def _make_snapshot(
     decision="BUY_CANDIDATE",
     decision_timestamp=None,
     current_price=100.0,
+    entry_zone_low=95.0,
+    entry_zone_high=100.0,
     target_1=110.0,
     target_2=120.0,
     target_3=130.0,
@@ -67,6 +77,8 @@ def _make_snapshot(
         data_quality_score=90.0,
         data_freshness_status="LIVE",
         current_price=current_price,
+        entry_zone_low=entry_zone_low,
+        entry_zone_high=entry_zone_high,
         target_1=target_1,
         target_2=target_2,
         target_3=target_3,
@@ -122,7 +134,11 @@ class TestCreatePendingDecisionV2Outcome:
         assert outcome is not None
         assert outcome.decision_v2_snapshot_id == snapshot.id
         assert outcome.status == DecisionV2OutcomeStatus.PENDING
-        assert outcome.entry_price == snapshot.current_price
+        # BASIRAH LIVE VALIDATION TRACKING: entry_price is never assumed
+        # to be the signal price -- it stays unset until price actually
+        # trades into the entry zone.
+        assert outcome.entry_price is None
+        assert outcome.entry_triggered is False
         assert outcome.symbol == "2222"
 
     def test_returns_none_for_non_actionable_decision(self, session, stock):
@@ -345,3 +361,135 @@ class TestEvaluatePendingOutcomes:
         assert row.status == DecisionV2OutcomeStatus.CANCELLED
         assert summary.cancelled == 1
         assert row.decision_v2_snapshot_id == snapshot_id
+
+
+class TestEntryTriggeredGating:
+    """BASIRAH LIVE VALIDATION TRACKING: the outcome evaluator must
+    never assume a fill at the signal price -- target/stop tracking
+    only begins once price has genuinely traded into
+    entry_zone_low..entry_zone_high. Regression coverage for the exact
+    bug this fixes: previously, a stop-level touch before price ever
+    reached the entry zone was wrongly scored as a real STOP_LOSS_HIT."""
+
+    def test_regression_stop_touch_before_entry_is_invalidated_not_a_loss(self, session, stock):
+        """The core bug: entry zone is 95-100, but the very first (and
+        only) forward bar never trades above 92 -- it touches
+        stop_loss (90) without ever having entered the recommended
+        zone. Before this fix this was wrongly scored STOP_LOSS_HIT;
+        it must now be INVALIDATED, never counted as a loss."""
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=95.0, entry_zone_high=100.0, stop_loss=90.0,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, datetime(2026, 1, 2), high=92.0, low=88.0, close=89.0)
+        session.commit()
+
+        now = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        evaluate_pending_outcomes(session, now=now)
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.status == DecisionV2OutcomeStatus.INVALIDATED
+        assert row.invalidated is True
+        assert row.invalidated_at is not None
+        assert row.entry_triggered is False
+        assert row.stop_loss_hit is None  # stop/target tracking never even ran
+        assert row.status in NON_RESOLVING_STATUSES
+
+    def test_entry_never_triggered_when_horizon_elapses_untouched(self, session, stock):
+        """Price stays entirely above the entry zone for the whole
+        horizon -- never a real position, never a loss, never a win."""
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=95.0, entry_zone_high=100.0, stop_loss=90.0,
+            expected_holding_period_max_days=5,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, datetime(2026, 1, 2), high=115.0, low=105.0, close=110.0)
+        session.commit()
+
+        now = datetime(2026, 1, 10, tzinfo=timezone.utc)  # past due_at (2026-01-06)
+        evaluate_pending_outcomes(session, now=now)
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.status == DecisionV2OutcomeStatus.ENTRY_NEVER_TRIGGERED
+        assert row.entry_triggered is False
+        assert row.status in NON_RESOLVING_STATUSES
+
+    def test_stays_pending_pre_entry_within_horizon(self, session, stock):
+        """Price hasn't reached the zone yet, but the horizon hasn't
+        elapsed either -- still genuinely open, not a terminal state."""
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=95.0, entry_zone_high=100.0, stop_loss=90.0,
+            expected_holding_period_max_days=30,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, datetime(2026, 1, 2), high=115.0, low=105.0, close=110.0)
+        session.commit()
+
+        now = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        summary = evaluate_pending_outcomes(session, now=now)
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.status == DecisionV2OutcomeStatus.PENDING
+        assert row.entry_triggered is False
+        assert summary.still_pending == 1
+
+    def test_entry_triggers_on_a_later_bar_then_target_hit_from_there(self, session, stock):
+        """Bar 1 never reaches the zone; bar 2 trades into it and also
+        touches target_1 -- entry_triggered_at must be bar 2's
+        timestamp, and the win must be scored, not missed."""
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=95.0, entry_zone_high=100.0, target_1=110.0, stop_loss=90.0,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, datetime(2026, 1, 2), high=115.0, low=105.0, close=110.0)  # never in zone
+        _add_bar(session, stock, datetime(2026, 1, 3), high=112.0, low=97.0, close=111.0)  # enters zone + hits T1
+        session.commit()
+
+        now = datetime(2026, 1, 4, tzinfo=timezone.utc)
+        evaluate_pending_outcomes(session, now=now)
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.entry_triggered is True
+        # SQLite (this test's in-memory engine) does not round-trip a
+        # timezone-aware DateTime faithfully -- compare naively,
+        # matching this file's other datetime assertions (e.g. due_at).
+        assert row.entry_triggered_at.replace(tzinfo=None) == datetime(2026, 1, 3, 16, 0)
+        assert row.status == DecisionV2OutcomeStatus.TARGET_1_HIT
+        assert row.highest_price_after_entry == pytest.approx(112.0)
+        assert row.lowest_price_after_entry == pytest.approx(97.0)
+
+    def test_entry_price_uses_conservative_zone_high_not_signal_price(self, session, stock):
+        """Signal price and entry zone can genuinely differ (e.g. a
+        WAIT_FOR_PULLBACK-style zone below the price at signal time in
+        real Decision V2 output) -- entry_price must reflect the real,
+        conservative assumed fill (zone top), not the original signal
+        price, once triggered."""
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            current_price=105.0, entry_zone_low=95.0, entry_zone_high=98.0,
+            target_1=110.0, stop_loss=90.0,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, datetime(2026, 1, 2), high=112.0, low=96.0, close=111.0)
+        session.commit()
+
+        now = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        evaluate_pending_outcomes(session, now=now)
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.entry_triggered is True
+        assert row.entry_price == pytest.approx(98.0)  # entry_zone_high, never 105.0 (the signal price)
