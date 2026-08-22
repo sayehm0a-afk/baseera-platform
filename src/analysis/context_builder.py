@@ -31,8 +31,11 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from src.analysis.decision_v2.breakout_confirmation import BreakoutStatus, compute_breakout_confirmation
-from src.analysis.decision_v2.evidence import derive_support_resistance
+from src.analysis.decision_v2.breakout_confirmation import (
+    BreakoutStatus,
+    compute_breakout_confirmation,
+    resolve_breakout_reference_level,
+)
 from src.analysis.decision_v2.sector_strength import compute_sector_strength
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
@@ -115,20 +118,22 @@ def _sector_rotation_extra(session: Session, stock: Stock, df) -> Dict[str, Any]
 
 def _breakout_confirmation_extra(df, technical_result, price: Optional[float], symbol: str) -> Dict[str, Any]:
     """Phase 3 area 5: real breakout/false-breakout confirmation -- see
-    breakout_confirmation.py. Reuses the same `support_resistance`
-    swing-pivot indicator and `derive_support_resistance()` call
-    `DecisionEngineV2.decide()` itself makes to get `breakout_level`
-    (so the two never disagree on which level is "the" breakout
-    level), computed here instead so this optional leg can degrade
-    the same independently-failing way every other leg in this module
-    does. Never raises."""
+    breakout_confirmation.py. The reference level a breakout is judged
+    against is deliberately NOT `evidence.derive_support_resistance()`'s
+    own `breakout_level` (the nearest resistance to the CURRENT price,
+    which `DecisionEngineV2.decide()` separately computes for its own
+    "what's the next level to watch from here" display field) --
+    reusing that value here made the guard below tautological (see
+    `resolve_breakout_reference_level`'s own docstring for the full
+    reasoning). This leg degrades the same independently-failing way
+    every other leg in this module does. Never raises."""
     if technical_result is None or price is None:
         return {}
     try:
-        sr_evidence = derive_support_resistance(price, technical_result.support_resistance)
         volume_sma = technical_result.indicators.get("volume_sma_20")
         volume_series = volume_sma.value if volume_sma is not None else None
-        result = compute_breakout_confirmation(df, sr_evidence.breakout_level, volume_series)
+        breakout_level = resolve_breakout_reference_level(df, technical_result.support_resistance)
+        result = compute_breakout_confirmation(df, breakout_level, volume_series)
     except Exception as exc:  # noqa: BLE001 -- an optional leg must never break the whole context
         logger.info("Breakout confirmation leg unavailable for '%s': %s", symbol, exc)
         return {}

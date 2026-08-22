@@ -145,6 +145,109 @@ class TestMissedEntry:
         result = _decide(ctx, decision)
         assert result.decision is Decision.WAIT_FOR_ENTRY
 
+    def test_severely_extended_price_is_missed_entry(self):
+        """Mandate proof C: a genuinely invalid/missed setup (price ran
+        130 vs. a ~103 entry zone) is classified MISSED_ENTRY, not just
+        the coarser WAIT_FOR_ENTRY decision."""
+        ctx = _context(price=130.0)
+        decision = _buy_decision(price=100.0, target=112.0, stop=94.0)
+        result = _decide(ctx, decision)
+        assert result.decision is Decision.WAIT_FOR_ENTRY
+        from src.analysis.decision_v2.types import EntryStatus
+        assert result.entry_status is EntryStatus.MISSED_ENTRY
+
+    def test_moderately_extended_price_is_wait_for_pullback(self):
+        """Mandate proof B + D: the anti-chase structural repair --
+        price has run just past the entry zone (103.25 vs. an entry
+        zone topping out at 103.0) but not by a severe margin, so this
+        stays a live WAIT_FOR_PULLBACK setup rather than being
+        collapsed into the same MISSED_ENTRY bucket as a price that
+        ran all the way to 130. Before the fix this branch was
+        unreachable through any real engine call -- decision reaching
+        WAIT_FOR_ENTRY already implied the single boolean previously
+        reused here was True, so this state could never be produced."""
+        ctx = _context(price=103.25)
+        decision = _buy_decision(price=100.0, target=112.0, stop=94.0)
+        result = _decide(ctx, decision)
+        assert result.decision is Decision.WAIT_FOR_ENTRY
+        from src.analysis.decision_v2.types import EntryStatus
+        assert result.entry_status is EntryStatus.WAIT_FOR_PULLBACK
+
+    def test_valid_entry_is_ready_now(self):
+        """Mandate proof A: a price still inside its own entry zone is
+        READY_NOW, unaffected by the anti-chase repair."""
+        from src.analysis.decision_v2.types import EntryStatus
+        ctx = _context(price=100.0)
+        decision = _buy_decision(price=100.0, target=112.0, stop=94.0)
+        result = _decide(ctx, decision)
+        assert result.decision in (Decision.BUY_CANDIDATE, Decision.STRONG_BUY_CANDIDATE)
+        assert result.entry_status is EntryStatus.READY_NOW
+
+    def test_anti_chase_diverges_from_the_frozen_baseline_engine(self):
+        """Mandate proof E: the identical moderately-extended setup,
+        run through the frozen pre-Phase-3 baseline's own
+        `classify_entry_status` (which still has the original
+        unrepaired logic -- see that module's provenance docstring),
+        always produces MISSED_ENTRY; the live, repaired Phase 3
+        engine produces WAIT_FOR_PULLBACK for the exact same inputs.
+        This is a genuine, structural divergence from Baseline, not a
+        difference in the underlying data."""
+        from src.backtesting.decision_v2_baseline.trade_classification import (
+            classify_entry_status as baseline_classify_entry_status,
+        )
+        from src.backtesting.decision_v2_baseline.types import Decision as BaselineDecision
+
+        baseline_status, _ = baseline_classify_entry_status(
+            BaselineDecision.WAIT_FOR_ENTRY, 103.25, 103.0, True,
+        )
+        assert baseline_status.value == "MISSED_ENTRY"
+
+        ctx = _context(price=103.25)
+        decision = _buy_decision(price=100.0, target=112.0, stop=94.0)
+        result = _decide(ctx, decision)
+        from src.analysis.decision_v2.types import EntryStatus
+        assert result.entry_status is EntryStatus.WAIT_FOR_PULLBACK
+        assert result.entry_status.value != baseline_status.value
+
+
+class TestConfidenceCalibrationWiring:
+    """Phase 3 area 2 structural repair: `calibrated_success_probability`
+    is a caller-supplied, engine-pure input (this engine never queries
+    the database itself) that can downgrade the decision via gates.py's
+    `confidence_calibration_applied` gate, but never overwrites the raw
+    `confidence_score` this engine reports."""
+
+    def test_raw_confidence_unchanged_regardless_of_calibration(self):
+        """Mandate proof A."""
+        ctx = _context()
+        no_calibration = _decide(ctx, _buy_decision())
+        with_good_calibration = _decide(ctx, _buy_decision(), calibrated_success_probability=0.9)
+        with_poor_calibration = _decide(ctx, _buy_decision(), calibrated_success_probability=0.05)
+        assert (
+            no_calibration.confidence_score
+            == with_good_calibration.confidence_score
+            == with_poor_calibration.confidence_score
+        )
+
+    def test_omitted_calibration_leaves_decision_unaffected(self):
+        """Mandate proof C: default None (every existing caller) is a
+        complete no-op -- identical decision to the pre-repair engine."""
+        ctx = _context()
+        decision = _buy_decision()
+        without = _decide(ctx, decision)
+        with_none_explicit = _decide(ctx, decision, calibrated_success_probability=None)
+        assert without.decision == with_none_explicit.decision
+        assert without.confidence_score == with_none_explicit.confidence_score
+
+    def test_poor_calibrated_probability_downgrades_decision(self):
+        """Mandate proof F: a genuine decision-changing constructed
+        example."""
+        ctx = _context()
+        result = _decide(ctx, _buy_decision(), calibrated_success_probability=0.05)
+        assert result.decision is Decision.WATCH
+        calibration_gate = next(g for g in result.gates if g.name == "confidence_calibration_applied")
+        assert calibration_gate.status.value == "FAIL"
+
 
 class TestHoldAndSellMapping:
     def test_hold_recommendation_has_no_entry_zone(self):

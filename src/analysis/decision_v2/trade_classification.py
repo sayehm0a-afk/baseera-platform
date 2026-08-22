@@ -111,28 +111,37 @@ def classify_entry_status(
     decision: Decision,
     price: Optional[float],
     entry_zone_high: Optional[float],
-    price_missed_entry_zone: bool,
+    price_severely_missed_entry_zone: bool,
     breakout_status: Optional[str] = None,
 ) -> Tuple[EntryStatus, str]:
     """Returns (entry_status, explanation_ar). `breakout_status` is
     `context.extra["breakout_confirmation"]["status"]` (see this
     module's docstring for exactly which statuses can produce
     `CONDITIONAL_ON_BREAKOUT`) -- optional, and irrelevant for any
-    decision other than WATCH."""
+    decision other than WATCH.
+
+    `price_severely_missed_entry_zone` (see `structure.
+    price_severely_missed_entry_zone`) is a magnitude-aware signal,
+    deliberately distinct from the plain "has it missed at all"
+    boolean that already decided `Decision.WAIT_FOR_ENTRY` itself
+    (Gate 15) -- reusing that same plain boolean here would make it
+    impossible to ever reach this branch's WAIT_FOR_PULLBACK case,
+    since arriving at `decision is WAIT_FOR_ENTRY` already required it
+    to be True."""
     if decision in (Decision.STRONG_BUY_CANDIDATE, Decision.BUY_CANDIDATE):
         return (
             EntryStatus.READY_NOW,
             "السعر الحالي ضمن نطاق الدخول المناسب وفق التحليل.",
         )
     if decision is Decision.WAIT_FOR_ENTRY:
-        if price_missed_entry_zone:
+        if price_severely_missed_entry_zone:
             return (
                 EntryStatus.MISSED_ENTRY,
-                "تجاوز السعر نطاق الدخول المناسب بالفعل -- يفضّل الانتظار بدل مطاردة السعر.",
+                "تجاوز السعر نطاق الدخول المناسب بفارق كبير -- الإعداد الحالي لم يعد صالحًا حتى مع تراجع محتمل.",
             )
         return (
             EntryStatus.WAIT_FOR_PULLBACK,
-            "يفضّل انتظار تراجع السعر نحو نطاق دخول أنسب قبل التنفيذ.",
+            "تجاوز السعر نطاق الدخول قليلاً -- يفضّل انتظار تراجع نحو نطاق دخول أنسب قبل التنفيذ.",
         )
     if decision is Decision.WATCH:
         if breakout_status in _CONDITIONAL_ON_BREAKOUT_STATUSES:

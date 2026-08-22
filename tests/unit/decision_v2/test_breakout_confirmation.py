@@ -8,7 +8,9 @@ import pytest
 from src.analysis.decision_v2.breakout_confirmation import (
     BreakoutStatus,
     compute_breakout_confirmation,
+    resolve_breakout_reference_level,
 )
+from src.analysis.types import SupportResistanceLevels
 
 
 def _df(closes, volumes=None):
@@ -117,3 +119,89 @@ def test_missing_volume_column_leaves_volume_confirmed_none():
     result = compute_breakout_confirmation(df, breakout_level=10.0, volume_sma_20=volume_sma_20)
     assert result.volume_confirmed is None
     assert result.status is BreakoutStatus.CONFIRMED_BREAKOUT
+
+
+class TestResolveBreakoutReferenceLevel:
+    """Structural repair: the level fed to `compute_breakout_confirmation`
+    must never be selected relative to the current/latest price -- that
+    made the module's own `latest_close <= breakout_level` guard a
+    tautology, since a level already broken is (by definition) no
+    longer >= the current price and would silently be swapped for the
+    next, still-untested level further up. `resolve_breakout_reference_
+    level` fixes this by anchoring the level to a PRIOR price (from
+    before the lookback window), never the latest close."""
+
+    def test_no_levels_is_none(self):
+        df = _df([9.5, 9.8, 10.5, 10.6, 10.7] * 3)
+        assert resolve_breakout_reference_level(df, None) is None
+        assert resolve_breakout_reference_level(df, SupportResistanceLevels(support=[], resistance=[])) is None
+
+    def test_insufficient_history_is_none(self):
+        # Fewer bars than lookback_days + 1 -- no "prior" close exists
+        # yet to anchor a reference against.
+        df = _df([9.5, 9.8, 10.5])
+        levels = SupportResistanceLevels(support=[], resistance=[10.0])
+        assert resolve_breakout_reference_level(df, levels, lookback_days=10) is None
+
+    def test_selects_the_nearest_resistance_above_the_prior_price_not_the_latest_close(self):
+        # 15 bars: the first 5 sit at 9.0 (the "prior" era), the last
+        # 10 (the lookback window) have already cleared and held above
+        # 10.0. The prior close (9.0) is what must select the 10.0
+        # level -- selecting by the LATEST close (10.7, already past
+        # 10.0) would instead pick 12.0, the next untested level up,
+        # reproducing the exact tautology this function exists to fix.
+        closes = [9.0] * 5 + [10.5, 10.6, 10.6, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7, 10.7]
+        df = _df(closes)
+        levels = SupportResistanceLevels(support=[], resistance=[10.0, 12.0])
+        level = resolve_breakout_reference_level(df, levels, lookback_days=10)
+        assert level == 10.0
+
+    def test_end_to_end_confirmed_breakout_is_now_reachable(self):
+        """Before this fix, feeding `compute_breakout_confirmation` a
+        level selected relative to the CURRENT price made
+        CONFIRMED_BREAKOUT structurally impossible for any input -- see
+        this module's own docstring. Composing the fixed reference
+        level with the unchanged confirmation logic now genuinely
+        reaches CONFIRMED_BREAKOUT."""
+        closes = [9.0] * 6 + [10.5, 10.6, 10.6, 10.7, 10.7]
+        volumes = [1_000] * 6 + [1_500, 1_400, 1_500, 1_600, 1_500]
+        df = _df(closes, volumes)
+        volume_sma_20 = _volume_sma([1_000] * 11)
+        levels = SupportResistanceLevels(support=[], resistance=[10.0])
+        level = resolve_breakout_reference_level(df, levels, lookback_days=10)
+        result = compute_breakout_confirmation(df, level, volume_sma_20, lookback_days=10)
+        assert result.status is BreakoutStatus.CONFIRMED_BREAKOUT
+
+    def test_end_to_end_failed_breakout_is_reachable(self):
+        # Cleared, reverted below the level, then closed back above it
+        # -- the latest close (10.2) must be above the level for
+        # compute_breakout_confirmation to treat a thesis as active at
+        # all; the revert in between is what makes it FAILED rather
+        # than a clean CONFIRMED/EARLY breakout.
+        closes = [9.0] * 6 + [10.5, 10.6, 9.8, 9.7, 10.2]
+        df = _df(closes)
+        levels = SupportResistanceLevels(support=[], resistance=[10.0])
+        level = resolve_breakout_reference_level(df, levels, lookback_days=10)
+        result = compute_breakout_confirmation(df, level, None, lookback_days=10)
+        assert result.status is BreakoutStatus.FAILED_BREAKOUT
+
+    def test_result_is_deterministic_given_only_the_rows_it_is_handed(self):
+        """No-look-ahead proof: re-slicing a longer series down to the
+        exact same as-of row set it was originally evaluated with
+        reproduces a byte-identical reference level -- the function
+        never reaches beyond the `df` it is given."""
+        closes = [9.0] * 6 + [10.5, 10.6, 10.6, 10.7, 10.7]
+        levels = SupportResistanceLevels(support=[], resistance=[10.0, 12.0])
+        df_as_of = _df(closes)
+        level_as_of = resolve_breakout_reference_level(df_as_of, levels, lookback_days=10)
+
+        # A longer series that includes genuinely FUTURE bars beyond
+        # the as-of evaluation point -- re-truncated to the identical
+        # as-of row set must reproduce the same result, proving the
+        # future rows played no part when they were excluded.
+        future_closes = closes + [11.5, 11.8, 12.5]
+        df_with_future = _df(future_closes)
+        df_re_truncated = df_with_future.iloc[: len(closes)]
+        level_re_truncated = resolve_breakout_reference_level(df_re_truncated, levels, lookback_days=10)
+
+        assert level_as_of == level_re_truncated == 10.0

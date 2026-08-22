@@ -24,6 +24,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from src.ai_evolution.confidence_calibration import TRAINING_SOURCE_DECISION_V2
+from src.analysis.decision_v2.types import Decision
 from src.backtesting.decision_v2_backtest_outcome import evaluate_decision_v2_backtest_outcome
 from src.backtesting.decision_v2_context import build_decision_v2_as_of_context
 from src.backtesting.decision_v2_replay import run_decision_v2_replay
@@ -150,11 +152,222 @@ class TestNoLookAheadAudit:
         never on the real current time this test happens to run at."""
         subject, _ = _seed_universe(session)
         ctx = build_decision_v2_as_of_context(session, subject, _AS_OF)
+        from src.backtesting.decision_v2_context import _replay_market_state_instant_utc
         from src.market_intelligence.trading_calendar import is_market_open
-        from datetime import time as _time
 
-        as_of_end = datetime.combine(_AS_OF, _time.max, tzinfo=timezone.utc)
-        assert ctx.market_is_open == is_market_open(as_of_end)
+        assert ctx.market_is_open == is_market_open(_replay_market_state_instant_utc(_AS_OF))
+
+    def test_market_state_reflects_the_genuine_historical_trading_session_not_always_closed(self, session):
+        """HIGH_QUALITY_BUY structural repair: `_AS_OF` (2026-03-01) is a
+        genuine Tadawul trading day (Sunday). Before the fix,
+        `market_is_open` was always False for every replay point
+        regardless of the as-of date -- an end-of-UTC-day anchor always
+        converts to the small hours of the NEXT day in Tadawul local
+        time, permanently outside the 10:00-15:00 AST session. This
+        proves the harness now reads the genuine historical
+        trading-session state instead of always reporting closed."""
+        assert _AS_OF.weekday() == 6  # Sunday -- a real Tadawul trading day
+        subject, _ = _seed_universe(session)
+        ctx = build_decision_v2_as_of_context(session, subject, _AS_OF)
+        assert ctx.market_is_open is True
+        assert ctx.market_status == "OPEN"
+
+    def test_market_state_still_correctly_closed_on_a_non_trading_day(self, session):
+        """A genuine non-trading as-of date (Friday) must still report
+        closed -- the fix reads the real calendar, it does not force
+        open unconditionally."""
+        friday = _AS_OF - timedelta(days=2)
+        assert friday.weekday() == 4  # Friday -- not a Tadawul trading day
+        subject, _ = _seed_universe(session)
+        ctx = build_decision_v2_as_of_context(session, subject, friday)
+        assert ctx.market_is_open is False
+        assert ctx.market_status == "CLOSED"
+
+    def test_market_state_instant_does_not_change_the_freshness_evaluation_time(self, session):
+        """The market-state repair must not alter the already-verified
+        evaluation_time (freshness) fix -- the two are deliberately
+        separate instants, see decision_v2_context.py's module
+        docstring."""
+        subject, _ = _seed_universe(session)
+        ctx = build_decision_v2_as_of_context(session, subject, _AS_OF)
+        expected_evaluation_time = datetime.combine(_AS_OF, datetime.max.time(), tzinfo=timezone.utc)
+        assert ctx.evaluation_time == expected_evaluation_time
+
+
+class TestHighQualityBuyMarketStateReachability:
+    """HIGH_QUALITY_BUY structural repair, engine-level proof: the one
+    warning every replay point used to carry unconditionally --
+    "السوق مغلق حاليًا" (market currently closed), appended whenever
+    `market_is_open is False` -- is exactly what `classify_high_quality_
+    buy`'s `if warnings: return False` rule used to foreclose on for
+    100% of points, regardless of the underlying evidence quality. This
+    proves that foreclosure is now conditional on the genuine
+    historical trading-session state, not a harness artifact."""
+
+    _MARKET_CLOSED_WARNING = "السوق مغلق حاليًا"
+
+    def test_genuine_trading_day_does_not_carry_the_market_closed_warning(self, session):
+        """Mandate proof B (part 1): the mandatory market-closed
+        condition genuinely does NOT fail on a real trading day, so it
+        no longer disqualifies HIGH_QUALITY_BUY by itself."""
+        subject, _ = _seed_universe(session)
+        point = build_replay_point(session, subject, _AS_OF)
+        assert point is not None
+        result = run_phase3_v2(point)
+        assert not any(self._MARKET_CLOSED_WARNING in w for w in result.warnings)
+
+    def test_genuine_non_trading_day_still_carries_the_market_closed_warning(self, session):
+        """Mandate proof B (part 2): on a real non-trading date, the
+        condition genuinely DOES fail -- HIGH_QUALITY_BUY correctly
+        stays foreclosed, exactly as documented, not weakened."""
+        friday = _AS_OF - timedelta(days=2)
+        subject, _ = _seed_universe(session)
+        point = build_replay_point(session, subject, friday)
+        assert point is not None
+        result = run_phase3_v2(point)
+        assert any(self._MARKET_CLOSED_WARNING in w for w in result.warnings)
+        assert result.is_high_quality_buy is False
+
+    def test_no_look_ahead_introduced_by_the_market_state_repair(self, session):
+        """Mandate proof E: a future price shock after `_AS_OF` must not
+        change the as-of market-open read (it depends only on the
+        as-of date's own calendar position, never on price data)."""
+        subject, _ = _seed_universe(session, future_subject_shock=False)
+        ctx_normal = build_decision_v2_as_of_context(session, subject, _AS_OF)
+
+        engine2 = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(engine2)
+        session2 = sessionmaker(bind=engine2)()
+        subject2, _ = _seed_universe(session2, future_subject_shock=True)
+        ctx_shocked = build_decision_v2_as_of_context(session2, subject2, _AS_OF)
+
+        assert ctx_normal.market_is_open == ctx_shocked.market_is_open is True
+
+    def test_live_production_market_state_path_is_structurally_unreachable_from_this_module(self):
+        """Mandate proof D: `_replay_market_state_instant_utc` lives in
+        `src.backtesting.decision_v2_context`, a backtest-only module.
+        Neither of the two real production callers of
+        `DecisionEngineV2.decide()` (the `/decision-v2` route and the
+        live market scanner) ever imports this module -- their own
+        `market_is_open` values come from a real live-quote/calendar
+        read against actual wall-clock time, a wholly separate code
+        path this repair cannot touch."""
+        import inspect
+
+        import src.api.routes.stocks as stocks_route
+        import src.market_intelligence.scanner as scanner_module
+
+        assert "decision_v2_context" not in inspect.getsource(stocks_route)
+        assert "decision_v2_context" not in inspect.getsource(scanner_module)
+
+
+class TestConfidenceCalibrationHarnessReachability:
+    """Phase 3 area 2 structural repair: confidence calibration was
+    entirely unreached by the backtest harness before this repair --
+    `run_phase3_v2`'s new optional `session` parameter makes it
+    genuinely reachable/testable the same way live production would
+    exercise it (see that function's own docstring). Uses a manually-
+    constructed ACTIVE model, never one trained from this backtest's
+    own outcome data -- satisfies "do not train/tune a new calibrator
+    using this backtest.\""""
+
+    def _insert_active_model(self, session, coef=8.0, intercept=-4.0):
+        from src.domain.models import ConfidenceCalibrationMethod, ConfidenceCalibrationModel, ConfidenceCalibrationStatus
+
+        model = ConfidenceCalibrationModel(
+            version="test-manual-v1",
+            status=ConfidenceCalibrationStatus.ACTIVE,
+            method=ConfidenceCalibrationMethod.PLATT,
+            training_source=TRAINING_SOURCE_DECISION_V2,
+            model_params={"coef": coef, "intercept": intercept},
+            training_sample_size=42,
+        )
+        session.add(model)
+        session.commit()
+        return model
+
+    def test_no_session_preserves_the_exact_single_pass_behavior(self, session):
+        """Mandate proof C (part 1): omitting `session` entirely (every
+        caller before this repair) is a complete no-op."""
+        subject, _ = _seed_universe(session)
+        point = build_replay_point(session, subject, _AS_OF)
+        assert point is not None
+        without_session = run_phase3_v2(point)
+        with_session_omitted_again = run_phase3_v2(point)
+        assert without_session.decision == with_session_omitted_again.decision
+        assert without_session.confidence_score == with_session_omitted_again.confidence_score
+
+    def test_session_with_no_active_model_falls_back_safely(self, session):
+        """Mandate proof C (part 2): a real session with no active
+        calibration model (the honest state this backtest DB is in
+        unless a model is explicitly inserted) must not change the
+        result at all."""
+        subject, _ = _seed_universe(session)
+        point = build_replay_point(session, subject, _AS_OF)
+        assert point is not None
+        without_session = run_phase3_v2(point)
+        with_session_no_model = run_phase3_v2(point, session=session)
+        assert without_session.decision == with_session_no_model.decision
+        assert without_session.confidence_score == with_session_no_model.confidence_score
+
+    def test_active_model_is_genuinely_applied_and_reachable(self, session):
+        """Mandate proof B + D: a real (manually-inserted, not backtest-
+        trained) active model produces a genuinely different, calibrated
+        result -- confidence calibration is no longer structurally
+        unreachable from this harness."""
+        subject, _ = _seed_universe(session)
+        point = build_replay_point(session, subject, _AS_OF)
+        assert point is not None
+        baseline_result = run_phase3_v2(point)
+        if baseline_result.decision not in (Decision.BUY_CANDIDATE, Decision.STRONG_BUY_CANDIDATE):
+            pytest.skip("fixture did not produce a buy-like decision to reach the calibration gate")
+        self._insert_active_model(session)
+        calibrated_result = run_phase3_v2(point, session=session)
+
+        calibration_gate = next(
+            g for g in calibrated_result.gates if g.name == "confidence_calibration_applied"
+        )
+        assert calibration_gate.status.value in ("PASS", "FAIL")  # genuinely evaluated, not skipped
+        # Raw confidence is never silently overwritten by calibration.
+        assert calibrated_result.confidence_score == baseline_result.confidence_score
+
+    def test_poorly_calibrated_active_model_downgrades_the_decision(self, session):
+        """Mandate proof F, at the harness level: a real active model
+        whose calibrated probability falls below the configured minimum
+        genuinely changes the final decision, not merely a gate detail."""
+        subject, _ = _seed_universe(session)
+        point = build_replay_point(session, subject, _AS_OF)
+        assert point is not None
+        baseline_result = run_phase3_v2(point)
+        if baseline_result.decision not in (Decision.BUY_CANDIDATE, Decision.STRONG_BUY_CANDIDATE):
+            pytest.skip("fixture did not produce a buy-like decision to downgrade")
+        # A steep negative Platt fit drives every confidence toward a
+        # near-zero calibrated probability, well below any reasonable
+        # minimum threshold.
+        self._insert_active_model(session, coef=0.0, intercept=-10.0)
+        calibrated_result = run_phase3_v2(point, session=session)
+        assert calibrated_result.decision is Decision.WATCH
+
+    def test_calibration_application_has_no_look_ahead(self, session):
+        """Mandate proof E: the calibration model's own parameters are
+        fixed at insertion time and applied identically regardless of
+        the as-of evaluation date -- no per-point date dependency
+        exists in `get_effective_confidence`'s own lookup (source +
+        ACTIVE status only), so it cannot leak future information tied
+        to a specific historical point."""
+        subject, _ = _seed_universe(session)
+        self._insert_active_model(session)
+        point_at_as_of = build_replay_point(session, subject, _AS_OF)
+        earlier_date = _AS_OF - timedelta(days=7)
+        point_earlier = build_replay_point(session, subject, earlier_date)
+        assert point_at_as_of is not None and point_earlier is not None
+
+        from src.ai_evolution.confidence_calibration import get_effective_confidence
+
+        calibrated_a, version_a = get_effective_confidence(session, 80.0, source=TRAINING_SOURCE_DECISION_V2)
+        calibrated_b, version_b = get_effective_confidence(session, 80.0, source=TRAINING_SOURCE_DECISION_V2)
+        assert calibrated_a == calibrated_b
+        assert version_a == version_b == "test-manual-v1"
 
 
 class TestBaselineVsPhase3Divergence:

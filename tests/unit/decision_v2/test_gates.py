@@ -55,6 +55,50 @@ def _base_buy_inputs(**overrides) -> GateInputs:
     return GateInputs(**defaults)
 
 
+class TestConfidenceCalibrationGate:
+    """Phase 3 area 2 structural repair: `confidence_calibration_applied`
+    is the one gate `calibrated_success_probability` can affect -- a
+    caution-level downgrade to WATCH, never a silent overwrite of
+    `confidence_score` itself (this gate never touches that field)."""
+
+    def test_no_calibration_applied_is_not_evaluated_and_unaffected(self):
+        """Mandate proof C: the safe fallback -- omitting
+        calibrated_success_probability (every caller before this
+        repair, and the honest state until a model is active) leaves
+        the decision completely unaffected."""
+        inputs = _base_buy_inputs()
+        result = evaluate_decision(inputs, TUNING)
+        gate = next(g for g in result.gates if g.name == "confidence_calibration_applied")
+        assert gate.status is GateStatus.NOT_EVALUATED
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_calibration_above_threshold_passes(self):
+        inputs = _base_buy_inputs(calibrated_success_probability=0.6, min_calibrated_success_probability=0.35)
+        result = evaluate_decision(inputs, TUNING)
+        gate = next(g for g in result.gates if g.name == "confidence_calibration_applied")
+        assert gate.status is GateStatus.PASS
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_calibration_below_threshold_downgrades_to_watch(self):
+        """Mandate proof D: a mandatory condition genuinely failing --
+        a real, poor calibrated probability -- changes the decision."""
+        inputs = _base_buy_inputs(calibrated_success_probability=0.1, min_calibrated_success_probability=0.35)
+        result = evaluate_decision(inputs, TUNING)
+        gate = next(g for g in result.gates if g.name == "confidence_calibration_applied")
+        assert gate.status is GateStatus.FAIL
+        assert result.decision is Decision.WATCH
+
+    def test_calibration_never_overwrites_confidence_score_itself(self):
+        """`GateInputs.confidence_score` (the raw value) is untouched
+        by this gate regardless of the calibrated value -- calibration
+        gates the decision, it never silently rewrites the raw
+        confidence this engine reports."""
+        inputs = _base_buy_inputs(
+            confidence_score=80.0, calibrated_success_probability=0.1, min_calibrated_success_probability=0.35,
+        )
+        assert inputs.confidence_score == 80.0
+
+
 class TestBaselineMappings:
     def test_hold_maps_to_hold(self):
         inputs = _base_buy_inputs(recommendation=Recommendation.HOLD, direction=0)

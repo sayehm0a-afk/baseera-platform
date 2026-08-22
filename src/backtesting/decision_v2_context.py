@@ -48,16 +48,26 @@ injection point that lets `DecisionEngineV2.decide()`'s freshness gate
 measure staleness against this historical instant instead of real
 wall-clock time, which previously forced every BUY-like raw
 recommendation to WATCH regardless of actual data quality.
+
+`market_is_open` (structural repair, HIGH_QUALITY_BUY reachability) is
+deliberately evaluated against a SEPARATE instant from `evaluation_time`
+above -- see `_replay_market_state_instant_utc`'s own docstring for why
+reusing the same end-of-UTC-day anchor for market-open state, not just
+freshness, made HIGH_QUALITY_BUY structurally unreachable through this
+harness regardless of the evidence backing any individual decision.
 """
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from src.analysis.decision_v2.breakout_confirmation import BreakoutStatus, compute_breakout_confirmation
-from src.analysis.decision_v2.evidence import derive_support_resistance
+from src.analysis.decision_v2.breakout_confirmation import (
+    BreakoutStatus,
+    compute_breakout_confirmation,
+    resolve_breakout_reference_level,
+)
 from src.analysis.decision_v2.sector_strength import compute_sector_strength
 from src.analysis.recommendation.types import AnalysisContext
 from src.backtesting.data_access import (
@@ -67,13 +77,48 @@ from src.backtesting.data_access import (
 )
 from src.domain.models import Stock
 from src.domain.sector_labels import sector_label_ar
-from src.market_intelligence.trading_calendar import is_market_open
+from src.market_intelligence.trading_calendar import TADAWUL_SESSION_CLOSE, TADAWUL_TIMEZONE, is_market_open
 
 UNAVAILABLE_FEATURES: Tuple[str, ...] = ("news_sentiment", "market_breadth", "live_bid_ask")
 
 
 def _end_of_day_utc(day: date) -> datetime:
     return datetime.combine(day, time.max, tzinfo=timezone.utc)
+
+
+def _replay_market_state_instant_utc(day: date) -> datetime:
+    """The instant historical replay evaluates market OPEN/CLOSED state
+    against -- deliberately NOT `_end_of_day_utc` (which anchors
+    `evaluation_time`/freshness only, and is correct for that separate
+    purpose: freshness only needs "is this data too old," which an
+    end-of-day anchor answers generously).
+
+    Anchoring market-STATE to end-of-UTC-day the same way would always
+    convert to the small hours of the NEXT Tadawul trading day (23:59
+    UTC = ~02:59 AST the next calendar day) -- outside the 10:00-15:00
+    AST session on every single evaluation, regardless of whether the
+    as-of date was a genuine trading day. That made `is_market_open`
+    return False for all 5100 points in the zero-actionable-signal
+    diagnostic's own backtest run, which in turn made `engine.py`
+    unconditionally append a market-closed warning to every decision --
+    and `classify_high_quality_buy`'s `if warnings: return False` rule
+    then structurally forecloses HIGH_QUALITY_BUY for 100% of points,
+    regardless of how strong the underlying evidence actually was. This
+    is a harness measurement artifact, not a statement about how rare
+    HIGH_QUALITY_BUY genuinely is -- in live production, `market_is_open`
+    already reflects the real live-quote state during actual trading
+    hours (a wholly separate code path from this backtest-only module,
+    so this change cannot affect it).
+
+    Anchored instead to a real instant just before Tadawul's own
+    published session close (15:00 AST) on the as-of date itself, so
+    `is_market_open` reads the genuine historical trading-session state
+    for that date through the same real Sunday-Thursday/10:00-15:00 AST
+    calendar (`trading_calendar.is_market_open`) every live caller
+    already uses -- a non-trading as-of date (Friday/Saturday) still
+    correctly reports closed, exactly as it should."""
+    close_local = datetime.combine(day, TADAWUL_SESSION_CLOSE, tzinfo=TADAWUL_TIMEZONE) - timedelta(minutes=1)
+    return close_local.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -135,14 +180,18 @@ def build_decision_v2_as_of_context(
             }
 
         if base.context.technical_result is not None:
-            sr_evidence = derive_support_resistance(
-                base.context.latest_price, base.context.technical_result.support_resistance
-            )
             volume_sma = base.context.technical_result.indicators.get("volume_sma_20")
             volume_series = volume_sma.value if volume_sma is not None else None
             try:
+                # Deliberately NOT sr_evidence.breakout_level (nearest
+                # resistance to the CURRENT price) -- see
+                # resolve_breakout_reference_level's own docstring for
+                # why that made the guard below tautological.
+                breakout_level = resolve_breakout_reference_level(
+                    base.price_bars_df, base.context.technical_result.support_resistance
+                )
                 breakout_result = compute_breakout_confirmation(
-                    base.price_bars_df, sr_evidence.breakout_level, volume_series
+                    base.price_bars_df, breakout_level, volume_series
                 )
             except Exception:  # noqa: BLE001 -- an optional leg must never break the whole context
                 breakout_result = None
@@ -176,7 +225,7 @@ def build_decision_v2_as_of_context(
         extra=extra,
     )
 
-    market_is_open_flag = is_market_open(as_of_end)
+    market_is_open_flag = is_market_open(_replay_market_state_instant_utc(as_of))
 
     return DecisionV2AsOfContext(
         context=context,

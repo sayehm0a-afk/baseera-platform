@@ -41,9 +41,12 @@ break out."
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from src.analysis.types import SupportResistanceLevels
 
 LOOKBACK_DAYS = 10
 MIN_BARS_FOR_SEQUENCE = 3
@@ -79,6 +82,49 @@ _NOT_APPLICABLE = BreakoutConfirmation(
     follow_through_pct=None,
     explanation_ar="",
 )
+
+
+def resolve_breakout_reference_level(
+    df: pd.DataFrame,
+    levels: Optional["SupportResistanceLevels"],
+    lookback_days: int = LOOKBACK_DAYS,
+) -> Optional[float]:
+    """The resistance level a breakout is judged against -- selected
+    using the close price from BEFORE the lookback window this module
+    evaluates, never the current/latest close.
+
+    Structural repair: `evidence.derive_support_resistance()`'s own
+    `breakout_level` field (nearest resistance to the CURRENT price)
+    exists for a legitimate, different purpose -- "what level would a
+    NEW breakout need to clear from here," a live display field.
+    Feeding that same value into `compute_breakout_confirmation` (the
+    original design, before this fix) made its own `latest_close <=
+    breakout_level` guard tautological: a level the price has already
+    broken is, by definition, no longer >= the current price, so it
+    would silently be swapped for the next, still-untested level
+    further up -- which can never have been broken. No amount of
+    historical data fixes that; the level being tested has to be
+    fixed independently of the very price action it is meant to
+    judge.
+
+    Anchoring the reference instead to the close price at the START of
+    the lookback window lets a real, already-in-progress breakout stay
+    testable against the same level for the whole window it is judged
+    over. `None` when there isn't yet enough history to distinguish
+    "prior structure" from the lookback window itself -- the same
+    conservative "not enough data to judge" default this module
+    already returns as SEQUENCE_UNVERIFIED for a related reason."""
+    if levels is None or not levels.resistance:
+        return None
+    if df is None or df.empty or "close" not in df.columns:
+        return None
+    closes = df["close"]
+    prior_index = len(closes) - lookback_days - 1
+    if prior_index < 0:
+        return None
+    prior_price = float(closes.iloc[prior_index])
+    candidates = sorted(r for r in levels.resistance if r >= prior_price)
+    return candidates[0] if candidates else None
 
 
 def compute_breakout_confirmation(

@@ -55,6 +55,15 @@ class TestClassifyTradeType:
 
 
 class TestClassifyEntryStatus:
+    """The 4th positional argument is `price_severely_missed_entry_zone`
+    -- a magnitude-aware signal distinct from the plain "has price
+    missed the zone at all" boolean that already decided
+    `Decision.WAIT_FOR_ENTRY` itself (Gate 15, gates.py). Reusing that
+    same plain boolean here was the anti-chase structural defect the
+    audit found: reaching this WAIT_FOR_ENTRY branch already required
+    it to be True, making the WAIT_FOR_PULLBACK case below
+    unreachable. See `structure.price_severely_missed_entry_zone`."""
+
     def test_buy_candidate_is_ready_now(self):
         status, explanation = classify_entry_status(Decision.BUY_CANDIDATE, 100.0, 102.0, False)
         assert status is EntryStatus.READY_NOW
@@ -64,13 +73,26 @@ class TestClassifyEntryStatus:
         status, _ = classify_entry_status(Decision.STRONG_BUY_CANDIDATE, 100.0, 102.0, False)
         assert status is EntryStatus.READY_NOW
 
-    def test_wait_for_entry_with_missed_zone_is_missed_entry(self):
-        status, _ = classify_entry_status(Decision.WAIT_FOR_ENTRY, 105.0, 102.0, True)
+    def test_wait_for_entry_severely_missed_is_missed_entry(self):
+        status, _ = classify_entry_status(Decision.WAIT_FOR_ENTRY, 110.0, 102.0, True)
         assert status is EntryStatus.MISSED_ENTRY
 
-    def test_wait_for_entry_without_missed_zone_is_wait_for_pullback(self):
-        status, _ = classify_entry_status(Decision.WAIT_FOR_ENTRY, 100.0, 102.0, False)
+    def test_wait_for_entry_not_severely_missed_is_wait_for_pullback(self):
+        """The exact case that was unreachable before the fix: decision
+        is already WAIT_FOR_ENTRY (price has run past the zone at
+        least somewhat -- otherwise Gate 15 would never have produced
+        this decision in the first place) but the overrun is not
+        severe, so this is still a live setup worth waiting on."""
+        status, explanation = classify_entry_status(Decision.WAIT_FOR_ENTRY, 103.0, 102.0, False)
         assert status is EntryStatus.WAIT_FOR_PULLBACK
+        assert explanation != ""
+
+    def test_both_entry_states_are_actually_reachable(self):
+        """Mandate proof D: neither branch is dead code."""
+        missed_status, _ = classify_entry_status(Decision.WAIT_FOR_ENTRY, 110.0, 102.0, True)
+        pullback_status, _ = classify_entry_status(Decision.WAIT_FOR_ENTRY, 103.0, 102.0, False)
+        assert missed_status is EntryStatus.MISSED_ENTRY
+        assert pullback_status is EntryStatus.WAIT_FOR_PULLBACK
 
     def test_watch_is_near_entry(self):
         status, _ = classify_entry_status(Decision.WATCH, 100.0, 102.0, False)

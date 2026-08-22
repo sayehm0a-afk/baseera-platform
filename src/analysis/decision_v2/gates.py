@@ -96,6 +96,14 @@ class GateInputs:
     market_risk_entry_permitted: bool
     market_risk_label_ar: str
 
+    # --- Phase 3 area 2 (confidence calibration) -----------------------
+    # `None` (every caller today) means no ConfidenceCalibrationEngine
+    # model is active yet, or the caller chose not to apply one -- the
+    # gate below reports NOT_EVALUATED, never a fabricated PASS/FAIL,
+    # matching get_min_calibrated_success_probability()'s own docstring.
+    calibrated_success_probability: Optional[float] = None
+    min_calibrated_success_probability: float = 0.0
+
 
 @dataclass
 class GateEvaluation:
@@ -389,6 +397,45 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         "market_risk_permits_entry", GateStatus.PASS,
         f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- لا تمنع الدخول.", False,
     ))
+
+    # Phase 3 area 2, confidence-calibration gate: the one place this
+    # engine's real, already-trained-and-activated ConfidenceCalibrationEngine
+    # model (see src.ai_evolution.confidence_calibration) can affect a
+    # Decision -- caller-computed and passed in via `decide()`'s own
+    # `calibrated_success_probability` parameter (this engine never
+    # queries the database itself, see that parameter's own docstring).
+    # `None` (every caller that doesn't pass a value, and the honest
+    # state until enough real outcome history exists to activate a
+    # model) is NOT_EVALUATED, never a fabricated PASS/FAIL -- mirrors
+    # `src.market_intelligence.publication_gate`'s identical
+    # `_confidence_calibration_gate` for the legacy V1 pipeline, reusing
+    # its exact same threshold getter so the bar is configured in one
+    # place, not two. A caution-level downgrade to WATCH, not REJECT --
+    # a poorly-calibrated confidence score means the evidence is
+    # shakier than it looks, not that there is no evidence at all, the
+    # same reasoning trend_momentum_consistency/volume_quality above
+    # already apply.
+    if inputs.calibrated_success_probability is None:
+        gates.append(GateOutcome(
+            "confidence_calibration_applied", GateStatus.NOT_EVALUATED,
+            "لا يوجد نموذج معايرة ثقة نشط حاليًا -- لم يتم تطبيق معايرة على درجة الثقة.", False,
+        ))
+    elif inputs.calibrated_success_probability < inputs.min_calibrated_success_probability:
+        gates.append(GateOutcome(
+            "confidence_calibration_applied", GateStatus.FAIL,
+            (
+                f"احتمال النجاح المعايَر {inputs.calibrated_success_probability:.0%} أقل من الحد الأدنى "
+                f"{inputs.min_calibrated_success_probability:.0%}."
+            ),
+            True,
+        ))
+        warnings.append("درجة الثقة بعد المعايرة الإحصائية أضعف من الحد الأدنى المعتمد -- تم تخفيض التوصية للمراقبة.")
+        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
+    else:
+        gates.append(GateOutcome(
+            "confidence_calibration_applied", GateStatus.PASS,
+            f"احتمال النجاح المعايَر {inputs.calibrated_success_probability:.0%}.", False,
+        ))
 
     # Gate 12: confidence not based on a single indicator -----------------------
     multi_factor_ok = inputs.available_sub_score_count >= 3

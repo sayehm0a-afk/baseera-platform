@@ -18,6 +18,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from src.ai_evolution.confidence_calibration import TRAINING_SOURCE_DECISION_V2, get_effective_confidence
 from src.analysis.decision.ai_decision_engine import AIDecisionEngine
 from src.analysis.decision.types import InvestmentDecision
 from src.analysis.decision_v2.engine import DecisionEngineV2 as Phase3DecisionEngineV2
@@ -82,15 +83,47 @@ def _decide_kwargs(point: DecisionV2ReplayPoint) -> dict:
 
 def run_baseline_v2(point: DecisionV2ReplayPoint):
     """Runs the frozen pre-Phase-3 DecisionEngineV2 -- see
-    src.backtesting.decision_v2_baseline's provenance note."""
+    src.backtesting.decision_v2_baseline's provenance note. Never
+    receives confidence calibration (Phase 3 area 2 structural repair,
+    see `run_phase3_v2` below) -- that mechanism postdates this frozen
+    snapshot entirely, the same reason it never received the anti-
+    chase/breakout-confirmation/sector-strength repairs either."""
     return BaselineDecisionEngineV2().decide(
         point.as_of_context.context, point.investment_decision, **_decide_kwargs(point)
     )
 
 
-def run_phase3_v2(point: DecisionV2ReplayPoint):
+def run_phase3_v2(point: DecisionV2ReplayPoint, session: Optional[Session] = None):
     """Runs the live, current DecisionEngineV2 -- the exact same
-    class/module production imports."""
+    class/module production imports.
+
+    `session` (Phase 3 area 2 structural repair, optional -- `None`,
+    the default and every caller before this repair, preserves the
+    exact single-pass behavior this always had): when provided, applies
+    the existing, already-trained-and-activated ConfidenceCalibration
+    Engine model (if any) to this point's own raw confidence via a
+    second `decide()` call -- the same two-step "compute raw, then
+    calibrate, then let the SECOND pass's gates see the calibrated
+    value" pattern real live production would need to actually exercise
+    `gates.py`'s `confidence_calibration_applied` gate (that engine
+    never queries the database itself -- see `DecisionEngineV2.decide()`'s
+    own docstring for `calibrated_success_probability`). Never trains
+    or activates a calibrator itself -- `get_effective_confidence` only
+    ever reads whichever model is already ACTIVE through the separate,
+    human-gated `ConfidenceCalibrationEngine` lifecycle; in a fresh
+    backtest run with no such model yet, this correctly falls back to
+    the single-pass result unchanged (the honest "not enough history"
+    state, not a defect)."""
+    kwargs = _decide_kwargs(point)
+    result = Phase3DecisionEngineV2().decide(point.as_of_context.context, point.investment_decision, **kwargs)
+    if session is None:
+        return result
+    calibrated_probability, _version = get_effective_confidence(
+        session, result.confidence_score, source=TRAINING_SOURCE_DECISION_V2
+    )
+    if calibrated_probability is None:
+        return result
     return Phase3DecisionEngineV2().decide(
-        point.as_of_context.context, point.investment_decision, **_decide_kwargs(point)
+        point.as_of_context.context, point.investment_decision,
+        **{**kwargs, "calibrated_success_probability": calibrated_probability},
     )

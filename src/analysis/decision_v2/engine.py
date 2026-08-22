@@ -34,6 +34,7 @@ from src.market_intelligence.config import (
     get_max_data_age_hours,
     get_max_ohlcv_staleness_days,
     get_min_average_traded_value,
+    get_min_calibrated_success_probability,
     get_min_risk_reward_ratio,
 )
 from src.market_intelligence.types import MarketBreadthSummary
@@ -78,7 +79,22 @@ class DecisionEngineV2:
         scan_run_id: Optional[int] = None,
         market_breadth: Optional[MarketBreadthSummary] = None,
         evaluation_time: Optional[datetime] = None,
+        calibrated_success_probability: Optional[float] = None,
     ) -> DecisionResult:
+        """`calibrated_success_probability` (Phase 3 area 2 structural
+        repair): the caller-computed output of `src.ai_evolution.
+        confidence_calibration.get_effective_confidence()` (0-1) for
+        this same decision's raw confidence, or `None` (every caller
+        that doesn't pass one, and the honest state until a real
+        ConfidenceCalibrationEngine model is active). This engine never
+        queries the database itself -- it stays a pure function of its
+        explicit inputs, the same reason `evaluation_time` above is
+        caller-supplied rather than self-computed. See gates.py's
+        `confidence_calibration_applied` gate for the one place this
+        can actually affect the Decision (a caution-level downgrade to
+        WATCH, never a silent confidence overwrite -- the raw
+        `confidence_score` on the returned `DecisionResult` is always
+        the uncalibrated value)."""
         tuning = self._tuning
         technical = context.technical_result
         price = context.latest_price
@@ -168,6 +184,7 @@ class DecisionEngineV2:
             support_resistance, tuning,
         )
         missed_entry = structure.price_has_missed_entry_zone(price, entry_high, direction)
+        severely_missed_entry = structure.price_severely_missed_entry_zone(price, entry_low, entry_high, direction)
         target_2, target_3, target_2_basis, target_3_basis = structure.compute_extended_targets(
             price, investment_decision.target_price, atr_value, direction, support_resistance, tuning
         )
@@ -283,12 +300,14 @@ class DecisionEngineV2:
             market_context_score=market_context,
             market_risk_entry_permitted=market_risk.entry_permitted,
             market_risk_label_ar=market_risk.label_ar,
+            calibrated_success_probability=calibrated_success_probability,
+            min_calibrated_success_probability=get_min_calibrated_success_probability(),
         )
         evaluation = evaluate_decision(gate_inputs, tuning)
         warnings.extend(evaluation.warnings)
 
         entry_status, _entry_status_explanation = trade_classification.classify_entry_status(
-            evaluation.decision, price, entry_high, missed_entry,
+            evaluation.decision, price, entry_high, severely_missed_entry,
             breakout_status=breakout_confirmation.get("status"),
         )
         entry_status_label_ar = ENTRY_STATUS_LABELS_AR[entry_status]
