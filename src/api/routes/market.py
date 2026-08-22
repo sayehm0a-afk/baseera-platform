@@ -355,6 +355,7 @@ def get_scan_progress(
         rejected_count=progress.rejected_count,
         watch_only_count=progress.watch_only_count,
         not_evaluated_count=progress.not_evaluated_count,
+        wait_for_entry_count=progress.wait_for_entry_count,
         current_symbol=progress.current_symbol,
         current_symbol_name_en=progress.current_symbol_name_en,
         current_symbol_name_ar=progress.current_symbol_name_ar,

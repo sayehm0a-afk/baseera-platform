@@ -54,6 +54,12 @@ class MarketScanProgress(Base):
     rejected_count = Column(Integer, nullable=False, default=0, server_default="0")
     watch_only_count = Column(Integer, nullable=False, default=0, server_default="0")
     not_evaluated_count = Column(Integer, nullable=False, default=0, server_default="0")
+    # Phase 3 area 1: PublicationStatus.WAIT_FOR_ENTRY -- a real
+    # recommendation whose entry has already been missed (see
+    # publication_gate.py's entry_not_missed gate), distinct from
+    # NOT_EVALUATED (nothing was actually decided) and from REJECTED
+    # (the thesis itself failed a gate).
+    wait_for_entry_count = Column(Integer, nullable=False, default=0, server_default="0")
 
     current_symbol = Column(String(32), nullable=True)
     current_symbol_name_en = Column(String(255), nullable=True)

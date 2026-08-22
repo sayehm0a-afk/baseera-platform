@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from src.analysis.decision.types import EntryQuality, PositionSize
+from src.analysis.decision_v2.types import Decision as DecisionV2Decision
 from src.analysis.recommendation.types import Recommendation
 from src.market_intelligence.config import (
     get_fundamental_conflict_margin,
@@ -113,11 +114,22 @@ def evaluate_publication(
 
     if not is_actionable:
         for name in (
-            "risk_reward", "entry_quality", "abnormal_spread", "position_sizing",
+            "entry_not_missed", "risk_reward", "entry_quality", "abnormal_spread", "position_sizing",
             "news_conflict", "fundamental_conflict", "confidence_calibration",
         ):
             gates.append(GateResult(name=name, status=GateStatus.NOT_EVALUATED, detail="HOLD proposes no trade"))
         return PublicationEvaluation(status=PublicationStatus.PUBLISHED, gates=gates, disclosures=disclosures)
+
+    entry_not_missed_gate = _entry_not_missed_gate(outcome)
+    gates.append(entry_not_missed_gate)
+    if entry_not_missed_gate.status is GateStatus.FAIL:
+        # Phase 3 area 1 (anti-chase parity): mirrors decision_v2's own
+        # gates.py gate 15 exactly -- same WAIT_FOR_ENTRY status, same
+        # "do not chase" semantics -- so the market-wide Opportunities
+        # feed and the per-symbol /decision page can never disagree on
+        # the same symbol. Not REJECTED: the underlying thesis is
+        # still valid, only the entry timing has passed.
+        return PublicationEvaluation(status=PublicationStatus.WAIT_FOR_ENTRY, gates=gates, disclosures=disclosures)
 
     risk_reward_gate = _risk_reward_gate(outcome, recommendation)
     gates.append(risk_reward_gate)
@@ -257,6 +269,37 @@ def _risk_reward_gate(outcome: SymbolScanOutcome, recommendation: Recommendation
             detail=f"risk/reward {risk_reward_ratio:.2f} below minimum {min_ratio:.2f}",
         )
     return GateResult(name="risk_reward", status=GateStatus.PASS, detail=f"risk/reward {risk_reward_ratio:.2f}")
+
+
+def _entry_not_missed_gate(outcome: SymbolScanOutcome) -> GateResult:
+    """Phase 3 area 1 (anti-chase parity): reuses -- never recomputes --
+    `DecisionEngineV2`'s own already-computed `Decision.WAIT_FOR_ENTRY`
+    verdict (`outcome.decision_v2`, computed by `MarketScanner` alongside
+    `report` from the exact same `InvestmentDecision`, see
+    `SymbolScanOutcome.decision_v2`'s own docstring). `Decision.
+    WAIT_FOR_ENTRY` has exactly one producer in the whole decision_v2
+    package -- gates.py's own `entry_not_missed` gate (structure.
+    price_has_missed_entry_zone) -- so reading it here can never drift
+    from what the per-symbol /decision route would say about the same
+    symbol at the same moment. `entry_status_label_ar` (e.g. "فاتت نقطة
+    الدخول" for a fully missed entry, or the pullback-wait label) is
+    carried into the gate detail so the real, precise reason is visible,
+    not just a boolean."""
+    decision_v2 = outcome.decision_v2
+    if decision_v2 is None:
+        return GateResult(
+            name="entry_not_missed", status=GateStatus.NOT_EVALUATED,
+            detail="Decision Engine V2 result unavailable for this symbol -- entry-zone timing not evaluated",
+        )
+    if decision_v2.decision is DecisionV2Decision.WAIT_FOR_ENTRY:
+        return GateResult(
+            name="entry_not_missed", status=GateStatus.FAIL,
+            detail=decision_v2.entry_status_label_ar or "السعر تجاوز نطاق الدخول المناسب بالفعل.",
+        )
+    return GateResult(
+        name="entry_not_missed", status=GateStatus.PASS,
+        detail=decision_v2.entry_status_label_ar or "السعر لا يزال ضمن نطاق دخول معقول.",
+    )
 
 
 def _liquidity_gate(outcome: SymbolScanOutcome) -> GateResult:

@@ -44,7 +44,12 @@ _EXCESSIVE_VOLATILITY_PCT_DEFAULT = 0.08
 _MAX_REASONS = 5
 
 
-def _direction_of(recommendation: Optional[Recommendation]) -> int:
+def direction_of(recommendation: Optional[Recommendation]) -> int:
+    """+1 for a BUY-like recommendation, -1 for a SELL-like one, 0
+    otherwise. Public (Phase 3, area 1) so publication_gate.py's
+    market-wide anti-chase gate can derive the same direction this
+    engine uses, from the same InvestmentDecision.recommendation,
+    instead of reimplementing this mapping a second time."""
     if recommendation in (Recommendation.BUY, Recommendation.STRONG_BUY):
         return 1
     if recommendation in (Recommendation.SELL, Recommendation.STRONG_SELL):
@@ -76,7 +81,7 @@ class DecisionEngineV2:
         tuning = self._tuning
         technical = context.technical_result
         price = context.latest_price
-        direction = _direction_of(investment_decision.recommendation)
+        direction = direction_of(investment_decision.recommendation)
 
         market_risk = classify_market_risk(market_is_open=bool(market_is_open), breadth=market_breadth)
 

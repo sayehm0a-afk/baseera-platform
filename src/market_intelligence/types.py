@@ -123,6 +123,13 @@ class PublicationStatus(str, Enum):
     WATCH_ONLY = "WATCH_ONLY"
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
     NOT_EVALUATED = "NOT_EVALUATED"
+    # Phase 3 area 1 (anti-chase parity): the trade thesis and levels
+    # are otherwise fine, but price has already run past the valid
+    # entry zone -- distinct from REJECTED (thesis itself is invalid)
+    # and from WATCH_ONLY (entry quality is poor). Mirrors
+    # decision_v2's own Decision.WAIT_FOR_ENTRY so the two surfaces
+    # cannot disagree on the same anti-chase condition.
+    WAIT_FOR_ENTRY = "WAIT_FOR_ENTRY"
 
 
 @dataclass(frozen=True)

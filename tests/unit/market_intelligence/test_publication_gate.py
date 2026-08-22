@@ -4,9 +4,11 @@ publishable" step that let symbol 1020 reach TOP_BUY #1 in the
 a negative expected return."""
 
 from src.analysis.decision.types import EntryQuality, PositionSize, Recommendation
+from src.analysis.decision_v2.types import Decision as DecisionV2Decision
 from src.analysis.recommendation.types import AnalysisContext
 from src.market_intelligence.publication_gate import evaluate_publication, is_publishable
 from src.market_intelligence.types import GateStatus, PublicationStatus
+from tests.unit.ai_evolution.committee._fixtures import make_decision_result
 from tests.unit.market_intelligence._fixtures import make_breakdown, make_decision, make_outcome
 
 
@@ -497,6 +499,68 @@ def test_hold_is_never_gated_by_the_new_actionable_only_gates():
     )
     evaluation = evaluate_publication(outcome)
     assert evaluation.status is PublicationStatus.PUBLISHED
-    for name in ("abnormal_spread", "position_sizing", "news_conflict", "fundamental_conflict", "confidence_calibration"):
+    for name in (
+        "entry_not_missed", "abnormal_spread", "position_sizing", "news_conflict", "fundamental_conflict",
+        "confidence_calibration",
+    ):
         gate = next(g for g in evaluation.gates if g.name == name)
         assert gate.status is GateStatus.NOT_EVALUATED, f"{name} should not be evaluated for a HOLD"
+
+
+# --- Phase 3 area 1: Opportunities-feed anti-chase parity with the --------
+# --- per-symbol Decision Engine V2 -----------------------------------
+
+
+def test_missed_entry_per_decision_v2_downgrades_to_wait_for_entry_not_rejected():
+    """The exact anti-chase parity guarantee the Phase 3 mandate asks
+    for: when decision_v2 (computed by MarketScanner from the same
+    InvestmentDecision, see SymbolScanOutcome.decision_v2) already says
+    Decision.WAIT_FOR_ENTRY, the market-wide Opportunities feed must
+    reach the same verdict -- not REJECTED (the thesis is still valid,
+    only the entry timing has passed), and not silently PUBLISHED
+    (which would let the feed chase a price the per-symbol page already
+    refuses to)."""
+    decision_v2 = make_decision_result(
+        decision=DecisionV2Decision.WAIT_FOR_ENTRY,
+        decision_label_ar="بانتظار نقطة الدخول",
+        entry_status_label_ar="فاتت نقطة الدخول المناسبة",
+    )
+    outcome = make_outcome(
+        decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0),
+        decision_v2=decision_v2,
+    )
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.WAIT_FOR_ENTRY
+    assert not is_publishable(outcome)
+    entry_not_missed_gate = next(g for g in evaluation.gates if g.name == "entry_not_missed")
+    assert entry_not_missed_gate.status is GateStatus.FAIL
+    assert entry_not_missed_gate.detail == "فاتت نقطة الدخول المناسبة"
+
+
+def test_decision_v2_confirms_entry_is_not_missed_publication_proceeds():
+    decision_v2 = make_decision_result(
+        decision=DecisionV2Decision.BUY_CANDIDATE,
+        entry_status_label_ar="السعر ضمن نطاق الدخول",
+    )
+    outcome = make_outcome(
+        decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0),
+        decision_v2=decision_v2,
+    )
+    evaluation = evaluate_publication(outcome)
+    entry_not_missed_gate = next(g for g in evaluation.gates if g.name == "entry_not_missed")
+    assert entry_not_missed_gate.status is GateStatus.PASS
+    assert evaluation.status is PublicationStatus.PUBLISHED
+
+
+def test_missing_decision_v2_leaves_entry_not_missed_gate_not_evaluated():
+    """Backward compatibility: an outcome built before decision_v2
+    existed (decision_v2=None, the make_outcome default) must not be
+    retroactively blocked -- NOT_EVALUATED, same convention as the
+    sector/benchmark/data-source gates, and publication proceeds on
+    the merit of every other gate."""
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
+    assert outcome.decision_v2 is None
+    evaluation = evaluate_publication(outcome)
+    entry_not_missed_gate = next(g for g in evaluation.gates if g.name == "entry_not_missed")
+    assert entry_not_missed_gate.status is GateStatus.NOT_EVALUATED
+    assert evaluation.status is PublicationStatus.PUBLISHED

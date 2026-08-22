@@ -53,6 +53,7 @@ class MarketScanProgressOut(BaseModel):
     rejected_count: int
     watch_only_count: int
     not_evaluated_count: int
+    wait_for_entry_count: int = 0
     current_symbol: Optional[str] = None
     current_symbol_name_en: Optional[str] = None
     current_symbol_name_ar: Optional[str] = None

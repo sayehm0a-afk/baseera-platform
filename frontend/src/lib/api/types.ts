@@ -222,6 +222,7 @@ export interface MarketScanProgress {
   rejected_count: number;
   watch_only_count: number;
   not_evaluated_count: number;
+  wait_for_entry_count: number;
   current_symbol: string | null;
   current_symbol_name_en: string | null;
   current_symbol_name_ar: string | null;

@@ -25,9 +25,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.analysis.decision.types import Recommendation
+from src.analysis.decision_v2.types import Decision as DecisionV2Decision
 from src.market_intelligence.publication_gate import evaluate_publication, is_publishable
 from src.market_intelligence.ranking import RankingEngine
 from src.market_intelligence.types import GateStatus, PublicationStatus, RankingCategory
+from tests.unit.ai_evolution.committee._fixtures import make_decision_result
 from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
 
 
@@ -106,19 +108,24 @@ def test_case_07_insufficient_history_is_insufficient_data():
 
 
 # 9. Extreme price move -> prevent chasing without confirmation.
-@pytest.mark.xfail(
-    reason="No 'extreme move / already priced in' gate exists yet -- publication_gate.py has no check "
-    "on how far price has already run before entry. Disclosed gap, docs/basirah_intelligence_core/"
-    "PHASE_0_REALITY_AUDIT.md.",
-    strict=True,
-)
+# No longer a disclosed gap: Phase 3 area 1 wires publication_gate.py's
+# entry_not_missed gate to DecisionEngineV2's own already-computed
+# Decision.WAIT_FOR_ENTRY (structure.price_has_missed_entry_zone) --
+# see test_publication_gate.py::test_missed_entry_per_decision_v2_
+# downgrades_to_wait_for_entry_not_rejected for the direct gate test.
 def test_case_09_extreme_recent_price_move_is_flagged_before_chasing():
+    decision_v2 = make_decision_result(
+        decision=DecisionV2Decision.WAIT_FOR_ENTRY,
+        entry_status_label_ar="فاتت نقطة الدخول المناسبة بسبب ارتفاع حاد في السعر",
+    )
     outcome = make_outcome(
         technical_snapshot={"volume_sma_20": 100000.0},
         decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0),
+        decision_v2=decision_v2,
     )
     evaluation = evaluate_publication(outcome)
     assert evaluation.status is not PublicationStatus.PUBLISHED
+    assert not is_publishable(outcome)
 
 
 # 10. Conflicting technical and fundamental evidence -> disclosed and downgraded.

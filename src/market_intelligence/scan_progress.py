@@ -61,6 +61,7 @@ class _ProgressState:
     rejected_count: int = 0
     watch_only_count: int = 0
     not_evaluated_count: int = 0
+    wait_for_entry_count: int = 0
     current_symbol: Optional[str] = None
     current_symbol_name_en: Optional[str] = None
     current_symbol_name_ar: Optional[str] = None
@@ -134,6 +135,8 @@ class ScanProgressTracker:
                     self._state.rejected_count += 1
                 elif evaluation.status == PublicationStatus.WATCH_ONLY:
                     self._state.watch_only_count += 1
+                elif evaluation.status == PublicationStatus.WAIT_FOR_ENTRY:
+                    self._state.wait_for_entry_count += 1
                 else:
                     self._state.not_evaluated_count += 1
             elif outcome.skipped_reason == "insufficient_data":
@@ -217,6 +220,7 @@ class ScanProgressTracker:
             row.rejected_count = s.rejected_count
             row.watch_only_count = s.watch_only_count
             row.not_evaluated_count = s.not_evaluated_count
+            row.wait_for_entry_count = s.wait_for_entry_count
             row.current_symbol = s.current_symbol
             row.current_symbol_name_en = s.current_symbol_name_en
             row.current_symbol_name_ar = s.current_symbol_name_ar
@@ -264,6 +268,7 @@ class ScanProgressTracker:
             "rejected_count": s.rejected_count,
             "watch_only_count": s.watch_only_count,
             "not_evaluated_count": s.not_evaluated_count,
+            "wait_for_entry_count": s.wait_for_entry_count,
             "current_symbol": s.current_symbol,
             "current_symbol_name_en": s.current_symbol_name_en,
             "current_symbol_name_ar": s.current_symbol_name_ar,
@@ -312,7 +317,8 @@ class ScanProgressTracker:
                 f"- SUCCESS: {d['success_count']} | FAILED: {d['failed_count']} | "
                 f"SKIPPED: {d['skipped_count']} | INSUFFICIENT_DATA: {d['insufficient_data_count']}",
                 f"- PUBLISHED: {d['published_count']} | REJECTED: {d['rejected_count']} | "
-                f"WATCH_ONLY: {d['watch_only_count']} | NOT_EVALUATED: {d['not_evaluated_count']}",
+                f"WATCH_ONLY: {d['watch_only_count']} | WAIT_FOR_ENTRY: {d['wait_for_entry_count']} | "
+                f"NOT_EVALUATED: {d['not_evaluated_count']}",
                 f"- Elapsed: {d['elapsed_seconds']}s | Avg/symbol: {d['average_seconds_per_symbol']}s | "
                 f"Est. remaining: {d['estimated_remaining_seconds']}s",
                 f"- API calls so far: {d['api_calls_total']} | Retries: {d['retries_total']}",
