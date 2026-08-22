@@ -283,6 +283,8 @@ def arm_metrics(records, label):
 
 baseline_metrics, baseline_entered = arm_metrics(summary.baseline_records, "baseline_v2")
 phase3_metrics, phase3_entered = arm_metrics(summary.phase3_records, "phase3_v2")
+baseline_records = summary.baseline_records
+phase3_records = summary.phase3_records
 print(json.dumps(baseline_metrics, indent=2, default=str))
 print(json.dumps(phase3_metrics, indent=2, default=str))
 
@@ -358,9 +360,6 @@ mechanisms = {}
 ac_reach = [r for r in phase3_records if r.decision == "WAIT_FOR_ENTRY"]
 ac_missed = [r for r in ac_reach if r.entry_status == "MISSED_ENTRY"]
 ac_pullback = [r for r in ac_reach if r.entry_status == "WAIT_FOR_PULLBACK"]
-ac_baseline_pair_decisions = {
-    (b.symbol, str(b.evaluated_at)): b.decision for b in baseline_records if b.decision == "WAIT_FOR_ENTRY"
-}
 mechanisms["anti_chase"] = {
     "A_evaluated_points_reached_mechanism": len(ac_reach),
     "B_activated_MISSED_ENTRY_severe_overrun": len(ac_missed),
