@@ -4,7 +4,7 @@ import {
   RecommendationBadge,
   type RecommendationValue,
 } from "@/components/badges/RecommendationBadge";
-import { RISK_LEVEL_LABELS } from "@/lib/portfolio-labels";
+import { RISK_LEVEL_LABELS, TIME_HORIZON_LABELS } from "@/lib/portfolio-labels";
 import type { AnalystReport } from "@/lib/api/stocks-types";
 
 const ENTRY_QUALITY_LABELS: Record<string, string> = {
@@ -61,7 +61,7 @@ export function AnalystReportView({ report }: { report: AnalystReport }) {
             <RecommendationBadge value={report.recommendation as RecommendationValue} />
           </div>
           <span className="text-xs text-bsr-text-muted">
-            {new Date(report.generated_at).toLocaleString("ar-SA")}
+            {new Date(report.generated_at).toLocaleString("ar-SA", { calendar: "gregory" })}
           </span>
         </div>
 
@@ -89,7 +89,7 @@ export function AnalystReportView({ report }: { report: AnalystReport }) {
           </div>
           <div className="rounded-bsr-md bg-bsr-surface-overlay px-bsr-3 py-bsr-2">
             <p className="text-xs text-bsr-text-secondary">الإطار الزمني</p>
-            <p className="text-bsr-text-primary">{report.time_horizon}</p>
+            <p className="text-bsr-text-primary">{TIME_HORIZON_LABELS[report.time_horizon] ?? report.time_horizon}</p>
           </div>
           <div className="rounded-bsr-md bg-bsr-surface-overlay px-bsr-3 py-bsr-2">
             <p className="text-xs text-bsr-text-secondary">مستوى المخاطرة</p>

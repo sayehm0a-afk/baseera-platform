@@ -182,10 +182,10 @@ function UsersPageInner() {
                       {user.is_staff && user.staff_role ? STAFF_ROLE_LABELS_AR[user.staff_role] : "—"}
                     </td>
                     <td className="bsr-numeric p-bsr-3 text-bsr-text-secondary">
-                      {new Date(user.created_at).toLocaleDateString("ar-SA")}
+                      {new Date(user.created_at).toLocaleDateString("ar-SA", { calendar: "gregory" })}
                     </td>
                     <td className="bsr-numeric p-bsr-3 text-bsr-text-secondary">
-                      {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString("ar-SA") : "—"}
+                      {user.last_login_at ? new Date(user.last_login_at).toLocaleDateString("ar-SA", { calendar: "gregory" }) : "—"}
                     </td>
                     <td className="p-bsr-3">
                       <div className="flex flex-wrap gap-bsr-2">

@@ -38,6 +38,11 @@ class PortfolioNewsAlert(Base):
     alert_type = Column(Enum(PortfolioAlertType), nullable=False, index=True)
     severity = Column(Enum(AlertSeverity), nullable=False)
     message = Column(Text, nullable=False)
+    # Pre-launch safety fix (2026-08-22, Priority 2): Arabic presentation
+    # companion to `message` -- nullable so rows written before this
+    # column existed still read back cleanly (frontend falls back to
+    # `message`). Never used by any decision/classification logic.
+    message_ar = Column(Text, nullable=True)
 
     generated_at = Column(DateTime(timezone=True), nullable=False, index=True)
     acknowledged_at = Column(DateTime(timezone=True), nullable=True)

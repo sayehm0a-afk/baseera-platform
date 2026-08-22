@@ -20,7 +20,12 @@ from src.domain.models import (
     Stock,
     User,
 )
-from src.news_intelligence.portfolio_alerts import PortfolioNewsAlertEngine, build_alert_message, classify_alert_type
+from src.news_intelligence.portfolio_alerts import (
+    PortfolioNewsAlertEngine,
+    build_alert_message,
+    build_alert_message_ar,
+    classify_alert_type,
+)
 
 
 # --- classify_alert_type: pure function -----------------------------------
@@ -60,6 +65,22 @@ def test_build_alert_message_cites_headline_and_category():
     assert "2222" in message
     assert "Company X faces lawsuit" in message
     assert "LAWSUIT" in message
+
+
+def test_build_alert_message_ar_is_arabic_except_the_verbatim_headline():
+    """Pre-launch safety fix (2026-08-22, Priority 2): the Arabic
+    companion must not leak the raw English alert-type/category tokens
+    -- only the real news headline (untranslated article text) may
+    still contain non-Arabic characters."""
+    event = NewsEvent(external_key="k", headline="Company X faces lawsuit", source="sahmk", category=NewsCategory.LAWSUIT)
+    message_ar = build_alert_message_ar("2222", PortfolioAlertType.HIGH_RISK, event)
+
+    assert "2222" in message_ar
+    assert "Company X faces lawsuit" in message_ar
+    assert "مخاطرة عالية" in message_ar
+    assert "قضية قانونية" in message_ar
+    assert "HIGH_RISK" not in message_ar
+    assert "LAWSUIT" not in message_ar
 
 
 # --- PortfolioNewsAlertEngine: full DB integration ------------------------
@@ -114,6 +135,25 @@ def test_generate_and_persist_creates_a_high_risk_alert_and_a_notification(sessi
     assert session.query(PortfolioNewsAlert).count() == 1
     notification = session.query(Notification).one()
     assert notification.user_id == portfolio.user_id
+
+
+def test_generate_and_persist_populates_arabic_presentation_fields(session, portfolio):
+    """Pre-launch safety fix (2026-08-22, Priority 2): both the
+    structured PortfolioNewsAlert row and its linked Notification must
+    carry a real Arabic companion, not just the legacy English text."""
+    _analyzed_event(session, "2222", NewsCategory.LAWSUIT, -0.7, 90.0)
+
+    PortfolioNewsAlertEngine().generate_and_persist(session, portfolio, ["2222"])
+
+    alert_row = session.query(PortfolioNewsAlert).one()
+    assert alert_row.message_ar is not None
+    assert "مخاطرة عالية" in alert_row.message_ar
+
+    notification = session.query(Notification).one()
+    assert notification.title_ar is not None
+    assert notification.body_ar is not None
+    assert "مخاطرة عالية" in notification.title_ar
+    assert notification.body_ar == alert_row.message_ar
 
 
 def test_generate_and_persist_is_idempotent_for_the_same_event(session, portfolio):

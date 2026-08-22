@@ -1,5 +1,6 @@
 import type { CommitteeConsensus } from "@/lib/api/stocks-types";
 import {
+  AGENT_NAME_LABELS_AR,
   AGENT_ROLE_LABELS_AR,
   AGENT_STANCE_LABELS_AR,
   FINAL_DECISION_LABELS_AR,
@@ -59,13 +60,17 @@ export function CommitteePanel({ committee }: { committee: CommitteeConsensus | 
           {committee.most_optimistic_agent ? (
             <div>
               <p className="text-[11px] text-bsr-text-secondary">الأكثر تفاؤلاً</p>
-              <p className="text-sm font-semibold text-bsr-action-buy">{committee.most_optimistic_agent}</p>
+              <p className="text-sm font-semibold text-bsr-action-buy">
+                {AGENT_NAME_LABELS_AR[committee.most_optimistic_agent] ?? committee.most_optimistic_agent}
+              </p>
             </div>
           ) : null}
           {committee.most_conservative_agent ? (
             <div>
               <p className="text-[11px] text-bsr-text-secondary">الأكثر تحفظاً</p>
-              <p className="text-sm font-semibold text-bsr-action-sell">{committee.most_conservative_agent}</p>
+              <p className="text-sm font-semibold text-bsr-action-sell">
+                {AGENT_NAME_LABELS_AR[committee.most_conservative_agent] ?? committee.most_conservative_agent}
+              </p>
             </div>
           ) : null}
         </div>
@@ -89,7 +94,9 @@ export function CommitteePanel({ committee }: { committee: CommitteeConsensus | 
               className="rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base p-bsr-2"
             >
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-bsr-text-primary">{opinion.agent_name}</span>
+                <span className="text-xs font-semibold text-bsr-text-primary">
+                  {AGENT_NAME_LABELS_AR[opinion.agent_name] ?? opinion.agent_name}
+                </span>
                 <span className={`text-xs font-semibold ${stanceColorClass(opinion.stance)}`}>
                   {AGENT_STANCE_LABELS_AR[opinion.stance]}
                 </span>
@@ -117,7 +124,7 @@ export function CommitteePanel({ committee }: { committee: CommitteeConsensus | 
           <ul className="mt-1 flex flex-col gap-1 text-[11px] text-bsr-text-secondary">
             {committee.rejected_alternatives.map((alt) => (
               <li key={alt.agent_name}>
-                <span className="font-semibold text-bsr-text-primary">{alt.agent_name}</span>{" "}
+                <span className="font-semibold text-bsr-text-primary">{AGENT_NAME_LABELS_AR[alt.agent_name] ?? alt.agent_name}</span>{" "}
                 <span className={stanceColorClass(alt.stance)}>({AGENT_STANCE_LABELS_AR[alt.stance]})</span>:{" "}
                 {alt.rejection_reason}
               </li>

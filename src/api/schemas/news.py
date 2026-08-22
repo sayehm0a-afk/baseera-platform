@@ -79,6 +79,7 @@ class PortfolioNewsAlertOut(BaseModel):
     alert_type: str
     severity: str
     message: str
+    message_ar: Optional[str] = None
     generated_at: datetime
     acknowledged_at: Optional[datetime] = None
 

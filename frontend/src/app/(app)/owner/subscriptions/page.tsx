@@ -20,7 +20,7 @@ const STATUS_LABELS_AR: Record<string, string> = {
 };
 
 function fmtDate(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleDateString("ar-SA") : "—";
+  return iso ? new Date(iso).toLocaleDateString("ar-SA", { calendar: "gregory" }) : "—";
 }
 
 type PageState =

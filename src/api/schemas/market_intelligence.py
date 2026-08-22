@@ -908,6 +908,18 @@ class RadarOpportunitySummaryOut(BaseModel):
     risk_level_label_ar: Optional[str] = None
     data_freshness_status: str
 
+    # Pre-launch safety fix (2026-08-22): entry_status/entry_status_label_ar
+    # were already computed by Decision Engine V2 for every opportunity
+    # (src.analysis.decision_v2.trade_classification.classify_entry_status)
+    # and already exposed on the Detail payload -- just never surfaced on
+    # the list/summary payload the consumer Radar page and cards actually
+    # render. Presentation-only exposure of an existing value; no new
+    # classification logic. entry_status == "MISSED_ENTRY" is what lets the
+    # frontend stop presenting an opportunity as a current actionable entry
+    # without touching the underlying decision.
+    entry_status: Optional[str] = None
+    entry_status_label_ar: Optional[str] = None
+
     stage1_rank: Optional[int] = None
     stage1_ranking_score: Optional[float] = None
     ranking_reason_ar: Optional[str] = None
@@ -970,7 +982,9 @@ class RadarOpportunityDetailOut(RadarOpportunitySummaryOut):
     accumulation_score: Optional[float] = None
 
     entry_quality_label_ar: Optional[str] = None
-    entry_status_label_ar: Optional[str] = None
+    # entry_status / entry_status_label_ar are inherited from
+    # RadarOpportunitySummaryOut (exposed there too as of the pre-launch
+    # safety fix above) -- not redeclared here.
 
     why_now_ar: Optional[str] = None
     why_not_stronger_ar: Optional[str] = None

@@ -67,6 +67,33 @@ const INDICATOR_LABELS: Record<string, string> = {
   candlestick_patterns: "أنماط الشموع اليابانية",
 };
 
+/** Pre-launch safety fix (2026-08-22, Priority 2): true ratio names ->
+ * Arabic display labels, matching the fundamental engine's real,
+ * currently-fixed key set (src.analysis.fundamental.
+ * fundamental_analysis_engine.FundamentalMetrics's named accessors).
+ * Same "unknown keys still render, just under their raw name" contract
+ * as INDICATOR_LABELS above -- never silently drops a new ratio. */
+const RATIO_LABELS: Record<string, string> = {
+  net_profit_margin: "هامش صافي الربح",
+  gross_profit_margin: "هامش الربح الإجمالي",
+  return_on_equity: "العائد على حقوق الملكية",
+  return_on_assets: "العائد على الأصول",
+  current_ratio: "نسبة التداول",
+  quick_ratio: "النسبة السريعة",
+  cash_ratio: "نسبة النقدية",
+  debt_to_equity: "نسبة الدين إلى حقوق الملكية",
+  debt_to_assets: "نسبة الدين إلى الأصول",
+  equity_multiplier: "مضاعف حقوق الملكية",
+  asset_turnover: "معدل دوران الأصول",
+  price_to_earnings: "مكرر الربحية (P/E)",
+  price_to_book: "مكرر القيمة الدفترية (P/B)",
+  dividend_yield: "عائد التوزيعات",
+  market_cap: "القيمة السوقية",
+  revenue_growth: "نمو الإيرادات",
+  net_income_growth: "نمو صافي الدخل",
+  eps_growth: "نمو ربحية السهم",
+};
+
 export function StockDetailClient({ symbol }: { symbol: string }) {
   const [tab, setTab] = useState<Tab>("overview");
   const [beginnerMode, setBeginnerMode] = useState(false);
@@ -240,7 +267,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
               <span className="text-xs text-bsr-text-secondary">المصدر: {quote.data.source}</span>
             )}
             <span className="bsr-numeric text-xs text-bsr-text-secondary">
-              آخر تحديث: {new Date(quote.data.timestamp).toLocaleString("ar-SA")}
+              آخر تحديث: {new Date(quote.data.timestamp).toLocaleString("ar-SA", { calendar: "gregory" })}
             </span>
           </div>
         ) : quote.status === "unavailable" ? (
@@ -422,7 +449,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
             <div className="grid grid-cols-1 gap-bsr-2 rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 sm:grid-cols-2">
               {Object.entries(fundamentals.data.ratios).map(([name, value]) => (
                 <div key={name} className="flex items-center justify-between border-b border-bsr-border-subtle py-bsr-2 last:border-0">
-                  <span className="text-sm text-bsr-text-secondary">{name}</span>
+                  <span className="text-sm text-bsr-text-secondary">{RATIO_LABELS[name] ?? name}</span>
                   <span className="bsr-numeric text-sm font-medium text-bsr-text-primary">
                     {formatRatioValue(value)}
                   </span>

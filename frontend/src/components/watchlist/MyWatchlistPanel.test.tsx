@@ -106,6 +106,43 @@ describe("MyWatchlistPanel", () => {
     expect(screen.queryByText(/الرادار الذكي/)).not.toBeInTheDocument();
   });
 
+  it("shows the recommendation age alongside the decision", async () => {
+    vi.mocked(getMyWatchlist).mockResolvedValue({
+      generated_at: "2026-08-01T00:00:00Z",
+      items: [buildItem({ latest_decision_timestamp: "2026-08-01T12:00:00Z" })],
+    });
+
+    render(<MyWatchlistPanel />);
+
+    expect(await screen.findByText(/آخر تحديث:/)).toBeInTheDocument();
+  });
+
+  it("never shows target/stop without a visible recommendation age -- a decision with no timestamp shows neither", async () => {
+    vi.mocked(getMyWatchlist).mockResolvedValue({
+      generated_at: "2026-08-01T00:00:00Z",
+      items: [buildItem({ latest_decision_timestamp: null })],
+    });
+
+    render(<MyWatchlistPanel />);
+    await screen.findByText("2222");
+
+    expect(screen.queryByText(/الهدف الأول:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/وقف الخسارة:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/آخر تحديث:/)).not.toBeInTheDocument();
+  });
+
+  it("shows target/stop together with their age when a timestamp is present", async () => {
+    vi.mocked(getMyWatchlist).mockResolvedValue({
+      generated_at: "2026-08-01T00:00:00Z",
+      items: [buildItem({ latest_decision_timestamp: "2026-08-01T12:00:00Z" })],
+    });
+
+    render(<MyWatchlistPanel />);
+
+    expect(await screen.findByText(/الهدف الأول:/)).toBeInTheDocument();
+    expect(screen.getByText(/آخر تحديث:/)).toBeInTheDocument();
+  });
+
   it("shows an error state when the fetch fails", async () => {
     vi.mocked(getMyWatchlist).mockRejectedValue(new Error("network error"));
 

@@ -140,11 +140,11 @@ function OwnerStatusPageInner() {
             <StatusRow label="الحالة" value={summary.last_scan_status ? (RUN_STATUS_LABELS[summary.last_scan_status] ?? summary.last_scan_status) : "—"} />
             <StatusRow
               label="بدأ في"
-              value={summary.last_scan_started_at ? new Date(summary.last_scan_started_at).toLocaleString("ar-SA") : "—"}
+              value={summary.last_scan_started_at ? new Date(summary.last_scan_started_at).toLocaleString("ar-SA", { calendar: "gregory" }) : "—"}
             />
             <StatusRow
               label="انتهى في"
-              value={summary.last_scan_finished_at ? new Date(summary.last_scan_finished_at).toLocaleString("ar-SA") : "لا يزال قيد التنفيذ"}
+              value={summary.last_scan_finished_at ? new Date(summary.last_scan_finished_at).toLocaleString("ar-SA", { calendar: "gregory" }) : "لا يزال قيد التنفيذ"}
             />
             <StatusRow label="الرموز المطلوبة" value={String(summary.last_scan_symbols_requested ?? "—")} />
             <StatusRow label="الرموز الناجحة" value={String(summary.last_scan_symbols_succeeded ?? "—")} />
@@ -188,7 +188,7 @@ function OwnerStatusPageInner() {
         {summary.ingestion_deferred_job_count > 0 && summary.ingestion_next_retry_at ? (
           <StatusRow
             label="إعادة المحاولة التالية"
-            value={new Date(summary.ingestion_next_retry_at).toLocaleString("ar-SA")}
+            value={new Date(summary.ingestion_next_retry_at).toLocaleString("ar-SA", { calendar: "gregory" })}
           />
         ) : null}
       </section>

@@ -513,7 +513,7 @@ def get_news_alerts(
         alerts=[
             PortfolioNewsAlertOut(
                 id=a.id, portfolio_id=a.portfolio_id, symbol=a.symbol, news_event_id=a.news_event_id,
-                alert_type=a.alert_type.value, severity=a.severity.value, message=a.message,
+                alert_type=a.alert_type.value, severity=a.severity.value, message=a.message, message_ar=a.message_ar,
                 generated_at=a.generated_at, acknowledged_at=a.acknowledged_at,
             )
             for a in rows
@@ -542,7 +542,7 @@ def refresh_news_alerts(
         alerts=[
             PortfolioNewsAlertOut(
                 id=a.id, portfolio_id=a.portfolio_id, symbol=a.symbol, news_event_id=a.news_event_id,
-                alert_type=a.alert_type.value, severity=a.severity.value, message=a.message,
+                alert_type=a.alert_type.value, severity=a.severity.value, message=a.message, message_ar=a.message_ar,
                 generated_at=a.generated_at, acknowledged_at=None,
             )
             for a in alerts

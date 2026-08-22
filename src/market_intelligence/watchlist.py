@@ -36,6 +36,13 @@ _SELL_LIKE = {Recommendation.SELL, Recommendation.STRONG_SELL}
 _LOW_MEDIUM_RISK = {RiskLevel.LOW, RiskLevel.MEDIUM}
 _HIGH_RISK = {RiskLevel.HIGH, RiskLevel.VERY_HIGH}
 
+RISK_LEVEL_LABELS_AR = {
+    RiskLevel.LOW: "منخفضة",
+    RiskLevel.MEDIUM: "متوسطة",
+    RiskLevel.HIGH: "عالية",
+    RiskLevel.VERY_HIGH: "عالية جداً",
+}
+
 
 def _successful(outcome: SymbolScanOutcome) -> bool:
     """See ranking.py's `_successful` -- same real-evidence defect
@@ -130,44 +137,49 @@ def _overbought_predicate(o: SymbolScanOutcome, cc: Dict[str, float]) -> bool:
     return _successful(o) and o.rsi is not None and o.rsi > get_overbought_rsi_threshold()
 
 
+# Pre-launch safety fix (2026-08-22, Priority 2): every reason_fn below
+# was raw English -- a direct, presentation-only translation (each
+# string is a template over already-computed values, no new
+# classification/decision logic) since `entry.reason` is the only
+# consumer of this text on the consumer-facing Watchlist page.
 _RULES: Dict[WatchlistCategory, _WatchlistRule] = {
     WatchlistCategory.MOMENTUM: _WatchlistRule(
-        _momentum_predicate, lambda o: f"ADX at {o.adx:.1f} indicates a strong, established trend.",
+        _momentum_predicate, lambda o: f"مؤشر الاتجاه المتوسط (ADX) عند {o.adx:.1f} يشير إلى اتجاه قوي وراسخ.",
         lambda o: o.adx, True,
     ),
     WatchlistCategory.INVESTMENT: _WatchlistRule(
         _investment_predicate,
-        lambda o: "Buy-rated, long-term horizon, low/medium risk -- a candidate for a core holding.",
+        lambda o: "توصية شراء، أفق استثماري طويل الأجل، مخاطرة منخفضة/متوسطة -- مرشح لمركز استثماري أساسي.",
         lambda o: o.confidence, True,
     ),
     WatchlistCategory.SWING: _WatchlistRule(
-        _swing_predicate, lambda o: "Buy-rated with a short-term horizon -- a tactical trade candidate.",
+        _swing_predicate, lambda o: "توصية شراء بأفق قصير الأجل -- مرشح لصفقة تكتيكية.",
         lambda o: o.confidence, True,
     ),
     WatchlistCategory.HIGH_RISK: _WatchlistRule(
-        _high_risk_predicate, lambda o: f"Risk assessed as {o.risk_level.value.title()}.",
+        _high_risk_predicate, lambda o: f"مستوى المخاطرة المقيّم: {RISK_LEVEL_LABELS_AR.get(o.risk_level, o.risk_level.value)}.",
         lambda o: o.confidence, True,
     ),
     WatchlistCategory.DIVIDEND: _WatchlistRule(
-        _dividend_predicate, lambda o: f"Dividend yield at {o.dividend_yield * 100:.2f}%.",
+        _dividend_predicate, lambda o: f"عائد التوزيعات عند {o.dividend_yield * 100:.2f}%.",
         lambda o: o.dividend_yield, True,
     ),
     WatchlistCategory.RECOVERY: _WatchlistRule(
         _recovery_predicate,
-        lambda o: f"RSI at {o.rsi:.1f} (oversold) with a Buy rating -- a potential recovery.",
+        lambda o: f"مؤشر القوة النسبية (RSI) عند {o.rsi:.1f} (تشبع بيعي) مع توصية شراء -- تعافٍ محتمل.",
         lambda o: o.rsi, False,
     ),
     WatchlistCategory.BREAKOUT_CANDIDATES: _WatchlistRule(
         _breakout_predicate,
-        lambda o: f"Price ({o.latest_price:.2f}) broke above the upper Bollinger Band ({o.bollinger_upper:.2f}) with ADX at {o.adx:.1f}.",
+        lambda o: f"السعر ({o.latest_price:.2f}) اخترق النطاق العلوي لبولينجر ({o.bollinger_upper:.2f}) مع ADX عند {o.adx:.1f}.",
         lambda o: o.adx, True,
     ),
     WatchlistCategory.OVERSOLD_OPPORTUNITIES: _WatchlistRule(
-        _oversold_predicate, lambda o: f"RSI at {o.rsi:.1f} -- oversold territory.",
+        _oversold_predicate, lambda o: f"مؤشر القوة النسبية (RSI) عند {o.rsi:.1f} -- منطقة تشبع بيعي.",
         lambda o: o.rsi, False,
     ),
     WatchlistCategory.OVERBOUGHT_WARNINGS: _WatchlistRule(
-        _overbought_predicate, lambda o: f"RSI at {o.rsi:.1f} -- overbought territory.",
+        _overbought_predicate, lambda o: f"مؤشر القوة النسبية (RSI) عند {o.rsi:.1f} -- منطقة تشبع شرائي.",
         lambda o: o.rsi, True,
     ),
 }

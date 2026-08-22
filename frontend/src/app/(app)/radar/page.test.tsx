@@ -13,9 +13,9 @@ vi.mock("@/lib/api/radar", () => ({
 
 import { getRadarSummary } from "@/lib/api/radar";
 
-function opportunity(symbol: string) {
+function opportunity(symbol: string, overrides: { entry_status?: string; entry_status_label_ar?: string; id?: number } = {}) {
   return {
-    id: 1,
+    id: overrides.id ?? 1,
     symbol,
     company_name_ar: null,
     company_name_en: `Company ${symbol}`,
@@ -36,6 +36,8 @@ function opportunity(symbol: string) {
     risk_level: "MEDIUM",
     risk_level_label_ar: "متوسطة",
     data_freshness_status: "LIVE" as const,
+    entry_status: overrides.entry_status ?? "READY_NOW",
+    entry_status_label_ar: overrides.entry_status_label_ar ?? "مناسب الآن",
     stage1_rank: 1,
     stage1_ranking_score: 88.0,
     ranking_reason_ar: "زخم شرائي قوي",
@@ -59,6 +61,13 @@ function summary(overrides: Partial<RadarHomeSummary> = {}): RadarHomeSummary {
     entry_permitted: true,
     market_risk_is_live: true,
     top_opportunities: [],
+    stage1_universe_size: null,
+    stage1_evaluated_count: null,
+    stage1_candidate_count: null,
+    stage2_candidate_cap: 20,
+    stage2_validated_count: null,
+    final_opportunities_count: null,
+    last_full_scan_at: null,
     ...overrides,
   };
 }
@@ -118,6 +127,33 @@ describe("RadarPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "إعادة المحاولة" }));
 
     expect(await screen.findByText("لا توجد فرص مرصودة حاليًا")).toBeInTheDocument();
+  });
+
+  it("never counts a missed-entry opportunity toward the current/live count, and moves it to a separate section instead of hiding it", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(
+      summary({
+        live_opportunity_count: 2,
+        live_by_classification: { BUY_CANDIDATE: 2 },
+        average_confidence: 80,
+        top_opportunities: [
+          opportunity("2222", { id: 1 }),
+          opportunity("1120", {
+            id: 2,
+            entry_status: "MISSED_ENTRY",
+            entry_status_label_ar: "فاتت نقطة الدخول",
+          }),
+        ],
+      })
+    );
+
+    render(<RadarPage />);
+
+    // Only the one still-actionable opportunity counts toward "current live".
+    expect(await screen.findByText("الفرص الحية (1)")).toBeInTheDocument();
+    // The missed-entry one is not deleted -- it appears in its own section.
+    expect(screen.getByText("فرص فاتت نقطة الدخول (1)")).toBeInTheDocument();
+    expect(screen.getByText("2222")).toBeInTheDocument();
+    expect(screen.getByText("1120")).toBeInTheDocument();
   });
 
   it("re-reads the same read-only endpoint on button press", async () => {

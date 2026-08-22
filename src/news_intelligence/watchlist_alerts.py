@@ -30,7 +30,13 @@ from src.domain.models import (
     UserWatchlist,
     WatchlistNewsAlert,
 )
-from src.news_intelligence.portfolio_alerts import _SEVERITY_BY_ALERT_TYPE, build_alert_message, classify_alert_type
+from src.news_intelligence.portfolio_alerts import (
+    _ALERT_TYPE_LABELS_AR,
+    _SEVERITY_BY_ALERT_TYPE,
+    build_alert_message,
+    build_alert_message_ar,
+    classify_alert_type,
+)
 from src.news_intelligence.types import WatchlistAlert
 
 
@@ -76,11 +82,12 @@ class WatchlistNewsAlertEngine:
 
                 severity = _SEVERITY_BY_ALERT_TYPE[alert_type]
                 message = build_alert_message(symbol, alert_type, event)
+                message_ar = build_alert_message_ar(symbol, alert_type, event)
                 generated_at = datetime.now(timezone.utc)
 
                 alert_row = WatchlistNewsAlert(
                     watchlist_id=watchlist.id, symbol=symbol, news_event_id=event.id, alert_type=alert_type,
-                    severity=severity, message=message, generated_at=generated_at,
+                    severity=severity, message=message, message_ar=message_ar, generated_at=generated_at,
                 )
                 session.add(alert_row)
                 session.flush()  # populates alert_row.id before it's threaded into the returned dataclass
@@ -89,12 +96,14 @@ class WatchlistNewsAlertEngine:
                         Notification(
                             user_id=watchlist.user_id, type=NotificationType.MARKET_ALERT,
                             title=f"{symbol}: {alert_type.value.replace('_', ' ').title()}", body=message,
+                            title_ar=f"{_ALERT_TYPE_LABELS_AR[alert_type]}: {symbol}", body_ar=message_ar,
                         )
                     )
                 alerts.append(
                     WatchlistAlert(
                         id=alert_row.id, watchlist_id=watchlist.id, symbol=symbol, news_event_id=event.id,
-                        alert_type=alert_type, severity=severity, message=message, generated_at=generated_at,
+                        alert_type=alert_type, severity=severity, message=message, message_ar=message_ar,
+                        generated_at=generated_at,
                     )
                 )
 

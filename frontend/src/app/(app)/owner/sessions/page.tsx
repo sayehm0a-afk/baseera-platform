@@ -121,10 +121,10 @@ function SessionsPageInner() {
                     <td className="p-bsr-3 text-bsr-text-secondary">{session.device_label ?? "—"}</td>
                     <td className="bsr-numeric p-bsr-3 text-bsr-text-secondary">{session.ip_address ?? "—"}</td>
                     <td className="bsr-numeric p-bsr-3 text-bsr-text-secondary">
-                      {new Date(session.last_used_at).toLocaleString("ar-SA")}
+                      {new Date(session.last_used_at).toLocaleString("ar-SA", { calendar: "gregory" })}
                     </td>
                     <td className="bsr-numeric p-bsr-3 text-bsr-text-secondary">
-                      {new Date(session.expires_at).toLocaleString("ar-SA")}
+                      {new Date(session.expires_at).toLocaleString("ar-SA", { calendar: "gregory" })}
                     </td>
                     <td className="p-bsr-3">
                       <div className="flex flex-wrap gap-bsr-2">

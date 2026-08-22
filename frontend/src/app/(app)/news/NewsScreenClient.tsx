@@ -41,7 +41,7 @@ function NewsCard({ event }: { event: NewsEvent }) {
         {event.published_at ? (
           <>
             <span>·</span>
-            <span>{new Date(event.published_at).toLocaleString("ar-SA")}</span>
+            <span>{new Date(event.published_at).toLocaleString("ar-SA", { calendar: "gregory" })}</span>
           </>
         ) : null}
         {event.is_synthetic ? (

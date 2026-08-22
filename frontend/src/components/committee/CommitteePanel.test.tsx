@@ -80,10 +80,12 @@ describe("CommitteePanel", () => {
     expect(screen.getByText("12.3")).toBeInTheDocument();
   });
 
-  it("renders the most optimistic and most conservative agent", () => {
+  it("renders the most optimistic and most conservative agent in Arabic, not the raw English agent_name", () => {
     render(<CommitteePanel committee={buildCommittee()} />);
-    expect(screen.getByText("Technical Analysis Agent", { selector: "p" })).toBeInTheDocument();
-    expect(screen.getByText("Risk Management Agent", { selector: "p" })).toBeInTheDocument();
+    expect(screen.getByText("وكيل التحليل الفني", { selector: "p" })).toBeInTheDocument();
+    expect(screen.getByText("وكيل إدارة المخاطر", { selector: "p" })).toBeInTheDocument();
+    expect(screen.queryByText("Technical Analysis Agent")).not.toBeInTheDocument();
+    expect(screen.queryByText("Risk Management Agent")).not.toBeInTheDocument();
   });
 
   it("renders the consensus reasoning explanation", () => {

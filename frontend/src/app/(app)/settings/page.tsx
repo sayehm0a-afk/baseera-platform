@@ -37,17 +37,38 @@ export default function SettingsPage() {
     getSessionServerSnapshot
   );
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 
   async function handleLogout() {
     setIsSigningOut(true);
-    await logout();
-    router.replace("/login");
+    setLogoutError(null);
+    try {
+      await logout();
+      router.replace("/login");
+    } catch {
+      // logout() already clears the local session in its own `finally`
+      // even when the network call fails -- the soft-lock bug was that
+      // isSigningOut never reset and no message was shown, leaving both
+      // buttons permanently disabled. The session is genuinely gone
+      // locally either way; only the server-side revocation may not have
+      // completed, so this stays recoverable rather than fatal.
+      setLogoutError("تعذّر تسجيل الخروج عبر الخادم بسبب مشكلة في الاتصال. تم إنهاء الجلسة على هذا الجهاز -- يمكنك المتابعة إلى صفحة الدخول أو إعادة المحاولة.");
+    } finally {
+      setIsSigningOut(false);
+    }
   }
 
   async function handleLogoutAll() {
     setIsSigningOut(true);
-    await logoutAll();
-    router.replace("/login");
+    setLogoutError(null);
+    try {
+      await logoutAll();
+      router.replace("/login");
+    } catch {
+      setLogoutError("تعذّر تسجيل الخروج من جميع الأجهزة عبر الخادم بسبب مشكلة في الاتصال. تم إنهاء الجلسة على هذا الجهاز -- يمكنك المتابعة إلى صفحة الدخول أو إعادة المحاولة.");
+    } finally {
+      setIsSigningOut(false);
+    }
   }
 
   return (
@@ -63,10 +84,22 @@ export default function SettingsPage() {
           label="تاريخ آخر تسجيل دخول"
           value={
             session?.last_login_at
-              ? new Date(session.last_login_at).toLocaleString("ar-SA")
+              ? new Date(session.last_login_at).toLocaleString("ar-SA", { calendar: "gregory" })
               : "—"
           }
         />
+        {logoutError ? (
+          <div className="mt-bsr-3 rounded-bsr-md border border-bsr-action-sell/40 bg-bsr-action-sell/10 p-bsr-3 text-sm text-bsr-action-sell">
+            <p>{logoutError}</p>
+            <button
+              type="button"
+              onClick={() => router.replace("/login")}
+              className="mt-bsr-2 text-sm font-semibold underline"
+            >
+              المتابعة إلى صفحة الدخول
+            </button>
+          </div>
+        ) : null}
         <div className="flex gap-bsr-3 pt-bsr-4">
           <button
             type="button"
