@@ -8,6 +8,15 @@ market_risk, fundamental_summary, news_impact) is byte-for-byte
 unchanged by Phase 3 -- confirmed via `git diff fa2acfe HEAD --
 src/analysis/decision_v2/` before this package was built; only types.py,
 engine.py, and trade_classification.py actually changed behavior.
+
+One deliberate, disclosed deviation from the fa2acfe snapshot: `decide()`
+gained an `evaluation_time` keyword-only parameter (default `None`, so
+behavior is identical for any caller that doesn't pass it), mirroring
+the identical addition to the live engine -- see that module's own
+docstring on the same line for why: the historical-replay harness needs
+to evaluate freshness against its own as-of date, not real wall-clock
+time. Added symmetrically to both arms so neither arm of the Baseline-
+vs-Phase-3 comparison is advantaged.
 """
 
 from datetime import datetime, timezone
@@ -76,6 +85,7 @@ class DecisionEngineV2:
         market_is_open: Optional[bool],
         scan_run_id: Optional[int] = None,
         market_breadth: Optional[MarketBreadthSummary] = None,
+        evaluation_time: Optional[datetime] = None,
     ) -> DecisionResult:
         tuning = self._tuning
         technical = context.technical_result
@@ -125,7 +135,14 @@ class DecisionEngineV2:
 
         has_technical = technical is not None
         has_fundamental = context.fundamental_result is not None
-        now = datetime.now(timezone.utc)
+        # Same clock-injection point as the live src.analysis.decision_v2
+        # .engine module this file is a frozen pre-Phase-3 snapshot of --
+        # added here (not present in the original fa2acfe snapshot) so
+        # the Baseline arm of the historical validation harness is
+        # symmetric with the Phase 3 arm; never imported by production
+        # (see this package's own __init__.py), so this is a harness-only
+        # change, not a live-behavior change.
+        now = evaluation_time if evaluation_time is not None else datetime.now(timezone.utc)
         data_age_hours: Optional[float] = None
         if quote_timestamp is not None:
             ts = quote_timestamp if quote_timestamp.tzinfo is not None else quote_timestamp.replace(tzinfo=timezone.utc)

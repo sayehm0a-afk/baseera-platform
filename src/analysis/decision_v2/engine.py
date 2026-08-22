@@ -77,6 +77,7 @@ class DecisionEngineV2:
         market_is_open: Optional[bool],
         scan_run_id: Optional[int] = None,
         market_breadth: Optional[MarketBreadthSummary] = None,
+        evaluation_time: Optional[datetime] = None,
     ) -> DecisionResult:
         tuning = self._tuning
         technical = context.technical_result
@@ -128,7 +129,16 @@ class DecisionEngineV2:
 
         has_technical = technical is not None
         has_fundamental = context.fundamental_result is not None
-        now = datetime.now(timezone.utc)
+        # `evaluation_time` is the sole clock-injection point for every
+        # freshness/timestamp calculation below (including
+        # `decision_timestamp` further down) -- `None` (every live
+        # caller today) preserves the exact real-wall-clock behavior
+        # this always had; only the historical-replay harness
+        # (src.backtesting.decision_v2_strategies) ever passes a real
+        # value, so it can evaluate freshness against its own as-of
+        # date instead of the real "now" a historical replay would
+        # otherwise always fail against.
+        now = evaluation_time if evaluation_time is not None else datetime.now(timezone.utc)
         data_age_hours: Optional[float] = None
         if quote_timestamp is not None:
             ts = quote_timestamp if quote_timestamp.tzinfo is not None else quote_timestamp.replace(tzinfo=timezone.utc)

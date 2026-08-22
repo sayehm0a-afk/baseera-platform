@@ -175,6 +175,31 @@ class TestBaselineVsPhase3Divergence:
         assert hasattr(phase3_result, "sector_strength_used")
 
 
+class TestReplayEvaluationTimeInjection:
+    """Regression coverage for the zero-actionable-signal root-cause
+    fix: the harness must pass its own as-of `evaluation_time` into
+    BOTH engine arms so neither is forced to WATCH purely because the
+    real historical quote timestamp predates the sandbox's real
+    wall-clock "now" by weeks or months."""
+
+    def test_both_arms_receive_a_freshness_evaluation_time_matching_as_of(self, session):
+        subject, _ = _seed_universe(session)
+        point = build_replay_point(session, subject, _AS_OF)
+        assert point is not None
+        expected = datetime.combine(_AS_OF, datetime.max.time(), tzinfo=timezone.utc)
+        assert point.as_of_context.evaluation_time == expected
+
+        baseline = run_baseline_v2(point)
+        phase3 = run_phase3_v2(point)
+        for result in (baseline, phase3):
+            freshness = next(g for g in result.gates if g.name == "data_freshness")
+            assert freshness.status.value == "PASS", (
+                "A historical replay point's own price-bar timestamp is always <= its as_of "
+                "date -- data_freshness must pass when evaluation_time is correctly wired, "
+                "proving the harness no longer measures staleness against real wall-clock time."
+            )
+
+
 class TestReplayDeterminism:
     def test_same_dataset_same_config_produces_identical_results(self, session):
         _seed_universe(session)

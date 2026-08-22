@@ -180,6 +180,103 @@ class TestClosedMarketAndFreshness:
         assert result.data_freshness_status is DataFreshnessStatus.UNKNOWN
 
 
+def _gate(result, name):
+    return next(g for g in result.gates if g.name == name)
+
+
+class TestEvaluationTimeInjection:
+    """Regression coverage for the historical-backtest zero-actionable-
+    signal root cause: `DecisionEngineV2.decide()` used to compute
+    `data_freshness` against real wall-clock `datetime.now()` even when
+    replaying a historical `as_of` date, so every BUY-like raw
+    recommendation in a backtest was unconditionally forced to WATCH
+    regardless of the data's actual quality (see
+    src.backtesting.decision_v2_strategies._decide_kwargs, which now
+    passes `evaluation_time`). `evaluation_time=None` (the default,
+    every live caller today) must reproduce the exact prior wall-clock
+    behavior -- these tests prove that, not just assert it."""
+
+    def test_live_default_still_uses_real_wall_clock_when_evaluation_time_omitted(self):
+        """No `evaluation_time` passed (every real live caller in
+        src.market_intelligence.scanner and src.api.routes.stocks) --- a
+        quote timestamped "just now" must still pass freshness exactly
+        as it always did."""
+        ctx = _context()
+        result = _decide(ctx, _buy_decision(), quote_timestamp=datetime.now(timezone.utc))
+        assert _gate(result, "data_freshness").status.value == "PASS"
+
+    def test_stale_live_quote_still_fails_freshness_with_no_evaluation_time(self):
+        """The live 24h freshness gate is not weakened: an old quote
+        with no `evaluation_time` override (real wall-clock default)
+        must still fail exactly as it did before this change."""
+        ctx = _context()
+        old_ts = datetime.now(timezone.utc) - timedelta(hours=72)
+        result = _decide(ctx, _buy_decision(), quote_timestamp=old_ts)
+        assert _gate(result, "data_freshness").status.value == "FAIL"
+        assert result.decision == Decision.WATCH
+
+    def test_historical_quote_is_evaluated_relative_to_as_of_not_wall_clock(self):
+        """A quote from 90 real-world days ago is fresh relative to an
+        `evaluation_time` set just 1 hour after it -- the historical
+        replay's own as-of clock, not today's real date, is what
+        freshness is measured against."""
+        ctx = _context()
+        historical_quote_ts = datetime.now(timezone.utc) - timedelta(days=90)
+        historical_evaluation_time = historical_quote_ts + timedelta(hours=1)
+        result = _decide(
+            ctx, _buy_decision(),
+            quote_timestamp=historical_quote_ts, evaluation_time=historical_evaluation_time,
+        )
+        assert _gate(result, "data_freshness").status.value == "PASS"
+
+    def test_raw_buy_historical_replay_no_longer_forced_to_watch_by_stale_timestamp_alone(self):
+        """The exact zero-signal defect: the SAME old quote_timestamp,
+        compared with vs. without the as-of `evaluation_time` --
+        without it, the real wall-clock default forces WATCH (today's
+        unchanged live behavior); with it, the identical historical
+        point reaches the real BUY_CANDIDATE decision the underlying
+        evidence actually supports, never getting to WATCH via
+        `data_freshness` alone."""
+        ctx = _context()
+        historical_quote_ts = datetime.now(timezone.utc) - timedelta(days=60)
+
+        forced_watch = _decide(ctx, _buy_decision(), quote_timestamp=historical_quote_ts)
+        assert forced_watch.decision == Decision.WATCH
+        assert _gate(forced_watch, "data_freshness").status.value == "FAIL"
+
+        real_replay = _decide(
+            ctx, _buy_decision(),
+            quote_timestamp=historical_quote_ts,
+            evaluation_time=historical_quote_ts + timedelta(hours=2),
+        )
+        assert _gate(real_replay, "data_freshness").status.value == "PASS"
+        assert real_replay.decision == Decision.BUY_CANDIDATE
+
+    def test_evaluation_time_only_affects_freshness_never_scoring_inputs(self):
+        """No-look-ahead proof for the injection itself: two replays of
+        the identical (context, investment_decision) pair with only
+        `evaluation_time` differing (one very old, one very new,
+        relative to their own matching quote_timestamp) must produce
+        identical technical/entry/target scoring -- `evaluation_time`
+        is scoped to the freshness clock alone, so it cannot leak
+        future information into anything else the decision depends on."""
+        ctx = _context()
+        old_ts = datetime(2026, 1, 15, tzinfo=timezone.utc)
+        new_ts = datetime(2026, 6, 15, tzinfo=timezone.utc)
+
+        old_result = _decide(ctx, _buy_decision(), quote_timestamp=old_ts, evaluation_time=old_ts + timedelta(hours=1))
+        new_result = _decide(ctx, _buy_decision(), quote_timestamp=new_ts, evaluation_time=new_ts + timedelta(hours=1))
+
+        assert _gate(old_result, "data_freshness").status.value == "PASS"
+        assert _gate(new_result, "data_freshness").status.value == "PASS"
+        assert old_result.decision == new_result.decision == Decision.BUY_CANDIDATE
+        assert old_result.entry_zone_low == new_result.entry_zone_low
+        assert old_result.entry_zone_high == new_result.entry_zone_high
+        assert old_result.target_1 == new_result.target_1
+        assert old_result.stop_loss == new_result.stop_loss
+        assert old_result.sub_scores.trend_score == new_result.sub_scores.trend_score
+
+
 class TestInsufficientData:
     def test_no_technical_data_is_insufficient_data(self):
         ctx = AnalysisContext(symbol="9999", technical_result=None, fundamental_result=None, latest_price=None)

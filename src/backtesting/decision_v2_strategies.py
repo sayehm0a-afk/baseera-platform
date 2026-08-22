@@ -76,6 +76,7 @@ def _decide_kwargs(point: DecisionV2ReplayPoint) -> dict:
         market_is_open=ctx.market_is_open,
         scan_run_id=None,
         market_breadth=ctx.market_breadth,
+        evaluation_time=ctx.evaluation_time,
     )
 
 

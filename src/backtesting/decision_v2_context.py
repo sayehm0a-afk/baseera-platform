@@ -40,6 +40,14 @@ never silently substituted with a live/current value:
     sector-classification history, so a stock that was reclassified
     since the evaluation date would (incorrectly) show today's sector.
     Disclosed, not hidden; affects both arms identically.
+
+`evaluation_time` (added for the zero-actionable-signal root-cause fix)
+is the as-of end-of-day UTC instant `decision_v2_strategies._decide_kwargs`
+passes on to both engines' `evaluation_time` parameter -- the clock-
+injection point that lets `DecisionEngineV2.decide()`'s freshness gate
+measure staleness against this historical instant instead of real
+wall-clock time, which previously forced every BUY-like raw
+recommendation to WATCH regardless of actual data quality.
 """
 
 from dataclasses import dataclass, field
@@ -85,6 +93,7 @@ class DecisionV2AsOfContext:
     quote_timestamp: Optional[datetime]
     market_status: str
     market_is_open: bool
+    evaluation_time: datetime
     market_breadth: None = None
     unavailable_features: Tuple[str, ...] = field(default_factory=lambda: UNAVAILABLE_FEATURES)
 
@@ -180,4 +189,5 @@ def build_decision_v2_as_of_context(
         quote_timestamp=base.technical_input_as_of,
         market_status="OPEN" if market_is_open_flag else "CLOSED",
         market_is_open=market_is_open_flag,
+        evaluation_time=as_of_end,
     )
