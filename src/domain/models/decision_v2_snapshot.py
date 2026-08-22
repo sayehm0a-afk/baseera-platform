@@ -205,6 +205,16 @@ class DecisionV2Snapshot(Base):
     calibrated_confidence_score = Column(Numeric(6, 2), nullable=True)
     calibration_version = Column(String(64), nullable=True)
 
+    # Phase 3 area 4: sector-relative strength (see
+    # src.analysis.decision_v2.sector_strength) -- all NULL/False when
+    # the sector is unclassified or real peer data was insufficient or
+    # stale, never a fabricated value.
+    sector_name = Column(String(64), nullable=True)
+    sector_strength_score = Column(Numeric(6, 2), nullable=True)
+    stock_vs_sector_relative_strength = Column(Numeric(6, 3), nullable=True)
+    sector_data_timestamp = Column(DateTime(timezone=True), nullable=True)
+    sector_strength_used = Column(Boolean, nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

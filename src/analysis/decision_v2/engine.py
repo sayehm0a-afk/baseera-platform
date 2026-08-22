@@ -84,6 +84,7 @@ class DecisionEngineV2:
         direction = direction_of(investment_decision.recommendation)
 
         market_risk = classify_market_risk(market_is_open=bool(market_is_open), breadth=market_breadth)
+        sector_rotation = context.extra.get("sector_rotation") or {}
 
         atr_value = None
         atr_pct = None
@@ -468,6 +469,16 @@ class DecisionEngineV2:
             market_breadth_sell_count=market_risk.sell_count,
             market_breadth_symbols_scanned=market_risk.symbols_scanned,
             market_breadth_average_confidence=market_risk.average_confidence,
+            # --- Phase 3 area 4: sector-relative strength ------------------
+            # Computed once in context_builder.py (compute_sector_strength)
+            # and carried here via context.extra -- this engine reads it,
+            # never recomputes it, the same "computes zero indicators of
+            # its own" discipline every other field here already follows.
+            sector_name=sector,
+            sector_strength_score=sector_rotation.get("sector_strength_score"),
+            stock_vs_sector_relative_strength=sector_rotation.get("sector_relative_strength"),
+            sector_data_timestamp=sector_rotation.get("sector_data_timestamp"),
+            sector_strength_used=bool(sector_rotation.get("sector_strength_used", False)),
         )
         return decision_result
 

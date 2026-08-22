@@ -401,6 +401,22 @@ class DecisionResult:
     news_impact: str = "NO_RELEVANT_NEWS"
     news_impact_summary_ar: str = "لا توجد أخبار محلَّلة حديثة ذات صلة بهذا السهم."
 
+    # ======================================================================
+    # Phase 3 area 4: sector-relative strength -- activates the
+    # previously-dead `SectorRotationScoreContributor` input (it always
+    # read `None` before this, since nothing ever populated
+    # context.extra["sector_rotation"]) with a real, DB-only comparison
+    # of this stock's own return against its real Tadawul sector peers'
+    # (see sector_strength.py). All fields default to the honest "not
+    # computed" state -- None/False -- when the sector is unclassified,
+    # peer data is insufficient, or peer data is stale; never fabricated.
+    # ======================================================================
+    sector_name: Optional[str] = None
+    sector_strength_score: Optional[float] = None
+    stock_vs_sector_relative_strength: Optional[float] = None
+    sector_data_timestamp: Optional[datetime] = None
+    sector_strength_used: bool = False
+
 
 def parse_quote_timestamp(raw: Optional[str]) -> Optional[datetime]:
     """Parses the ISO-8601 timestamp string a quote payload carries

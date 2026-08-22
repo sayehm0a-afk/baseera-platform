@@ -444,6 +444,16 @@ class DecisionV2Out(BaseModel):
     market_breadth_symbols_scanned: Optional[int] = None
     market_breadth_average_confidence: Optional[float] = None
 
+    # Phase 3 area 4: sector-relative strength (see
+    # src.analysis.decision_v2.sector_strength) -- all None/False when
+    # the sector is unclassified or real peer data was insufficient or
+    # stale, never a fabricated value.
+    sector_name: Optional[str] = None
+    sector_strength_score: Optional[float] = None
+    stock_vs_sector_relative_strength: Optional[float] = None
+    sector_data_timestamp: Optional[datetime] = None
+    sector_strength_used: bool = False
+
     # Section 12: fundamental summary -- real M2.3 ratios (revenue/
     # profit growth, margins, ROE, debt-to-equity, valuation multiples,
     # dividend yield), never fabricated. Keys are always present;

@@ -935,6 +935,11 @@ async def get_decision_v2(
             fundamental_summary_ar=result.fundamental_summary_ar,
             news_impact=result.news_impact,
             news_impact_summary_ar=result.news_impact_summary_ar,
+            sector_name=result.sector_name,
+            sector_strength_score=_f(result.sector_strength_score),
+            stock_vs_sector_relative_strength=_f(result.stock_vs_sector_relative_strength),
+            sector_data_timestamp=result.sector_data_timestamp,
+            sector_strength_used=result.sector_strength_used,
             calibrated_confidence_score=_f(
                 round(calibrated_probability * 100.0, 1) if calibrated_probability is not None else None
             ),
@@ -997,6 +1002,11 @@ async def get_decision_v2(
         calibration_sample_size=calibration_sample_size,
         opportunity_quality_score=result.opportunity_quality_score,
         risk_score=result.risk_score,
+        sector_name=result.sector_name,
+        sector_strength_score=result.sector_strength_score,
+        stock_vs_sector_relative_strength=result.stock_vs_sector_relative_strength,
+        sector_data_timestamp=result.sector_data_timestamp,
+        sector_strength_used=result.sector_strength_used,
         data_quality_score=result.data_quality_score,
         data_freshness_status=result.data_freshness_status.value,
         current_price=result.current_price,

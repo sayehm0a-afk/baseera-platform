@@ -214,10 +214,15 @@ class InsiderTransactionScoreContributor:
 
 class SectorRotationScoreContributor:
     """Expects `context.extra["sector_rotation"] = {"sector_relative_strength":
-    float in [-1, 1]}` -- this stock's sector performance relative to the
-    broad market. A single metric has no natural sample size to scale
-    confidence by, so confidence is a fixed, documented value whenever
-    the metric is present."""
+    float in [-1, 1]}` -- this specific stock's trailing return relative
+    to the average trailing return of its real Tadawul sector peers
+    (Phase 3 area 4: activated via context_builder.py's
+    `_sector_rotation_extra`, computed by
+    `src.analysis.decision_v2.sector_strength.compute_sector_strength`;
+    previously always `None` in production, see that module's own
+    docstring for why). A single metric has no natural sample size to
+    scale confidence by, so confidence is a fixed, documented value
+    whenever the metric is present."""
 
     name = "sector_rotation"
     _FIXED_CONFIDENCE = 75.0

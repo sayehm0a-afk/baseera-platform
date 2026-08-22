@@ -31,6 +31,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
+from src.analysis.decision_v2.sector_strength import compute_sector_strength
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
 from src.analysis.ohlcv_loader import load_price_bars
@@ -75,6 +76,37 @@ def _news_sentiment_extra(session: Session, symbol: str, news_service: NewsIntel
                 }
                 for event in sentiment.events
             ],
+        }
+    }
+
+
+def _sector_rotation_extra(session: Session, stock: Stock, df) -> Dict[str, Any]:
+    """Phase 3 area 4: real, DB-only sector-relative-strength -- see
+    sector_strength.py. Computed once here (not once per consumer) so
+    both `SectorRotationScoreContributor` (reads `sector_relative_
+    strength`) and `DecisionEngineV2.decide()` (reads the other four
+    audit fields) share the exact same computation instead of running
+    it twice. Never raises -- a failure here degrades to the same
+    honest "not computed" state compute_sector_strength itself already
+    returns for insufficient/stale data, it just also survives a
+    genuinely unexpected error rather than breaking the whole context."""
+    try:
+        result = compute_sector_strength(session, stock, df)
+    except Exception as exc:  # noqa: BLE001 -- an optional leg must never break the whole context
+        logger.info("Sector strength leg unavailable for '%s': %s", stock.symbol, exc)
+        return {}
+    if not result.sector_strength_used:
+        # Same "omit the whole leg when there's nothing real to add"
+        # convention _news_sentiment_extra above already uses -- an
+        # unclassified sector or insufficient/stale peer data is not a
+        # failure, just nothing to disclose here.
+        return {}
+    return {
+        "sector_rotation": {
+            "sector_relative_strength": result.stock_vs_sector_relative_strength,
+            "sector_strength_score": result.sector_strength_score,
+            "sector_data_timestamp": result.sector_data_timestamp,
+            "sector_strength_used": result.sector_strength_used,
         }
     }
 
@@ -217,6 +249,7 @@ async def build_analysis_context(
     extra = {
         **quote_extra,
         **_news_sentiment_extra(session, symbol, news_service),
+        **_sector_rotation_extra(session, stock, df),
         "bars_used": len(df),
         "likely_suspended": _detect_likely_suspended(df),
         "ohlcv_latest_bar_age_days": ohlcv_latest_bar_age_days(df),

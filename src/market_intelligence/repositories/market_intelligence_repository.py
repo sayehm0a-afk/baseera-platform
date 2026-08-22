@@ -617,6 +617,11 @@ class MarketIntelligenceRepository:
                         fundamental_summary_ar=result.fundamental_summary_ar,
                         news_impact=result.news_impact,
                         news_impact_summary_ar=result.news_impact_summary_ar,
+                        sector_name=result.sector_name,
+                        sector_strength_score=_f(result.sector_strength_score),
+                        stock_vs_sector_relative_strength=_f(result.stock_vs_sector_relative_strength),
+                        sector_data_timestamp=result.sector_data_timestamp,
+                        sector_strength_used=result.sector_strength_used,
                         # RADAR-C: same disclosed, additive calibration
                         # companion figure as the /decision-v2 route --
                         # see get_effective_confidence's own docstring.
