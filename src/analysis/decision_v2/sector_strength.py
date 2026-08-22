@@ -84,17 +84,27 @@ def _trailing_return_pct(df: pd.DataFrame, lookback_days: int) -> Optional[float
 
 
 def _peer_returns_and_timestamps(
-    session: Session, peer_stock_ids: List[int], lookback_days: int, now: datetime
+    session: Session, peer_stock_ids: List[int], lookback_days: int, now: datetime,
+    as_of_bound: Optional[datetime] = None,
 ) -> tuple:
     """One batched query for every peer's bars, grouped in Python --
     the whole point of this helper is issuing exactly one PriceBar
-    query regardless of how many peers there are, not one per peer."""
-    rows = (
-        session.query(PriceBar.stock_id, PriceBar.timestamp, PriceBar.close)
-        .filter(PriceBar.stock_id.in_(peer_stock_ids), PriceBar.timeframe == Timeframe.ONE_DAY)
-        .order_by(PriceBar.stock_id.asc(), PriceBar.timestamp.asc())
-        .all()
+    query regardless of how many peers there are, not one per peer.
+
+    `as_of_bound`, when given (the historical validation harness's own
+    use -- see compute_sector_strength's `as_of` parameter), excludes
+    any peer bar dated after it. This is the one query in this module
+    that is NOT already scoped by an as-of-safe `df` the way this
+    stock's own return is -- without this bound, a historical replay
+    would read real peer bars from *after* the evaluation date, a
+    genuine look-ahead leak. `None` (live production's only caller
+    today) preserves the exact prior unbounded behavior."""
+    query = session.query(PriceBar.stock_id, PriceBar.timestamp, PriceBar.close).filter(
+        PriceBar.stock_id.in_(peer_stock_ids), PriceBar.timeframe == Timeframe.ONE_DAY
     )
+    if as_of_bound is not None:
+        query = query.filter(PriceBar.timestamp <= as_of_bound)
+    rows = query.order_by(PriceBar.stock_id.asc(), PriceBar.timestamp.asc()).all()
     by_stock: Dict[int, List[tuple]] = {}
     for stock_id, timestamp, close in rows:
         by_stock.setdefault(stock_id, []).append((timestamp, float(close)))
@@ -118,8 +128,16 @@ def _peer_returns_and_timestamps(
 
 
 def compute_sector_strength(
-    session: Session, stock: Stock, df: pd.DataFrame, lookback_days: int = LOOKBACK_DAYS
+    session: Session, stock: Stock, df: pd.DataFrame, lookback_days: int = LOOKBACK_DAYS,
+    as_of: Optional[datetime] = None,
 ) -> SectorStrengthResult:
+    """`as_of`, when given, is the historical-validation harness's own
+    extension point: both the staleness clock and the peer-bar query
+    are anchored to it instead of the real wall clock, and the peer
+    query is additionally bounded to never read a bar dated after it
+    (see `_peer_returns_and_timestamps`). `None` (the only value any
+    live production call site passes today) is exactly the original,
+    unbounded, "now means now" behavior -- unchanged."""
     sector = stock.sector
     if sector in _UNCLASSIFIED_SECTORS:
         return _NOT_COMPUTED
@@ -131,7 +149,7 @@ def compute_sector_strength(
             sector_data_timestamp=None, sector_strength_used=False,
         )
     own_latest_ts = _as_utc(df.index.max())
-    now = datetime.now(timezone.utc)
+    now = as_of if as_of is not None else datetime.now(timezone.utc)
     if (now - own_latest_ts).total_seconds() / 86400.0 > MAX_STALENESS_DAYS:
         return SectorStrengthResult(
             sector_name=sector, sector_strength_score=None, stock_vs_sector_relative_strength=None,
@@ -151,7 +169,7 @@ def compute_sector_strength(
             sector_data_timestamp=None, sector_strength_used=False,
         )
 
-    peer_returns, peer_timestamps = _peer_returns_and_timestamps(session, peer_ids, lookback_days, now)
+    peer_returns, peer_timestamps = _peer_returns_and_timestamps(session, peer_ids, lookback_days, now, as_of)
     if len(peer_returns) < MIN_PEER_COUNT:
         return SectorStrengthResult(
             sector_name=sector, sector_strength_score=None, stock_vs_sector_relative_strength=None,
