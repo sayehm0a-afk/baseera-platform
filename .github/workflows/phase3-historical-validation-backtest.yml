@@ -1,0 +1,55 @@
+name: Phase 3 Historical Validation - Real V2-vs-V2 Backtest (temporary, read-only, zero SAHMK cost)
+
+# BASIRAH -- PHASE 3 REAL HISTORICAL VALIDATION DATA ACCESS + FINAL
+# GO/NO-GO mandate, Phases A/B/C: pulls real, already-ingested OHLCV
+# out of production via the staff-only export route (zero SAHMK
+# calls), then runs the ACTUAL DecisionEngineV2 historical validation
+# harness (Baseline V2 vs Phase 3 V2) locally inside this job against
+# that real data. Never deploys or merges Phase 3 trading logic --
+# this is a one-shot, offline, read-only analysis job.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet -r requirements.txt
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Pull real OHLCV + run real V2-vs-V2 backtest + stratification/ablation
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: python3 .github/workflows/independent_audit/phase3_historical_validation_backtest.py
+
+      - name: Upload full report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3-backtest-full-report
+          path: phase3_backtest_full_report.json
+          retention-days: 14
