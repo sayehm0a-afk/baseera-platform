@@ -5,6 +5,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from src.analysis.decision_v2.breakout_confirmation import BreakoutStatus
+
 
 class Decision(str, Enum):
     """The user-facing action taxonomy Phase 1 requires -- deliberately
@@ -416,6 +418,31 @@ class DecisionResult:
     stock_vs_sector_relative_strength: Optional[float] = None
     sector_data_timestamp: Optional[datetime] = None
     sector_strength_used: bool = False
+
+    # ======================================================================
+    # Phase 3 area 5: real breakout/false-breakout confirmation --
+    # fills EntryStatus.CONDITIONAL_ON_BREAKOUT's long-deferred gap (see
+    # trade_classification.py) with a real, daily-close-only read of
+    # whether `breakout_level` above has actually been cleared and
+    # held (see breakout_confirmation.py). Defaults to NOT_APPLICABLE,
+    # itself a meaningful state ("no breakout thesis in play here"),
+    # not a placeholder for missing data.
+    # ======================================================================
+    breakout_status: str = BreakoutStatus.NOT_APPLICABLE.value
+    breakout_hold_days: Optional[int] = None
+    breakout_volume_confirmed: Optional[bool] = None
+    breakout_follow_through_pct: Optional[float] = None
+    breakout_explanation_ar: str = ""
+
+    # ======================================================================
+    # Phase 3: HIGH_QUALITY_BUY tier -- an additive tag on an already-
+    # issued buy candidate (see trade_classification.classify_high_
+    # quality_buy for the exact, evidence-gated criteria), never a 10th
+    # Decision value. False far more often than True by design -- no
+    # threshold here is tuned to guarantee a nonzero rate.
+    # ======================================================================
+    is_high_quality_buy: bool = False
+    high_quality_buy_explanation_ar: str = ""
 
 
 def parse_quote_timestamp(raw: Optional[str]) -> Optional[datetime]:

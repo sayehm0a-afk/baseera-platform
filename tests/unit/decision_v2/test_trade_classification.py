@@ -2,8 +2,12 @@
 entry-status derivation, isolated from the full DecisionEngineV2 path
 (covered separately in test_engine.py's TestPhase2ACanonicalFields)."""
 
-from src.analysis.decision_v2.trade_classification import classify_entry_status, classify_trade_type
-from src.analysis.decision_v2.types import Decision, EntryStatus, TradeType
+from src.analysis.decision_v2.trade_classification import (
+    classify_entry_status,
+    classify_high_quality_buy,
+    classify_trade_type,
+)
+from src.analysis.decision_v2.types import DataFreshnessStatus, Decision, EntryStatus, TradeType
 
 
 class TestClassifyTradeType:
@@ -77,10 +81,141 @@ class TestClassifyEntryStatus:
             status, _ = classify_entry_status(decision, 100.0, 102.0, False)
             assert status is EntryStatus.NOT_SUITABLE
 
-    def test_conditional_on_breakout_is_never_returned(self):
-        """Requires a real breakout-pattern detector -- deferred to
-        Phase 2F. Must never be assigned by this module today."""
+    def test_conditional_on_breakout_never_returned_without_breakout_evidence(self):
+        """Without a `breakout_status` (the default), or with any
+        status other than the two real, evidence-gated ones (Phase 3
+        area 5), CONDITIONAL_ON_BREAKOUT must never be assigned."""
+        non_triggering_statuses = [
+            None, "NOT_APPLICABLE", "SEQUENCE_UNVERIFIED", "CONFIRMED_BREAKOUT", "FAILED_BREAKOUT",
+        ]
         for decision in Decision:
             for missed in (True, False):
-                status, _ = classify_entry_status(decision, 100.0, 102.0, missed)
-                assert status is not EntryStatus.CONDITIONAL_ON_BREAKOUT
+                for breakout_status in non_triggering_statuses:
+                    status, _ = classify_entry_status(decision, 100.0, 102.0, missed, breakout_status=breakout_status)
+                    assert status is not EntryStatus.CONDITIONAL_ON_BREAKOUT
+
+    def test_watch_with_early_breakout_is_conditional_on_breakout(self):
+        status, explanation = classify_entry_status(
+            Decision.WATCH, 100.0, 102.0, False, breakout_status="EARLY_BREAKOUT"
+        )
+        assert status is EntryStatus.CONDITIONAL_ON_BREAKOUT
+        assert explanation != ""
+
+    def test_watch_with_unconfirmed_breakout_is_conditional_on_breakout(self):
+        status, _ = classify_entry_status(
+            Decision.WATCH, 100.0, 102.0, False, breakout_status="UNCONFIRMED_BREAKOUT"
+        )
+        assert status is EntryStatus.CONDITIONAL_ON_BREAKOUT
+
+    def test_non_watch_decision_ignores_breakout_status(self):
+        """CONDITIONAL_ON_BREAKOUT only ever overrides the WATCH path --
+        every other decision path is unaffected by breakout_status."""
+        status, _ = classify_entry_status(
+            Decision.BUY_CANDIDATE, 100.0, 102.0, False, breakout_status="EARLY_BREAKOUT"
+        )
+        assert status is EntryStatus.READY_NOW
+
+
+class TestClassifyHighQualityBuy:
+    def _ideal_kwargs(self):
+        return dict(
+            decision=Decision.STRONG_BUY_CANDIDATE,
+            confidence_score=80.0,
+            data_freshness_status=DataFreshnessStatus.LIVE,
+            entry_status=EntryStatus.READY_NOW,
+            risk_reward_target_1=2.5,
+            volume_confirms_decision=True,
+            sector_strength_used=True,
+            stock_vs_sector_relative_strength=0.3,
+            breakout_status="NOT_APPLICABLE",
+            warnings=[],
+        )
+
+    def test_all_conditions_met_is_high_quality(self):
+        is_hq, explanation = classify_high_quality_buy(**self._ideal_kwargs())
+        assert is_hq is True
+        assert explanation != ""
+
+    def test_sector_data_absent_does_not_disqualify(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["sector_strength_used"] = False
+        kwargs["stock_vs_sector_relative_strength"] = None
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is True
+
+    def test_watch_decision_is_never_high_quality(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["decision"] = Decision.WATCH
+        is_hq, explanation = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+        assert explanation == ""
+
+    def test_low_confidence_disqualifies(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["confidence_score"] = 60.0
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+
+    def test_stale_data_disqualifies(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["data_freshness_status"] = DataFreshnessStatus.STALE
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+
+    def test_not_ready_now_disqualifies(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["entry_status"] = EntryStatus.NEAR_ENTRY
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+
+    def test_weak_risk_reward_disqualifies(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["risk_reward_target_1"] = 1.2
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+
+    def test_missing_risk_reward_disqualifies(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["risk_reward_target_1"] = None
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+
+    def test_volume_not_confirming_disqualifies(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["volume_confirms_decision"] = False
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+
+    def test_volume_confirmation_absent_disqualifies(self):
+        """Unlike sector strength, volume confirmation must be
+        affirmatively True -- None is not treated the same as absent
+        sector data, since OBV direction is core, always-computable
+        evidence, not an optional data-availability leg."""
+        kwargs = self._ideal_kwargs()
+        kwargs["volume_confirms_decision"] = None
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+
+    def test_underperforming_sector_disqualifies(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["stock_vs_sector_relative_strength"] = -0.2
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+
+    def test_failed_breakout_disqualifies(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["breakout_status"] = "FAILED_BREAKOUT"
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False
+
+    def test_confirmed_breakout_does_not_disqualify(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["breakout_status"] = "CONFIRMED_BREAKOUT"
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is True
+
+    def test_any_active_warning_disqualifies(self):
+        kwargs = self._ideal_kwargs()
+        kwargs["warnings"] = ["سيولة التداول في هذا السهم محدودة نسبيًا."]
+        is_hq, _ = classify_high_quality_buy(**kwargs)
+        assert is_hq is False

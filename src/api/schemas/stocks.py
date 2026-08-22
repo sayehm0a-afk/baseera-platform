@@ -454,6 +454,22 @@ class DecisionV2Out(BaseModel):
     sector_data_timestamp: Optional[datetime] = None
     sector_strength_used: bool = False
 
+    # Phase 3 area 5: real breakout/false-breakout confirmation (see
+    # src.analysis.decision_v2.breakout_confirmation). breakout_status
+    # defaults to "NOT_APPLICABLE" -- itself a meaningful state ("no
+    # breakout thesis in play"), never a fabricated confirmation.
+    breakout_status: str = "NOT_APPLICABLE"
+    breakout_hold_days: Optional[int] = None
+    breakout_volume_confirmed: Optional[bool] = None
+    breakout_follow_through_pct: Optional[float] = None
+    breakout_explanation_ar: str = ""
+
+    # Phase 3: HIGH_QUALITY_BUY tier -- an additive tag on an already-
+    # issued buy candidate, never a 10th Decision value. False far more
+    # often than True.
+    is_high_quality_buy: bool = False
+    high_quality_buy_explanation_ar: str = ""
+
     # Section 12: fundamental summary -- real M2.3 ratios (revenue/
     # profit growth, margins, ROE, debt-to-equity, valuation multiples,
     # dividend yield), never fabricated. Keys are always present;

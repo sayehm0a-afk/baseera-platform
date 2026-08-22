@@ -215,6 +215,23 @@ class DecisionV2Snapshot(Base):
     sector_data_timestamp = Column(DateTime(timezone=True), nullable=True)
     sector_strength_used = Column(Boolean, nullable=True)
 
+    # Phase 3 area 5: real breakout/false-breakout confirmation (see
+    # src.analysis.decision_v2.breakout_confirmation). breakout_status
+    # defaults to "NOT_APPLICABLE" -- itself a meaningful state ("no
+    # breakout thesis in play"), never a fabricated confirmation.
+    breakout_status = Column(String(32), nullable=True)
+    breakout_hold_days = Column(Integer, nullable=True)
+    breakout_volume_confirmed = Column(Boolean, nullable=True)
+    breakout_follow_through_pct = Column(Numeric(9, 2), nullable=True)
+    breakout_explanation_ar = Column(Text, nullable=True)
+
+    # Phase 3: HIGH_QUALITY_BUY tier -- an additive tag on an already-
+    # issued buy candidate (see
+    # src.analysis.decision_v2.trade_classification.classify_high_quality_buy),
+    # never a 10th Decision value. False far more often than True.
+    is_high_quality_buy = Column(Boolean, nullable=True)
+    high_quality_buy_explanation_ar = Column(Text, nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

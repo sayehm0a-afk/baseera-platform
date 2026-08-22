@@ -9,8 +9,23 @@ route's `result.latest_snapshot()` call. Six core, always-computable
 indicators (RSI, MACD, Supertrend, EMA-vs-SMA momentum, OBV trend,
 volume trend) drive the score; ADX (trend strength, not direction)
 only adjusts confidence; candlestick patterns add a capped score
-contribution; Bollinger Band width is reported as an informational,
-zero-impact signal.
+contribution; Bollinger Band *width trend* (widening/narrowing over
+the last 10 sessions) is reported as an informational, zero-impact
+signal here specifically.
+
+This is deliberately not the only place Bollinger Bands are read: a
+different measurement of the same indicator -- the band's *width
+ratio* relative to price, a point-in-time reading rather than a
+trend -- is scored with real point impact by
+`src.analysis.decision.contributors.risk_contributor.RiskScoreContributor`,
+which does reach `InvestmentDecision.risk_level` and `final_score`
+(see that module's own docstring). Phase 3's audit flagged this as a
+potential documentation discrepancy between the two files; it is not
+a functional bug -- the two contributors score two genuinely
+different aspects of Bollinger Bands, each internally consistent and
+already documented on its own side -- but this cross-reference is
+added so nobody reading this file alone concludes Bollinger Bands
+have zero score impact anywhere in the platform.
 """
 
 from typing import List, Optional, Tuple
@@ -296,6 +311,10 @@ def _score_patterns(result: TechnicalAnalysisResult) -> Tuple[float, List[Signal
 
 
 def _bollinger_width_signal(result: TechnicalAnalysisResult) -> Optional[Signal]:
+    """Always NEUTRAL, never added to `points` below -- purely
+    informational (see this module's docstring for where Bollinger
+    Band width *does* carry real score impact, in a different
+    contributor)."""
     bollinger = result.bollinger
     upper = bollinger.upper.dropna()
     lower = bollinger.lower.dropna()

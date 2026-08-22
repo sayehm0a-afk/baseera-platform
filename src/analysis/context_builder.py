@@ -31,6 +31,8 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
+from src.analysis.decision_v2.breakout_confirmation import BreakoutStatus, compute_breakout_confirmation
+from src.analysis.decision_v2.evidence import derive_support_resistance
 from src.analysis.decision_v2.sector_strength import compute_sector_strength
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
@@ -107,6 +109,41 @@ def _sector_rotation_extra(session: Session, stock: Stock, df) -> Dict[str, Any]
             "sector_strength_score": result.sector_strength_score,
             "sector_data_timestamp": result.sector_data_timestamp,
             "sector_strength_used": result.sector_strength_used,
+        }
+    }
+
+
+def _breakout_confirmation_extra(df, technical_result, price: Optional[float], symbol: str) -> Dict[str, Any]:
+    """Phase 3 area 5: real breakout/false-breakout confirmation -- see
+    breakout_confirmation.py. Reuses the same `support_resistance`
+    swing-pivot indicator and `derive_support_resistance()` call
+    `DecisionEngineV2.decide()` itself makes to get `breakout_level`
+    (so the two never disagree on which level is "the" breakout
+    level), computed here instead so this optional leg can degrade
+    the same independently-failing way every other leg in this module
+    does. Never raises."""
+    if technical_result is None or price is None:
+        return {}
+    try:
+        sr_evidence = derive_support_resistance(price, technical_result.support_resistance)
+        volume_sma = technical_result.indicators.get("volume_sma_20")
+        volume_series = volume_sma.value if volume_sma is not None else None
+        result = compute_breakout_confirmation(df, sr_evidence.breakout_level, volume_series)
+    except Exception as exc:  # noqa: BLE001 -- an optional leg must never break the whole context
+        logger.info("Breakout confirmation leg unavailable for '%s': %s", symbol, exc)
+        return {}
+    if result.status == BreakoutStatus.NOT_APPLICABLE:
+        # Same "omit the whole leg when there's nothing real to add"
+        # convention _sector_rotation_extra/_news_sentiment_extra use --
+        # no breakout thesis is in play, not a failure to disclose.
+        return {}
+    return {
+        "breakout_confirmation": {
+            "status": result.status.value,
+            "hold_days": result.hold_days,
+            "volume_confirmed": result.volume_confirmed,
+            "follow_through_pct": result.follow_through_pct,
+            "explanation_ar": result.explanation_ar,
         }
     }
 
@@ -250,6 +287,7 @@ async def build_analysis_context(
         **quote_extra,
         **_news_sentiment_extra(session, symbol, news_service),
         **_sector_rotation_extra(session, stock, df),
+        **_breakout_confirmation_extra(df, technical_result, market_price, symbol),
         "bars_used": len(df),
         "likely_suspended": _detect_likely_suspended(df),
         "ohlcv_latest_bar_age_days": ohlcv_latest_bar_age_days(df),

@@ -85,6 +85,7 @@ class DecisionEngineV2:
 
         market_risk = classify_market_risk(market_is_open=bool(market_is_open), breadth=market_breadth)
         sector_rotation = context.extra.get("sector_rotation") or {}
+        breakout_confirmation = context.extra.get("breakout_confirmation") or {}
 
         atr_value = None
         atr_pct = None
@@ -277,7 +278,8 @@ class DecisionEngineV2:
         warnings.extend(evaluation.warnings)
 
         entry_status, _entry_status_explanation = trade_classification.classify_entry_status(
-            evaluation.decision, price, entry_high, missed_entry
+            evaluation.decision, price, entry_high, missed_entry,
+            breakout_status=breakout_confirmation.get("status"),
         )
         entry_status_label_ar = ENTRY_STATUS_LABELS_AR[entry_status]
         entry_quality_value = investment_decision.entry_quality.value
@@ -316,6 +318,15 @@ class DecisionEngineV2:
             freshness_status = DataFreshnessStatus.STALE if market_is_open else DataFreshnessStatus.LAST_SESSION
         else:
             freshness_status = DataFreshnessStatus.LIVE
+
+        is_high_quality_buy, high_quality_buy_explanation_ar = trade_classification.classify_high_quality_buy(
+            evaluation.decision, confidence, freshness_status, entry_status,
+            investment_decision.risk_reward_ratio, accumulation.volume_confirms_decision,
+            bool(sector_rotation.get("sector_strength_used", False)),
+            sector_rotation.get("sector_relative_strength"),
+            breakout_confirmation.get("status", "NOT_APPLICABLE"),
+            warnings,
+        )
 
         positive_reasons = [
             s.description for s in investment_decision.signals if s.direction == SignalDirection.BULLISH
@@ -479,6 +490,20 @@ class DecisionEngineV2:
             stock_vs_sector_relative_strength=sector_rotation.get("sector_relative_strength"),
             sector_data_timestamp=sector_rotation.get("sector_data_timestamp"),
             sector_strength_used=bool(sector_rotation.get("sector_strength_used", False)),
+            # --- Phase 3 area 5: breakout/false-breakout confirmation -----
+            # Computed once in context_builder.py (compute_breakout_
+            # confirmation) and carried here via context.extra -- same
+            # "read it, never recompute it" discipline as sector_rotation
+            # above. Defaults to NOT_APPLICABLE when the key is absent
+            # (no breakout thesis was in play for this symbol).
+            breakout_status=breakout_confirmation.get("status", "NOT_APPLICABLE"),
+            breakout_hold_days=breakout_confirmation.get("hold_days"),
+            breakout_volume_confirmed=breakout_confirmation.get("volume_confirmed"),
+            breakout_follow_through_pct=breakout_confirmation.get("follow_through_pct"),
+            breakout_explanation_ar=breakout_confirmation.get("explanation_ar", ""),
+            # --- Phase 3: HIGH_QUALITY_BUY tier -----------------------------
+            is_high_quality_buy=is_high_quality_buy,
+            high_quality_buy_explanation_ar=high_quality_buy_explanation_ar,
         )
         return decision_result
 

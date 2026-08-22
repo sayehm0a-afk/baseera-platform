@@ -622,6 +622,13 @@ class MarketIntelligenceRepository:
                         stock_vs_sector_relative_strength=_f(result.stock_vs_sector_relative_strength),
                         sector_data_timestamp=result.sector_data_timestamp,
                         sector_strength_used=result.sector_strength_used,
+                        breakout_status=result.breakout_status,
+                        breakout_hold_days=result.breakout_hold_days,
+                        breakout_volume_confirmed=result.breakout_volume_confirmed,
+                        breakout_follow_through_pct=_f(result.breakout_follow_through_pct),
+                        breakout_explanation_ar=result.breakout_explanation_ar,
+                        is_high_quality_buy=result.is_high_quality_buy,
+                        high_quality_buy_explanation_ar=result.high_quality_buy_explanation_ar,
                         # RADAR-C: same disclosed, additive calibration
                         # companion figure as the /decision-v2 route --
                         # see get_effective_confidence's own docstring.
