@@ -32,6 +32,8 @@ function buildSummary(overrides: Partial<RadarOpportunitySummary> = {}): RadarOp
     risk_level: "MEDIUM",
     risk_level_label_ar: "متوسطة",
     data_freshness_status: "LIVE",
+    entry_status: "READY_NOW",
+    entry_status_label_ar: "مناسب الآن",
     stage1_rank: 3,
     stage1_ranking_score: 70.0,
     ranking_reason_ar: "زخم شرائي قوي",

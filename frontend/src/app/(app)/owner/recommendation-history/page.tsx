@@ -154,7 +154,7 @@ function RecommendationHistoryAuditPageInner() {
                   <span className="text-sm font-semibold text-bsr-text-primary">{item.symbol}</span>{" "}
                   <span className="text-xs text-bsr-text-secondary">{item.company_name_ar ?? ""}</span>
                   <p className="text-[11px] text-bsr-text-tertiary">
-                    {new Date(item.evaluated_at).toLocaleString("ar-SA")}
+                    {new Date(item.evaluated_at).toLocaleString("ar-SA", { calendar: "gregory" })}
                   </p>
                 </div>
                 <RecommendationBadge value={item.recommendation as RecommendationValue} />

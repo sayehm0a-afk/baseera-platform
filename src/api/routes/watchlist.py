@@ -180,7 +180,7 @@ def remove_watchlist_item(
 def _news_alert_out(a: WatchlistNewsAlert) -> WatchlistNewsAlertOut:
     return WatchlistNewsAlertOut(
         id=a.id, watchlist_id=a.watchlist_id, symbol=a.symbol, news_event_id=a.news_event_id,
-        alert_type=a.alert_type.value, severity=a.severity.value, message=a.message,
+        alert_type=a.alert_type.value, severity=a.severity.value, message=a.message, message_ar=a.message_ar,
         generated_at=a.generated_at, acknowledged_at=a.acknowledged_at,
     )
 
@@ -226,7 +226,7 @@ def refresh_watchlist_news_alerts(
         alerts=[
             WatchlistNewsAlertOut(
                 id=a.id, watchlist_id=a.watchlist_id, symbol=a.symbol, news_event_id=a.news_event_id,
-                alert_type=a.alert_type.value, severity=a.severity.value, message=a.message,
+                alert_type=a.alert_type.value, severity=a.severity.value, message=a.message, message_ar=a.message_ar,
                 generated_at=a.generated_at, acknowledged_at=None,
             )
             for a in alerts

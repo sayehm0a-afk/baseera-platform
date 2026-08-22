@@ -19,6 +19,7 @@ function alert(overrides: Partial<WatchlistNewsAlert> = {}): WatchlistNewsAlert 
     alert_type: "HIGH_RISK",
     severity: "CRITICAL",
     message: "High risk for 2222: lawsuit filed.",
+    message_ar: null,
     generated_at: "2026-08-18T00:00:00Z",
     acknowledged_at: null,
     ...overrides,
@@ -42,6 +43,17 @@ describe("WatchlistNewsAlertsSection", () => {
     expect(await screen.findByText("2222")).toBeInTheDocument();
     expect(screen.getByText("High risk for 2222: lawsuit filed.")).toBeInTheDocument();
     expect(screen.getByText("مخاطرة عالية")).toBeInTheDocument();
+  });
+
+  it("prefers the Arabic message when the backend supplied one, over the legacy English text", async () => {
+    vi.mocked(getWatchlistNewsAlerts).mockResolvedValue({
+      alerts: [alert({ message_ar: "مخاطرة عالية لسهم 2222: تم رفع قضية قانونية." })],
+    });
+
+    render(<WatchlistNewsAlertsSection />);
+
+    expect(await screen.findByText("مخاطرة عالية لسهم 2222: تم رفع قضية قانونية.")).toBeInTheDocument();
+    expect(screen.queryByText("High risk for 2222: lawsuit filed.")).not.toBeInTheDocument();
   });
 
   it("refreshes and reloads real alerts on the explicit action, never on mount", async () => {

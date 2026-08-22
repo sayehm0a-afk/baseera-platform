@@ -33,6 +33,7 @@ export function FreshnessBanner({ result }: FreshnessBannerProps) {
   const generatedLabel =
     result.generated_at !== null
       ? new Date(result.generated_at).toLocaleString("ar-SA", {
+          calendar: "gregory",
           dateStyle: "medium",
           timeStyle: "short",
         })

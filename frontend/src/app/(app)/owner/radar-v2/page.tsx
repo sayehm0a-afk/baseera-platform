@@ -44,7 +44,7 @@ function fmtPct(pct: number | null): string {
 }
 
 function fmtDate(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleString("ar-SA") : "—";
+  return iso ? new Date(iso).toLocaleString("ar-SA", { calendar: "gregory" }) : "—";
 }
 
 type PageState =

@@ -21,7 +21,15 @@ type PanelState =
  * counters). Discovers the latest scan_run_id via a real rankings
  * call (the only response shape that currently exposes it), then
  * polls the progress route while the run is RUNNING. */
-export function LiveScanPanel() {
+interface LiveScanPanelProps {
+  /** Pre-launch safety fix (2026-08-22, Priority 5): raw backend
+   * exception text (`latest_error`) must never reach retail users --
+   * only the staff-only owner live-test page may show it verbatim.
+   * Defaults to false so every existing consumer usage stays safe. */
+  showTechnicalDetail?: boolean;
+}
+
+export function LiveScanPanel({ showTechnicalDetail = false }: LiveScanPanelProps = {}) {
   const [state, setState] = useState<PanelState>({ kind: "loading" });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -161,7 +169,7 @@ export function LiveScanPanel() {
 
       {d.latest_error ? (
         <p className="mt-bsr-3 text-sm text-bsr-market-down">
-          آخر خطأ: {d.latest_error}
+          {showTechnicalDetail ? `آخر خطأ: ${d.latest_error}` : "حدث خطأ في تحليل بعض الأسهم أثناء المسح، وتم تخطّيها."}
         </p>
       ) : null}
     </section>

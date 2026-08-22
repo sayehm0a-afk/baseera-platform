@@ -146,6 +146,7 @@ class PortfolioAlert:
     alert_type: PortfolioAlertType
     severity: AlertSeverity
     message: str
+    message_ar: str
     generated_at: datetime
     id: Optional[int] = None
 
@@ -162,5 +163,6 @@ class WatchlistAlert:
     alert_type: PortfolioAlertType
     severity: AlertSeverity
     message: str
+    message_ar: str
     generated_at: datetime
     id: Optional[int] = None

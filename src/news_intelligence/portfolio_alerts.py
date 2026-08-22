@@ -79,6 +79,54 @@ def build_alert_message(symbol: str, alert_type: PortfolioAlertType, event: News
     return f"{label} for {symbol}: {event.headline} ({event.category.value if event.category else 'OTHER'})."
 
 
+# Pre-launch safety fix (2026-08-22, Priority 2): Arabic label
+# companions for the enums this module already classifies by -- kept in
+# lockstep with frontend/src/lib/news-labels.ts's NEWS_CATEGORY_LABELS/
+# PORTFOLIO_ALERT_TYPE_LABELS so both surfaces show the same wording.
+# Presentation only: does not change classify_alert_type's rule or any
+# stored English `message`/title -- only adds an Arabic companion.
+_ALERT_TYPE_LABELS_AR = {
+    PortfolioAlertType.HIGH_RISK: "مخاطرة عالية",
+    PortfolioAlertType.DOWNGRADE: "إشارة تخفيض",
+    PortfolioAlertType.MAJOR_OPPORTUNITY: "فرصة كبرى",
+    PortfolioAlertType.UPGRADE: "إشارة ترقية",
+}
+
+_NEWS_CATEGORY_LABELS_AR = {
+    NewsCategory.EARNINGS: "أرباح",
+    NewsCategory.DIVIDEND: "توزيعات أرباح",
+    NewsCategory.CONTRACT_AWARD: "ترسية عقد",
+    NewsCategory.EXPANSION: "توسع",
+    NewsCategory.ACQUISITION: "استحواذ",
+    NewsCategory.LAWSUIT: "قضية قانونية",
+    NewsCategory.REGULATORY_CHANGE: "تغيير تنظيمي",
+    NewsCategory.GOVERNMENT_POLICY: "سياسة حكومية",
+    NewsCategory.OIL: "النفط",
+    NewsCategory.INTEREST_RATES: "أسعار الفائدة",
+    NewsCategory.INFLATION: "التضخم",
+    NewsCategory.CURRENCY: "العملة",
+    NewsCategory.SUPPLY_CHAIN: "سلسلة الإمداد",
+    NewsCategory.PRODUCTION: "الإنتاج",
+    NewsCategory.GUIDANCE: "توجيهات الشركة",
+    NewsCategory.CREDIT_RATING: "التصنيف الائتماني",
+    NewsCategory.EXECUTIVE_CHANGE: "تغيير تنفيذي",
+    NewsCategory.BANKRUPTCY: "إفلاس",
+    NewsCategory.TRADING_SUSPENSION: "إيقاف تداول",
+    NewsCategory.OTHER: "أخرى",
+}
+
+
+def build_alert_message_ar(symbol: str, alert_type: PortfolioAlertType, event: NewsEvent) -> str:
+    """Arabic companion to `build_alert_message` -- same structure and
+    same underlying data (symbol, alert type, category), fully Arabic
+    except the news headline itself, which is real article text in
+    whatever language it was published and is not translated here (no
+    LLM call is introduced by this presentation fix)."""
+    label_ar = _ALERT_TYPE_LABELS_AR[alert_type]
+    category_ar = _NEWS_CATEGORY_LABELS_AR[event.category] if event.category else _NEWS_CATEGORY_LABELS_AR[NewsCategory.OTHER]
+    return f"{label_ar} لسهم {symbol}: {event.headline} ({category_ar})."
+
+
 class PortfolioNewsAlertEngine:
     def generate_and_persist(
         self, session: Session, portfolio: Portfolio, symbols: List[str], since: Optional[datetime] = None
@@ -122,11 +170,12 @@ class PortfolioNewsAlertEngine:
 
                 severity = _SEVERITY_BY_ALERT_TYPE[alert_type]
                 message = build_alert_message(symbol, alert_type, event)
+                message_ar = build_alert_message_ar(symbol, alert_type, event)
                 generated_at = datetime.now(timezone.utc)
 
                 alert_row = PortfolioNewsAlert(
                     portfolio_id=portfolio.id, symbol=symbol, news_event_id=event.id, alert_type=alert_type,
-                    severity=severity, message=message, generated_at=generated_at,
+                    severity=severity, message=message, message_ar=message_ar, generated_at=generated_at,
                 )
                 session.add(alert_row)
                 session.flush()  # populates alert_row.id before it's threaded into the returned dataclass
@@ -135,12 +184,14 @@ class PortfolioNewsAlertEngine:
                         Notification(
                             user_id=portfolio.user_id, type=NotificationType.PORTFOLIO_ALERT,
                             title=f"{symbol}: {alert_type.value.replace('_', ' ').title()}", body=message,
+                            title_ar=f"{_ALERT_TYPE_LABELS_AR[alert_type]}: {symbol}", body_ar=message_ar,
                         )
                     )
                 alerts.append(
                     PortfolioAlert(
                         id=alert_row.id, portfolio_id=portfolio.id, symbol=symbol, news_event_id=event.id,
-                        alert_type=alert_type, severity=severity, message=message, generated_at=generated_at,
+                        alert_type=alert_type, severity=severity, message=message, message_ar=message_ar,
+                        generated_at=generated_at,
                     )
                 )
 

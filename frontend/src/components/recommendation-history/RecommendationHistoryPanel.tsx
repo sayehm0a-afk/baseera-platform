@@ -11,6 +11,11 @@ import type {
   RecommendationHistoryStats,
 } from "@/lib/api/recommendation-history-types";
 
+const ERROR_MESSAGES_AR: Record<string, string> = {
+  no_active_subscription: "يتطلب الاشتراك النشط للاطلاع على سجل التوصيات.",
+  not_authenticated: "يرجى تسجيل الدخول للاطلاع على سجل التوصيات.",
+};
+
 const STATUS_LABELS_AR: Record<string, string> = {
   ACTIVE: "قيد المتابعة",
   COMPLETED: "مكتملة",
@@ -88,7 +93,7 @@ function HistoryItemRow({ item }: { item: RecommendationHistoryItem }) {
           </a>{" "}
           <span className="text-xs text-bsr-text-secondary">{item.company_name_ar ?? ""}</span>
           <p className="text-[11px] text-bsr-text-tertiary">
-            {new Date(item.evaluated_at).toLocaleDateString("ar-SA")} · ثقة {Math.round(item.confidence_score)}%
+            {new Date(item.evaluated_at).toLocaleDateString("ar-SA", { calendar: "gregory" })} · ثقة {Math.round(item.confidence_score)}%
           </p>
         </div>
         <div className="flex flex-col items-end gap-1">
@@ -142,9 +147,15 @@ export function RecommendationHistoryPanel({ symbol }: { symbol?: string }) {
         setState({ status: "ready", items: history.items, stats });
       })
       .catch((err) => {
+        // Pre-launch safety fix (2026-08-22, Priority 5): ApiError.message
+        // is English-by-design (see src.api.exceptions) -- never render it
+        // to a retail user. Map the known error code the same way
+        // login/page.tsx already does; fall back to one generic Arabic
+        // message for anything else, never the raw exception text.
+        const code = err instanceof ApiError ? err.code : undefined;
         setState({
           status: "error",
-          message: err instanceof ApiError ? err.message : "تعذّر تحميل سجل التوصيات.",
+          message: (code && ERROR_MESSAGES_AR[code]) ?? "تعذّر تحميل سجل التوصيات. تأكد من اتصال الخادم وحاول مرة أخرى.",
         });
       });
   }, [symbol, reloadToken]);

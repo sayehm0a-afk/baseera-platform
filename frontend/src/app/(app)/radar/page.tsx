@@ -7,6 +7,7 @@ import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { RadarOpportunityCard } from "@/components/radar/RadarOpportunityCard";
 import { getRadarSummary } from "@/lib/api/radar";
 import type { RadarHomeSummary } from "@/lib/api/radar-types";
+import { formatArabicDateTime, formatRelativeAgeAr, isEntryMissed } from "@/lib/format/freshness";
 
 type RadarData =
   | { status: "loading" }
@@ -150,6 +151,19 @@ export default function RadarPage() {
         />
       ) : null}
 
+      {data.status === "ready" ? (
+        <p className="text-center text-xs text-bsr-text-secondary">
+          آخر تحديث للرادار: <span className="bsr-numeric">{formatArabicDateTime(data.summary.generated_at)}</span> (
+          {formatRelativeAgeAr(data.summary.generated_at)})
+          {data.summary.most_recent_emitted_at ? (
+            <>
+              {" "}
+              · أحدث إشارة: <span className="bsr-numeric">{formatRelativeAgeAr(data.summary.most_recent_emitted_at)}</span>
+            </>
+          ) : null}
+        </p>
+      ) : null}
+
       {data.status === "ready" ? <MarketRiskBanner summary={data.summary} /> : null}
       {data.status === "ready" ? <ScanFunnelBanner summary={data.summary} /> : null}
 
@@ -160,28 +174,59 @@ export default function RadarPage() {
         />
       ) : null}
 
-      {data.status === "ready" && data.summary.live_opportunity_count > 0 ? (
-        <section className="flex flex-col gap-bsr-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-bsr-text-primary">
-              الفرص الحية ({data.summary.live_opportunity_count})
-            </h2>
-            {data.summary.average_confidence != null ? (
-              <span className="text-sm text-bsr-text-secondary">
-                متوسط الثقة:{" "}
-                <span className="bsr-numeric font-semibold text-bsr-teal-500">
-                  {Math.round(data.summary.average_confidence)}%
-                </span>
-              </span>
-            ) : null}
-          </div>
-          <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
-            {data.summary.top_opportunities.map((opportunity) => (
-              <RadarOpportunityCard key={opportunity.id} opportunity={opportunity} />
-            ))}
-          </div>
-        </section>
-      ) : null}
+      {data.status === "ready" && data.summary.live_opportunity_count > 0
+        ? (() => {
+            const currentOpportunities = data.summary.top_opportunities.filter((o) => !isEntryMissed(o.entry_status));
+            const missedEntryOpportunities = data.summary.top_opportunities.filter((o) => isEntryMissed(o.entry_status));
+            return (
+              <>
+                <section className="flex flex-col gap-bsr-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-base font-semibold text-bsr-text-primary">
+                      الفرص الحية ({currentOpportunities.length})
+                    </h2>
+                    {data.summary.average_confidence != null ? (
+                      <span className="text-sm text-bsr-text-secondary">
+                        متوسط الثقة:{" "}
+                        <span className="bsr-numeric font-semibold text-bsr-teal-500">
+                          {Math.round(data.summary.average_confidence)}%
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
+                  {currentOpportunities.length === 0 ? (
+                    <EmptyState
+                      title="لا توجد فرصة دخول حالية"
+                      description="جميع الفرص المرصودة تجاوز سعرها نطاق الدخول الموصى به. انظر أدناه للفرص السابقة."
+                    />
+                  ) : (
+                    <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
+                      {currentOpportunities.map((opportunity) => (
+                        <RadarOpportunityCard key={opportunity.id} opportunity={opportunity} />
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                {missedEntryOpportunities.length > 0 ? (
+                  <section className="flex flex-col gap-bsr-4">
+                    <h2 className="text-base font-semibold text-bsr-text-secondary">
+                      فرص فاتت نقطة الدخول ({missedEntryOpportunities.length})
+                    </h2>
+                    <p className="text-xs text-bsr-text-secondary">
+                      معروضة للاطلاع فقط -- لم تعد فرص دخول حالية.
+                    </p>
+                    <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
+                      {missedEntryOpportunities.map((opportunity) => (
+                        <RadarOpportunityCard key={opportunity.id} opportunity={opportunity} />
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+              </>
+            );
+          })()
+        : null}
     </div>
   );
 }

@@ -21,6 +21,8 @@ function notification(overrides: Partial<Notification> = {}): Notification {
     type: "MARKET_ALERT",
     title: "تنبيه 2222",
     body: "خطر مرتفع بسبب أخبار سلبية",
+    title_ar: null,
+    body_ar: null,
     read_at: null,
     created_at: "2026-08-18T00:00:00Z",
     ...overrides,
@@ -84,6 +86,36 @@ describe("NotificationBell", () => {
 
     await waitFor(() => expect(markNotificationRead).toHaveBeenCalledWith(1));
     await waitFor(() => expect(screen.queryByText("1")).not.toBeInTheDocument());
+  });
+
+  it("prefers the Arabic title/body when the backend supplied them", async () => {
+    vi.mocked(listNotifications).mockResolvedValue({
+      notifications: [
+        notification({ title: "Portfolio Alert: 2222", body: "High risk", title_ar: "تنبيه محفظة: 2222", body_ar: "مخاطرة عالية" }),
+      ],
+      unread_count: 1,
+    });
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole("button", { name: "التنبيهات" }));
+
+    expect(await screen.findByText("تنبيه محفظة: 2222")).toBeInTheDocument();
+    expect(screen.getByText("مخاطرة عالية")).toBeInTheDocument();
+    expect(screen.queryByText("Portfolio Alert: 2222")).not.toBeInTheDocument();
+    expect(screen.queryByText("High risk")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the English title/body for a legacy notification with no Arabic companion yet", async () => {
+    vi.mocked(listNotifications).mockResolvedValue({
+      notifications: [notification({ title: "Legacy English Title", body: "Legacy English body" })],
+      unread_count: 1,
+    });
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole("button", { name: "التنبيهات" }));
+
+    expect(await screen.findByText("Legacy English Title")).toBeInTheDocument();
+    expect(screen.getByText("Legacy English body")).toBeInTheDocument();
   });
 
   it("marks all notifications read via the bulk action", async () => {

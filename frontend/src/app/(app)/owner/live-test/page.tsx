@@ -49,7 +49,7 @@ function MarketStatusPill({
       <span className={`font-semibold ${colorClass}`}>{marketStatus.label_ar}</span>
       <span className="text-bsr-text-secondary">
         وقت الخادم (الرياض):{" "}
-        <span className="bsr-numeric">{new Date(marketStatus.server_time_riyadh).toLocaleString("ar-SA")}</span>
+        <span className="bsr-numeric">{new Date(marketStatus.server_time_riyadh).toLocaleString("ar-SA", { calendar: "gregory" })}</span>
       </span>
       {marketStatus.last_completed_session_date ? (
         <span className="text-bsr-text-secondary">
@@ -130,7 +130,7 @@ function LiveTestPageInner() {
 
       <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
         <h2 className="mb-bsr-2 text-base font-semibold text-bsr-text-primary">تقدّم المسح الحالي</h2>
-        <LiveScanPanel />
+        <LiveScanPanel showTechnicalDetail />
       </section>
 
       <section>

@@ -620,6 +620,8 @@ def radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummaryO
         risk_level=snapshot.risk_level,
         risk_level_label_ar=snapshot.risk_level_label_ar,
         data_freshness_status=snapshot.data_freshness_status,
+        entry_status=snapshot.entry_status,
+        entry_status_label_ar=snapshot.entry_status_label_ar,
         stage1_rank=opportunity.stage1_rank,
         stage1_ranking_score=(
             float(opportunity.stage1_ranking_score) if opportunity.stage1_ranking_score is not None else None
@@ -667,7 +669,9 @@ def radar_detail_out(opportunity: RadarOpportunity, outcome: Optional[DecisionV2
         average_volume=float(snapshot.average_volume) if snapshot.average_volume is not None else None,
         accumulation_score=float(snapshot.accumulation_score) if snapshot.accumulation_score is not None else None,
         entry_quality_label_ar=snapshot.entry_quality_label_ar,
-        entry_status_label_ar=snapshot.entry_status_label_ar,
+        # entry_status/entry_status_label_ar already come from
+        # **summary.model_dump() above -- passing them again here would
+        # raise "multiple values for keyword argument".
         why_now_ar=snapshot.why_now_ar,
         why_not_stronger_ar=snapshot.why_not_stronger_ar,
         why_not_buy_reasons=snapshot.why_not_buy_reasons or [],

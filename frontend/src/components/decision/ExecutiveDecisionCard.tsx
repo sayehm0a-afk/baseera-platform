@@ -290,7 +290,7 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
         <span>المصدر: {DATA_SOURCE_LABELS_AR[decision.data_source] ?? decision.data_source}</span>
         <span>إصدار المحرك: {decision.analysis_version}</span>
         <span className="bsr-numeric">
-          وقت القرار: {new Date(decision.decision_timestamp).toLocaleString("ar-SA")}
+          وقت القرار: {new Date(decision.decision_timestamp).toLocaleString("ar-SA", { calendar: "gregory" })}
         </span>
       </div>
     </div>

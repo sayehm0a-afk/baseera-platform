@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { getMyWatchlist, removeFromWatchlist } from "@/lib/api/watchlist";
 import type { WatchlistItem } from "@/lib/api/watchlist-types";
+import { formatArabicDateTime, formatRelativeAgeAr, freshnessLabelAr } from "@/lib/format/freshness";
 
 type PanelState =
   | { status: "loading" }
@@ -112,6 +113,14 @@ export function MyWatchlistPanel() {
             <p className="text-sm text-bsr-text-secondary">لم يتم تحليل هذا السهم بعد.</p>
           )}
 
+          {item.latest_decision_label_ar && item.latest_decision_timestamp ? (
+            <p className="text-xs text-bsr-text-secondary">
+              {freshnessLabelAr(item.latest_data_freshness_status)} · آخر تحديث:{" "}
+              <span className="bsr-numeric">{formatArabicDateTime(item.latest_decision_timestamp)}</span> (
+              {formatRelativeAgeAr(item.latest_decision_timestamp)})
+            </p>
+          ) : null}
+
           {item.radar_is_live_opportunity ? (
             <div className="flex items-center gap-bsr-2 text-xs text-bsr-teal-500">
               <AiStar size="sm" />
@@ -125,7 +134,7 @@ export function MyWatchlistPanel() {
             <p className="text-xs text-bsr-text-secondary">{item.radar_ranking_reason_ar}</p>
           ) : null}
 
-          {item.latest_target_1 != null || item.latest_stop_loss != null ? (
+          {(item.latest_target_1 != null || item.latest_stop_loss != null) && item.latest_decision_timestamp != null ? (
             <div className="flex flex-wrap gap-bsr-4 text-xs text-bsr-text-secondary">
               {item.latest_target_1 != null ? (
                 <span>

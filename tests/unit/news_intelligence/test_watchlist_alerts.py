@@ -81,6 +81,21 @@ def test_generate_and_persist_creates_a_high_risk_alert_and_a_notification(sessi
     assert notification.type == NotificationType.MARKET_ALERT
 
 
+def test_generate_and_persist_populates_arabic_presentation_fields(session, watchlist):
+    """Pre-launch safety fix (2026-08-22, Priority 2)."""
+    _analyzed_event(session, "2222", NewsCategory.LAWSUIT, -0.7, 90.0)
+
+    WatchlistNewsAlertEngine().generate_and_persist(session, watchlist, ["2222"])
+
+    alert_row = session.query(WatchlistNewsAlert).one()
+    assert alert_row.message_ar is not None
+    assert "مخاطرة عالية" in alert_row.message_ar
+
+    notification = session.query(Notification).one()
+    assert notification.title_ar is not None
+    assert notification.body_ar == alert_row.message_ar
+
+
 def test_generate_and_persist_is_idempotent_for_the_same_event(session, watchlist):
     _analyzed_event(session, "2222", NewsCategory.LAWSUIT, -0.7, 90.0)
 

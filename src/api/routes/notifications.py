@@ -24,7 +24,8 @@ router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
 
 def _out(n: Notification) -> NotificationOut:
     return NotificationOut(
-        id=n.id, type=n.type.value, title=n.title, body=n.body, read_at=n.read_at, created_at=n.created_at,
+        id=n.id, type=n.type.value, title=n.title, body=n.body, title_ar=n.title_ar, body_ar=n.body_ar,
+        read_at=n.read_at, created_at=n.created_at,
     )
 
 

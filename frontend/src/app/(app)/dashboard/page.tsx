@@ -172,7 +172,7 @@ export default function DashboardPage() {
               label="آخر تحديث"
               value={
                 run.finished_at
-                  ? new Date(run.finished_at).toLocaleString("ar-SA")
+                  ? new Date(run.finished_at).toLocaleString("ar-SA", { calendar: "gregory" })
                   : "—"
               }
             />

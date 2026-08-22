@@ -112,10 +112,10 @@ function NewsAlertsSection({ portfolioId }: { portfolioId: number }) {
                   </span>
                 </div>
                 <span className="text-xs text-bsr-text-muted">
-                  {new Date(alert.generated_at).toLocaleString("ar-SA")}
+                  {new Date(alert.generated_at).toLocaleString("ar-SA", { calendar: "gregory" })}
                 </span>
               </div>
-              <p className="text-sm text-bsr-text-secondary">{alert.message}</p>
+              <p className="text-sm text-bsr-text-secondary">{alert.message_ar ?? alert.message}</p>
             </li>
           ))}
         </ul>
@@ -139,7 +139,7 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
         <div>
           <h1 className="text-lg font-semibold text-bsr-text-primary">{analysis.name}</h1>
           <p className="text-sm text-bsr-text-secondary">
-            آخر تحليل: {new Date(analysis.generated_at).toLocaleString("ar-SA")}
+            آخر تحليل: {new Date(analysis.generated_at).toLocaleString("ar-SA", { calendar: "gregory" })}
           </p>
         </div>
         <div className="flex gap-bsr-2">

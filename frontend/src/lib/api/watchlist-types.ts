@@ -44,6 +44,7 @@ export interface WatchlistNewsAlert {
   alert_type: string;
   severity: string;
   message: string;
+  message_ar: string | null;
   generated_at: string;
   acknowledged_at: string | null;
 }

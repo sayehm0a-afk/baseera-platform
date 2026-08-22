@@ -35,6 +35,10 @@ class WatchlistNewsAlert(Base):
     alert_type = Column(Enum(PortfolioAlertType), nullable=False, index=True)
     severity = Column(Enum(AlertSeverity), nullable=False)
     message = Column(Text, nullable=False)
+    # Pre-launch safety fix (2026-08-22, Priority 2): see the matching
+    # column on PortfolioNewsAlert -- same nullable, presentation-only
+    # companion field.
+    message_ar = Column(Text, nullable=True)
 
     generated_at = Column(DateTime(timezone=True), nullable=False, index=True)
     acknowledged_at = Column(DateTime(timezone=True), nullable=True)

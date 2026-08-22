@@ -27,6 +27,37 @@ from src.market_intelligence.types import (
 _BUY_LIKE = {"BUY", "STRONG_BUY"}
 _SELL_LIKE = {"SELL", "STRONG_SELL"}
 
+# Pre-launch safety fix (2026-08-22, Priority 2): Arabic labels for the
+# raw Recommendation/RiskLevel enum tokens this module embeds into
+# generated alert text -- presentation only, does not change which
+# alert fires or its severity/type classification.
+_RECOMMENDATION_LABELS_AR = {
+    "STRONG_BUY": "شراء قوي",
+    "BUY": "شراء",
+    "HOLD": "احتفاظ",
+    "SELL": "بيع",
+    "STRONG_SELL": "بيع قوي",
+}
+
+_RISK_LABELS_AR = {
+    "LOW": "منخفضة",
+    "MEDIUM": "متوسطة",
+    "HIGH": "عالية",
+    "VERY_HIGH": "عالية جداً",
+}
+
+
+def _recommendation_ar(value: str | None) -> str:
+    if value is None:
+        return "غير مصنّف"
+    return _RECOMMENDATION_LABELS_AR.get(value, value)
+
+
+def _risk_ar(value: str | None) -> str:
+    if value is None:
+        return "غير معروفة"
+    return _RISK_LABELS_AR.get(value, value)
+
 
 def _successful(outcome: SymbolScanOutcome) -> bool:
     return outcome.success and outcome.report is not None
@@ -64,7 +95,7 @@ class AlertEngine:
                     Alert(
                         alert_type=AlertType.NEW_STRONG_BUY, severity=AlertSeverity.INFO,
                         symbol=event.symbol, sector=None,
-                        message=f"{event.symbol} is now rated STRONG_BUY (was {event.previous_value or 'unrated'}).",
+                        message=f"{event.symbol} أصبح مصنّفاً {_recommendation_ar('STRONG_BUY')} (كان {_recommendation_ar(event.previous_value)}).",
                         generated_at=generated_at,
                     )
                 )
@@ -73,7 +104,7 @@ class AlertEngine:
                     Alert(
                         alert_type=AlertType.RECOMMENDATION_UPGRADED, severity=AlertSeverity.INFO,
                         symbol=event.symbol, sector=None,
-                        message=f"{event.symbol} upgraded from {event.previous_value} to {event.new_value}.",
+                        message=f"{event.symbol} تمت ترقيته من {_recommendation_ar(event.previous_value)} إلى {_recommendation_ar(event.new_value)}.",
                         generated_at=generated_at,
                     )
                 )
@@ -82,7 +113,7 @@ class AlertEngine:
                     Alert(
                         alert_type=AlertType.RECOMMENDATION_DOWNGRADED, severity=AlertSeverity.WARNING,
                         symbol=event.symbol, sector=None,
-                        message=f"{event.symbol} downgraded from {event.previous_value} to {event.new_value}.",
+                        message=f"{event.symbol} تم تخفيضه من {_recommendation_ar(event.previous_value)} إلى {_recommendation_ar(event.new_value)}.",
                         generated_at=generated_at,
                     )
                 )
@@ -95,7 +126,7 @@ class AlertEngine:
             Alert(
                 alert_type=AlertType.CONFIDENCE_ABOVE_THRESHOLD, severity=AlertSeverity.INFO,
                 symbol=o.symbol, sector=o.sector,
-                message=f"{o.symbol} confidence at {o.confidence:.1f}% (>= {threshold:.1f}% threshold).",
+                message=f"{o.symbol}: درجة الثقة عند {o.confidence:.1f}% (>= الحد الأدنى {threshold:.1f}%).",
                 generated_at=generated_at,
             )
             for o in outcomes
@@ -118,7 +149,7 @@ class AlertEngine:
                     Alert(
                         alert_type=AlertType.TARGET_REACHED, severity=AlertSeverity.INFO,
                         symbol=o.symbol, sector=o.sector,
-                        message=f"{o.symbol} reached its target price of {o.target_price:.2f} (latest: {o.latest_price:.2f}).",
+                        message=f"{o.symbol} بلغ سعره المستهدف {o.target_price:.2f} (آخر سعر: {o.latest_price:.2f}).",
                         generated_at=generated_at,
                     )
                 )
@@ -149,8 +180,8 @@ class AlertEngine:
                     alert_type=AlertType.RISK_SPIKE, severity=severity,
                     symbol=event.symbol, sector=outcome.sector if outcome else None,
                     message=(
-                        f"{event.symbol} risk rose from {event.previous_value} to {event.new_value} "
-                        f"alongside a {abs(confidence_delta):.1f}-point confidence drop."
+                        f"ارتفعت مخاطرة {event.symbol} من {_risk_ar(event.previous_value)} إلى {_risk_ar(event.new_value)} "
+                        f"مع انخفاض في درجة الثقة بمقدار {abs(confidence_delta):.1f} نقطة."
                     ),
                     generated_at=generated_at,
                 )
@@ -164,12 +195,12 @@ class AlertEngine:
         for summary in sector_summaries:
             if summary.momentum is None or abs(summary.momentum) < threshold:
                 continue
-            direction = "into" if summary.momentum > 0 else "out of"
+            direction_ar = "إلى" if summary.momentum > 0 else "خارج"
             alerts.append(
                 Alert(
                     alert_type=AlertType.SECTOR_ROTATION, severity=AlertSeverity.INFO,
                     symbol=None, sector=summary.sector,
-                    message=f"Capital appears to be rotating {direction} {summary.sector} (momentum {summary.momentum:+.1f}).",
+                    message=f"يبدو أن هناك تدفقاً لرؤوس الأموال {direction_ar} قطاع {summary.sector} (الزخم {summary.momentum:+.1f}).",
                     generated_at=generated_at,
                 )
             )

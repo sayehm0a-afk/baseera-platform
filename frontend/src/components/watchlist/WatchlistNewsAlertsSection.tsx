@@ -84,10 +84,10 @@ export function WatchlistNewsAlertsSection() {
                   </span>
                 </div>
                 <span className="text-xs text-bsr-text-muted">
-                  {new Date(alert.generated_at).toLocaleString("ar-SA")}
+                  {new Date(alert.generated_at).toLocaleString("ar-SA", { calendar: "gregory" })}
                 </span>
               </div>
-              <p className="text-sm text-bsr-text-secondary">{alert.message}</p>
+              <p className="text-sm text-bsr-text-secondary">{alert.message_ar ?? alert.message}</p>
             </li>
           ))}
         </ul>

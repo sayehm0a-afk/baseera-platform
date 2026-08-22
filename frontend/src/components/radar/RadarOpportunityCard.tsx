@@ -2,17 +2,13 @@ import { AiStar } from "@/components/ai/AiStar";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import type { RadarOpportunitySummary } from "@/lib/api/radar-types";
+import { FRESHNESS_LABELS_AR, formatArabicDateTime, formatRelativeAgeAr, isEntryMissed } from "@/lib/format/freshness";
 
 interface RadarOpportunityCardProps {
   opportunity: RadarOpportunitySummary;
 }
 
-export const FRESHNESS_LABELS_AR: Record<RadarOpportunitySummary["data_freshness_status"], string> = {
-  LIVE: "بيانات حيّة",
-  LAST_SESSION: "بيانات آخر جلسة مكتملة",
-  STALE: "بيانات قديمة",
-  UNKNOWN: "حداثة البيانات غير مؤكدة",
-};
+export { FRESHNESS_LABELS_AR };
 
 function priceLabel(value: number | null): string {
   return value == null ? "--" : value.toFixed(2);
@@ -25,8 +21,15 @@ function priceLabel(value: number | null): string {
  * consistently, but sourced from RadarOpportunity/Decision V2 data
  * instead of the personal-scan simplification. */
 export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardProps) {
+  const entryMissed = isEntryMissed(o.entry_status);
   return (
-    <div className="flex flex-col gap-bsr-3 rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-overlay p-bsr-4">
+    <div
+      className={`flex flex-col gap-bsr-3 rounded-bsr-lg border p-bsr-4 ${
+        entryMissed
+          ? "border-bsr-gold-500/40 bg-bsr-surface-raised"
+          : "border-bsr-border-subtle bg-bsr-surface-overlay"
+      }`}
+    >
       <div className="flex items-start justify-between">
         <div className="flex flex-col">
           {o.stage1_rank != null ? (
@@ -39,6 +42,18 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
         </div>
         <DecisionBadge value={o.classification} labelAr={o.classification_label_ar} />
       </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-bsr-2 text-xs text-bsr-text-secondary">
+        <span>
+          صدرت الإشارة: <span className="bsr-numeric">{formatArabicDateTime(o.emitted_at)}</span> ({formatRelativeAgeAr(o.emitted_at)})
+        </span>
+      </div>
+
+      {entryMissed ? (
+        <div className="rounded-bsr-md border border-bsr-gold-500/50 bg-bsr-gold-500/10 px-bsr-3 py-bsr-2 text-xs font-semibold text-bsr-gold-500">
+          {o.entry_status_label_ar ?? "فاتت نقطة الدخول"} — لم تعد فرصة دخول حالية، معروضة هنا للاطلاع فقط.
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-bsr-2 text-sm md:grid-cols-4">
         <div>

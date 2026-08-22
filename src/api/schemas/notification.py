@@ -14,6 +14,11 @@ class NotificationOut(BaseModel):
     type: str
     title: str
     body: str
+    # Pre-launch safety fix (2026-08-22): Arabic presentation companions
+    # -- None for notifications written before this field existed; the
+    # frontend falls back to `title`/`body` in that case.
+    title_ar: Optional[str] = None
+    body_ar: Optional[str] = None
     read_at: Optional[datetime] = None
     created_at: datetime
 

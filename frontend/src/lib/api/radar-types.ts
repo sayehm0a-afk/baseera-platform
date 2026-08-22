@@ -35,6 +35,12 @@ export interface RadarOpportunitySummary {
   risk_level_label_ar: string | null;
   data_freshness_status: "LIVE" | "LAST_SESSION" | "STALE" | "UNKNOWN";
 
+  // Pre-launch safety fix (2026-08-22): already-computed by Decision
+  // Engine V2, now also surfaced on the list/summary payload so cards can
+  // stop presenting a missed-entry opportunity as currently actionable.
+  entry_status: string | null;
+  entry_status_label_ar: string | null;
+
   stage1_rank: number | null;
   stage1_ranking_score: number | null;
   ranking_reason_ar: string | null;

@@ -135,11 +135,13 @@ export function NotificationBell() {
                         {!notification.read_at ? (
                           <span className="h-1.5 w-1.5 shrink-0 rounded-bsr-full bg-bsr-gold-500" aria-hidden />
                         ) : null}
-                        <span className="text-sm font-semibold text-bsr-text-primary">{notification.title}</span>
+                        <span className="text-sm font-semibold text-bsr-text-primary">
+                          {notification.title_ar ?? notification.title}
+                        </span>
                       </span>
-                      <span className="text-xs text-bsr-text-secondary">{notification.body}</span>
+                      <span className="text-xs text-bsr-text-secondary">{notification.body_ar ?? notification.body}</span>
                       <span className="text-[11px] text-bsr-text-tertiary">
-                        {new Date(notification.created_at).toLocaleDateString("ar-SA")}
+                        {new Date(notification.created_at).toLocaleDateString("ar-SA", { calendar: "gregory" })}
                       </span>
                     </button>
                   </li>

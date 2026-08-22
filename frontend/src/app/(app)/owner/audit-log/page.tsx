@@ -103,7 +103,7 @@ function AuditLogPageInner() {
               {logs.map((log) => (
                 <tr key={log.id} className="border-b border-bsr-border-subtle last:border-0">
                   <td className="bsr-numeric p-bsr-3 text-bsr-text-secondary">
-                    {new Date(log.created_at).toLocaleString("ar-SA")}
+                    {new Date(log.created_at).toLocaleString("ar-SA", { calendar: "gregory" })}
                   </td>
                   <td className="bsr-numeric p-bsr-3 text-bsr-text-primary">{log.actor_user_id}</td>
                   <td className="p-bsr-3 text-bsr-text-primary">{log.action}</td>
