@@ -14,6 +14,7 @@ from src.api.routes.admin import (
     audit_log,
     billing,
     feature_flags,
+    historical_data_export,
     investment_committee,
     market_intelligence,
     recommendation_history,
@@ -39,3 +40,4 @@ router.include_router(ai_evolution.router)
 router.include_router(market_intelligence.router)
 router.include_router(investment_committee.router)
 router.include_router(recommendation_history.router)
+router.include_router(historical_data_export.router)
