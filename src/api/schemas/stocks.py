@@ -323,6 +323,14 @@ class DecisionV2Out(BaseModel):
     # confidence_score.
     calibrated_confidence_score: Optional[float] = None
     calibration_version: Optional[str] = None
+    # Phase 3 area 2: whether an ACTIVE decision_v2-source calibration
+    # model was actually applied to produce calibrated_confidence_score
+    # above (equivalent to calibration_version is not None, made
+    # explicit so a consumer never has to infer it), and the exact
+    # number of real resolved outcomes that model was fitted on --
+    # never surfaced as a bare "calibrated" flag without this count.
+    calibration_applied: bool = False
+    calibration_sample_size: Optional[int] = None
     opportunity_quality_score: float
     risk_score: float
     data_quality_score: float

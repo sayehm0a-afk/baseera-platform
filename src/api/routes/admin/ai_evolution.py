@@ -27,6 +27,7 @@ from src.ai_evolution.confidence_calibration import (
     TRAINING_SOURCE_DECISION_V2,
     ConfidenceCalibrationEngine,
 )
+from src.api.exceptions import CalibrationNotFoundError, InvalidCalibrationTransitionError
 from src.ai_evolution.paper_trading import (
     DEFAULT_EVALUATION_HORIZON_DAYS,
     compare_champion_vs_challenger,
@@ -37,6 +38,9 @@ from src.ai_evolution.validation_metrics import compute_validation_session_metri
 from src.ai_evolution.validation_session_service import close_validation_session, create_validation_session
 from src.api.schemas.ai_evolution import (
     CalibrationStatusOut,
+    ConfidenceCalibrationModelListOut,
+    ConfidenceCalibrationModelOut,
+    ConfidenceCalibrationProposeRequest,
     DailyIntelligenceSnapshotOut,
     DiscoveredPatternListOut,
     DiscoveredPatternOut,
@@ -59,6 +63,7 @@ from src.core.db.database import get_db
 from src.domain.models import (
     CalibrationConfig,
     CalibrationStatus,
+    ConfidenceCalibrationModel,
     DailyIntelligenceSnapshot,
     DecisionV2Outcome,
     DecisionV2Snapshot,
@@ -129,6 +134,132 @@ def get_calibration_status(
         ),
         latest_validated_challenger_version=challenger.version if challenger else None,
     )
+
+
+def _to_confidence_calibration_out(row: ConfidenceCalibrationModel) -> ConfidenceCalibrationModelOut:
+    return ConfidenceCalibrationModelOut(
+        version=row.version,
+        status=row.status.value,
+        method=row.method.value,
+        training_source=row.training_source,
+        training_period_start=row.training_period_start,
+        training_period_end=row.training_period_end,
+        training_sample_size=row.training_sample_size,
+        calibration_error_before=_f(row.calibration_error_before),
+        calibration_error_after=_f(row.calibration_error_after),
+        notes=row.notes,
+        created_at=row.created_at,
+        activated_at=row.activated_at,
+        deactivated_at=row.deactivated_at,
+    )
+
+
+def _get_confidence_calibration_or_404(session: Session, version: str) -> ConfidenceCalibrationModel:
+    row = session.query(ConfidenceCalibrationModel).filter_by(version=version).one_or_none()
+    if row is None:
+        raise CalibrationNotFoundError(f"No confidence calibration model {version!r}.")
+    return row
+
+
+@router.post("/confidence-calibration/propose", response_model=ConfidenceCalibrationModelOut)
+def propose_confidence_calibration(
+    request: ConfidenceCalibrationProposeRequest,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> ConfidenceCalibrationModelOut:
+    """Phase 3 area 2: fits a new DRAFT confidence-calibration model from
+    real resolved outcome history (RecommendationOutcome for
+    'legacy_v1', DecisionV2Outcome for 'decision_v2') -- never
+    activated by this call. ConfidenceCalibrationEngine.propose()'s own
+    DEFAULT_MIN_SAMPLE_SIZE floor (30 labeled outcomes) is enforced
+    unconditionally; this route accepts no override, so an insufficient
+    real sample always raises rather than fitting noise. See
+    src.ai_evolution.confidence_calibration's module docstring for the
+    Platt/isotonic method selection."""
+    try:
+        row = ConfidenceCalibrationEngine().propose(
+            session,
+            training_period_start=request.training_period_start,
+            training_period_end=request.training_period_end,
+            reference_horizon_days=request.reference_horizon_days,
+            source=request.source,
+            notes=request.notes,
+        )
+    except ValueError as exc:
+        raise InvalidCalibrationTransitionError(str(exc)) from exc
+    return _to_confidence_calibration_out(row)
+
+
+@router.get("/confidence-calibration", response_model=ConfidenceCalibrationModelListOut)
+def list_confidence_calibrations(
+    source: Optional[str] = Query(None, description="Filter by training_source ('legacy_v1' or 'decision_v2')."),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> ConfidenceCalibrationModelListOut:
+    query = session.query(ConfidenceCalibrationModel)
+    if source is not None:
+        query = query.filter_by(training_source=source)
+    rows = query.order_by(ConfidenceCalibrationModel.created_at.desc()).all()
+    return ConfidenceCalibrationModelListOut(models=[_to_confidence_calibration_out(row) for row in rows])
+
+
+@router.get("/confidence-calibration/{version}", response_model=ConfidenceCalibrationModelOut)
+def get_confidence_calibration(
+    version: str, session: Session = Depends(get_db), _current_user: User = Depends(require_staff_role(StaffRole.ADMIN))
+) -> ConfidenceCalibrationModelOut:
+    return _to_confidence_calibration_out(_get_confidence_calibration_or_404(session, version))
+
+
+@router.post("/confidence-calibration/{version}/test", response_model=ConfidenceCalibrationModelOut)
+def test_confidence_calibration(
+    version: str, session: Session = Depends(get_db), _current_user: User = Depends(require_staff_role(StaffRole.ADMIN))
+) -> ConfidenceCalibrationModelOut:
+    """Compares the fitted model's before/after expected calibration
+    error and marks it VALIDATED or REJECTED -- see
+    ConfidenceCalibrationEngine.test(). A REJECTED model can never be
+    activated (activate() itself enforces VALIDATED-only)."""
+    _get_confidence_calibration_or_404(session, version)
+    try:
+        result = ConfidenceCalibrationEngine().test(session, version)
+    except ValueError as exc:
+        raise InvalidCalibrationTransitionError(str(exc)) from exc
+    return _to_confidence_calibration_out(result)
+
+
+@router.post("/confidence-calibration/{version}/activate", response_model=ConfidenceCalibrationModelOut)
+def activate_confidence_calibration(
+    version: str, session: Session = Depends(get_db), _current_user: User = Depends(require_staff_role(StaffRole.ADMIN))
+) -> ConfidenceCalibrationModelOut:
+    """Owner/admin-gated live activation -- the one action in this
+    lifecycle that changes what `get_effective_confidence()`/
+    `compute_calibrated_confidences()` return to every live route that
+    reads calibrated confidence. Never reachable except through this
+    staff-only route; never a user-facing setting. Superseding the
+    previous ACTIVE row (if any) for the same training_source is
+    handled atomically by ConfidenceCalibrationEngine.activate()."""
+    _get_confidence_calibration_or_404(session, version)
+    try:
+        result = ConfidenceCalibrationEngine().activate(session, version)
+    except ValueError as exc:
+        raise InvalidCalibrationTransitionError(str(exc)) from exc
+    return _to_confidence_calibration_out(result)
+
+
+@router.post("/confidence-calibration/{version}/rollback", response_model=ConfidenceCalibrationModelOut)
+def rollback_confidence_calibration(
+    version: str, session: Session = Depends(get_db), _current_user: User = Depends(require_staff_role(StaffRole.ADMIN))
+) -> ConfidenceCalibrationModelOut:
+    """Rolls back to `version` -- deactivates whatever is currently
+    ACTIVE for that version's training_source and reactivates this
+    specific prior version (same semantics as
+    /calibrations/{version}/rollback for contributor-weight
+    calibration)."""
+    row = _get_confidence_calibration_or_404(session, version)
+    try:
+        result = ConfidenceCalibrationEngine().rollback(session, to_version=version, source=row.training_source)
+    except ValueError as exc:
+        raise InvalidCalibrationTransitionError(str(exc)) from exc
+    return _to_confidence_calibration_out(result)
 
 
 @router.get("/patterns", response_model=DiscoveredPatternListOut)

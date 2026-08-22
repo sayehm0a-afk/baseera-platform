@@ -19,6 +19,7 @@ from src.analysis.decision_v2.types import (
 from src.analysis.recommendation.types import Recommendation
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.domain.models import (
+    ConfidenceCalibrationMethod, ConfidenceCalibrationModel, ConfidenceCalibrationStatus,
     DecisionV2Snapshot, FundamentalSnapshot, MarketScanStatus, PeriodType, PriceBar, Stock, Timeframe,
 )
 from src.market_data.providers.market_data_provider import IMarketDataProvider, ProviderHealth
@@ -578,3 +579,53 @@ def test_decision_v2_degrades_gracefully_when_breadth_read_raises(client, db_ses
 
     assert body["market_risk_state"] == "INSUFFICIENT_DATA"
     assert body["market_risk_entry_permitted"] is True
+
+
+def test_decision_v2_calibration_applied_is_false_when_no_model_active(client, db_session):
+    """Phase 3 area 2: with no ACTIVE decision_v2-source calibration
+    model, the response must honestly report calibration_applied=False
+    and calibration_sample_size=None -- never a fabricated calibration."""
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["calibration_applied"] is False
+    assert body["calibration_sample_size"] is None
+    assert body["calibrated_confidence_score"] is None
+    assert body["calibration_version"] is None
+
+
+def test_decision_v2_calibration_applied_reports_the_real_training_sample_size(client, db_session):
+    """Phase 3 area 2's audit-field requirement: calibration_applied and
+    calibration_sample_size must both be present whenever a real ACTIVE
+    decision_v2-source model exists, and the sample size must be that
+    specific model's own training_sample_size (joined by
+    calibration_version), never a placeholder."""
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    active_model = ConfidenceCalibrationModel(
+        version="conf-cal-test-001",
+        status=ConfidenceCalibrationStatus.ACTIVE,
+        method=ConfidenceCalibrationMethod.PLATT,
+        training_source="decision_v2",
+        model_params={"coef": 0.5, "intercept": 0.0},
+        training_sample_size=137,
+        activated_at=datetime.now(timezone.utc),
+    )
+    db_session.add(active_model)
+    db_session.commit()
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["calibration_applied"] is True
+    assert body["calibration_version"] == "conf-cal-test-001"
+    assert body["calibration_sample_size"] == 137
+    assert body["calibrated_confidence_score"] is not None

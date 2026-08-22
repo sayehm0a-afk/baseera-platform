@@ -119,7 +119,16 @@ from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.domain.arabic_text import normalize_arabic
-from src.domain.models import DecisionV2Snapshot, FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe, User
+from src.domain.models import (
+    ConfidenceCalibrationModel,
+    DecisionV2Snapshot,
+    FundamentalSnapshot,
+    PeriodType,
+    PriceBar,
+    Stock,
+    Timeframe,
+    User,
+)
 from src.domain.sector_labels import sector_label_ar
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
@@ -955,6 +964,20 @@ async def get_decision_v2(
             news_events=context.extra.get("news_sentiment", {}).get("events", []),
         )
 
+    calibration_sample_size = None
+    if snapshot is not None and snapshot.calibration_version is not None:
+        # Phase 3 area 2: the ConfidenceCalibrationModel row is
+        # immutable once fitted (propose() never mutates
+        # training_sample_size after insert), so this join always
+        # reconstructs the exact real sample size that specific
+        # calibration_version was trained on -- no need to denormalize
+        # it onto every snapshot row.
+        calibration_sample_size = (
+            session.query(ConfidenceCalibrationModel.training_sample_size)
+            .filter_by(version=snapshot.calibration_version)
+            .scalar()
+        )
+
     return DecisionV2Out(
         symbol=result.symbol,
         company_name_ar=result.company_name_ar,
@@ -970,6 +993,8 @@ async def get_decision_v2(
         # never leave these referencing an unset name.
         calibrated_confidence_score=_f(snapshot.calibrated_confidence_score) if snapshot is not None else None,
         calibration_version=snapshot.calibration_version if snapshot is not None else None,
+        calibration_applied=snapshot is not None and snapshot.calibration_version is not None,
+        calibration_sample_size=calibration_sample_size,
         opportunity_quality_score=result.opportunity_quality_score,
         risk_score=result.risk_score,
         data_quality_score=result.data_quality_score,

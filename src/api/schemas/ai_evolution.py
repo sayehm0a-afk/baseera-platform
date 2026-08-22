@@ -8,7 +8,7 @@ live or fabricates a value not already stored.
 from datetime import date, datetime
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class GroupPerformanceOut(BaseModel):
@@ -104,6 +104,54 @@ class CalibrationStatusOut(BaseModel):
     active_decision_v2_confidence_calibration_method: Optional[str] = None
     active_decision_v2_confidence_calibration_activated_at: Optional[datetime] = None
     latest_validated_challenger_version: Optional[str] = None
+
+
+class ConfidenceCalibrationProposeRequest(BaseModel):
+    """Phase 3 area 2: request body for POST .../confidence-calibration/
+    propose. Deliberately carries no min_sample_size/isotonic_threshold
+    override -- ConfidenceCalibrationEngine.propose()'s own
+    DEFAULT_MIN_SAMPLE_SIZE floor (30 labeled outcomes) is the one
+    safety gate this route can never let a caller loosen; source and
+    the training window are the only real choices to make."""
+
+    training_period_start: date
+    training_period_end: date
+    source: str = "legacy_v1"
+    reference_horizon_days: int = 7
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_period(self) -> "ConfidenceCalibrationProposeRequest":
+        if self.training_period_end <= self.training_period_start:
+            raise ValueError("training_period_end must be after training_period_start")
+        if self.source not in ("legacy_v1", "decision_v2"):
+            raise ValueError("source must be 'legacy_v1' or 'decision_v2'")
+        return self
+
+
+class ConfidenceCalibrationModelOut(BaseModel):
+    """One ConfidenceCalibrationModel row -- the full propose -> test ->
+    activate -> rollback audit trail for a single fitted calibration,
+    including the exact sample size it was trained on (never surfaced
+    as a bare "calibrated" boolean without this number alongside it)."""
+
+    version: str
+    status: str
+    method: str
+    training_source: str
+    training_period_start: Optional[date] = None
+    training_period_end: Optional[date] = None
+    training_sample_size: int
+    calibration_error_before: Optional[float] = None
+    calibration_error_after: Optional[float] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    activated_at: Optional[datetime] = None
+    deactivated_at: Optional[datetime] = None
+
+
+class ConfidenceCalibrationModelListOut(BaseModel):
+    models: List[ConfidenceCalibrationModelOut]
 
 
 class DiscoveredPatternOut(BaseModel):
