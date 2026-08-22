@@ -140,6 +140,27 @@ describe("ExecutiveDecisionCard", () => {
     expect(screen.getByText("درجة الثقة تعكس قوة الأدلة، لا تضمن الربح.")).toBeInTheDocument();
   });
 
+  it("displays risk_score inverted (100 - risk_score) so a low-risk stock's number reads low next to its 'low risk' label", () => {
+    // Phase 3 area 3 cosmetic-score correction: risk_score itself is a
+    // SAFETY score -- RiskLevel.LOW maps to ~90 (see
+    // scoring.py::risk_score_from_level) -- the opposite direction the
+    // "مستوى المخاطرة" (risk level) heading implies. Every other real
+    // consumer (personal_scan.py's ranking, portfolio_score.py's
+    // display) already inverts it before presenting it as "risk";
+    // this locks down that ExecutiveDecisionCard does too, so a
+    // LOW-risk stock (risk_score=90, risk_level_label_ar="منخفضة")
+    // shows the low number "10/100" next to "منخفضة", not the
+    // confusing raw "90/100".
+    render(
+      <ExecutiveDecisionCard
+        decision={buildDecision({ risk_score: 90, risk_level: "LOW", risk_level_label_ar: "منخفضة" })}
+      />
+    );
+    expect(screen.getByText("10/100")).toBeInTheDocument();
+    expect(screen.getByText("منخفضة")).toBeInTheDocument();
+    expect(screen.queryByText("90/100")).not.toBeInTheDocument();
+  });
+
   it("renders the entry zone, stop loss, and both targets when present", () => {
     render(<ExecutiveDecisionCard decision={buildDecision()} />);
     expect(screen.getByText("26.80 – 26.93")).toBeInTheDocument();

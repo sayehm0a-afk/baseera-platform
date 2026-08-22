@@ -207,7 +207,19 @@ def risk_score_from_level(risk_level_value: str, volatility: Optional[float]) ->
     """Blends the already-computed `RiskLevel` (never re-derived here)
     with the volatility sub-score above, so two symbols in the same
     RiskLevel band aren't presented as identically risky when their
-    ATR-implied volatility clearly differs."""
+    ATR-implied volatility clearly differs.
+
+    Direction, stated explicitly because it is easy to misread: this is
+    a SAFETY score, not a risk magnitude -- RiskLevel.LOW (the safest
+    band) maps to ~90, RiskLevel.VERY_HIGH to ~15. Every real internal
+    consumer already inverts it (`100 - risk_score`) before presenting
+    it as "risk" in the intuitive higher-is-riskier sense --
+    `personal_scan.py::_composite_score` and
+    `portfolio_intelligence/portfolio_score.py` both do this for their
+    own, unrelated risk_score fields. `ExecutiveDecisionCard.tsx`
+    (Phase 3 area 3) now does the same for this one; do not remove that
+    inversion or add a new raw display of this value without it.
+    """
     base = _RISK_LEVEL_BASE.get(risk_level_value, 50.0)
     if volatility is None:
         return base
@@ -219,7 +231,28 @@ def opportunity_quality_score(sub: dict, tuning: DecisionV2Tuning) -> float:
     1.0, see DecisionV2Tuning); a `None` sub-score is excluded and the
     remaining weights are renormalized, exactly the same "coverage"
     principle RecommendationEngine already applies to missing
-    contributor modules."""
+    contributor modules.
+
+    Score-semantics decision (Phase 3 area 3, evidence-based): this
+    score and `risk_score` above are deliberately kept OPTION B
+    (display-only / informational), not wired into any publication
+    gate or into `confidence_score` (OPTION A). Two reasons, both
+    evidence-based rather than assumed:
+    (1) gates.py already gates several of this blend's own inputs
+    individually and more precisely -- trend_momentum_consistency,
+    volume_quality, volatility_acceptable, liquidity, risk_reward --
+    so an additional gate on the blended composite would silently
+    double-penalize the same evidence a second time under a vaguer
+    signal.
+    (2) `confidence_score` is computed upstream by AIDecisionEngine and
+    deliberately never mutated by decision_v2 (see engine.py's module
+    docstring: "computes zero indicators of its own"); blending this
+    score into it after the fact would break that invariant for a
+    number that adds no evidence AIDecisionEngine didn't already see.
+    Neither score is ever a probability of profit -- it is a composite
+    of already-real sub-scores, presented for transparency alongside
+    (not instead of) the gates that actually decided `decision`.
+    """
     weights = {
         "trend_score": tuning.trend_weight,
         "momentum_score": tuning.momentum_weight,

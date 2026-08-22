@@ -199,7 +199,14 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
         <div>
           <p className="text-xs text-bsr-text-secondary">مستوى المخاطرة</p>
           <p className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
-            {Math.round(decision.risk_score)}/100
+            {/* decision.risk_score is a SAFETY score (higher = safer -- see
+                risk_score_from_level in scoring.py, where RiskLevel.LOW maps to
+                ~90), the opposite direction "مستوى المخاطرة" (risk level) implies.
+                Every other real consumer (personal_scan.py's ranking,
+                portfolio_score.py's display) already inverts it the same way
+                before presenting it as a "risk" figure -- this is the one place
+                that was still showing the raw, backwards-reading number. */}
+            {Math.round(100 - decision.risk_score)}/100
           </p>
           <p className="text-[11px] text-bsr-text-secondary">{decision.risk_level_label_ar}</p>
         </div>
