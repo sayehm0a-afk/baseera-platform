@@ -55,3 +55,50 @@ def test_market_data_health_never_leaks_the_api_key(client, monkeypatch):
     response = client.get("/health/market-data")
     assert secret not in response.text
     assert response.json()["sahmk_key_present"] is True
+
+
+def test_provider_state_is_unknown_not_confirmed_unavailable_when_never_probed(client, monkeypatch):
+    """Production truthfulness fix (2026-08-23) regression fixture: real
+    production evidence (2026-08-23T13:04Z) showed can_publish_
+    recommendations=false with current_provider_kind=None and
+    last_connectivity_status=None -- moments after a fully successful
+    384/384 SAHMK historical_ohlcv run -- i.e. genuinely never observed
+    by this process/the shared snapshot recently, not a confirmed
+    failure. `can_publish_recommendations` must stay conservative
+    (False), but `provider_state` must say UNKNOWN, not
+    CONFIRMED_UNAVAILABLE, so the frontend banner can stop rendering a
+    "confirmed failure" message for this case."""
+    monkeypatch.setenv("STRICT_REAL_DATA", "true")
+    response = client.get("/health/market-data")
+    body = response.json()
+    assert body["can_publish_recommendations"] is False
+    assert body["provider_state"] == "UNKNOWN_NO_RECENT_CHECK"
+
+
+def test_provider_state_is_confirmed_unavailable_for_a_real_observed_failure(client, monkeypatch):
+    from src.market_data import provider_factory
+
+    monkeypatch.setenv("STRICT_REAL_DATA", "true")
+    monkeypatch.setattr(provider_factory, "_last_connectivity_status", "FAILED")
+    response = client.get("/health/market-data")
+    body = response.json()
+    assert body["can_publish_recommendations"] is False
+    assert body["provider_state"] == "CONFIRMED_UNAVAILABLE"
+
+
+def test_provider_state_is_confirmed_live_when_sahmk_was_actually_selected(client, monkeypatch):
+    from src.market_data import provider_factory
+
+    monkeypatch.setenv("STRICT_REAL_DATA", "true")
+    monkeypatch.setattr(provider_factory, "_cached_provider_kind", "sahmk")
+    response = client.get("/health/market-data")
+    body = response.json()
+    assert body["can_publish_recommendations"] is True
+    assert body["provider_state"] == "CONFIRMED_LIVE"
+
+
+def test_provider_state_is_non_strict_outside_strict_mode(client, monkeypatch):
+    monkeypatch.setenv("STRICT_REAL_DATA", "false")
+    response = client.get("/health/market-data")
+    body = response.json()
+    assert body["provider_state"] == "NON_STRICT"

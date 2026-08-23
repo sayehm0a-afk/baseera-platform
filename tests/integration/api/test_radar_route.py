@@ -324,6 +324,38 @@ def test_summary_reflects_a_real_live_opportunity(client, db_session, authentica
     assert body["top_opportunities"][0]["symbol"] == "2222"
 
 
+def test_summary_excludes_a_stale_decision_from_live_count_and_preview(client, db_session, authenticated_as_staff):
+    """Production truthfulness fix (2026-08-23) regression fixture: a
+    real production case, symbol 6060, was emitted 3 days ago (STALE)
+    yet still rendered as an actionable "شراء" inside "الفرص الحية"
+    because only `entry_status` (not `is_decision_fresh`) gated
+    membership. A stale RadarOpportunity must not count toward
+    live_opportunity_count, average_confidence, live_by_classification,
+    or occupy a top_opportunities preview slot -- Decision V2
+    classification/scoring/ranking are untouched, this is membership
+    truthfulness only."""
+    stale_stock = _make_stock(db_session, "6060", name_ar="الشرقية للتنمية")
+    stale_snapshot = _make_snapshot(db_session, stale_stock, confidence=60.0)
+    _make_opportunity(
+        db_session, stale_stock, stale_snapshot,
+        emitted_at=datetime.now(timezone.utc) - timedelta(days=5),
+    )
+
+    fresh_stock = _make_stock(db_session, "2222")
+    fresh_snapshot = _make_snapshot(db_session, fresh_stock, confidence=90.0)
+    _make_opportunity(db_session, fresh_stock, fresh_snapshot)
+
+    response = client.get(_SUMMARY_ROUTE)
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["live_opportunity_count"] == 1
+    assert body["average_confidence"] == pytest.approx(90.0)
+    symbols_in_preview = [o["symbol"] for o in body["top_opportunities"]]
+    assert "6060" not in symbols_in_preview
+    assert "2222" in symbols_in_preview
+
+
 def test_summary_reports_the_real_stage1_scan_funnel_from_the_latest_radar_v2_run(
     client, db_session, authenticated_as_staff
 ):

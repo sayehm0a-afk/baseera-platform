@@ -7,6 +7,7 @@ import type { MarketDataHealth, MarketStatus } from "@/lib/api/types";
 type BannerState =
   | { kind: "hidden" }
   | { kind: "unavailable" }
+  | { kind: "unknown" }
   | { kind: "status"; marketStatus: MarketStatus | null };
 
 const STATUS_DOT_CLASS: Record<string, string> = {
@@ -77,7 +78,20 @@ export function RealDataStatusBanner() {
       }
 
       if (!health.can_publish_recommendations) {
-        setState({ kind: "unavailable" });
+        // Production truthfulness fix (2026-08-23): only render the
+        // "تعذر الحصول على بيانات حقيقية" failure message for a
+        // genuinely observed failure. `provider_state ===
+        // "UNKNOWN_NO_RECENT_CHECK"` means no worker has made a real
+        // provider-selection call recently enough for the shared health
+        // snapshot to still be fresh -- confirmed in production even
+        // moments after a fully successful SAHMK ingestion run (see
+        // src/market_data/provider_factory.py's own module docstring).
+        // `can_publish_recommendations` itself is unchanged -- still
+        // fail-closed -- only the banner's wording is now honest about
+        // which of the two situations is real.
+        if (!cancelled) {
+          setState(health.provider_state === "UNKNOWN_NO_RECENT_CHECK" ? { kind: "unknown" } : { kind: "unavailable" });
+        }
         return;
       }
 
@@ -105,6 +119,18 @@ export function RealDataStatusBanner() {
       >
         <span className="h-2 w-2 rounded-full bg-bsr-market-down" />
         تعذر الحصول على بيانات حقيقية من مزود البيانات — التحليل متوقف مؤقتًا لحين استعادة الاتصال
+      </div>
+    );
+  }
+
+  if (state.kind === "unknown") {
+    return (
+      <div
+        role="status"
+        className="flex items-center justify-center gap-bsr-2 bg-bsr-surface-overlay px-bsr-4 py-bsr-1.5 text-xs font-semibold text-bsr-text-secondary"
+      >
+        <span className="h-2 w-2 rounded-full bg-bsr-text-muted" />
+        لم يتم التحقق من الاتصال بمزود البيانات مؤخرًا — لا يوجد دليل على وجود عطل حاليًا
       </div>
     );
   }

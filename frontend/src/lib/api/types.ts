@@ -246,6 +246,13 @@ export interface MarketDataHealth {
   last_real_data_at: string | null;
   last_scan_source: string | null;
   can_publish_recommendations: boolean;
+  /** Production truthfulness fix (2026-08-23): distinguishes an actually
+   * observed provider failure from "no worker in the fleet has made a
+   * provider-selection call recently enough for the shared health
+   * snapshot to still be warm" -- both previously collapsed into the
+   * same `can_publish_recommendations: false`. One of "CONFIRMED_LIVE" /
+   * "CONFIRMED_UNAVAILABLE" / "UNKNOWN_NO_RECENT_CHECK" / "NON_STRICT". */
+  provider_state: string;
 }
 
 /** Mirrors MarketStatusOut (src/api/schemas/market_intelligence.py).

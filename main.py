@@ -543,19 +543,45 @@ async def market_data_health():
     health = get_market_data_health()
     strict = health["strict_real_data"]
     current_kind = health["current_provider_kind"]
+    last_status = health["last_connectivity_status"]
     last_scan_source = {"sahmk": "SAHMK_REAL", "dev": "DEV_SYNTHETIC"}.get(current_kind)
 
     # Under strict mode, only ever true when the most recent real
     # selection actually resolved to SAHMK -- never true merely because
     # no failure has been observed yet. Non-strict deployments make no
     # "this is real data" claim in the first place, so this field is
-    # not the relevant gate for them.
+    # not the relevant gate for them. UNCHANGED by the provider_state
+    # addition below -- publish-gating stays conservative (fail-closed)
+    # exactly as before.
     can_publish = (current_kind == "sahmk") if strict else True
+
+    # Production truthfulness fix (2026-08-23): `can_publish_recommendations
+    # =false` was being rendered by RealDataStatusBanner.tsx as "تعذر
+    # الحصول على بيانات حقيقية من مزود البيانات" (a confirmed-failure
+    # message) even when no failure was ever observed -- only that no
+    # worker in the fleet has made a provider-selection call recently
+    # enough for the shared Redis snapshot (900s TTL) to still be warm.
+    # Confirmed in production (2026-08-23T13:04Z diagnostic, ~15-30min
+    # after a fully successful 384/384 SAHMK historical_ohlcv run):
+    # current_provider_kind=None, last_connectivity_status=None -- i.e.
+    # genuinely never-observed-by-anyone-recently, not a recorded
+    # failure. `provider_state` lets the frontend distinguish that from
+    # an actual confirmed failure without changing `can_publish_
+    # recommendations`'s existing, deliberately conservative semantics.
+    if not strict:
+        provider_state = "NON_STRICT"
+    elif current_kind == "sahmk":
+        provider_state = "CONFIRMED_LIVE"
+    elif last_status == "FAILED":
+        provider_state = "CONFIRMED_UNAVAILABLE"
+    else:
+        provider_state = "UNKNOWN_NO_RECENT_CHECK"
 
     return {
         **health,
         "last_scan_source": last_scan_source,
         "can_publish_recommendations": can_publish,
+        "provider_state": provider_state,
     }
 
 
