@@ -209,6 +209,130 @@ class TestMissedEntry:
         assert any("مطاردة" in w for w in result.warnings)
 
 
+class TestSevereAntiChase:
+    """Severity of an entry-zone overrun has real decision consequence,
+    using the already-computed structure.price_severely_missed_entry_zone
+    signal. Decision.WATCH is used instead of REJECT -- REJECT collides
+    with src.api.routes.portfolio._HOLDER_GUIDANCE_MAP's REJECT->EXIT
+    mapping and the frontend's REJECT->sell/red badge color, both wrong
+    for a bullish overrun."""
+
+    def test_severe_missed_entry_becomes_watch(self):
+        inputs = _base_buy_inputs(price_missed_entry_zone=True, price_severely_missed_entry_zone=True)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+        gate = next(g for g in result.gates if g.name == "entry_not_missed")
+        assert gate.status is GateStatus.FAIL
+
+    def test_severe_missed_entry_never_produces_reject_exit_or_reduce(self):
+        """Severe anti-chase must never imply SELL, REDUCE, EXIT, or a
+        bearish/invalidated-setup semantic -- this is a bullish
+        overrun, not a broken trade."""
+        inputs = _base_buy_inputs(price_missed_entry_zone=True, price_severely_missed_entry_zone=True)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision not in (Decision.REJECT, Decision.EXIT, Decision.REDUCE)
+        assert result.decision is Decision.WATCH
+
+    def test_severe_missed_entry_does_not_affect_sell_side_decisions(self):
+        """SELL-like recommendations never reach the BUY-branch
+        entry-zone gates at all -- direction is negative, so
+        price_missed_entry_zone/price_severely_missed_entry_zone are
+        irrelevant and the base-recommendation mapping applies
+        unchanged."""
+        inputs = _base_buy_inputs(
+            recommendation=Recommendation.STRONG_SELL, direction=-1,
+            price_missed_entry_zone=True, price_severely_missed_entry_zone=True,
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.EXIT
+
+    def test_mild_and_severe_are_distinguished_only_by_the_severity_flag(self):
+        """Sanity check that the two branches are genuinely reachable
+        and distinct from the identical base inputs."""
+        mild = evaluate_decision(
+            _base_buy_inputs(price_missed_entry_zone=True, price_severely_missed_entry_zone=False), TUNING,
+        )
+        severe = evaluate_decision(
+            _base_buy_inputs(price_missed_entry_zone=True, price_severely_missed_entry_zone=True), TUNING,
+        )
+        assert mild.decision is Decision.WAIT_FOR_ENTRY
+        assert severe.decision is Decision.WATCH
+
+
+class TestFailedBreakoutGate:
+    """FAILED_BREAKOUT is real contradicting technical evidence for a
+    BUY thesis right now -- downgrades to WATCH (never REJECT),
+    mirroring the identical FAIL->WATCH pattern trend_momentum_
+    consistency/volume_quality already use. Every other breakout_status
+    value, including the safe default NOT_APPLICABLE, must PASS through
+    unaffected."""
+
+    def test_failed_breakout_downgrades_buy_candidate_to_watch(self):
+        inputs = _base_buy_inputs(breakout_status="FAILED_BREAKOUT")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+        gate = next(g for g in result.gates if g.name == "breakout_not_failed")
+        assert gate.status is GateStatus.FAIL
+
+    def test_failed_breakout_downgrades_strong_buy_too(self):
+        inputs = _base_buy_inputs(
+            recommendation=Recommendation.STRONG_BUY, available_sub_score_count=8, confidence_score=90.0,
+            breakout_status="FAILED_BREAKOUT",
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+
+    def test_not_applicable_default_is_byte_identical_to_pre_repair(self):
+        """Omitting breakout_status entirely (every caller before this
+        gate existed) must produce the exact same decision and gate
+        list shape as today."""
+        inputs = _base_buy_inputs()
+        assert inputs.breakout_status == "NOT_APPLICABLE"
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "breakout_not_failed")
+        assert gate.status is GateStatus.PASS
+
+    def test_confirmed_breakout_unaffected(self):
+        inputs = _base_buy_inputs(breakout_status="CONFIRMED_BREAKOUT")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_early_breakout_unaffected(self):
+        inputs = _base_buy_inputs(breakout_status="EARLY_BREAKOUT")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_unconfirmed_breakout_unaffected(self):
+        inputs = _base_buy_inputs(breakout_status="UNCONFIRMED_BREAKOUT")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_sequence_unverified_unaffected(self):
+        inputs = _base_buy_inputs(breakout_status="SEQUENCE_UNVERIFIED")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_failed_breakout_does_not_affect_hold(self):
+        """HOLD returns before the BUY-like branch is ever reached, so
+        breakout_status is irrelevant."""
+        inputs = _base_buy_inputs(recommendation=Recommendation.HOLD, direction=0, breakout_status="FAILED_BREAKOUT")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.HOLD
+
+    def test_failed_breakout_does_not_affect_reduce(self):
+        inputs = _base_buy_inputs(recommendation=Recommendation.SELL, direction=-1, breakout_status="FAILED_BREAKOUT")
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.REDUCE
+
+    def test_failed_breakout_does_not_affect_exit(self):
+        inputs = _base_buy_inputs(
+            recommendation=Recommendation.STRONG_SELL, direction=-1, breakout_status="FAILED_BREAKOUT",
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.EXIT
+
+
 class TestRiskRewardAndLiquidity:
     def test_risk_reward_below_minimum_is_rejected(self):
         inputs = _base_buy_inputs(risk_reward_ratio=0.5, min_risk_reward_ratio=1.0)

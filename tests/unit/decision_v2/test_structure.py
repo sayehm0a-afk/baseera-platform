@@ -5,6 +5,7 @@ from src.analysis.decision_v2.structure import (
     compute_extended_targets,
     compute_holding_period,
     price_has_missed_entry_zone,
+    price_severely_missed_entry_zone,
 )
 from src.analysis.types import SupportResistanceLevels
 
@@ -54,6 +55,54 @@ class TestMissedEntry:
 
     def test_hold_direction_is_never_missed(self):
         assert price_has_missed_entry_zone(105.0, 101.0, 0) is False
+
+
+class TestSeverelyMissedEntry:
+    """Anti-chase severity split: `price_severely_missed_entry_zone` is
+    a magnitude-aware refinement of an overrun that has already tripped
+    `price_has_missed_entry_zone` -- moderate overrun stays a live
+    WAIT_FOR_ENTRY setup, severe overrun becomes Decision.WATCH via
+    Gate 15's severity branch. Zone width here is 101.0 - 99.0 = 2.0."""
+
+    def test_price_within_zone_is_not_severely_missed(self):
+        assert price_severely_missed_entry_zone(100.0, 99.0, 101.0, 1) is False
+
+    def test_moderate_overrun_is_not_severely_missed(self):
+        # 101.5 is only 0.5 past the zone high -- well under one more
+        # zone-width (2.0) beyond it.
+        assert price_severely_missed_entry_zone(101.5, 99.0, 101.0, 1) is False
+
+    def test_severe_overrun_is_severely_missed(self):
+        # 103.5 is 2.5 past the zone high -- more than one more
+        # zone-width (2.0) beyond it.
+        assert price_severely_missed_entry_zone(103.5, 99.0, 101.0, 1) is True
+
+    def test_exactly_one_zone_width_past_is_not_yet_severe(self):
+        # Exactly at the boundary (101.0 + 2.0 = 103.0) -- strictly
+        # greater than is required, not equal to.
+        assert price_severely_missed_entry_zone(103.0, 99.0, 101.0, 1) is False
+
+    def test_degenerate_zero_width_zone_any_overrun_is_severe(self):
+        assert price_severely_missed_entry_zone(101.5, 101.0, 101.0, 1) is True
+
+    def test_hold_direction_is_never_severely_missed(self):
+        assert price_severely_missed_entry_zone(105.0, 99.0, 101.0, 0) is False
+
+    def test_missing_inputs_are_never_severely_missed(self):
+        assert price_severely_missed_entry_zone(None, 99.0, 101.0, 1) is False
+        assert price_severely_missed_entry_zone(105.0, None, 101.0, 1) is False
+        assert price_severely_missed_entry_zone(105.0, 99.0, None, 1) is False
+
+    def test_both_missed_functions_agree_on_the_moderate_overrun_case(self):
+        """The mild overrun case: any overrun at all makes
+        `price_has_missed_entry_zone` True (so Gate 15 still reaches
+        Decision.WAIT_FOR_ENTRY), while a moderate overrun keeps
+        `price_severely_missed_entry_zone` False -- these are two
+        genuinely independent signals, not the same boolean asked to
+        mean two different things."""
+        price, low, high, direction = 101.5, 99.0, 101.0, 1
+        assert price_has_missed_entry_zone(price, high, direction) is True
+        assert price_severely_missed_entry_zone(price, low, high, direction) is False
 
 
 class TestExtendedTargets:
