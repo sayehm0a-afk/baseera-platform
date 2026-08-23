@@ -34,6 +34,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from src.analysis.decision_v2.decision_freshness import classify_decision_freshness, is_decision_fresh
 from src.analysis.decision_v2.types import DECISION_LABELS_AR, Decision
 
 from src.api.schemas.market_intelligence import (
@@ -628,6 +629,8 @@ def radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummaryO
         ),
         ranking_reason_ar=opportunity.ranking_reason_ar,
         emitted_at=opportunity.emitted_at,
+        decision_freshness_status=classify_decision_freshness(opportunity.emitted_at).value,
+        is_decision_fresh=is_decision_fresh(opportunity.emitted_at),
         decision_v2_snapshot_id=opportunity.decision_v2_snapshot_id,
     )
 

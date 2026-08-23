@@ -7,7 +7,12 @@ import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { getMyWatchlist, removeFromWatchlist } from "@/lib/api/watchlist";
 import type { WatchlistItem } from "@/lib/api/watchlist-types";
-import { formatArabicDateTime, formatRelativeAgeAr, freshnessLabelAr } from "@/lib/format/freshness";
+import {
+  decisionFreshnessLabelAr,
+  formatArabicDateTime,
+  formatRelativeAgeAr,
+  freshnessLabelAr,
+} from "@/lib/format/freshness";
 
 type PanelState =
   | { status: "loading" }
@@ -114,8 +119,19 @@ export function MyWatchlistPanel() {
           )}
 
           {item.latest_decision_label_ar && item.latest_decision_timestamp ? (
-            <p className="text-xs text-bsr-text-secondary">
-              {freshnessLabelAr(item.latest_data_freshness_status)} · آخر تحديث:{" "}
+            <p
+              className={`text-xs ${
+                item.latest_is_decision_fresh === false
+                  ? "font-semibold text-bsr-action-sell"
+                  : "text-bsr-text-secondary"
+              }`}
+            >
+              {/* Distinct pills: freshnessLabelAr describes the PRICE
+                  data, decisionFreshnessLabelAr describes the DECISION
+                  itself -- LIVE PRICE != LIVE DECISION, so both are
+                  shown rather than collapsing into one. */}
+              {freshnessLabelAr(item.latest_data_freshness_status)} ·{" "}
+              {decisionFreshnessLabelAr(item.latest_decision_freshness_status)} · آخر تحديث:{" "}
               <span className="bsr-numeric">{formatArabicDateTime(item.latest_decision_timestamp)}</span> (
               {formatRelativeAgeAr(item.latest_decision_timestamp)})
             </p>

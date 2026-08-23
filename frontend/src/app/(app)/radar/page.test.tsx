@@ -42,6 +42,8 @@ function opportunity(symbol: string, overrides: { entry_status?: string; entry_s
     stage1_ranking_score: 88.0,
     ranking_reason_ar: "زخم شرائي قوي",
     emitted_at: "2026-08-17T09:00:00Z",
+    decision_freshness_status: "LIVE" as const,
+    is_decision_fresh: true,
     decision_v2_snapshot_id: 100,
   };
 }

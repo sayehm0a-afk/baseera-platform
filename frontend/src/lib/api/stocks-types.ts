@@ -211,6 +211,12 @@ export interface DecisionV2 {
   market_status: string;
   market_status_label_ar: string;
   decision_timestamp: string;
+  // Production freshness fix (2026-08-23): whether THIS DECISION (not
+  // the price it was computed from -- data_freshness_status above is a
+  // different concept) still belongs to the current/most recently
+  // completed Tadawul session. LIVE PRICE != LIVE DECISION.
+  decision_freshness_status: "LIVE" | "LAST_SESSION" | "STALE" | "UNKNOWN";
+  is_decision_fresh: boolean;
 
   invalidation_conditions: string[];
   positive_reasons: string[];

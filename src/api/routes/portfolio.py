@@ -47,6 +47,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.analysis.decision_v2.decision_freshness import classify_decision_freshness, is_decision_fresh
 from src.api.dependencies import get_market_provider
 from src.market_data.sahmk.operation_scope import PORTFOLIO, operation_scope
 from src.api.exceptions import (
@@ -90,6 +91,7 @@ from src.domain.models import (
     User,
 )
 from src.market_data.providers.market_data_provider import IMarketDataProvider
+from src.market_intelligence.market_status import get_market_status
 from src.news_intelligence.portfolio_alerts import PortfolioNewsAlertEngine
 from src.portfolio_intelligence.config import get_max_holdings_per_portfolio
 from src.portfolio_intelligence.portfolio_engine import PORTFOLIO_ENGINE_VERSION, PortfolioEngine
@@ -252,6 +254,7 @@ def _holding_detail(
     holding: PortfolioHolding,
     prices: Dict[int, tuple],
     decisions: Dict[int, DecisionV2Snapshot],
+    market_status=None,
 ) -> PortfolioHoldingDetailOut:
     stock = holding.stock
     quantity = float(holding.quantity)
@@ -273,6 +276,8 @@ def _holding_detail(
     guidance_decision = guidance_label_ar = guidance_basis_ar = None
     guidance_confidence: Optional[float] = None
     guidance_evaluated_at: Optional[datetime] = None
+    guidance_freshness_status: Optional[str] = None
+    is_guidance_fresh: Optional[bool] = None
     snapshot = decisions.get(holding.stock_id)
     if snapshot is not None:
         mapped = _holder_guidance_from_decision(snapshot.decision)
@@ -281,6 +286,8 @@ def _holding_detail(
             guidance_basis_ar = snapshot.decision_summary_ar or snapshot.recommendation_basis
             guidance_confidence = float(snapshot.confidence_score)
             guidance_evaluated_at = snapshot.decision_timestamp
+            guidance_freshness_status = classify_decision_freshness(guidance_evaluated_at, market_status).value
+            is_guidance_fresh = is_decision_fresh(guidance_evaluated_at, market_status)
 
     return PortfolioHoldingDetailOut(
         id=holding.id,
@@ -302,6 +309,8 @@ def _holding_detail(
         guidance_basis_ar=guidance_basis_ar,
         guidance_confidence=guidance_confidence,
         guidance_evaluated_at=guidance_evaluated_at,
+        guidance_freshness_status=guidance_freshness_status,
+        is_guidance_fresh=is_guidance_fresh,
     )
 
 
@@ -323,8 +332,9 @@ def get_portfolio_holdings(
     stock_ids = [row.stock_id for row in rows]
     prices = _latest_price_by_stock_id(session, stock_ids)
     decisions = _latest_decision_by_stock_id(session, stock_ids)
+    market_status = get_market_status()
 
-    holdings = [_holding_detail(row, prices, decisions) for row in rows]
+    holdings = [_holding_detail(row, prices, decisions, market_status) for row in rows]
 
     total_invested_cost = sum(h.invested_cost for h in holdings if h.invested_cost is not None)
     total_current_value = sum(h.current_value for h in holdings if h.current_value is not None)

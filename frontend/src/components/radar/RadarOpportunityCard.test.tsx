@@ -32,6 +32,8 @@ function buildOpportunity(overrides: Partial<RadarOpportunitySummary> = {}): Rad
     stage1_ranking_score: 88.5,
     ranking_reason_ar: "اختراق مستوى المقاومة بحجم تداول مرتفع",
     emitted_at: "2026-08-17T09:00:00Z",
+    decision_freshness_status: "LIVE" as const,
+    is_decision_fresh: true,
     decision_v2_snapshot_id: 100,
     ...overrides,
   };

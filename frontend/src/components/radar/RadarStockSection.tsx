@@ -5,6 +5,7 @@ import { AiStar } from "@/components/ai/AiStar";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import { getRadarOpportunity } from "@/lib/api/radar";
+import { decisionFreshnessLabelAr, formatRelativeAgeAr } from "@/lib/format/freshness";
 import type { RadarOpportunityDetail, RadarOpportunitySummary } from "@/lib/api/radar-types";
 
 interface RadarStockSectionProps {
@@ -52,6 +53,18 @@ export function RadarStockSection({ opportunity }: RadarStockSectionProps) {
         </div>
         <DecisionBadge value={o.classification} labelAr={o.classification_label_ar} />
       </div>
+
+      {/* Production freshness fix (2026-08-23): this classification was
+          frozen at `emitted_at` -- LIVE PRICE != LIVE DECISION, so a
+          radar card must say plainly when its classification is no
+          longer current for this trading session, not just show a
+          badge that looks the same whether it was computed a minute
+          or three days ago. */}
+      <p className={`text-[11px] ${o.is_decision_fresh ? "text-bsr-text-muted" : "font-semibold text-bsr-action-sell"}`}>
+        {o.is_decision_fresh
+          ? `آخر تحديث: ${formatRelativeAgeAr(o.emitted_at)}`
+          : decisionFreshnessLabelAr(o.decision_freshness_status)}
+      </p>
 
       <div className="flex items-center gap-bsr-3">
         <span className="text-xs text-bsr-text-secondary">الثقة</span>

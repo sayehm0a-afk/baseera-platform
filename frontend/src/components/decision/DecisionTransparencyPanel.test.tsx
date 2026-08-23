@@ -41,6 +41,8 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
     market_status: "OPEN",
     market_status_label_ar: "التداول المستمر",
     decision_timestamp: "2026-08-04T12:00:00Z",
+    decision_freshness_status: "LIVE",
+    is_decision_fresh: true,
     invalidation_conditions: ["إغلاق دون وقف الخسارة"],
     positive_reasons: ["اتجاه صاعد مؤكد بحجم تداول قوي"],
     negative_reasons: ["تقييم مرتفع نسبياً للقطاع"],

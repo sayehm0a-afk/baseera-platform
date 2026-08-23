@@ -271,6 +271,33 @@ def test_calibrated_confidences_excludes_a_below_threshold_symbol_from_gated_cat
     assert {e.symbol for e in rankings[RankingCategory.HIGHEST_CONFIDENCE].entries} == {"LOW_CAL", "HIGH_CAL"}
 
 
+def test_generated_at_defaults_to_now_when_not_supplied():
+    # Backward compatibility: existing callers (e.g. RebalanceEngine)
+    # that never pass generated_at must keep getting "now", unchanged.
+    before = datetime.now(timezone.utc)
+    outcomes = [make_outcome(symbol="A", decision=make_decision(symbol="A"))]
+    rankings = RankingEngine().rank(outcomes)
+    after = datetime.now(timezone.utc)
+    for ranking_list in rankings.values():
+        assert before <= ranking_list.generated_at <= after
+
+
+def test_generated_at_uses_the_real_supplied_timestamp_not_read_time():
+    # Production freshness fix (2026-08-23): a caller with a real scan
+    # timestamp (e.g. src.api.routes.market's `run.finished_at`) must
+    # see that exact timestamp reflected in every RankingList, not the
+    # moment rank() happened to be called -- this is what makes
+    # /opportunities' and /rankings' `generated_at` field honestly
+    # report how old the underlying scan actually is instead of always
+    # claiming "just now".
+    real_scan_timestamp = datetime(2026, 8, 20, 10, 0, tzinfo=timezone.utc)  # three days before "now" in this run
+    outcomes = [make_outcome(symbol="A", decision=make_decision(symbol="A"))]
+    rankings = RankingEngine().rank(outcomes, generated_at=real_scan_timestamp)
+    for ranking_list in rankings.values():
+        assert ranking_list.generated_at == real_scan_timestamp
+        assert ranking_list.generated_at != datetime.now(timezone.utc)
+
+
 def test_no_calibrated_confidences_argument_behaves_exactly_as_before():
     # Backward compatibility: omitting calibrated_confidences entirely
     # (every existing caller before this hardening pass) must produce

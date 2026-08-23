@@ -86,6 +86,30 @@ export function freshnessLabelAr(status: string | null | undefined): string {
   return FRESHNESS_LABELS_AR.UNKNOWN;
 }
 
+/** Production freshness fix (2026-08-23): a separate Arabic label set
+ * for DECISION freshness (`decision_freshness_status` /
+ * `latest_decision_freshness_status` / `guidance_freshness_status`),
+ * deliberately worded differently from `FRESHNESS_LABELS_AR` above --
+ * that set describes PRICE/quote data staleness ("بيانات قديمة"),
+ * this one describes a stale ANALYSIS/decision that needs
+ * re-evaluation ("تحليل قديم"). Never call `freshnessLabelAr` on a
+ * *_freshness_status field or vice versa -- LIVE PRICE != LIVE
+ * DECISION, and mixing the two label sets would silently reintroduce
+ * that exact confusion in the UI. */
+export const DECISION_FRESHNESS_LABELS_AR: Record<DataFreshnessStatus, string> = {
+  LIVE: "قرار حالي لهذه الجلسة",
+  LAST_SESSION: "قرار آخر جلسة مكتملة",
+  STALE: "تحليل قديم — يحتاج إعادة تقييم",
+  UNKNOWN: "حداثة القرار غير مؤكدة",
+};
+
+export function decisionFreshnessLabelAr(status: string | null | undefined): string {
+  if (status && status in DECISION_FRESHNESS_LABELS_AR) {
+    return DECISION_FRESHNESS_LABELS_AR[status as DataFreshnessStatus];
+  }
+  return DECISION_FRESHNESS_LABELS_AR.UNKNOWN;
+}
+
 /** `entry_status === "MISSED_ENTRY"` is a real, already-computed
  * Decision Engine V2 value (src.analysis.decision_v2.trade_classification.
  * classify_entry_status) meaning the price has already moved past the

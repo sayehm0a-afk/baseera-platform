@@ -425,7 +425,9 @@ def get_rankings(
     )
 
     calibrated_confidences = _calibrated_confidences_for(session, outcomes)
-    rankings = RankingEngine().rank(outcomes, change_result, calibrated_confidences)
+    rankings = RankingEngine().rank(
+        outcomes, change_result, calibrated_confidences, generated_at=run.finished_at or run.started_at
+    )
     if category is not None:
         rankings = {k: v for k, v in rankings.items() if k.value == category}
 
@@ -476,7 +478,9 @@ def get_opportunities(
     )
 
     calibrated_confidences = _calibrated_confidences_for(session, outcomes)
-    all_rankings = RankingEngine().rank(outcomes, change_result, calibrated_confidences)
+    all_rankings = RankingEngine().rank(
+        outcomes, change_result, calibrated_confidences, generated_at=run.finished_at or run.started_at
+    )
     curated = curate_opportunity_rankings(all_rankings)
 
     return OpportunitiesOut(

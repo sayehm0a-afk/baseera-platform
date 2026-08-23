@@ -30,6 +30,8 @@ function buildItem(overrides: Partial<WatchlistItem> = {}): WatchlistItem {
     latest_decision_timestamp: "2026-08-01T12:00:00Z",
     radar_is_live_opportunity: false,
     radar_stage1_rank: null,
+    latest_decision_freshness_status: null,
+    latest_is_decision_fresh: null,
     radar_ranking_reason_ar: null,
     ...overrides,
   };

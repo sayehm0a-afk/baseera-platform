@@ -350,6 +350,15 @@ class DecisionV2Out(BaseModel):
     market_status: str
     market_status_label_ar: str
     decision_timestamp: datetime
+    # Production freshness fix (2026-08-23): whether THIS DECISION
+    # (not the price it was computed from -- see `data_freshness_status`
+    # above, a different concept) still belongs to the current/most
+    # recently completed Tadawul session. `LIVE PRICE != LIVE DECISION`
+    # -- a decision can be `data_freshness_status=LIVE` while itself
+    # being days old; these two fields are deliberately never merged.
+    # See src.analysis.decision_v2.decision_freshness.
+    decision_freshness_status: str
+    is_decision_fresh: bool
 
     invalidation_conditions: List[str]
     positive_reasons: List[str]
