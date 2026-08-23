@@ -104,6 +104,15 @@ class GateInputs:
     calibrated_success_probability: Optional[float] = None
     min_calibrated_success_probability: float = 0.0
 
+    # --- Phase 3 decision-authority repair -----------------------------
+    # Both fields reuse evidence this engine already computes for
+    # display/labeling purposes (structure.price_severely_missed_entry_zone
+    # and context.extra["breakout_confirmation"]["status"]) -- no new
+    # indicator, no new threshold. Defaults preserve exact existing
+    # behavior for any caller that doesn't pass them.
+    price_severely_missed_entry_zone: bool = False
+    breakout_status: str = "NOT_APPLICABLE"
+
 
 @dataclass
 class GateEvaluation:
@@ -308,7 +317,31 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         return GateEvaluation(Decision.REJECT, gates, warnings, disclosures)
 
     # Gate 15: price already ran past the entry zone --------------------------
+    # Phase 3 decision-authority repair: severity now has real decision
+    # consequence, using the same already-computed, non-arbitrary
+    # signal (structure.price_severely_missed_entry_zone -- reuses the
+    # entry zone's own ATR-derived width, no new threshold). A mild
+    # overrun keeps the exact prior behavior (WAIT_FOR_ENTRY, setup
+    # preserved). A severe overrun (price has run a further full
+    # entry-zone-width beyond the top edge) moves to Decision.WATCH,
+    # deliberately NOT Decision.REJECT and NOT any SELL-like state --
+    # this is a bullish extension, not an invalidated setup, and WATCH
+    # is the only existing Decision value every downstream consumer
+    # already treats as "still monitored, not exited" (see
+    # src.api.routes.portfolio._HOLDER_GUIDANCE_MAP mapping WATCH to
+    # continued-monitoring guidance, and the frontend DecisionBadge
+    # coloring WATCH the same neutral bucket as WAIT_FOR_ENTRY, never
+    # the sell/red bucket REJECT/REDUCE/EXIT share).
     if inputs.price_missed_entry_zone:
+        if inputs.price_severely_missed_entry_zone:
+            gates.append(GateOutcome(
+                "entry_not_missed", GateStatus.FAIL,
+                "السعر تجاوز نطاق الدخول بفارق كبير -- لم يعد هذا الإعداد فرصة دخول فورية.", True,
+            ))
+            warnings.append(
+                "السعر ابتعد كثيرًا عن نطاق الدخول المناسب -- لا يُنصح بمطاردة السعر حاليًا، وتم نقل الفرصة للمراقبة."
+            )
+            return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
         gates.append(GateOutcome("entry_not_missed", GateStatus.FAIL, "السعر تجاوز نطاق الدخول المحدد بالفعل.", True))
         warnings.append("السعر الحالي أعلى من نطاق الدخول المناسب -- يفضّل الانتظار بدل مطاردة السعر.")
         return GateEvaluation(Decision.WAIT_FOR_ENTRY, gates, warnings, disclosures)
@@ -396,6 +429,31 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     gates.append(GateOutcome(
         "market_risk_permits_entry", GateStatus.PASS,
         f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- لا تمنع الدخول.", False,
+    ))
+
+    # Phase 3 decision-authority repair, failed-breakout gate: a real,
+    # already-in-progress breakout attempt for this symbol that has
+    # already reverted is contradicting technical evidence for a BUY
+    # thesis right now -- downgrades to WATCH (never REJECT: the
+    # underlying thesis may still be sound once the level is retested),
+    # the identical FAIL->WATCH pattern trend_momentum_consistency and
+    # volume_quality already use for contradicting evidence above.
+    # `breakout_status` defaults to NOT_APPLICABLE (no breakout thesis
+    # in play for this symbol) and is otherwise one of
+    # SEQUENCE_UNVERIFIED/CONFIRMED_BREAKOUT/EARLY_BREAKOUT/
+    # UNCONFIRMED_BREAKOUT/FAILED_BREAKOUT -- only the exact
+    # FAILED_BREAKOUT string triggers this gate; every other value
+    # (including the safe default) PASSes through unchanged.
+    if inputs.breakout_status == "FAILED_BREAKOUT":
+        gates.append(GateOutcome(
+            "breakout_not_failed", GateStatus.FAIL,
+            "محاولة اختراق سابقة لهذا المستوى تراجعت بالفعل -- الدليل الفني الحالي يتعارض مع فرضية الشراء.",
+            True,
+        ))
+        warnings.append("محاولة اختراق سابقة لهذا السهم فشلت وتراجع السعر دون المستوى -- يفضّل الحذر قبل الدخول.")
+        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
+    gates.append(GateOutcome(
+        "breakout_not_failed", GateStatus.PASS, "لا توجد محاولة اختراق فاشلة نشطة حاليًا.", False,
     ))
 
     # Phase 3 area 2, confidence-calibration gate: the one place this

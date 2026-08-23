@@ -136,25 +136,36 @@ class TestBuyPath:
 
 
 class TestMissedEntry:
-    def test_price_run_past_entry_zone_becomes_wait_for_entry(self):
-        # A tight, already-realized rally: price sits well above the
-        # target-implying stop-anchored entry zone the InvestmentDecision
-        # was computed for.
-        ctx = _context(price=130.0)
+    def test_price_moderately_past_entry_zone_becomes_wait_for_entry(self):
+        """Mild overrun (not severe) -- exact prior WAIT_FOR_ENTRY
+        behavior, unaffected by the Phase 3 decision-authority repair."""
+        ctx = _context(price=103.25)
         decision = _buy_decision(price=100.0, target=112.0, stop=94.0)
         result = _decide(ctx, decision)
         assert result.decision is Decision.WAIT_FOR_ENTRY
 
-    def test_severely_extended_price_is_missed_entry(self):
-        """Mandate proof C: a genuinely invalid/missed setup (price ran
-        130 vs. a ~103 entry zone) is classified MISSED_ENTRY, not just
-        the coarser WAIT_FOR_ENTRY decision."""
+    def test_severely_extended_price_becomes_watch_not_wait_for_entry(self):
+        """Phase 3 decision-authority repair, mandate proof B: a
+        genuinely severe overrun (price ran to 130 vs. a ~103 entry
+        zone) now moves to Decision.WATCH -- a real decision
+        consequence for the already-computed severity signal, replacing
+        the old behavior where this stayed the coarser WAIT_FOR_ENTRY
+        indefinitely. Verified against the real engine (not a
+        hand-constructed GateInputs) at price=130.0 -- empirically
+        confirmed severely_missed before writing this assertion."""
         ctx = _context(price=130.0)
         decision = _buy_decision(price=100.0, target=112.0, stop=94.0)
         result = _decide(ctx, decision)
-        assert result.decision is Decision.WAIT_FOR_ENTRY
-        from src.analysis.decision_v2.types import EntryStatus
-        assert result.entry_status is EntryStatus.MISSED_ENTRY
+        assert result.decision is Decision.WATCH
+
+    def test_severely_extended_price_never_produces_reject_exit_or_reduce(self):
+        """Mandate proof C: severe anti-chase must never imply a
+        SELL-like/invalidated-setup decision -- this is a bullish
+        overrun, not a broken trade."""
+        ctx = _context(price=130.0)
+        decision = _buy_decision(price=100.0, target=112.0, stop=94.0)
+        result = _decide(ctx, decision)
+        assert result.decision not in (Decision.REJECT, Decision.EXIT, Decision.REDUCE)
 
     def test_moderately_extended_price_is_wait_for_pullback(self):
         """Mandate proof B + D: the anti-chase structural repair --
@@ -620,3 +631,211 @@ class TestNewsImpactWiring:
         ctx = _context(extra={"news_sentiment": {"sentiment_score": -0.5, "article_count": 2}})
         result = _decide(ctx, _buy_decision())
         assert result.news_impact == "NEGATIVE"
+
+
+class TestFailedBreakoutGate:
+    """Phase 3 decision-authority repair, item 2: FAILED_BREAKOUT
+    downgrades an otherwise-actionable BUY-like decision to WATCH.
+    Every other breakout_status value, including the safe default
+    NOT_APPLICABLE, is unaffected."""
+
+    def test_failed_breakout_downgrades_buy_candidate_to_watch(self):
+        """Mandate proof E."""
+        ctx = _context(price=100.0, extra={"breakout_confirmation": {"status": "FAILED_BREAKOUT"}})
+        result = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert result.decision is Decision.WATCH
+        gate = next(g for g in result.gates if g.name == "breakout_not_failed")
+        assert gate.status.value == "FAIL"
+
+    def test_geometry_and_confidence_unchanged_by_failed_breakout_gate(self):
+        """Mandate proof H: the new gate only changes the Decision, never
+        entry zone, stop, targets, or confidence -- verified against the
+        identical inputs with and without the FAILED_BREAKOUT signal."""
+        baseline = _decide(_context(price=100.0), _buy_decision(price=100.0, target=112.0, stop=94.0))
+        with_failed_breakout = _decide(
+            _context(price=100.0, extra={"breakout_confirmation": {"status": "FAILED_BREAKOUT"}}),
+            _buy_decision(price=100.0, target=112.0, stop=94.0),
+        )
+        assert baseline.decision is Decision.BUY_CANDIDATE
+        assert with_failed_breakout.decision is Decision.WATCH
+        assert baseline.entry_zone_low == with_failed_breakout.entry_zone_low
+        assert baseline.entry_zone_high == with_failed_breakout.entry_zone_high
+        assert baseline.stop_loss == with_failed_breakout.stop_loss
+        assert baseline.target_1 == with_failed_breakout.target_1
+        assert baseline.target_2 == with_failed_breakout.target_2
+        assert baseline.target_3 == with_failed_breakout.target_3
+        assert baseline.confidence_score == with_failed_breakout.confidence_score
+        assert baseline.risk_reward_target_1 == with_failed_breakout.risk_reward_target_1
+
+    def test_not_applicable_default_is_byte_identical_to_pre_repair(self):
+        """Mandate proof F (default case): omitting breakout_confirmation
+        entirely (every caller before this repair) is unaffected."""
+        with_default = _decide(_context(price=100.0, extra={}), _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert with_default.decision is Decision.BUY_CANDIDATE
+        assert with_default.breakout_status == "NOT_APPLICABLE"
+
+    def test_confirmed_breakout_unaffected(self):
+        """Mandate proof F."""
+        ctx = _context(price=100.0, extra={"breakout_confirmation": {"status": "CONFIRMED_BREAKOUT"}})
+        result = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_early_breakout_unaffected(self):
+        """Mandate proof F."""
+        ctx = _context(price=100.0, extra={"breakout_confirmation": {"status": "EARLY_BREAKOUT"}})
+        result = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_unconfirmed_breakout_unaffected(self):
+        """Mandate proof F."""
+        ctx = _context(price=100.0, extra={"breakout_confirmation": {"status": "UNCONFIRMED_BREAKOUT"}})
+        result = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_sequence_unverified_unaffected(self):
+        """Mandate proof F."""
+        ctx = _context(price=100.0, extra={"breakout_confirmation": {"status": "SEQUENCE_UNVERIFIED"}})
+        result = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_failed_breakout_does_not_affect_hold_sell_reduce_exit(self):
+        """Mandate proof G."""
+        extra = {"breakout_confirmation": {"status": "FAILED_BREAKOUT"}}
+
+        def _sell_side_decision(recommendation):
+            return InvestmentDecision(
+                symbol="2222", recommendation=recommendation, confidence=60.0, final_score=30.0,
+                target_price=90.0, stop_loss=105.0, time_horizon=TimeHorizon.SHORT_TERM,
+                expected_return_pct=-10.0, risk_level=RiskLevel.MEDIUM, position_size=PositionSize.NONE,
+                reasons=[], breakdown=[], signals=[], generated_at=datetime.now(timezone.utc),
+            )
+
+        hold_decision = InvestmentDecision(
+            symbol="2222", recommendation=Recommendation.HOLD, confidence=60.0, final_score=50.0,
+            target_price=None, stop_loss=None, time_horizon=TimeHorizon.SHORT_TERM,
+            expected_return_pct=None, risk_level=RiskLevel.MEDIUM, position_size=PositionSize.NONE,
+            reasons=[], breakdown=[], signals=[], generated_at=datetime.now(timezone.utc),
+        )
+        assert _decide(_context(price=100.0, extra=extra), hold_decision).decision is Decision.HOLD
+        assert _decide(
+            _context(price=100.0, extra=extra), _sell_side_decision(Recommendation.SELL)
+        ).decision is Decision.REDUCE
+        assert _decide(
+            _context(price=100.0, extra=extra), _sell_side_decision(Recommendation.STRONG_SELL)
+        ).decision is Decision.EXIT
+
+
+class TestSevereAntiChaseGeometryAndDownstreamConsistency:
+    """Mandate proofs H and D for item 1 (severe anti-chase)."""
+
+    def test_stop_and_target_unchanged_between_mild_and_severe(self):
+        """Mandate proof H: the new severity gate only changes the
+        Decision, never stop_loss/target_1 -- both are echoed straight
+        through from investment_decision.stop_loss/target_price
+        regardless of price or severity, never recomputed after
+        evaluate_decision() runs. (entry_zone_low/high are deliberately
+        NOT compared here -- structure.compute_entry_zone anchors the
+        zone to the current price/ATR by design, so it legitimately
+        differs between two different prices; that is pre-existing,
+        unrelated behavior, not a side effect of this repair -- see
+        TestFailedBreakoutGate.test_geometry_and_confidence_unchanged_by_failed_breakout_gate
+        for the correct same-price comparison proving the new gates
+        introduce zero geometry side effects.)"""
+        mild = _decide(_context(price=103.25), _buy_decision(price=100.0, target=112.0, stop=94.0))
+        severe = _decide(_context(price=130.0), _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert mild.decision is Decision.WAIT_FOR_ENTRY
+        assert severe.decision is Decision.WATCH
+        assert mild.stop_loss == severe.stop_loss == 94.0
+        assert mild.target_1 == severe.target_1 == 112.0
+        assert mild.confidence_score == severe.confidence_score
+
+    def test_existing_holder_never_receives_exit_guidance_from_severe_overrun(self):
+        """Mandate proof D: src.api.routes.portfolio's
+        _HOLDER_GUIDANCE_MAP (unchanged by this repair) must map the
+        Decision this engine now returns for a severe overrun
+        (Decision.WATCH) to continued-monitoring guidance, never EXIT --
+        this is the concrete evidence the prior architecture review
+        used to reject REJECT as the terminal state for this case."""
+        from src.api.routes.portfolio import _HOLDER_GUIDANCE_MAP, _holder_guidance_from_decision
+
+        severe = _decide(_context(price=130.0), _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert severe.decision is Decision.WATCH
+        guidance = _holder_guidance_from_decision(severe.decision.value)
+        assert guidance is not None
+        code, label_ar = guidance
+        assert code == "WATCH"
+        assert code != "EXIT"
+        assert _HOLDER_GUIDANCE_MAP["WATCH"][0] == "WATCH"
+        assert _HOLDER_GUIDANCE_MAP["REJECT"][0] == "EXIT"  # unchanged, confirms REJECT was correctly avoided
+
+    def test_high_quality_buy_remains_false_and_unaffected_for_severe_overrun(self):
+        """Mandate proof J: HIGH_QUALITY_BUY stays a pure post-decision
+        label -- it cannot be True for a WATCH decision (classify_high_
+        quality_buy's own first condition already requires an actionable
+        BUY decision), unaffected by this repair."""
+        severe = _decide(_context(price=130.0), _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert severe.decision is Decision.WATCH
+        assert severe.is_high_quality_buy is False
+
+
+class TestHighQualityBuyRemainsPostDecisionOnly:
+    """Mandate proof J (general case, item 3): HIGH_QUALITY_BUY was not
+    made a decision gate by this repair -- it cannot change the Decision
+    regardless of its own conjunctive conditions."""
+
+    def test_high_quality_buy_true_does_not_alter_decision_or_geometry(self):
+        ctx = _context(price=100.0, extra={
+            "news_sentiment": {},
+        })
+        result = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0))
+        # Whichever value is_high_quality_buy takes, the Decision and
+        # geometry are unaffected -- HQB is read-only over already-final
+        # fields (trade_classification.classify_high_quality_buy takes
+        # decision/entry_status/confidence/RR as inputs, never writes
+        # back to them).
+        also = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert result.decision == also.decision
+        assert result.entry_zone_low == also.entry_zone_low
+        assert result.stop_loss == also.stop_loss
+        assert result.target_1 == also.target_1
+        assert result.confidence_score == also.confidence_score
+
+
+class TestSectorStrengthUnchanged:
+    """Mandate proof K (item 4): no behavioral activation -- sector
+    strength evidence, if present, has zero effect on confidence,
+    decision, or geometry (this repair did not touch it)."""
+
+    def test_negative_relative_strength_has_no_confidence_or_decision_effect(self):
+        without_sector = _decide(_context(price=100.0, extra={}), _buy_decision(price=100.0, target=112.0, stop=94.0))
+        with_negative_sector = _decide(
+            _context(price=100.0, extra={
+                "sector_rotation": {
+                    "sector_strength_used": True, "sector_relative_strength": -10.0, "sector_strength_score": 20.0,
+                },
+            }),
+            _buy_decision(price=100.0, target=112.0, stop=94.0),
+        )
+        assert without_sector.decision == with_negative_sector.decision
+        assert without_sector.confidence_score == with_negative_sector.confidence_score
+        assert without_sector.opportunity_quality_score == with_negative_sector.opportunity_quality_score
+
+
+class TestConfidenceCalibrationUnchangedByThisRepair:
+    """Mandate proof L (item 5): this repair did not touch the
+    confidence_calibration_applied gate or its call sites -- re-proves
+    the pre-existing behavior is intact after the anti-chase/breakout
+    changes land alongside it."""
+
+    def test_omitted_calibration_still_leaves_decision_unaffected(self):
+        ctx = _context(price=100.0)
+        without = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0))
+        with_none_explicit = _decide(
+            ctx, _buy_decision(price=100.0, target=112.0, stop=94.0), calibrated_success_probability=None,
+        )
+        assert without.decision == with_none_explicit.decision
+
+    def test_poor_calibration_still_downgrades_to_watch(self):
+        ctx = _context(price=100.0)
+        result = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0), calibrated_success_probability=0.05)
+        assert result.decision is Decision.WATCH

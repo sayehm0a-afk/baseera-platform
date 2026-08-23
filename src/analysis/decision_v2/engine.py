@@ -302,6 +302,13 @@ class DecisionEngineV2:
             market_risk_label_ar=market_risk.label_ar,
             calibrated_success_probability=calibrated_success_probability,
             min_calibrated_success_probability=get_min_calibrated_success_probability(),
+            # Phase 3 decision-authority repair: both already computed
+            # above (severely_missed_entry at line ~187, breakout_confirmation
+            # at line ~105) -- threading the same values gates.py's own
+            # entry_not_missed/breakout_not_failed gates now consume,
+            # never a second, independent computation.
+            price_severely_missed_entry_zone=severely_missed_entry,
+            breakout_status=breakout_confirmation.get("status", "NOT_APPLICABLE"),
         )
         evaluation = evaluate_decision(gate_inputs, tuning)
         warnings.extend(evaluation.warnings)

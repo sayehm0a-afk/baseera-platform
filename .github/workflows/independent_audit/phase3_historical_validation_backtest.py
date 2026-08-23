@@ -726,6 +726,66 @@ negative_expectancy = {
 }
 print(json.dumps(negative_expectancy, indent=2, default=str))
 
+section("15. PHASE G -- narrowly-scoped implementation-impact counters (this run's 2 new gates)")
+# DecisionV2BacktestRecord does not carry the raw price_severely_missed_
+# entry_zone boolean, so these counters are derived from the baseline-vs-
+# phase3 comparison instead -- baseline_v2 is the FROZEN pre-Phase-3
+# snapshot (never receives either new gate), so any point where baseline
+# stayed WAIT_FOR_ENTRY/BUY-like but phase3 became WATCH, under the exact
+# trigger condition each new gate uses, is that gate's real effect on
+# this dataset. No new production instrumentation was added for this --
+# purely a read-only aggregation over already-collected records.
+anti_chase_severe = [
+    (b, p) for b, p in zip(summary.baseline_records, summary.phase3_records)
+    if b.decision == "WAIT_FOR_ENTRY"
+]
+anti_chase_severe_to_watch = [(b, p) for b, p in anti_chase_severe if p.decision == "WATCH"]
+
+failed_breakout_points = [p for p in summary.phase3_records if p.breakout_status == "FAILED_BREAKOUT"]
+failed_breakout_to_watch = [
+    (b, p) for b, p in zip(summary.baseline_records, summary.phase3_records)
+    if p.breakout_status == "FAILED_BREAKOUT" and b.decision in _ACTIONABLE and p.decision == "WATCH"
+]
+
+trades_removed = [
+    (b, p) for b, p in zip(summary.baseline_records, summary.phase3_records)
+    if b.decision in _ACTIONABLE and p.decision not in _ACTIONABLE
+]
+
+outcomes_changed = [
+    (b, p) for b, p in zip(summary.baseline_records, summary.phase3_records)
+    if (
+        getattr(b.outcome.status, "value", str(b.outcome.status))
+        != getattr(p.outcome.status, "value", str(p.outcome.status))
+    )
+    or b.outcome.return_pct != p.outcome.return_pct
+]
+
+implementation_impact = {
+    "ANTI_CHASE_SEVERE_COUNT": len(anti_chase_severe_to_watch),
+    "ANTI_CHASE_SEVERE_CHANGED_TO_WATCH": len(anti_chase_severe_to_watch),
+    "ANTI_CHASE_REACHED_WAIT_FOR_ENTRY_TOTAL": len(anti_chase_severe),
+    "ANTI_CHASE_MILD_STAYED_WAIT_FOR_ENTRY": len(anti_chase_severe) - len(anti_chase_severe_to_watch),
+    "FAILED_BREAKOUT_COUNT": len(failed_breakout_points),
+    "FAILED_BREAKOUT_CHANGED_TO_WATCH": len(failed_breakout_to_watch),
+    "NUMBER_OF_TRADES_REMOVED": len(trades_removed),
+    "NUMBER_OF_OUTCOMES_CHANGED": len(outcomes_changed),
+    "note": (
+        "ANTI_CHASE_SEVERE_COUNT and ANTI_CHASE_SEVERE_CHANGED_TO_WATCH are identical by construction -- "
+        "gates.py's severity branch is a strict if/else (severe always -> WATCH, mild always -> "
+        "WAIT_FOR_ENTRY unchanged), so every severe case is, by definition, a case that changed to WATCH. "
+        "FAILED_BREAKOUT_COUNT counts every point with that breakout_status regardless of whether it was "
+        "already non-actionable for an unrelated reason before reaching the new gate (in which case it "
+        "would not appear in FAILED_BREAKOUT_CHANGED_TO_WATCH). NUMBER_OF_TRADES_REMOVED is baseline-"
+        "actionable/phase3-non-actionable points, which can only be caused by these 2 new gates since no "
+        "other change was made this turn. NUMBER_OF_OUTCOMES_CHANGED counts real outcome-status or "
+        "return_pct divergences (a WATCH decision is never entry-triggered by the outcome evaluator, so "
+        "any point downgraded away from BUY_CANDIDATE/STRONG_BUY_CANDIDATE necessarily shows here if it "
+        "previously had a real, non-PENDING baseline outcome)."
+    ),
+}
+print(json.dumps(implementation_impact, indent=2, default=str))
+
 section("14. FINAL REPORT FIELDS")
 final = {
     "REAL_HISTORICAL_DATA_ACCESS": "YES" if phase_a["real_historical_data_access"] else "NO",
@@ -740,6 +800,7 @@ final = {
     "counterfactual_divergence_summary": counterfactual_summary,
     "counterfactual_divergence_sample": divergences[:50],
     "negative_expectancy_factor_analysis": negative_expectancy,
+    "implementation_impact_counters": implementation_impact,
     "skipped": summary.skipped,
     "evaluated_points": summary.evaluated_points,
 }
