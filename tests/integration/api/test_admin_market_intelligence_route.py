@@ -727,6 +727,77 @@ def test_coverage_handles_an_entirely_empty_database(client, session_factory, as
         "active_stocks_with_exclusion_reason_set": 0,
     }
     assert len(body["pipeline_funnel"]) == 7
+    assert body["outcome_tracking"] == {
+        "tracked_symbol_count": 0,
+        "active_signal_count": 0,
+        "pending_outcome_count": 0,
+        "oldest_pending_signal_decision_timestamp": None,
+        "pending_signals_with_zero_post_signal_bars": [],
+        "last_successful_historical_ohlcv_run": None,
+    }
+
+
+def test_coverage_reports_outcome_tracking_for_a_deactivated_symbol_with_a_pending_signal(
+    client, session_factory, as_staff
+):
+    """OHLCV persistence / post-signal outcome-tracking fix (2026-08-23):
+    a symbol with an outstanding PENDING DecisionV2Outcome must be
+    surfaced by /coverage's outcome_tracking block even after it drops
+    out of Stock.is_active -- and, since it has no PriceBar after its
+    own decision_timestamp, must appear in
+    pending_signals_with_zero_post_signal_bars."""
+    from datetime import datetime, timezone
+
+    from src.domain.models import DecisionV2Outcome, DecisionV2OutcomeStatus, DecisionV2Snapshot
+
+    session = session_factory()
+    stock = Stock(symbol="6060", name_en="Some Deactivated Co", is_active=False)
+    session.add(stock)
+    session.commit()
+    decision_ts = datetime(2026, 8, 20, 8, 53, tzinfo=timezone.utc)
+    snapshot = DecisionV2Snapshot(
+        stock_id=stock.id,
+        symbol=stock.symbol,
+        company_name_en=stock.name_en,
+        decision="BUY_CANDIDATE",
+        decision_label_ar="شراء",
+        confidence_score=70.0,
+        opportunity_quality_score=60.0,
+        risk_score=30.0,
+        data_quality_score=90.0,
+        data_freshness_status="LIVE",
+        current_price=100.0,
+        entry_zone_low=95.0,
+        entry_zone_high=100.0,
+        target_1=110.0,
+        target_2=120.0,
+        target_3=130.0,
+        stop_loss=90.0,
+        market_status="OPEN",
+        decision_timestamp=decision_ts,
+        analysis_version="2.0.0",
+        data_source="test",
+    )
+    session.add(snapshot)
+    session.flush()
+    session.add(
+        DecisionV2Outcome(
+            decision_v2_snapshot_id=snapshot.id,
+            symbol=stock.symbol,
+            due_at=decision_ts,
+            status=DecisionV2OutcomeStatus.PENDING,
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    tracking = response.json()["outcome_tracking"]
+    assert tracking["tracked_symbol_count"] == 1
+    assert tracking["pending_outcome_count"] == 1
+    assert tracking["pending_signals_with_zero_post_signal_bars"] == ["6060"]
 
 
 # --- POST /full-discovery ------------------------------------------------

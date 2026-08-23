@@ -68,6 +68,7 @@ from src.market_data.ingestion.ingest_dividends import ingest_dividends
 from src.market_data.ingestion.ingest_fundamentals import ingest_fundamentals
 from src.market_data.ingestion.ingest_historical_ohlcv import ingest_historical_ohlcv
 from src.market_data.ingestion.ingest_symbols import sync_symbols
+from src.market_data.ingestion.outcome_tracking import pending_signal_symbols
 from src.market_data.fundamental_provider_factory import get_fundamental_data_provider
 from src.market_data.provider_factory import get_market_data_provider
 from src.market_data.sahmk.rate_limiter import (
@@ -650,6 +651,30 @@ class IngestionScheduler:
             session.close()
         return list(dict.fromkeys(list(configured) + discovered))
 
+    def _resolve_ohlcv_target_symbols(self) -> List[str]:
+        """`_resolve_target_symbols()`, further unioned with every
+        symbol that has a still-`PENDING` `DecisionV2Outcome` -- the
+        OHLCV persistence / outcome-tracking fix (2026-08-23, see
+        `src.market_data.ingestion.outcome_tracking`'s module docstring
+        for the full root-cause writeup). A symbol must not stop
+        receiving OHLCV updates merely because it is no longer selected
+        by the next Stage 2 scan or because its general `Stock.
+        is_active` flag changes for an unrelated reason (a directory
+        reclassification, a temporary provider gap) -- an outstanding
+        signal's own evaluation need is a first-class, independent
+        reason to keep fetching. Deliberately scoped to OHLCV only
+        (fundamentals/dividends still use the unmodified `_resolve_
+        target_symbols()`): those two data types are not what
+        `evaluate_pending_outcomes()` reads, so extending their target
+        list would add SAHMK cost with no outcome-tracking benefit."""
+        base = self._resolve_target_symbols()
+        session = self._session_factory()
+        try:
+            pending = pending_signal_symbols(session)
+        finally:
+            session.close()
+        return list(dict.fromkeys(base + pending))
+
     async def _run_symbols(self) -> IngestionResult:
         with priority_scope(BACKGROUND), operation_scope(INGESTION):
             provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
@@ -664,7 +689,7 @@ class IngestionScheduler:
     async def _run_historical_ohlcv(self) -> IngestionResult:
         with priority_scope(BACKGROUND), operation_scope(INGESTION):
             provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
-            symbols = self._resolve_target_symbols()
+            symbols = self._resolve_ohlcv_target_symbols()
             return await ingest_historical_ohlcv(
                 symbols,
                 provider,

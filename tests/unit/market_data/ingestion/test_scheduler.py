@@ -12,7 +12,14 @@ from sqlalchemy.orm import sessionmaker
 
 import src.market_intelligence.scheduler_leader_lock as leader_lock_module
 from src.core.db.database import Base
-from src.domain.models import IngestionJobStatus, IngestionRunLog, Stock
+from src.domain.models import (
+    DecisionV2Outcome,
+    DecisionV2OutcomeStatus,
+    DecisionV2Snapshot,
+    IngestionJobStatus,
+    IngestionRunLog,
+    Stock,
+)
 from src.market_data.ingestion._common import IngestionResult
 from src.market_data.ingestion.scheduler import (
     _QUOTA_RETRY_SAFETY_BUFFER,
@@ -482,6 +489,91 @@ async def test_ohlcv_fundamentals_dividends_jobs_use_resolved_symbols_not_just_c
 
     assert result.symbols_requested == 2
     assert result.symbols_succeeded == 2
+
+
+# --- _resolve_ohlcv_target_symbols (OHLCV persistence / post-signal ----
+# outcome-tracking fix, 2026-08-23): a symbol with an outstanding
+# PENDING DecisionV2Outcome must keep receiving OHLCV updates even if
+# it drops out of Stock.is_active / the next Stage 2 scan. -----------
+
+
+def _make_pending_outcome_for(session, stock, decision_timestamp):
+    snapshot = DecisionV2Snapshot(
+        stock_id=stock.id,
+        symbol=stock.symbol,
+        company_name_en=stock.name_en,
+        decision="BUY_CANDIDATE",
+        decision_label_ar="شراء",
+        confidence_score=70.0,
+        opportunity_quality_score=60.0,
+        risk_score=30.0,
+        data_quality_score=90.0,
+        data_freshness_status="LIVE",
+        current_price=100.0,
+        entry_zone_low=95.0,
+        entry_zone_high=100.0,
+        target_1=110.0,
+        target_2=120.0,
+        target_3=130.0,
+        stop_loss=90.0,
+        market_status="OPEN",
+        decision_timestamp=decision_timestamp,
+        analysis_version="2.0.0",
+        data_source="test",
+    )
+    session.add(snapshot)
+    session.flush()
+    session.add(
+        DecisionV2Outcome(
+            decision_v2_snapshot_id=snapshot.id,
+            symbol=stock.symbol,
+            due_at=decision_timestamp,
+            status=DecisionV2OutcomeStatus.PENDING,
+        )
+    )
+    session.commit()
+
+
+def test_resolve_ohlcv_target_symbols_unions_in_pending_signal_symbols(session_factory, monkeypatch):
+    """TEST 2 (mandate): a symbol that disappears from the next Stage 2
+    scan / active-stock universe must still be tracked by OHLCV
+    ingestion while it has an outstanding signal awaiting evaluation."""
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ingestion_symbol_universe",
+        lambda: [],
+    )
+    session = session_factory()
+    active_stock = Stock(symbol="2222", name_en="Saudi Aramco", is_active=True)
+    deactivated_stock = Stock(symbol="6060", name_en="Some Deactivated Co", is_active=False)
+    session.add_all([active_stock, deactivated_stock])
+    session.commit()
+    _make_pending_outcome_for(session, deactivated_stock, datetime(2026, 8, 20, tzinfo=timezone.utc))
+    session.close()
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    resolved = scheduler._resolve_ohlcv_target_symbols()
+
+    assert set(resolved) == {"2222", "6060"}
+    # fundamentals/dividends must NOT be affected by this OHLCV-only union
+    assert scheduler._resolve_target_symbols() == ["2222"]
+
+
+def test_resolve_ohlcv_target_symbols_dedupes_when_already_active(session_factory, monkeypatch):
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ingestion_symbol_universe",
+        lambda: [],
+    )
+    session = session_factory()
+    stock = Stock(symbol="2222", name_en="Saudi Aramco", is_active=True)
+    session.add(stock)
+    session.commit()
+    _make_pending_outcome_for(session, stock, datetime(2026, 8, 20, tzinfo=timezone.utc))
+    session.close()
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    resolved = scheduler._resolve_ohlcv_target_symbols()
+
+    assert resolved.count("2222") == 1
 
 
 @pytest.mark.asyncio
