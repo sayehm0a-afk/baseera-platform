@@ -96,15 +96,7 @@ class GateInputs:
     market_risk_entry_permitted: bool
     market_risk_label_ar: str
 
-    # --- Phase 3 area 2 (confidence calibration) -----------------------
-    # `None` (every caller today) means no ConfidenceCalibrationEngine
-    # model is active yet, or the caller chose not to apply one -- the
-    # gate below reports NOT_EVALUATED, never a fabricated PASS/FAIL,
-    # matching get_min_calibrated_success_probability()'s own docstring.
-    calibrated_success_probability: Optional[float] = None
-    min_calibrated_success_probability: float = 0.0
-
-    # --- Phase 3 decision-authority repair -----------------------------
+    # --- Anti-chase severity + failed-breakout gate ---------------------
     # Both fields reuse evidence this engine already computes for
     # display/labeling purposes (structure.price_severely_missed_entry_zone
     # and context.extra["breakout_confirmation"]["status"]) -- no new
@@ -317,21 +309,21 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         return GateEvaluation(Decision.REJECT, gates, warnings, disclosures)
 
     # Gate 15: price already ran past the entry zone --------------------------
-    # Phase 3 decision-authority repair: severity now has real decision
-    # consequence, using the same already-computed, non-arbitrary
-    # signal (structure.price_severely_missed_entry_zone -- reuses the
-    # entry zone's own ATR-derived width, no new threshold). A mild
-    # overrun keeps the exact prior behavior (WAIT_FOR_ENTRY, setup
-    # preserved). A severe overrun (price has run a further full
-    # entry-zone-width beyond the top edge) moves to Decision.WATCH,
-    # deliberately NOT Decision.REJECT and NOT any SELL-like state --
-    # this is a bullish extension, not an invalidated setup, and WATCH
-    # is the only existing Decision value every downstream consumer
-    # already treats as "still monitored, not exited" (see
-    # src.api.routes.portfolio._HOLDER_GUIDANCE_MAP mapping WATCH to
-    # continued-monitoring guidance, and the frontend DecisionBadge
-    # coloring WATCH the same neutral bucket as WAIT_FOR_ENTRY, never
-    # the sell/red bucket REJECT/REDUCE/EXIT share).
+    # Severity now has real decision consequence, using the already-
+    # computed, non-arbitrary signal (structure.price_severely_missed_
+    # entry_zone -- reuses the entry zone's own ATR-derived width, no
+    # new threshold). A mild overrun keeps the exact prior behavior
+    # (WAIT_FOR_ENTRY, setup preserved). A severe overrun (price has
+    # run a further full entry-zone-width beyond the top edge) moves to
+    # Decision.WATCH, deliberately NOT Decision.REJECT and NOT any
+    # SELL-like state -- this is a bullish extension, not an
+    # invalidated setup, and WATCH is the only existing Decision value
+    # every downstream consumer already treats as "still monitored, not
+    # exited" (see src.api.routes.portfolio._HOLDER_GUIDANCE_MAP
+    # mapping WATCH to continued-monitoring guidance, and the frontend
+    # DecisionBadge coloring WATCH the same neutral bucket as
+    # WAIT_FOR_ENTRY, never the sell/red bucket REJECT/REDUCE/EXIT
+    # share).
     if inputs.price_missed_entry_zone:
         if inputs.price_severely_missed_entry_zone:
             gates.append(GateOutcome(
@@ -431,19 +423,18 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- لا تمنع الدخول.", False,
     ))
 
-    # Phase 3 decision-authority repair, failed-breakout gate: a real,
-    # already-in-progress breakout attempt for this symbol that has
-    # already reverted is contradicting technical evidence for a BUY
-    # thesis right now -- downgrades to WATCH (never REJECT: the
-    # underlying thesis may still be sound once the level is retested),
-    # the identical FAIL->WATCH pattern trend_momentum_consistency and
-    # volume_quality already use for contradicting evidence above.
-    # `breakout_status` defaults to NOT_APPLICABLE (no breakout thesis
-    # in play for this symbol) and is otherwise one of
-    # SEQUENCE_UNVERIFIED/CONFIRMED_BREAKOUT/EARLY_BREAKOUT/
-    # UNCONFIRMED_BREAKOUT/FAILED_BREAKOUT -- only the exact
-    # FAILED_BREAKOUT string triggers this gate; every other value
-    # (including the safe default) PASSes through unchanged.
+    # Failed-breakout gate: a real, already-in-progress breakout attempt
+    # for this symbol that has already reverted is contradicting
+    # technical evidence for a BUY thesis right now -- downgrades to
+    # WATCH (never REJECT: the underlying thesis may still be sound
+    # once the level is retested), the identical FAIL->WATCH pattern
+    # trend_momentum_consistency and volume_quality already use for
+    # contradicting evidence above. `breakout_status` defaults to
+    # NOT_APPLICABLE (no breakout thesis in play for this symbol) and
+    # is otherwise one of SEQUENCE_UNVERIFIED/CONFIRMED_BREAKOUT/
+    # EARLY_BREAKOUT/UNCONFIRMED_BREAKOUT/FAILED_BREAKOUT -- only the
+    # exact FAILED_BREAKOUT string triggers this gate; every other
+    # value (including the safe default) PASSes through unchanged.
     if inputs.breakout_status == "FAILED_BREAKOUT":
         gates.append(GateOutcome(
             "breakout_not_failed", GateStatus.FAIL,
@@ -455,45 +446,6 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     gates.append(GateOutcome(
         "breakout_not_failed", GateStatus.PASS, "لا توجد محاولة اختراق فاشلة نشطة حاليًا.", False,
     ))
-
-    # Phase 3 area 2, confidence-calibration gate: the one place this
-    # engine's real, already-trained-and-activated ConfidenceCalibrationEngine
-    # model (see src.ai_evolution.confidence_calibration) can affect a
-    # Decision -- caller-computed and passed in via `decide()`'s own
-    # `calibrated_success_probability` parameter (this engine never
-    # queries the database itself, see that parameter's own docstring).
-    # `None` (every caller that doesn't pass a value, and the honest
-    # state until enough real outcome history exists to activate a
-    # model) is NOT_EVALUATED, never a fabricated PASS/FAIL -- mirrors
-    # `src.market_intelligence.publication_gate`'s identical
-    # `_confidence_calibration_gate` for the legacy V1 pipeline, reusing
-    # its exact same threshold getter so the bar is configured in one
-    # place, not two. A caution-level downgrade to WATCH, not REJECT --
-    # a poorly-calibrated confidence score means the evidence is
-    # shakier than it looks, not that there is no evidence at all, the
-    # same reasoning trend_momentum_consistency/volume_quality above
-    # already apply.
-    if inputs.calibrated_success_probability is None:
-        gates.append(GateOutcome(
-            "confidence_calibration_applied", GateStatus.NOT_EVALUATED,
-            "لا يوجد نموذج معايرة ثقة نشط حاليًا -- لم يتم تطبيق معايرة على درجة الثقة.", False,
-        ))
-    elif inputs.calibrated_success_probability < inputs.min_calibrated_success_probability:
-        gates.append(GateOutcome(
-            "confidence_calibration_applied", GateStatus.FAIL,
-            (
-                f"احتمال النجاح المعايَر {inputs.calibrated_success_probability:.0%} أقل من الحد الأدنى "
-                f"{inputs.min_calibrated_success_probability:.0%}."
-            ),
-            True,
-        ))
-        warnings.append("درجة الثقة بعد المعايرة الإحصائية أضعف من الحد الأدنى المعتمد -- تم تخفيض التوصية للمراقبة.")
-        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
-    else:
-        gates.append(GateOutcome(
-            "confidence_calibration_applied", GateStatus.PASS,
-            f"احتمال النجاح المعايَر {inputs.calibrated_success_probability:.0%}.", False,
-        ))
 
     # Gate 12: confidence not based on a single indicator -----------------------
     multi_factor_ok = inputs.available_sub_score_count >= 3

@@ -96,9 +96,8 @@ def price_has_missed_entry_zone(price: Optional[float], entry_zone_high: Optiona
     triggers this -- it governs Gate 15 (`entry_not_missed`) alone,
     which only needs to know "should this still be scored as an
     immediate BUY," not how far past the zone price has run. See
-    `price_severely_missed_entry_zone` below for the further,
-    magnitude-aware split `Decision.WAIT_FOR_ENTRY` itself is then
-    classified into (WAIT_FOR_PULLBACK vs MISSED_ENTRY)."""
+    `price_severely_missed_entry_zone` below for the magnitude-aware
+    signal that gives Gate 15 a further, severity-based branch."""
     if price is None or entry_zone_high is None or direction == 0:
         return False
     if direction > 0:
@@ -114,10 +113,10 @@ def price_severely_missed_entry_zone(
 ) -> bool:
     """True only once price has run not merely past the entry zone but
     by at least one further entry-zone-width beyond its top edge --
-    the structural line between "extended, still worth waiting for a
-    pullback" (`EntryStatus.WAIT_FOR_PULLBACK`, a still-live setup)
-    and "this setup is genuinely stale, chasing it even on a pullback
-    no longer makes sense" (`EntryStatus.MISSED_ENTRY`).
+    the structural line between "extended, could still resolve back
+    toward the setup" and "this setup is genuinely stale, chasing it
+    no longer makes sense" that Gate 15 (`entry_not_missed`) uses to
+    choose `Decision.WATCH` over the coarser `Decision.WAIT_FOR_ENTRY`.
 
     Reuses only the entry zone's own already-computed width -- no new
     external percentage/threshold is introduced -- so what counts as
@@ -125,18 +124,7 @@ def price_severely_missed_entry_zone(
     to begin with for this specific setup, rather than an arbitrary
     fixed number applied uniformly to every stock regardless of its
     own volatility (the entry zone's width is itself already
-    ATR-derived, see `compute_entry_zone`).
-
-    `price_has_missed_entry_zone` above answers "has price run past
-    the zone at all" -- that alone still governs Gate 15 and
-    `Decision.WAIT_FOR_ENTRY` itself, unchanged. This function further
-    subdivides that single WAIT_FOR_ENTRY state into its two possible
-    entry statuses; before this existed, `classify_entry_status` was
-    handed the exact same "has it missed at all" boolean a second
-    time, which made its own WAIT_FOR_PULLBACK branch impossible to
-    reach (reaching that branch already required the same boolean to
-    be True to arrive there, and False to take that branch -- a
-    genuine contradiction, not a rare condition)."""
+    ATR-derived, see `compute_entry_zone`)."""
     if price is None or entry_zone_low is None or entry_zone_high is None or direction == 0:
         return False
     if direction > 0:

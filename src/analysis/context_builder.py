@@ -36,7 +36,6 @@ from src.analysis.decision_v2.breakout_confirmation import (
     compute_breakout_confirmation,
     resolve_breakout_reference_level,
 )
-from src.analysis.decision_v2.sector_strength import compute_sector_strength
 from src.analysis.fundamental.fundamental_analysis_engine import FundamentalAnalysisEngine
 from src.analysis.fundamental.fundamental_loader import load_fundamental_snapshots
 from src.analysis.ohlcv_loader import load_price_bars
@@ -85,48 +84,18 @@ def _news_sentiment_extra(session: Session, symbol: str, news_service: NewsIntel
     }
 
 
-def _sector_rotation_extra(session: Session, stock: Stock, df) -> Dict[str, Any]:
-    """Phase 3 area 4: real, DB-only sector-relative-strength -- see
-    sector_strength.py. Computed once here (not once per consumer) so
-    both `SectorRotationScoreContributor` (reads `sector_relative_
-    strength`) and `DecisionEngineV2.decide()` (reads the other four
-    audit fields) share the exact same computation instead of running
-    it twice. Never raises -- a failure here degrades to the same
-    honest "not computed" state compute_sector_strength itself already
-    returns for insufficient/stale data, it just also survives a
-    genuinely unexpected error rather than breaking the whole context."""
-    try:
-        result = compute_sector_strength(session, stock, df)
-    except Exception as exc:  # noqa: BLE001 -- an optional leg must never break the whole context
-        logger.info("Sector strength leg unavailable for '%s': %s", stock.symbol, exc)
-        return {}
-    if not result.sector_strength_used:
-        # Same "omit the whole leg when there's nothing real to add"
-        # convention _news_sentiment_extra above already uses -- an
-        # unclassified sector or insufficient/stale peer data is not a
-        # failure, just nothing to disclose here.
-        return {}
-    return {
-        "sector_rotation": {
-            "sector_relative_strength": result.stock_vs_sector_relative_strength,
-            "sector_strength_score": result.sector_strength_score,
-            "sector_data_timestamp": result.sector_data_timestamp,
-            "sector_strength_used": result.sector_strength_used,
-        }
-    }
-
-
 def _breakout_confirmation_extra(df, technical_result, price: Optional[float], symbol: str) -> Dict[str, Any]:
-    """Phase 3 area 5: real breakout/false-breakout confirmation -- see
+    """Real breakout/false-breakout confirmation -- see
     breakout_confirmation.py. The reference level a breakout is judged
     against is deliberately NOT `evidence.derive_support_resistance()`'s
     own `breakout_level` (the nearest resistance to the CURRENT price,
     which `DecisionEngineV2.decide()` separately computes for its own
     "what's the next level to watch from here" display field) --
-    reusing that value here made the guard below tautological (see
-    `resolve_breakout_reference_level`'s own docstring for the full
-    reasoning). This leg degrades the same independently-failing way
-    every other leg in this module does. Never raises."""
+    reusing that value here would make the "has the level been
+    cleared" guard tautological (see `resolve_breakout_reference_level`'s
+    own docstring for the full reasoning). This leg degrades the same
+    independently-failing way every other leg in this module does.
+    Never raises."""
     if technical_result is None or price is None:
         return {}
     try:
@@ -139,8 +108,8 @@ def _breakout_confirmation_extra(df, technical_result, price: Optional[float], s
         return {}
     if result.status == BreakoutStatus.NOT_APPLICABLE:
         # Same "omit the whole leg when there's nothing real to add"
-        # convention _sector_rotation_extra/_news_sentiment_extra use --
-        # no breakout thesis is in play, not a failure to disclose.
+        # convention _news_sentiment_extra above uses -- no breakout
+        # thesis is in play, not a failure to disclose.
         return {}
     return {
         "breakout_confirmation": {
@@ -291,7 +260,6 @@ async def build_analysis_context(
     extra = {
         **quote_extra,
         **_news_sentiment_extra(session, symbol, news_service),
-        **_sector_rotation_extra(session, stock, df),
         **_breakout_confirmation_extra(df, technical_result, market_price, symbol),
         "bars_used": len(df),
         "likely_suspended": _detect_likely_suspended(df),

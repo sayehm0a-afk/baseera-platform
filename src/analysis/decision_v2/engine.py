@@ -34,7 +34,6 @@ from src.market_intelligence.config import (
     get_max_data_age_hours,
     get_max_ohlcv_staleness_days,
     get_min_average_traded_value,
-    get_min_calibrated_success_probability,
     get_min_risk_reward_ratio,
 )
 from src.market_intelligence.types import MarketBreadthSummary
@@ -45,12 +44,7 @@ _EXCESSIVE_VOLATILITY_PCT_DEFAULT = 0.08
 _MAX_REASONS = 5
 
 
-def direction_of(recommendation: Optional[Recommendation]) -> int:
-    """+1 for a BUY-like recommendation, -1 for a SELL-like one, 0
-    otherwise. Public (Phase 3, area 1) so publication_gate.py's
-    market-wide anti-chase gate can derive the same direction this
-    engine uses, from the same InvestmentDecision.recommendation,
-    instead of reimplementing this mapping a second time."""
+def _direction_of(recommendation: Optional[Recommendation]) -> int:
     if recommendation in (Recommendation.BUY, Recommendation.STRONG_BUY):
         return 1
     if recommendation in (Recommendation.SELL, Recommendation.STRONG_SELL):
@@ -79,29 +73,24 @@ class DecisionEngineV2:
         scan_run_id: Optional[int] = None,
         market_breadth: Optional[MarketBreadthSummary] = None,
         evaluation_time: Optional[datetime] = None,
-        calibrated_success_probability: Optional[float] = None,
     ) -> DecisionResult:
-        """`calibrated_success_probability` (Phase 3 area 2 structural
-        repair): the caller-computed output of `src.ai_evolution.
-        confidence_calibration.get_effective_confidence()` (0-1) for
-        this same decision's raw confidence, or `None` (every caller
-        that doesn't pass one, and the honest state until a real
-        ConfidenceCalibrationEngine model is active). This engine never
-        queries the database itself -- it stays a pure function of its
-        explicit inputs, the same reason `evaluation_time` above is
-        caller-supplied rather than self-computed. See gates.py's
-        `confidence_calibration_applied` gate for the one place this
-        can actually affect the Decision (a caution-level downgrade to
-        WATCH, never a silent confidence overwrite -- the raw
-        `confidence_score` on the returned `DecisionResult` is always
-        the uncalibrated value)."""
+        # VALIDATION-HARNESS-ONLY clock injection (49408af, self-contained,
+        # unmodified) -- added to this temporary worktree copy alone so the
+        # existing, unchanged backtest harness can drive PR #92's real
+        # production files against historical as-of dates. NOT part of PR
+        # #92 itself; never committed to that branch. Defaults to None,
+        # reproducing real wall-clock behavior for every live caller.
         tuning = self._tuning
         technical = context.technical_result
         price = context.latest_price
-        direction = direction_of(investment_decision.recommendation)
+        direction = _direction_of(investment_decision.recommendation)
 
         market_risk = classify_market_risk(market_is_open=bool(market_is_open), breadth=market_breadth)
-        sector_rotation = context.extra.get("sector_rotation") or {}
+        # Computed once in context_builder.py (compute_breakout_
+        # confirmation) and carried here via context.extra -- this
+        # engine reads it, never recomputes it. Defaults to {} when the
+        # key is absent (no breakout thesis was in play for this
+        # symbol), matching gates.py's own NOT_APPLICABLE default.
         breakout_confirmation = context.extra.get("breakout_confirmation") or {}
 
         atr_value = None
@@ -145,15 +134,6 @@ class DecisionEngineV2:
 
         has_technical = technical is not None
         has_fundamental = context.fundamental_result is not None
-        # `evaluation_time` is the sole clock-injection point for every
-        # freshness/timestamp calculation below (including
-        # `decision_timestamp` further down) -- `None` (every live
-        # caller today) preserves the exact real-wall-clock behavior
-        # this always had; only the historical-replay harness
-        # (src.backtesting.decision_v2_strategies) ever passes a real
-        # value, so it can evaluate freshness against its own as-of
-        # date instead of the real "now" a historical replay would
-        # otherwise always fail against.
         now = evaluation_time if evaluation_time is not None else datetime.now(timezone.utc)
         data_age_hours: Optional[float] = None
         if quote_timestamp is not None:
@@ -300,13 +280,10 @@ class DecisionEngineV2:
             market_context_score=market_context,
             market_risk_entry_permitted=market_risk.entry_permitted,
             market_risk_label_ar=market_risk.label_ar,
-            calibrated_success_probability=calibrated_success_probability,
-            min_calibrated_success_probability=get_min_calibrated_success_probability(),
-            # Phase 3 decision-authority repair: both already computed
-            # above (severely_missed_entry at line ~187, breakout_confirmation
-            # at line ~105) -- threading the same values gates.py's own
-            # entry_not_missed/breakout_not_failed gates now consume,
-            # never a second, independent computation.
+            # Both already computed above (severely_missed_entry, breakout_
+            # confirmation) -- threading the same values gates.py's own
+            # entry_not_missed/breakout_not_failed gates now consume, never
+            # a second, independent computation.
             price_severely_missed_entry_zone=severely_missed_entry,
             breakout_status=breakout_confirmation.get("status", "NOT_APPLICABLE"),
         )
@@ -314,8 +291,7 @@ class DecisionEngineV2:
         warnings.extend(evaluation.warnings)
 
         entry_status, _entry_status_explanation = trade_classification.classify_entry_status(
-            evaluation.decision, price, entry_high, severely_missed_entry,
-            breakout_status=breakout_confirmation.get("status"),
+            evaluation.decision, price, entry_high, missed_entry
         )
         entry_status_label_ar = ENTRY_STATUS_LABELS_AR[entry_status]
         entry_quality_value = investment_decision.entry_quality.value
@@ -354,15 +330,6 @@ class DecisionEngineV2:
             freshness_status = DataFreshnessStatus.STALE if market_is_open else DataFreshnessStatus.LAST_SESSION
         else:
             freshness_status = DataFreshnessStatus.LIVE
-
-        is_high_quality_buy, high_quality_buy_explanation_ar = trade_classification.classify_high_quality_buy(
-            evaluation.decision, confidence, freshness_status, entry_status,
-            investment_decision.risk_reward_ratio, accumulation.volume_confirms_decision,
-            bool(sector_rotation.get("sector_strength_used", False)),
-            sector_rotation.get("sector_relative_strength"),
-            breakout_confirmation.get("status", "NOT_APPLICABLE"),
-            warnings,
-        )
 
         positive_reasons = [
             s.description for s in investment_decision.signals if s.direction == SignalDirection.BULLISH
@@ -516,30 +483,6 @@ class DecisionEngineV2:
             market_breadth_sell_count=market_risk.sell_count,
             market_breadth_symbols_scanned=market_risk.symbols_scanned,
             market_breadth_average_confidence=market_risk.average_confidence,
-            # --- Phase 3 area 4: sector-relative strength ------------------
-            # Computed once in context_builder.py (compute_sector_strength)
-            # and carried here via context.extra -- this engine reads it,
-            # never recomputes it, the same "computes zero indicators of
-            # its own" discipline every other field here already follows.
-            sector_name=sector,
-            sector_strength_score=sector_rotation.get("sector_strength_score"),
-            stock_vs_sector_relative_strength=sector_rotation.get("sector_relative_strength"),
-            sector_data_timestamp=sector_rotation.get("sector_data_timestamp"),
-            sector_strength_used=bool(sector_rotation.get("sector_strength_used", False)),
-            # --- Phase 3 area 5: breakout/false-breakout confirmation -----
-            # Computed once in context_builder.py (compute_breakout_
-            # confirmation) and carried here via context.extra -- same
-            # "read it, never recompute it" discipline as sector_rotation
-            # above. Defaults to NOT_APPLICABLE when the key is absent
-            # (no breakout thesis was in play for this symbol).
-            breakout_status=breakout_confirmation.get("status", "NOT_APPLICABLE"),
-            breakout_hold_days=breakout_confirmation.get("hold_days"),
-            breakout_volume_confirmed=breakout_confirmation.get("volume_confirmed"),
-            breakout_follow_through_pct=breakout_confirmation.get("follow_through_pct"),
-            breakout_explanation_ar=breakout_confirmation.get("explanation_ar", ""),
-            # --- Phase 3: HIGH_QUALITY_BUY tier -----------------------------
-            is_high_quality_buy=is_high_quality_buy,
-            high_quality_buy_explanation_ar=high_quality_buy_explanation_ar,
         )
         return decision_result
 
