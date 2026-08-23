@@ -79,6 +79,12 @@ class DecisionEngineV2:
         direction = _direction_of(investment_decision.recommendation)
 
         market_risk = classify_market_risk(market_is_open=bool(market_is_open), breadth=market_breadth)
+        # Computed once in context_builder.py (compute_breakout_
+        # confirmation) and carried here via context.extra -- this
+        # engine reads it, never recomputes it. Defaults to {} when the
+        # key is absent (no breakout thesis was in play for this
+        # symbol), matching gates.py's own NOT_APPLICABLE default.
+        breakout_confirmation = context.extra.get("breakout_confirmation") or {}
 
         atr_value = None
         atr_pct = None
@@ -151,6 +157,7 @@ class DecisionEngineV2:
             support_resistance, tuning,
         )
         missed_entry = structure.price_has_missed_entry_zone(price, entry_high, direction)
+        severely_missed_entry = structure.price_severely_missed_entry_zone(price, entry_low, entry_high, direction)
         target_2, target_3, target_2_basis, target_3_basis = structure.compute_extended_targets(
             price, investment_decision.target_price, atr_value, direction, support_resistance, tuning
         )
@@ -266,6 +273,12 @@ class DecisionEngineV2:
             market_context_score=market_context,
             market_risk_entry_permitted=market_risk.entry_permitted,
             market_risk_label_ar=market_risk.label_ar,
+            # Both already computed above (severely_missed_entry, breakout_
+            # confirmation) -- threading the same values gates.py's own
+            # entry_not_missed/breakout_not_failed gates now consume, never
+            # a second, independent computation.
+            price_severely_missed_entry_zone=severely_missed_entry,
+            breakout_status=breakout_confirmation.get("status", "NOT_APPLICABLE"),
         )
         evaluation = evaluate_decision(gate_inputs, tuning)
         warnings.extend(evaluation.warnings)
