@@ -12,6 +12,13 @@ on:
       symbols:
         description: "Comma-separated symbols to evaluate"
         required: true
+  # workflow_dispatch is only invokable via the API once a workflow file
+  # exists on the default branch; this workflow lives on a temporary,
+  # never-merged-to-main branch only, so a push trigger scoped to that
+  # same branch is the only way to fire it from here.
+  push:
+    branches:
+      - tmp-decision-v2-targeted-refresh-only
 
 permissions:
   contents: read
@@ -24,7 +31,7 @@ jobs:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
-      SYMBOLS_INPUT: ${{ inputs.symbols }}
+      SYMBOLS_INPUT: ${{ inputs.symbols || '4162,6060,3092,1060,7204' }}
     steps:
       - uses: actions/checkout@v4
 
