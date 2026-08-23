@@ -180,6 +180,7 @@ class RankingEngine:
         outcomes: List[SymbolScanOutcome],
         change_result: Optional[ChangeDetectionResult] = None,
         calibrated_confidences: Optional[Dict[str, float]] = None,
+        generated_at: Optional[datetime] = None,
     ) -> Dict[RankingCategory, RankingList]:
         """`calibrated_confidences` (symbol -> calibrated 0-1 success
         probability) is optional and defaults to an empty mapping --
@@ -191,8 +192,18 @@ class RankingEngine:
         confidences, called once by src.api.routes.market with the
         Session it already holds) to actually activate the
         confidence_calibration gate for every ranking category that
-        gates on is_publishable()."""
-        generated_at = datetime.now(timezone.utc)
+        gates on is_publishable().
+
+        `generated_at` should be the real timestamp the underlying
+        `outcomes` were computed at (e.g. the scan run's
+        `finished_at`) -- NOT read-time -- so a `RankingList` honestly
+        reports how old its data is instead of always claiming "just
+        now" regardless of how stale the source scan actually is
+        (production freshness fix, 2026-08-23). Defaults to the
+        current time only for callers that genuinely have no better
+        timestamp available (e.g. `RebalanceEngine`, which discards
+        `generated_at` entirely and never surfaces it)."""
+        generated_at = generated_at or datetime.now(timezone.utc)
         top_n = get_ranking_top_n()
         by_symbol = {o.symbol: o for o in outcomes}
         calibrated_confidences = calibrated_confidences or {}

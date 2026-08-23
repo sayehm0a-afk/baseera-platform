@@ -292,6 +292,13 @@ class PortfolioHoldingDetailOut(BaseModel):
     guidance_basis_ar: Optional[str] = None
     guidance_confidence: Optional[float] = None
     guidance_evaluated_at: Optional[datetime] = None
+    # Production freshness fix (2026-08-23): whether `guidance_evaluated_at`
+    # still belongs to the current/most recently completed Tadawul
+    # session -- see src.analysis.decision_v2.decision_freshness. None
+    # only when there is no guidance at all (mirrors the `guidance_*`
+    # fields above).
+    guidance_freshness_status: Optional[str] = None
+    is_guidance_fresh: Optional[bool] = None
 
     @model_validator(mode="after")
     def _fill_sector_ar(self) -> "PortfolioHoldingDetailOut":

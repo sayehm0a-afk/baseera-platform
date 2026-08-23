@@ -22,6 +22,12 @@ export interface WatchlistItem {
   latest_stop_loss: number | null;
   latest_data_freshness_status: string | null;
   latest_decision_timestamp: string | null;
+  // Production freshness fix (2026-08-23): whether `latest_decision`
+  // itself (not the price it was computed from -- see
+  // latest_data_freshness_status above) still belongs to the current/
+  // most recently completed Tadawul session.
+  latest_decision_freshness_status: string | null;
+  latest_is_decision_fresh: boolean | null;
 
   radar_is_live_opportunity: boolean;
   radar_stage1_rank: number | null;

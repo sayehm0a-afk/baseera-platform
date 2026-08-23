@@ -66,6 +66,8 @@ function holding(overrides: Partial<PortfolioHoldingDetail> = {}): PortfolioHold
     guidance_basis_ar: "الأدلة الحالية تدعم الاستمرار في الاحتفاظ بالسهم.",
     guidance_confidence: 70,
     guidance_evaluated_at: "2026-08-17T00:00:00Z",
+    guidance_freshness_status: "LIVE" as const,
+    is_guidance_fresh: true,
     ...overrides,
   };
 }

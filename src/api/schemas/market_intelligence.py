@@ -925,6 +925,15 @@ class RadarOpportunitySummaryOut(BaseModel):
     ranking_reason_ar: Optional[str] = None
 
     emitted_at: datetime
+    # Production freshness fix (2026-08-23): whether this opportunity's
+    # `emitted_at` (the decision-computation timestamp, frozen at
+    # emission -- see RadarOpportunity's own docstring) still belongs
+    # to the current/most recently completed Tadawul session. Distinct
+    # from `data_freshness_status` above, which describes the PRICE
+    # data the decision was computed from, not the age of the decision
+    # itself -- see src.analysis.decision_v2.decision_freshness.
+    decision_freshness_status: str = "UNKNOWN"
+    is_decision_fresh: bool = False
     decision_v2_snapshot_id: int
 
 

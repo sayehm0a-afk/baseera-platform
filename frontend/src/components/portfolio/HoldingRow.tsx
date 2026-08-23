@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { PortfolioHoldingDetail } from "@/lib/api/portfolio-types";
+import { decisionFreshnessLabelAr, formatRelativeAgeAr } from "@/lib/format/freshness";
 import { HolderGuidanceBadge } from "./HolderGuidanceBadge";
 
 function fmt(value: number | null): string {
@@ -124,7 +125,20 @@ export function HoldingRow({
           </span>
         </Link>
         {holding.guidance_decision && holding.guidance_label_ar ? (
-          <HolderGuidanceBadge value={holding.guidance_decision} labelAr={holding.guidance_label_ar} />
+          <div className="flex flex-col items-end gap-0.5">
+            <HolderGuidanceBadge value={holding.guidance_decision} labelAr={holding.guidance_label_ar} />
+            {holding.guidance_evaluated_at ? (
+              <span
+                className={`text-[10px] ${
+                  holding.is_guidance_fresh === false ? "font-semibold text-bsr-action-sell" : "text-bsr-text-muted"
+                }`}
+              >
+                {holding.is_guidance_fresh === false
+                  ? decisionFreshnessLabelAr(holding.guidance_freshness_status)
+                  : formatRelativeAgeAr(holding.guidance_evaluated_at)}
+              </span>
+            ) : null}
+          </div>
         ) : (
           <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-3 py-bsr-1 text-xs text-bsr-text-secondary">
             بلا توصية بعد

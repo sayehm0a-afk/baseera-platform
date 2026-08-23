@@ -1,6 +1,7 @@
 import { AiStar } from "@/components/ai/AiStar";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
+import { decisionFreshnessLabelAr, formatRelativeAgeAr } from "@/lib/format/freshness";
 import type { DecisionV2 } from "@/lib/api/stocks-types";
 
 const FRESHNESS_LABELS_AR: Record<DecisionV2["data_freshness_status"], string> = {
@@ -127,6 +128,17 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
         >
           {FRESHNESS_LABELS_AR[decision.data_freshness_status]}
         </span>
+        {/* Distinct from the price-freshness pill above: whether the
+            DECISION itself (not the price it was computed from) is
+            still current for this trading session -- see
+            src.analysis.decision_v2.decision_freshness. A card must
+            never look "live" from the price pill alone while this one
+            says the decision needs re-evaluation. */}
+        {!decision.is_decision_fresh ? (
+          <span className="rounded-bsr-full bg-bsr-action-sell/15 px-bsr-2 py-bsr-0.5 font-semibold text-bsr-action-sell">
+            {decisionFreshnessLabelAr(decision.decision_freshness_status)}
+          </span>
+        ) : null}
         <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-2 py-bsr-0.5">
           {decision.market_status_label_ar}
         </span>
@@ -291,6 +303,7 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
         <span>إصدار المحرك: {decision.analysis_version}</span>
         <span className="bsr-numeric">
           وقت القرار: {new Date(decision.decision_timestamp).toLocaleString("ar-SA", { calendar: "gregory" })}
+          {" "}({formatRelativeAgeAr(decision.decision_timestamp)})
         </span>
       </div>
     </div>

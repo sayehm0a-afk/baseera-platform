@@ -46,6 +46,13 @@ export interface RadarOpportunitySummary {
   ranking_reason_ar: string | null;
 
   emitted_at: string;
+  // Production freshness fix (2026-08-23): whether `emitted_at` (the
+  // decision-computation timestamp) still belongs to the current/most
+  // recently completed Tadawul session -- distinct from
+  // `data_freshness_status` above, which is about the PRICE data the
+  // decision was computed from, not the decision's own age.
+  decision_freshness_status: "LIVE" | "LAST_SESSION" | "STALE" | "UNKNOWN";
+  is_decision_fresh: boolean;
   decision_v2_snapshot_id: number;
 }
 

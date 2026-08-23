@@ -65,6 +65,7 @@ from src.analysis.analyst.analyst_engine_factory import get_analyst_engine
 from src.analysis.analyst.output_formatter import OutputFormatter
 from src.analysis.context_builder import build_analysis_context
 from src.analysis.decision_pipeline import compute_investment_decision
+from src.analysis.decision_v2.decision_freshness import classify_decision_freshness, is_decision_fresh
 from src.analysis.decision_v2.engine import DecisionEngineV2
 from src.analysis.decision_v2.types import (
     ANALYSIS_DISCLAIMER_AR,
@@ -993,6 +994,8 @@ async def get_decision_v2(
         market_status=result.market_status,
         market_status_label_ar=market_status_label_ar(result.market_status),
         decision_timestamp=result.decision_timestamp,
+        decision_freshness_status=classify_decision_freshness(result.decision_timestamp, market_info).value,
+        is_decision_fresh=is_decision_fresh(result.decision_timestamp, market_info),
         invalidation_conditions=result.invalidation_conditions,
         positive_reasons=result.positive_reasons,
         negative_reasons=result.negative_reasons,

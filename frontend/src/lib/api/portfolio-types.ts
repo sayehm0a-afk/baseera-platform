@@ -233,6 +233,11 @@ export interface PortfolioHoldingDetail {
   guidance_basis_ar: string | null;
   guidance_confidence: number | null;
   guidance_evaluated_at: string | null;
+  // Production freshness fix (2026-08-23): whether `guidance_evaluated_at`
+  // still belongs to the current/most recently completed Tadawul
+  // session -- see src.analysis.decision_v2.decision_freshness.
+  guidance_freshness_status: "LIVE" | "LAST_SESSION" | "STALE" | "UNKNOWN" | null;
+  is_guidance_fresh: boolean | null;
 }
 
 export interface PortfolioHoldings {

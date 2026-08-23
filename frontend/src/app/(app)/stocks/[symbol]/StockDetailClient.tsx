@@ -246,6 +246,16 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <div className="flex items-center gap-bsr-3">
             {decisionV2.status === "ready" ? (
               <DecisionBadge value={decisionV2.data.decision} labelAr={decisionV2.data.decision_label_ar} />
+            ) : decisionV2.status === "loading" ? (
+              // Production freshness fix (2026-08-23): Decision V2 is
+              // still in flight -- never fall back to the legacy,
+              // unlabeled RecommendationBadge just because it happened
+              // to resolve first. Showing the old score-band badge
+              // here, even briefly, is exactly the "Recommendation
+              // score -> frontend BUY badge" path the freshness fix
+              // forbids; a neutral placeholder is honest, a stale
+              // badge is not.
+              <span className="h-6 w-20 animate-pulse rounded-bsr-full bg-bsr-surface-overlay" />
             ) : decisionRec ? (
               <RecommendationBadge value={decisionRec} />
             ) : null}

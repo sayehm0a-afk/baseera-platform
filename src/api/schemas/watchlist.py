@@ -35,6 +35,14 @@ class WatchlistItemOut(BaseModel):
     latest_stop_loss: Optional[float] = None
     latest_data_freshness_status: Optional[str] = None
     latest_decision_timestamp: Optional[datetime] = None
+    # Production freshness fix (2026-08-23): whether `latest_decision`
+    # still belongs to the current/most recently completed Tadawul
+    # session -- distinct from `latest_data_freshness_status` above,
+    # which describes the price data the decision was computed FROM,
+    # not the age of the decision itself. None only when there is no
+    # snapshot at all (mirrors the other `latest_*` fields).
+    latest_decision_freshness_status: Optional[str] = None
+    latest_is_decision_fresh: Optional[bool] = None
 
     # Basirah Radar V2 (Phase B/D, 2026-08-17): populated only when a
     # live (non-superseded) RadarOpportunity row exists for this
