@@ -1,0 +1,50 @@
+name: Check Decision V2 Targeted (temporary, one-shot, read-only, small real SAHMK cost)
+
+# Throwaway diagnostic tooling, same convention as check-price-accuracy.yml
+# and audit-todays-recommendations.yml. Calls the existing, unmodified
+# GET /api/v1/stocks/{symbol}/decision-v2 route for a fixed, caller-approved
+# symbol list only -- one real SAHMK request per symbol, nothing else.
+# Not merged to main; dispatched from a temporary branch and discarded.
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Comma-separated symbols to evaluate"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      SYMBOLS_INPUT: ${{ inputs.symbols }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet requests
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Fetch targeted Decision V2 evaluations
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: python3 .github/workflows/independent_audit/check_decision_v2_targeted.py
