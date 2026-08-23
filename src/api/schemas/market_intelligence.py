@@ -684,6 +684,29 @@ class MarketCoverageOut(BaseModel):
     # instead, since it's the real per-symbol reason, not a diff guess.
     latest_scan_skipped_symbols: List[str] = []
 
+    outcome_tracking: "OutcomeTrackingOut"
+
+
+class OutcomeTrackingOut(BaseModel):
+    """OHLCV persistence / post-signal outcome-tracking fix (2026-08-23):
+    direct, always-accurate answers to "can Basirah currently reconstruct
+    every outstanding Decision V2 signal's real post-signal market path,"
+    independent of any ingestion job's own self-reported success/failure
+    (which the root-cause investigation found can report success while
+    silently making zero progress for an already-tracked symbol). Every
+    field here is a direct query result over decision_v2_outcomes/
+    decision_v2_snapshots/price_bars -- never estimated, never fabricated."""
+
+    tracked_symbol_count: int
+    active_signal_count: int
+    pending_outcome_count: int
+    oldest_pending_signal_decision_timestamp: Optional[datetime] = None
+    pending_signals_with_zero_post_signal_bars: List[str] = []
+    last_successful_historical_ohlcv_run: Optional[IngestionJobStatusOut] = None
+
+
+MarketCoverageOut.model_rebuild()
+
 
 class MarketSummaryOut(BaseModel):
     scan_run_id: Optional[int] = None

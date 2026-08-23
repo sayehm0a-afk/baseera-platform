@@ -55,6 +55,7 @@ from src.api.schemas.market_intelligence import (
     ObservedFieldOut,
     DailyValidationReportOut,
     ObservedFieldValueOut,
+    OutcomeTrackingOut,
     PipelineStageOut,
     RadarOpportunityDetailOut,
     RadarOpportunitySummaryOut,
@@ -88,9 +89,11 @@ from src.auth.token_store import get_redis_client
 from src.core.db.database import get_db
 from src.domain.models import (
     DecisionV2Outcome,
+    DecisionV2OutcomeStatus,
     DecisionV2Snapshot,
     Dividend,
     FundamentalSnapshot,
+    IngestionJobStatus,
     IngestionRunLog,
     MarketScanProgress,
     MarketScanRun,
@@ -102,6 +105,11 @@ from src.domain.models import (
     User,
 )
 from src.market_data.ingestion import config as ingestion_config
+from src.market_data.ingestion.outcome_tracking import (
+    oldest_pending_signal_decision_timestamp,
+    pending_signal_symbols,
+    pending_signals_with_zero_post_signal_bars,
+)
 from src.market_data.providers.sector_provider import get_sector_classification_provider
 from src.market_data.sahmk.operation_scope import ADMIN_DIAGNOSTICS, MARKET_SCAN, RADAR_V2, operation_scope
 from src.market_data.sahmk.rate_limiter import get_default_rate_limiter
@@ -1707,6 +1715,40 @@ async def get_market_coverage(
         ),
     ]
 
+    # OHLCV persistence / post-signal outcome-tracking fix (2026-08-23):
+    # direct, always-accurate signal-vs-bar observability -- never
+    # derived from any ingestion job's own self-reported success, which
+    # the root-cause investigation found can report success while
+    # silently making zero progress for an already-tracked symbol.
+    pending_symbols = pending_signal_symbols(session)
+    pending_outcome_count = (
+        session.query(func.count(DecisionV2Outcome.id))
+        .filter(DecisionV2Outcome.status == DecisionV2OutcomeStatus.PENDING)
+        .scalar()
+        or 0
+    )
+    zero_bar_signals = pending_signals_with_zero_post_signal_bars(session)
+    last_successful_ohlcv_run_row = (
+        session.query(IngestionRunLog)
+        .filter(IngestionRunLog.job_name == "historical_ohlcv")
+        .filter(IngestionRunLog.status == IngestionJobStatus.SUCCESS)
+        .order_by(IngestionRunLog.started_at.desc())
+        .first()
+    )
+    last_ohlcv_run = (
+        _ingestion_job_status_out("historical_ohlcv", last_successful_ohlcv_run_row)
+        if last_successful_ohlcv_run_row is not None
+        else None
+    )
+    outcome_tracking = OutcomeTrackingOut(
+        tracked_symbol_count=len(pending_symbols),
+        active_signal_count=len(pending_symbols),
+        pending_outcome_count=pending_outcome_count,
+        oldest_pending_signal_decision_timestamp=oldest_pending_signal_decision_timestamp(session),
+        pending_signals_with_zero_post_signal_bars=sorted({row["symbol"] for row in zero_bar_signals}),
+        last_successful_historical_ohlcv_run=last_ohlcv_run,
+    )
+
     return MarketCoverageOut(
         generated_at=datetime.now(timezone.utc),
         total_stocks=total_stocks,
@@ -1737,6 +1779,7 @@ async def get_market_coverage(
         pipeline_funnel=pipeline_funnel,
         symbols_missing_price_history=symbols_missing_price_history,
         latest_scan_skipped_symbols=latest_scan_skipped_symbols,
+        outcome_tracking=outcome_tracking,
     )
 
 
