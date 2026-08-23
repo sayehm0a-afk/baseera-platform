@@ -2,7 +2,13 @@ import { AiStar } from "@/components/ai/AiStar";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import type { RadarOpportunitySummary } from "@/lib/api/radar-types";
-import { FRESHNESS_LABELS_AR, formatArabicDateTime, formatRelativeAgeAr, isEntryMissed } from "@/lib/format/freshness";
+import {
+  decisionFreshnessLabelAr,
+  FRESHNESS_LABELS_AR,
+  formatArabicDateTime,
+  formatRelativeAgeAr,
+  isEntryMissed,
+} from "@/lib/format/freshness";
 
 interface RadarOpportunityCardProps {
   opportunity: RadarOpportunitySummary;
@@ -48,6 +54,18 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
           صدرت الإشارة: <span className="bsr-numeric">{formatArabicDateTime(o.emitted_at)}</span> ({formatRelativeAgeAr(o.emitted_at)})
         </span>
       </div>
+
+      {/* Production truthfulness fix (2026-08-23): LIVE PRICE != LIVE
+          DECISION -- this line reflects the same is_decision_fresh /
+          decision_freshness_status RadarStockSection.tsx already shows on
+          the stock-detail page, so a stale decision (e.g. a 3-day-old
+          BUY_CANDIDATE) is never left unlabeled next to a "بيانات حيّة"
+          price badge that could otherwise read as endorsing it. Never
+          reuse FRESHNESS_LABELS_AR (price) for this -- see
+          src/lib/format/freshness.ts's own warning. */}
+      {!o.is_decision_fresh ? (
+        <p className="text-xs font-semibold text-bsr-action-sell">{decisionFreshnessLabelAr(o.decision_freshness_status)}</p>
+      ) : null}
 
       {entryMissed ? (
         <div className="rounded-bsr-md border border-bsr-gold-500/50 bg-bsr-gold-500/10 px-bsr-3 py-bsr-2 text-xs font-semibold text-bsr-gold-500">

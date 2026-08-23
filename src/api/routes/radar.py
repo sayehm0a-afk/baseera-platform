@@ -42,6 +42,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from src.analysis.decision_v2.decision_freshness import is_decision_fresh
 from src.analysis.decision_v2.market_risk import classify_market_risk
 from src.api.middleware.rate_limiting import limiter
 from src.api.routes.admin.market_intelligence import radar_detail_out, radar_summary_out
@@ -92,7 +93,22 @@ def get_radar_summary(
     radar's current live composition, the market-wide entry-risk read,
     and a short top-ranked preview -- all read from already-persisted
     state, zero SAHMK cost."""
-    live = list_live_opportunities(session, limit=1000)
+    # Production truthfulness fix (2026-08-23): `list_live_opportunities()`
+    # only excludes a symbol's superseded radar entries -- it does not (and,
+    # being shared with the staff admin routes' own full-visibility needs,
+    # should not) exclude a decision that has simply gone STALE with age.
+    # A radar entry whose Decision V2 snapshot is no longer fresh for the
+    # current session must not count toward, or occupy a preview slot in,
+    # what this consumer-facing summary calls "live" -- confirmed in
+    # production (2026-08-23T13:04Z diagnostic): symbol 6060, emitted
+    # 2026-08-20 (STALE), was still surfacing in `top_opportunities` with
+    # entry_status=READY_NOW, rendering as an actionable BUY three days
+    # after its signal. No Decision V2/scoring/ranking logic changes --
+    # `list_live_opportunities()`'s query and ordering are untouched; this
+    # only filters the already-fetched, already-ranked Python list before
+    # it is summarized/previewed.
+    live_all = list_live_opportunities(session, limit=1000)
+    live = [o for o in live_all if is_decision_fresh(o.emitted_at)]
     by_classification: Dict[str, int] = {}
     for o in live:
         by_classification[o.classification] = by_classification.get(o.classification, 0) + 1
@@ -106,7 +122,7 @@ def get_radar_summary(
     breadth = _latest_market_breadth(session)
     risk = classify_market_risk(market_is_open=market_is_open, breadth=breadth)
 
-    top = list_live_opportunities(session, limit=_HOME_TOP_OPPORTUNITIES_LIMIT)
+    top = live[:_HOME_TOP_OPPORTUNITIES_LIMIT]
 
     latest_stage1_run = _repository.get_latest_run_with_stage1_metrics(session)
     final_opportunities_count = (

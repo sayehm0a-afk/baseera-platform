@@ -108,4 +108,29 @@ describe("RadarOpportunityCard", () => {
 
     expect(screen.queryByText(/لم تعد فرصة دخول حالية/)).not.toBeInTheDocument();
   });
+
+  it("labels a stale decision honestly (تحليل قديم), distinct from and never using the price-freshness label -- production regression: symbol 6060 (3-day-old BUY, live price, stale decision)", () => {
+    render(
+      <RadarOpportunityCard
+        opportunity={buildOpportunity({
+          symbol: "6060",
+          data_freshness_status: "LIVE",
+          entry_status: "READY_NOW",
+          decision_freshness_status: "STALE",
+          is_decision_fresh: false,
+        })}
+      />
+    );
+
+    // Price freshness ("بيانات حيّة") and decision freshness ("تحليل
+    // قديم") must both be visible and never conflated into one label.
+    expect(screen.getByText("بيانات حيّة")).toBeInTheDocument();
+    expect(screen.getByText("تحليل قديم — يحتاج إعادة تقييم")).toBeInTheDocument();
+  });
+
+  it("does not show the decision-freshness warning for a fresh decision", () => {
+    render(<RadarOpportunityCard opportunity={buildOpportunity({ is_decision_fresh: true })} />);
+
+    expect(screen.queryByText(/تحليل قديم/)).not.toBeInTheDocument();
+  });
 });

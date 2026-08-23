@@ -176,7 +176,24 @@ export default function RadarPage() {
 
       {data.status === "ready" && data.summary.live_opportunity_count > 0
         ? (() => {
-            const currentOpportunities = data.summary.top_opportunities.filter((o) => !isEntryMissed(o.entry_status));
+            // Production truthfulness fix (2026-08-23): a Decision V2
+            // signal that has gone STALE (is_decision_fresh === false)
+            // must never render as a current actionable opportunity here,
+            // even when entry_status still reads READY_NOW because price
+            // hasn't yet moved out of the recommended zone -- LIVE PRICE
+            // != LIVE DECISION (see src/lib/format/freshness.ts). Real
+            // production case that motivated this: symbol 6060, signaled
+            // 2026-08-20 (3 days stale), still showed "شراء" inside "الفرص
+            // الحية" because only entry_status was checked. Stale-but-not-
+            // missed-entry opportunities get their own clearly-labeled
+            // section instead of being silently dropped or silently shown
+            // as current.
+            const currentOpportunities = data.summary.top_opportunities.filter(
+              (o) => !isEntryMissed(o.entry_status) && o.is_decision_fresh
+            );
+            const staleOpportunities = data.summary.top_opportunities.filter(
+              (o) => !isEntryMissed(o.entry_status) && !o.is_decision_fresh
+            );
             const missedEntryOpportunities = data.summary.top_opportunities.filter((o) => isEntryMissed(o.entry_status));
             return (
               <>
@@ -197,7 +214,7 @@ export default function RadarPage() {
                   {currentOpportunities.length === 0 ? (
                     <EmptyState
                       title="لا توجد فرصة دخول حالية"
-                      description="جميع الفرص المرصودة تجاوز سعرها نطاق الدخول الموصى به. انظر أدناه للفرص السابقة."
+                      description="جميع الفرص المرصودة تجاوز سعرها نطاق الدخول الموصى به، أو أصبح تحليلها قديمًا. انظر أدناه للفرص السابقة."
                     />
                   ) : (
                     <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
@@ -207,6 +224,22 @@ export default function RadarPage() {
                     </div>
                   )}
                 </section>
+
+                {staleOpportunities.length > 0 ? (
+                  <section className="flex flex-col gap-bsr-4">
+                    <h2 className="text-base font-semibold text-bsr-text-secondary">
+                      تحليل قديم — يحتاج إعادة تقييم ({staleOpportunities.length})
+                    </h2>
+                    <p className="text-xs text-bsr-text-secondary">
+                      معروضة للاطلاع فقط -- تحليل هذه الفرص لم يعد يمثّل الجلسة الحالية.
+                    </p>
+                    <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
+                      {staleOpportunities.map((opportunity) => (
+                        <RadarOpportunityCard key={opportunity.id} opportunity={opportunity} />
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
 
                 {missedEntryOpportunities.length > 0 ? (
                   <section className="flex flex-col gap-bsr-4">

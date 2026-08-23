@@ -13,7 +13,16 @@ vi.mock("@/lib/api/radar", () => ({
 
 import { getRadarSummary } from "@/lib/api/radar";
 
-function opportunity(symbol: string, overrides: { entry_status?: string; entry_status_label_ar?: string; id?: number } = {}) {
+function opportunity(
+  symbol: string,
+  overrides: {
+    entry_status?: string;
+    entry_status_label_ar?: string;
+    id?: number;
+    is_decision_fresh?: boolean;
+    decision_freshness_status?: "LIVE" | "LAST_SESSION" | "STALE" | "UNKNOWN";
+  } = {}
+) {
   return {
     id: overrides.id ?? 1,
     symbol,
@@ -42,8 +51,8 @@ function opportunity(symbol: string, overrides: { entry_status?: string; entry_s
     stage1_ranking_score: 88.0,
     ranking_reason_ar: "زخم شرائي قوي",
     emitted_at: "2026-08-17T09:00:00Z",
-    decision_freshness_status: "LIVE" as const,
-    is_decision_fresh: true,
+    decision_freshness_status: overrides.decision_freshness_status ?? ("LIVE" as const),
+    is_decision_fresh: overrides.is_decision_fresh ?? true,
     decision_v2_snapshot_id: 100,
   };
 }
@@ -156,6 +165,35 @@ describe("RadarPage", () => {
     expect(screen.getByText("فرص فاتت نقطة الدخول (1)")).toBeInTheDocument();
     expect(screen.getByText("2222")).toBeInTheDocument();
     expect(screen.getByText("1120")).toBeInTheDocument();
+  });
+
+  it("never shows a stale-decision opportunity as a current live BUY, even with entry_status READY_NOW -- moves it to its own labeled section (production regression: symbol 6060)", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(
+      summary({
+        live_opportunity_count: 2,
+        live_by_classification: { BUY_CANDIDATE: 2 },
+        average_confidence: 80,
+        top_opportunities: [
+          opportunity("2222", { id: 1 }),
+          opportunity("6060", {
+            id: 2,
+            entry_status: "READY_NOW",
+            is_decision_fresh: false,
+            decision_freshness_status: "STALE",
+          }),
+        ],
+      })
+    );
+
+    render(<RadarPage />);
+
+    // Only the fresh decision counts as "الفرص الحية".
+    expect(await screen.findByText("الفرص الحية (1)")).toBeInTheDocument();
+    // The stale one is not deleted or silently shown as current -- it
+    // gets its own clearly-labeled section.
+    expect(screen.getByText("تحليل قديم — يحتاج إعادة تقييم (1)")).toBeInTheDocument();
+    expect(screen.getByText("2222")).toBeInTheDocument();
+    expect(screen.getByText("6060")).toBeInTheDocument();
   });
 
   it("re-reads the same read-only endpoint on button press", async () => {
