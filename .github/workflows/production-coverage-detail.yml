@@ -138,6 +138,9 @@ jobs:
           print()
           print('=== latest_scan_skipped_symbols (exact symbols) ===')
           print(d.get('latest_scan_skipped_symbols'))
+          print()
+          print('=== outcome_tracking (PR #94: OHLCV persistence / post-signal outcome tracking) ===')
+          print(json.dumps(d.get('outcome_tracking'), indent=2, ensure_ascii=False))
           "
 
       - name: Fetch personal top-opportunities (real "امسح السوق الآن" read path -- no scan triggered)
