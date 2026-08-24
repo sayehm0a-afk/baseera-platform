@@ -516,3 +516,80 @@ def get_live_market_mode_poll_interval_seconds() -> float:
     a short default (60s) keeps the "start scanning right after the
     bell" latency low at negligible cost."""
     return float(os.getenv("LIVE_MARKET_MODE_POLL_INTERVAL_SECONDS", "60"))
+
+
+# --- Recurrent Live Scan (Shadow Mode) --------------------------------------
+#
+# A second, independent scheduler (src.market_intelligence.
+# recurrent_live_scan.RecurrentLiveScanScheduler) layered on top of the
+# proven once-per-session opening scan -- reuses that scan's own Stage 1/
+# Stage 2/Decision V2 pipeline unmodified, at a much smaller, deliberately
+# conservative per-cycle candidate cap, so an intraday BUY (or an intraday
+# invalidation of an existing one) can be detected automatically between
+# opening scans without risking the real SAHMK daily quota. Every default
+# below is set against the CONFIRMED real upstream cap (~100 requests/day,
+# 2026-08-24 incident evidence -- see src.market_data.sahmk.rate_limiter's
+# module docstring and docs/SAHMK_INTEGRATION.md), not the stale, much
+# larger SAHMK_MAX_REQUESTS_PER_DAY config default: at 1 cycle/hour capped
+# to 3 symbols across a ~5-hour Tadawul session, this adds at most ~15
+# requests/day, leaving the overwhelming majority of the real ~100/day cap
+# for the opening scan, ingestion backfill, and on-demand user analysis.
+# Disabled by default, matching every other scheduler in this codebase.
+
+
+def is_live_recurrent_scan_enabled() -> bool:
+    return os.getenv("LIVE_RECURRENT_SCAN_ENABLED", "false").lower() == "true"
+
+
+def is_live_recurrent_scan_shadow_mode() -> bool:
+    """Recorded on every RecurrentScanCycle row and included in the
+    truthful Live Status surface, but this codebase currently contains
+    no code path for shadow_mode=False: RecurrentLiveScanScheduler
+    always writes to ShadowLiveSignal only and never touches
+    RadarOpportunity, regardless of this flag's value. Flipping it to
+    false today has no effect -- going live requires a separate,
+    later, explicitly authorized PR that adds the actual consumer-feed
+    emission code path behind this flag. Kept as a real, persisted
+    config value (not a hardcoded True) so that future PR has a single
+    existing switch to wire into, instead of inventing a new one."""
+    return os.getenv("LIVE_RECURRENT_SCAN_SHADOW_MODE", "true").lower() == "true"
+
+
+def get_live_recurrent_scan_interval_minutes() -> int:
+    return int(os.getenv("LIVE_RECURRENT_SCAN_INTERVAL_MINUTES", "60"))
+
+
+def get_live_recurrent_scan_max_candidates() -> int:
+    """Hard cap on how many symbols one recurrent cycle may send to
+    live Stage 2 validation, combining both active-signal revalidation
+    (Phase 7) and new Stage 1 candidates (Phase 8) -- independent of,
+    and always additionally bounded by,
+    get_radar_stage2_candidate_cap() (the opening scan's own, larger
+    cap)."""
+    return int(os.getenv("LIVE_RECURRENT_SCAN_MAX_CANDIDATES", "3"))
+
+
+def get_live_recurrent_scan_request_reserve() -> int:
+    """Extra safety margin, on top of get_scan_min_background_quota_
+    remaining(), required in the rate limiter's own remaining_today_
+    for_background count before a recurrent cycle is allowed to spend
+    a single request -- so a recurrent cycle never itself pushes
+    background usage down to the point where the opening scan or
+    ingestion backfill would be starved later the same day."""
+    return int(os.getenv("LIVE_RECURRENT_SCAN_REQUEST_RESERVE", "5"))
+
+
+def get_live_recurrent_scan_leader_lease_seconds() -> float:
+    """Mirrors get_scan_leader_lease_seconds()'s own role for the
+    opening scan, under RecurrentLiveScanScheduler's own, independent
+    SchedulerLeaderLock lease key -- see recurrent_live_scan.py."""
+    return float(os.getenv("LIVE_RECURRENT_SCAN_LEADER_LEASE_SECONDS", "180"))
+
+
+def get_live_recurrent_scan_supervisor_poll_interval_seconds() -> float:
+    """Mirrors get_live_market_mode_poll_interval_seconds()'s own role
+    -- how often the market-hours supervisor wrapping the recurrent
+    scheduler re-checks whether the Tadawul session just opened or
+    closed. A second, independent LiveMarketModeScheduler instance
+    (unmodified) is reused for this -- see recurrent_live_scan.py."""
+    return float(os.getenv("LIVE_RECURRENT_SCAN_SUPERVISOR_POLL_INTERVAL_SECONDS", "60"))
