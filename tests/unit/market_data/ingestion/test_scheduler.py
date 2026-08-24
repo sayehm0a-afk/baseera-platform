@@ -576,6 +576,46 @@ def test_resolve_ohlcv_target_symbols_dedupes_when_already_active(session_factor
     assert resolved.count("2222") == 1
 
 
+def test_resolve_ohlcv_target_symbols_orders_pending_signals_before_background_universe(
+    session_factory, monkeypatch
+):
+    """2026-08-24 SAHMK real-quota exhaustion incident, root cause:
+    ingest_historical_ohlcv() processes its symbol list in order and
+    stops early the instant the real SAHMK daily quota (confirmed live
+    at ~100/day, far below the ~384-symbol active universe) is
+    exhausted -- every symbol after that point in the list is never
+    attempted. With the old `base + pending` ordering, a mid-run
+    exhaustion always sacrificed the very symbols this method exists to
+    protect (outstanding signals -- that day's frozen Forward Test
+    BUYs among them). Pending-outcome symbols must now appear before
+    every symbol that is only in the list because it's part of the
+    generic background universe, so a truncated run still reaches every
+    outstanding signal first."""
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ingestion_symbol_universe",
+        lambda: [],
+    )
+    session = session_factory()
+    # Background-universe symbols, alphabetically/numerically well
+    # ahead of the pending symbol under the old ordering -- exactly the
+    # shape of production's real active-Stock query result.
+    background_stocks = [Stock(symbol=s, name_en=s, is_active=True) for s in ("1010", "1020", "1030")]
+    pending_stock = Stock(symbol="4050", name_en="SASCO", is_active=True)
+    session.add_all(background_stocks + [pending_stock])
+    session.commit()
+    _make_pending_outcome_for(session, pending_stock, datetime(2026, 8, 24, tzinfo=timezone.utc))
+    session.close()
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    resolved = scheduler._resolve_ohlcv_target_symbols()
+
+    assert resolved[0] == "4050", (
+        "the pending-outcome symbol must be first, so a quota-exhaustion "
+        "truncation still reaches it before any background-only symbol"
+    )
+    assert set(resolved) == {"1010", "1020", "1030", "4050"}
+
+
 @pytest.mark.asyncio
 async def test_scheduler_start_reaps_a_stale_running_job_before_scheduling(session_factory):
     """Mirrors the identical fix on MarketIntelligenceScheduler: a

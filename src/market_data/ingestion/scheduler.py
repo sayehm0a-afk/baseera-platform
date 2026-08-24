@@ -666,14 +666,31 @@ class IngestionScheduler:
         (fundamentals/dividends still use the unmodified `_resolve_
         target_symbols()`): those two data types are not what
         `evaluate_pending_outcomes()` reads, so extending their target
-        list would add SAHMK cost with no outcome-tracking benefit."""
+        list would add SAHMK cost with no outcome-tracking benefit.
+
+        ACTIVE-SIGNAL-FIRST ORDERING (2026-08-24 SAHMK real-quota
+        exhaustion incident -- root cause): `ingest_historical_ohlcv()`
+        processes its `symbols` argument strictly in order and, per its
+        own documented contract, stops early the moment the real SAHMK
+        daily quota is exhausted -- every symbol after that point in
+        the list is never attempted this run. The previous `base +
+        pending` ordering put the entire generic active-Stock universe
+        (hundreds of symbols) BEFORE the pending-outcome symbols, so a
+        mid-run exhaustion (confirmed live in production: real quota is
+        ~100/day, far below the ~384-symbol universe) always sacrificed
+        the symbols this method exists specifically to protect --
+        including that day's own frozen Forward Test BUYs. `pending` is
+        now placed FIRST: even a heavily truncated run (quota exhausted
+        after only a handful of symbols) still attempts every
+        outstanding signal before spending a single request on the
+        undifferentiated background universe."""
         base = self._resolve_target_symbols()
         session = self._session_factory()
         try:
             pending = pending_signal_symbols(session)
         finally:
             session.close()
-        return list(dict.fromkeys(base + pending))
+        return list(dict.fromkeys(pending + base))
 
     async def _run_symbols(self) -> IngestionResult:
         with priority_scope(BACKGROUND), operation_scope(INGESTION):
