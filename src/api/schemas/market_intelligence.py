@@ -1202,3 +1202,44 @@ class RadarV2SahmkConsumptionOut(BaseModel):
     generated_at: datetime
     rate_limiter_by_operation: Optional[Dict] = None
     cache_by_operation: Optional[Dict] = None
+
+
+class RecurrentLiveScanStatusOut(BaseModel):
+    """GET .../recurrent-live-scan/status -- BASIRAH -- PRODUCTION-GRADE
+    RECURRENT LIVE MARKET INTELLIGENCE mandate, Phase 16 ("truthful Live
+    Status API"): every field here is read verbatim from real,
+    already-persisted state (RecurrentScanCycle rows, the real
+    SahmkRateLimiter/market-status singletons) -- never a fabricated
+    "live" claim. `consumer_feed_affected` is always `false` today: this
+    codebase currently contains no code path that lets a Shadow Mode
+    signal reach RadarOpportunity/the consumer feed, regardless of
+    `shadow_mode`'s own value -- see recurrent_live_scan.py's module
+    docstring. There is no `current_cycle_status` field: a recurrent
+    cycle in this design is short-lived and synchronous within one
+    scheduler loop tick (see RecurrentScanCycle's own docstring), so
+    there is no real in-flight state to report beyond what
+    `last_cycle_status` already gives -- reporting a fabricated
+    "RUNNING" concept here would itself violate the "never fake live"
+    principle this endpoint exists to uphold."""
+
+    generated_at: datetime
+    live_recurrent_scan_enabled: bool
+    shadow_mode: bool
+    consumer_feed_affected: bool = False
+    interval_minutes: int
+    max_candidates_per_cycle: int
+    market_status: str
+    market_status_label_ar: str
+    upstream_confirmed_exhausted: Optional[bool] = None
+    remaining_quota_today_for_background: Optional[int] = None
+    last_cycle_id: Optional[str] = None
+    last_cycle_status: Optional[str] = None
+    last_cycle_triggered_at: Optional[datetime] = None
+    last_cycle_skip_reason: Optional[str] = None
+    last_cycle_signals_new_opportunity_count: Optional[int] = None
+    last_cycle_signals_refreshed_count: Optional[int] = None
+    last_cycle_signals_missed_entry_count: Optional[int] = None
+    last_cycle_signals_chase_risk_count: Optional[int] = None
+    last_cycle_signals_invalidated_count: Optional[int] = None
+    last_cycle_signals_unchanged_count: Optional[int] = None
+    cycles_today_count: int = 0

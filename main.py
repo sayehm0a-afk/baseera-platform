@@ -154,6 +154,8 @@ daily_reflection_scheduler = None
 daily_intelligence_aggregation_scheduler = None
 live_market_mode_scheduler = None
 decision_v2_outcome_scheduler = None
+recurrent_live_scan_scheduler = None
+recurrent_live_scan_supervisor = None
 
 
 class TaskRequest(BaseModel):
@@ -178,6 +180,7 @@ async def startup_event():
     global outcome_evaluation_scheduler, pattern_discovery_scheduler, daily_reflection_scheduler
     global daily_intelligence_aggregation_scheduler, live_market_mode_scheduler
     global decision_v2_outcome_scheduler
+    global recurrent_live_scan_scheduler, recurrent_live_scan_supervisor
 
     # Live Market Mode (LIVE_MARKET_MODE_ENABLED) supersedes the
     # standalone market-scan scheduler below -- it owns its own internal
@@ -213,6 +216,40 @@ async def startup_event():
             logger.info("Live Market Mode disabled (set LIVE_MARKET_MODE_ENABLED=true to enable).")
     except Exception as e:
         logger.error(f"Error starting Live Market Mode: {e}", exc_info=True)
+
+    # Recurrent live-scan (Shadow Mode) -- BASIRAH -- PRODUCTION-GRADE
+    # RECURRENT LIVE MARKET INTELLIGENCE mandate. A SEPARATE scheduler
+    # from the one Live Market Mode owns above: it never touches
+    # RadarOpportunity/the consumer feed, only ShadowLiveSignal/
+    # RecurrentScanCycle (see src.market_intelligence.recurrent_live_scan's
+    # module docstring). Wrapped in its OWN, second LiveMarketModeScheduler
+    # instance for Tadawul-hours gating -- that class is generic over any
+    # start()/stop()/is_running collaborator, so this reuses it completely
+    # unmodified rather than re-deriving market-hours awareness here.
+    # Disabled by default (LIVE_RECURRENT_SCAN_ENABLED=false); independent
+    # try/except so a failure here can never block any other scheduler.
+    try:
+        from src.market_intelligence.config import (
+            get_live_recurrent_scan_supervisor_poll_interval_seconds,
+            is_live_recurrent_scan_enabled,
+        )
+        from src.market_intelligence.live_market_mode import LiveMarketModeScheduler as _LiveMarketModeScheduler
+        from src.market_intelligence.recurrent_live_scan import RecurrentLiveScanScheduler
+
+        if is_live_recurrent_scan_enabled():
+            recurrent_live_scan_scheduler = RecurrentLiveScanScheduler()
+            recurrent_live_scan_supervisor = _LiveMarketModeScheduler(
+                market_intelligence_scheduler=recurrent_live_scan_scheduler,
+                poll_interval_seconds=get_live_recurrent_scan_supervisor_poll_interval_seconds(),
+            )
+            recurrent_live_scan_supervisor.start()
+            logger.info("Recurrent live-scan scheduler started (Shadow Mode, Tadawul-hours-gated).")
+        else:
+            logger.info(
+                "Recurrent live-scan scheduler disabled (set LIVE_RECURRENT_SCAN_ENABLED=true to enable)."
+            )
+    except Exception as e:
+        logger.error(f"Error starting recurrent live-scan scheduler: {e}", exc_info=True)
 
     # The ingestion scheduler needs only the DB and a market/fundamental
     # data provider -- no Redis, no runtime kernel. Started first, in its
@@ -457,6 +494,9 @@ async def shutdown_event():
 
         if decision_v2_outcome_scheduler is not None:
             await decision_v2_outcome_scheduler.stop()
+
+        if recurrent_live_scan_supervisor is not None:
+            await recurrent_live_scan_supervisor.stop()
 
         if kernel:
             await kernel.stop()

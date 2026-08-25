@@ -60,6 +60,7 @@ from src.api.schemas.market_intelligence import (
     RadarOpportunityDetailOut,
     RadarOpportunitySummaryOut,
     RadarStage1ComponentScoresOut,
+    RecurrentLiveScanStatusOut,
     RadarV2ExtendedPerformanceOut,
     RadarV2GroupPerformanceOut,
     RadarV2PerformanceOut,
@@ -99,6 +100,7 @@ from src.domain.models import (
     MarketScanRun,
     PriceBar,
     RadarOpportunity,
+    RecurrentScanCycle,
     StaffRole,
     Stock,
     SymbolIntelligenceRecord,
@@ -121,7 +123,12 @@ from src.market_intelligence.config import (
     get_max_scan_run_duration_hours,
     get_radar_stage2_candidate_cap,
     get_scan_leader_lease_seconds,
+    get_live_recurrent_scan_interval_minutes,
+    get_live_recurrent_scan_max_candidates,
+    is_live_recurrent_scan_enabled,
+    is_live_recurrent_scan_shadow_mode,
 )
+from src.market_intelligence.market_status import get_market_status
 from src.market_intelligence.radar_v2 import (
     compute_daily_validation_report,
     compute_radar_v2_extended_performance,
@@ -959,6 +966,58 @@ async def get_radar_v2_sahmk_consumption(
         generated_at=datetime.now(timezone.utc),
         rate_limiter_by_operation=_radar_v2_subset(rate_status.get("by_operation")),
         cache_by_operation=_radar_v2_subset(cache_status.get("by_operation")),
+    )
+
+
+@router.get("/recurrent-live-scan/status", response_model=RecurrentLiveScanStatusOut)
+async def get_recurrent_live_scan_status(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> RecurrentLiveScanStatusOut:
+    """BASIRAH -- PRODUCTION-GRADE RECURRENT LIVE MARKET INTELLIGENCE
+    mandate, Phase 16: a truthful status surface for the recurrent
+    Shadow Mode scheduler (src.market_intelligence.recurrent_live_scan).
+    Read-only, zero SAHMK cost -- every field is either static config or
+    an already-persisted/already-computed value (the real rate limiter,
+    the real market-status calculator, the most recent real
+    RecurrentScanCycle row). See RecurrentLiveScanStatusOut's own
+    docstring for why `consumer_feed_affected` is hardcoded false and
+    why there is no fabricated `current_cycle_status`."""
+    market_status = get_market_status()
+    rate_status = get_default_rate_limiter().get_status()
+
+    last_cycle = (
+        db.query(RecurrentScanCycle).order_by(RecurrentScanCycle.triggered_at.desc()).first()
+    )
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    cycles_today = (
+        db.query(func.count(RecurrentScanCycle.id))
+        .filter(RecurrentScanCycle.triggered_at >= day_start)
+        .scalar()
+        or 0
+    )
+
+    return RecurrentLiveScanStatusOut(
+        generated_at=datetime.now(timezone.utc),
+        live_recurrent_scan_enabled=is_live_recurrent_scan_enabled(),
+        shadow_mode=is_live_recurrent_scan_shadow_mode(),
+        interval_minutes=get_live_recurrent_scan_interval_minutes(),
+        max_candidates_per_cycle=get_live_recurrent_scan_max_candidates(),
+        market_status=market_status.status.value,
+        market_status_label_ar=market_status.label_ar,
+        upstream_confirmed_exhausted=rate_status.get("upstream_confirmed_exhausted"),
+        remaining_quota_today_for_background=rate_status.get("remaining_today_for_background"),
+        last_cycle_id=last_cycle.cycle_id if last_cycle else None,
+        last_cycle_status=last_cycle.status.value if last_cycle else None,
+        last_cycle_triggered_at=last_cycle.triggered_at if last_cycle else None,
+        last_cycle_skip_reason=last_cycle.skip_reason if last_cycle else None,
+        last_cycle_signals_new_opportunity_count=last_cycle.signals_new_opportunity_count if last_cycle else None,
+        last_cycle_signals_refreshed_count=last_cycle.signals_refreshed_count if last_cycle else None,
+        last_cycle_signals_missed_entry_count=last_cycle.signals_missed_entry_count if last_cycle else None,
+        last_cycle_signals_chase_risk_count=last_cycle.signals_chase_risk_count if last_cycle else None,
+        last_cycle_signals_invalidated_count=last_cycle.signals_invalidated_count if last_cycle else None,
+        last_cycle_signals_unchanged_count=last_cycle.signals_unchanged_count if last_cycle else None,
+        cycles_today_count=cycles_today,
     )
 
 

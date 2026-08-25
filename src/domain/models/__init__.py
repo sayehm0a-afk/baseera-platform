@@ -69,6 +69,12 @@ from src.domain.models.decision_v2_outcome import (
     NON_RESOLVING_STATUSES,
 )
 from src.domain.models.radar_opportunity import RadarOpportunity
+from src.domain.models.recurrent_scan_cycle import RecurrentScanCycle, RecurrentScanCycleStatus
+from src.domain.models.shadow_live_signal import (
+    ShadowLiveSignal,
+    ShadowLifecycleResult,
+    PERSISTED_LIFECYCLE_RESULTS,
+)
 
 __all__ = [
     "Stock",
@@ -161,4 +167,9 @@ __all__ = [
     "DecisionV2OutcomeStatus",
     "NON_RESOLVING_STATUSES",
     "RadarOpportunity",
+    "RecurrentScanCycle",
+    "RecurrentScanCycleStatus",
+    "ShadowLiveSignal",
+    "ShadowLifecycleResult",
+    "PERSISTED_LIFECYCLE_RESULTS",
 ]

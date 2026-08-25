@@ -44,6 +44,13 @@ ADMIN_DIAGNOSTICS = "admin_diagnostics"
 # redis_shared_cache.py), with no separate accounting code needed.
 RADAR_V2 = "radar_v2"
 
+# Recurrent live-scan mandate (2026-08-24), Shadow Mode: the recurrent
+# scheduler's own Stage 2 calls reuse the same run_market_scan_job path
+# RADAR_V2 does, tagged separately so its (deliberately small) daily
+# request cost is independently visible from the opening scan's --
+# see src.market_intelligence.recurrent_live_scan.
+LIVE_RECURRENT_SCAN = "live_recurrent_scan"
+
 UNCLASSIFIED = "unclassified"
 
 _operation_var: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
