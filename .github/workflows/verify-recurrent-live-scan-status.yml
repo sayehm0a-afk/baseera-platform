@@ -1,0 +1,62 @@
+name: Verify Recurrent Live Scan Status (temporary, one-shot, read-only, zero SAHMK cost)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - if: ${{ !env.RAILWAY_TOKEN || !env.STAFF_EMAIL || !env.STAFF_PASSWORD }}
+        run: |
+          echo "::error::RAILWAY_TOKEN/STAFF_EMAIL/STAFF_PASSWORD not set."
+          exit 1
+
+      - run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as the staff account
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Staff login failed."
+            exit 1
+          fi
+
+      - name: Fetch recurrent live-scan status (Shadow Mode, zero SAHMK cost)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/recurrent-live-scan/status" -o /tmp/recurrent.json -w "%{http_code}")
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/recurrent.json
+          echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::recurrent-live-scan/status returned non-200."
+            exit 1
+          fi
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: rm -f /tmp/staff_cookies.txt /tmp/login_body.json /tmp/backend_domains.json /tmp/recurrent.json
