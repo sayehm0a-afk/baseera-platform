@@ -63,12 +63,16 @@ from sqlalchemy.orm import Session
 from src.core.db import database
 from src.domain.models import IngestionJobStatus, IngestionRunLog, Stock
 from src.market_data.ingestion import config as ingestion_config
-from src.market_data.ingestion._common import IngestionResult
+from src.market_data.ingestion._common import (
+    STOP_REASON_COMPLETED,
+    STOP_REASON_NO_WORK,
+    IngestionResult,
+)
 from src.market_data.ingestion.ingest_dividends import ingest_dividends
 from src.market_data.ingestion.ingest_fundamentals import ingest_fundamentals
 from src.market_data.ingestion.ingest_historical_ohlcv import ingest_historical_ohlcv
 from src.market_data.ingestion.ingest_symbols import sync_symbols
-from src.market_data.ingestion.outcome_tracking import pending_signal_symbols
+from src.market_data.ingestion.ohlcv_priority import OhlcvPriorityPlan, build_priority_plan
 from src.market_data.fundamental_provider_factory import get_fundamental_data_provider
 from src.market_data.provider_factory import get_market_data_provider
 from src.market_data.sahmk.rate_limiter import (
@@ -77,7 +81,7 @@ from src.market_data.sahmk.rate_limiter import (
     get_default_rate_limiter,
 )
 from src.market_data.sahmk.operation_scope import INGESTION, operation_scope
-from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
+from src.market_data.sahmk.request_priority import BACKGROUND, CRITICAL, priority_scope
 from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 
 logger = logging.getLogger(__name__)
@@ -355,6 +359,37 @@ def reap_stale_ingestion_runs(session: Session, max_age_hours: float) -> List[In
     if reaped:
         session.commit()
     return reaped
+
+
+def _merge_ingestion_results(critical: IngestionResult, background: IngestionResult) -> IngestionResult:
+    """Combines the CRITICAL-priority and BACKGROUND-priority
+    historical_ohlcv passes (see IngestionScheduler._run_historical_
+    ohlcv) into one IngestionResult, so the existing single
+    `historical_ohlcv` IngestionRunLog row is unaffected by the P0
+    split into two priority-scoped sub-passes. `stop_reason`: COMPLETED
+    only if BOTH passes completed; otherwise the first non-COMPLETED
+    reason, critical pass first (a critical-pass budget stop is more
+    consequential than a background-pass one and must not be masked by
+    it)."""
+    merged = IngestionResult(
+        symbols_requested=critical.symbols_requested + background.symbols_requested,
+        symbols_succeeded=critical.symbols_succeeded + background.symbols_succeeded,
+        symbols_failed=critical.symbols_failed + background.symbols_failed,
+        rows_upserted=critical.rows_upserted + background.rows_upserted,
+        symbols_skipped_fresh=critical.symbols_skipped_fresh + background.symbols_skipped_fresh,
+        symbols_skipped_budget=critical.symbols_skipped_budget + background.symbols_skipped_budget,
+    )
+    merged.errors = {**critical.errors, **background.errors}
+    merged.zero_progress = {**critical.zero_progress, **background.zero_progress}
+    if merged.symbols_requested == 0:
+        merged.stop_reason = STOP_REASON_NO_WORK
+    elif critical.stop_reason != STOP_REASON_COMPLETED:
+        merged.stop_reason = critical.stop_reason
+    elif background.stop_reason != STOP_REASON_COMPLETED:
+        merged.stop_reason = background.stop_reason
+    else:
+        merged.stop_reason = STOP_REASON_COMPLETED
+    return merged
 
 
 class IngestionScheduler:
@@ -651,46 +686,23 @@ class IngestionScheduler:
             session.close()
         return list(dict.fromkeys(list(configured) + discovered))
 
-    def _resolve_ohlcv_target_symbols(self) -> List[str]:
-        """`_resolve_target_symbols()`, further unioned with every
-        symbol that has a still-`PENDING` `DecisionV2Outcome` -- the
-        OHLCV persistence / outcome-tracking fix (2026-08-23, see
-        `src.market_data.ingestion.outcome_tracking`'s module docstring
-        for the full root-cause writeup). A symbol must not stop
-        receiving OHLCV updates merely because it is no longer selected
-        by the next Stage 2 scan or because its general `Stock.
-        is_active` flag changes for an unrelated reason (a directory
-        reclassification, a temporary provider gap) -- an outstanding
-        signal's own evaluation need is a first-class, independent
-        reason to keep fetching. Deliberately scoped to OHLCV only
-        (fundamentals/dividends still use the unmodified `_resolve_
-        target_symbols()`): those two data types are not what
-        `evaluate_pending_outcomes()` reads, so extending their target
-        list would add SAHMK cost with no outcome-tracking benefit.
-
-        ACTIVE-SIGNAL-FIRST ORDERING (2026-08-24 SAHMK real-quota
-        exhaustion incident -- root cause): `ingest_historical_ohlcv()`
-        processes its `symbols` argument strictly in order and, per its
-        own documented contract, stops early the moment the real SAHMK
-        daily quota is exhausted -- every symbol after that point in
-        the list is never attempted this run. The previous `base +
-        pending` ordering put the entire generic active-Stock universe
-        (hundreds of symbols) BEFORE the pending-outcome symbols, so a
-        mid-run exhaustion (confirmed live in production: real quota is
-        ~100/day, far below the ~384-symbol universe) always sacrificed
-        the symbols this method exists specifically to protect --
-        including that day's own frozen Forward Test BUYs. `pending` is
-        now placed FIRST: even a heavily truncated run (quota exhausted
-        after only a handful of symbols) still attempts every
-        outstanding signal before spending a single request on the
-        undifferentiated background universe."""
+    def _build_ohlcv_priority_plan(self) -> "OhlcvPriorityPlan":
+        """P0 SAHMK quota architecture repair (2026-08-25), superseding
+        the prior `_resolve_ohlcv_target_symbols()` (a flat `pending +
+        base` union/ordering -- see git history for its own 2026-08-23/
+        2026-08-24 root-cause writeups, both still true and still
+        honored, just now expressed as Tier 0/1 within the full 5-tier
+        plan instead of a single "pending" bucket). See
+        `src.market_data.ingestion.ohlcv_priority`'s module docstring
+        for the tier definitions. `_resolve_target_symbols()` (base
+        symbols) is unchanged and still exclusively drives fundamentals/
+        dividends, which do not use this plan."""
         base = self._resolve_target_symbols()
         session = self._session_factory()
         try:
-            pending = pending_signal_symbols(session)
+            return build_priority_plan(session, base)
         finally:
             session.close()
-        return list(dict.fromkeys(pending + base))
 
     async def _run_symbols(self) -> IngestionResult:
         with priority_scope(BACKGROUND), operation_scope(INGESTION):
@@ -704,15 +716,44 @@ class IngestionScheduler:
             )
 
     async def _run_historical_ohlcv(self) -> IngestionResult:
-        with priority_scope(BACKGROUND), operation_scope(INGESTION):
-            provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
-            symbols = self._resolve_ohlcv_target_symbols()
-            return await ingest_historical_ohlcv(
-                symbols,
-                provider,
-                self._session_factory,
-                backfill_days=ingestion_config.get_ohlcv_backfill_days(),
-            )
+        """P0 SAHMK quota architecture repair (2026-08-25): two
+        priority-scoped passes over the same shared provider instead of
+        one undifferentiated BACKGROUND pass. The CRITICAL pass (Tier
+        0+1 -- active positions, pending-not-yet-triggered signals) is
+        protected by SahmkRateLimiter's own critical reserve, exactly
+        like a live market scan's quote lookups -- it is no longer
+        merely ordered first within a shared background budget (which
+        did not protect it from a same-day quota exhaustion at all),
+        it now has its own guaranteed budget. The BACKGROUND pass (Tier
+        2-4) is unchanged in priority but now uses deterministic,
+        starvation-resistant tiering/rotation (see ohlcv_priority.py)
+        instead of arbitrary Stock-table order. Results are merged into
+        one IngestionResult so the existing single `historical_ohlcv`
+        IngestionRunLog row/observability contract is unaffected."""
+        provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
+        plan = self._build_ohlcv_priority_plan()
+
+        critical_result = IngestionResult(symbols_requested=0)
+        if plan.critical_symbols:
+            with priority_scope(CRITICAL), operation_scope(INGESTION):
+                critical_result = await ingest_historical_ohlcv(
+                    plan.critical_symbols,
+                    provider,
+                    self._session_factory,
+                    backfill_days=ingestion_config.get_critical_refresh_backfill_days(),
+                )
+
+        background_result = IngestionResult(symbols_requested=0)
+        if plan.background_symbols:
+            with priority_scope(BACKGROUND), operation_scope(INGESTION):
+                background_result = await ingest_historical_ohlcv(
+                    plan.background_symbols,
+                    provider,
+                    self._session_factory,
+                    backfill_days=ingestion_config.get_ohlcv_backfill_days(),
+                )
+
+        return _merge_ingestion_results(critical_result, background_result)
 
     async def _run_fundamentals(self) -> IngestionResult:
         with priority_scope(BACKGROUND), operation_scope(INGESTION):

@@ -20,7 +20,12 @@ from typing import Dict
 from sqlalchemy.orm import Session
 
 from src.domain.models import PriceBar, Stock, Timeframe
-from src.market_data.sahmk.rate_limiter import SahmkRateLimitExceededError
+from src.market_data.sahmk.rate_limiter import (
+    SahmkQuotaReservedForCriticalError,
+    SahmkQuotaReservedForLiveScanError,
+    SahmkRateLimitExceededError,
+    SahmkUpstreamQuotaExhaustedError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,27 @@ def is_quota_exhausted_for_today(exc: Exception) -> bool:
     time and floods IngestionResult.errors/logs with N-1 duplicate
     entries carrying zero new information."""
     return isinstance(exc, SahmkRateLimitExceededError)
+
+
+def quota_exhaustion_stop_reason(exc: Exception) -> str:
+    """Maps a SahmkRateLimitExceededError (or a subclass) to the
+    STOP_REASON_* constant that best describes WHY a run stopped early
+    -- Section 11's observability requirement that a budget-limited
+    background run must never be indistinguishable from a genuine
+    failure. Order matters: the more specific subclasses are checked
+    before the base class."""
+    if isinstance(exc, SahmkUpstreamQuotaExhaustedError):
+        return STOP_REASON_UPSTREAM_EXHAUSTED
+    if isinstance(exc, SahmkQuotaReservedForLiveScanError):
+        return STOP_REASON_LIVE_SCAN_RESERVE_PROTECTED
+    if isinstance(exc, SahmkQuotaReservedForCriticalError):
+        return STOP_REASON_CRITICAL_RESERVE_PROTECTED
+    # Plain SahmkRateLimitExceededError (client-side max_per_day count
+    # reached, with no more specific reserve or upstream-evidence
+    # subclass): reported the same as UPSTREAM_EXHAUSTED -- both mean
+    # "today's daily budget is spent, stop," which is the only
+    # actionable distinction Section 11's stop-reason vocabulary draws.
+    return STOP_REASON_UPSTREAM_EXHAUSTED
 
 
 async def sleep_if_rate_limited(exc: Exception) -> None:
@@ -71,6 +97,18 @@ async def sleep_if_rate_limited(exc: Exception) -> None:
         await asyncio.sleep(delay)
 
 
+# P0 SAHMK quota architecture repair (2026-08-25), Section 11
+# observability: why a run ended the way it did. COMPLETED means every
+# requested symbol was attempted (success or per-symbol failure, not a
+# budget refusal); every other value means the run stopped early for a
+# reason that is not itself a failure and must not be reported as one.
+STOP_REASON_COMPLETED = "COMPLETED"
+STOP_REASON_CRITICAL_RESERVE_PROTECTED = "CRITICAL_RESERVE_PROTECTED"
+STOP_REASON_LIVE_SCAN_RESERVE_PROTECTED = "LIVE_SCAN_RESERVE_PROTECTED"
+STOP_REASON_UPSTREAM_EXHAUSTED = "UPSTREAM_EXHAUSTED"
+STOP_REASON_NO_WORK = "NO_WORK"
+
+
 @dataclass
 class IngestionResult:
     """Summary of one ingestion job run over a list of symbols."""
@@ -85,6 +123,20 @@ class IngestionResult:
     # from `errors`, which is only ever populated on a raised exception.
     # Currently only ingest_historical_ohlcv.py populates this.
     zero_progress: Dict[str, str] = field(default_factory=dict)
+    # How many of `symbols_requested` were never attempted because a
+    # symbol already had today's bar (DB-first freshness check --
+    # `start > today` in ingest_historical_ohlcv.py) -- zero provider
+    # cost, not a failure, not a budget skip.
+    symbols_skipped_fresh: int = 0
+    # How many of `symbols_requested` were never attempted because the
+    # run stopped early on a budget/quota refusal (see `stop_reason`)
+    # before reaching them -- distinct from symbols_failed (a real
+    # per-symbol provider/data error).
+    symbols_skipped_budget: int = 0
+    # One of the STOP_REASON_* constants above -- COMPLETED unless the
+    # run ended early. Never left as None: a run that never even starts
+    # (e.g. an empty symbol list) reports STOP_REASON_NO_WORK.
+    stop_reason: str = STOP_REASON_COMPLETED
 
     @property
     def success(self) -> bool:

@@ -491,6 +491,59 @@ async def test_ohlcv_fundamentals_dividends_jobs_use_resolved_symbols_not_just_c
     assert result.symbols_succeeded == 2
 
 
+@pytest.mark.asyncio
+async def test_run_historical_ohlcv_runs_critical_pass_under_critical_and_background_pass_under_background(
+    session_factory, monkeypatch
+):
+    """Test matrix #17 (in spirit): the critical (Tier 0/1) pass and the
+    background (Tier 2-4) pass must be genuinely priority-scoped
+    differently -- this is what makes SahmkRateLimiter's reserve
+    protection actually apply (a deep backfill exhausting the
+    background budget can never block the critical pass, because the
+    critical pass never even checks the background cutoff)."""
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ingestion_symbol_universe",
+        lambda: [],
+    )
+    session = session_factory()
+    critical_stock = Stock(symbol="4050", name_en="SASCO", is_active=True)
+    background_stock = Stock(symbol="1010", name_en="Background Co", is_active=True)
+    session.add_all([critical_stock, background_stock])
+    session.commit()
+    _make_pending_outcome_for(session, critical_stock, datetime(2026, 8, 24, tzinfo=timezone.utc))
+    session.close()
+
+    from src.market_data.sahmk.request_priority import get_current_priority
+
+    observed_priority_by_symbol = {}
+
+    class _ObservingProvider:
+        async def authenticate(self):
+            return True
+
+        async def disconnect(self):
+            pass
+
+        async def get_historical_ohlcv(self, symbol, start, end, interval="1d"):
+            observed_priority_by_symbol[symbol] = get_current_priority()
+            return [
+                {
+                    "symbol": symbol, "open": 1, "high": 2, "low": 0.5, "close": 1.5,
+                    "volume": 100, "timestamp": "2026-01-01T00:00:00+00:00",
+                    "source": "fake", "is_synthetic": True,
+                }
+            ]
+
+    async def get_provider():
+        return _ObservingProvider()
+
+    scheduler = IngestionScheduler(session_factory=session_factory, market_provider_getter=get_provider)
+    await scheduler._run_historical_ohlcv()
+
+    assert observed_priority_by_symbol["4050"] == "critical"
+    assert observed_priority_by_symbol["1010"] == "background"
+
+
 # --- _resolve_ohlcv_target_symbols (OHLCV persistence / post-signal ----
 # outcome-tracking fix, 2026-08-23): a symbol with an outstanding
 # PENDING DecisionV2Outcome must keep receiving OHLCV updates even if
@@ -534,10 +587,15 @@ def _make_pending_outcome_for(session, stock, decision_timestamp):
     session.commit()
 
 
-def test_resolve_ohlcv_target_symbols_unions_in_pending_signal_symbols(session_factory, monkeypatch):
-    """TEST 2 (mandate): a symbol that disappears from the next Stage 2
-    scan / active-stock universe must still be tracked by OHLCV
-    ingestion while it has an outstanding signal awaiting evaluation."""
+def test_build_ohlcv_priority_plan_includes_pending_signal_symbols_outside_active_stocks(
+    session_factory, monkeypatch
+):
+    """P0 SAHMK quota architecture repair (2026-08-25), superseding the
+    prior _resolve_ohlcv_target_symbols union test: a symbol that
+    disappears from the next Stage 2 scan / active-stock universe must
+    still be tracked by OHLCV ingestion while it has an outstanding
+    signal awaiting evaluation -- now expressed as Tier 0/1 membership
+    rather than list-order union."""
     monkeypatch.setattr(
         "src.market_data.ingestion.config.get_ingestion_symbol_universe",
         lambda: [],
@@ -551,14 +609,19 @@ def test_resolve_ohlcv_target_symbols_unions_in_pending_signal_symbols(session_f
     session.close()
 
     scheduler = IngestionScheduler(session_factory=session_factory)
-    resolved = scheduler._resolve_ohlcv_target_symbols()
+    plan = scheduler._build_ohlcv_priority_plan()
 
-    assert set(resolved) == {"2222", "6060"}
-    # fundamentals/dividends must NOT be affected by this OHLCV-only union
+    assert "6060" in plan.critical_symbols, "a pending-outcome symbol must be in the critical tier"
+    assert set(plan.critical_symbols) | set(plan.background_symbols) == {"2222", "6060"}
+    # fundamentals/dividends must NOT be affected by this OHLCV-only tiering
     assert scheduler._resolve_target_symbols() == ["2222"]
 
 
-def test_resolve_ohlcv_target_symbols_dedupes_when_already_active(session_factory, monkeypatch):
+def test_build_ohlcv_priority_plan_dedupes_when_already_active(session_factory, monkeypatch):
+    """A symbol that is both in the generic active-Stock universe AND
+    has a pending outcome must appear exactly once across the whole
+    plan (in its highest tier only, never duplicated into background
+    too)."""
     monkeypatch.setattr(
         "src.market_data.ingestion.config.get_ingestion_symbol_universe",
         lambda: [],
@@ -571,34 +634,28 @@ def test_resolve_ohlcv_target_symbols_dedupes_when_already_active(session_factor
     session.close()
 
     scheduler = IngestionScheduler(session_factory=session_factory)
-    resolved = scheduler._resolve_ohlcv_target_symbols()
+    plan = scheduler._build_ohlcv_priority_plan()
 
-    assert resolved.count("2222") == 1
+    assert plan.critical_symbols.count("2222") == 1
+    assert "2222" not in plan.background_symbols
 
 
-def test_resolve_ohlcv_target_symbols_orders_pending_signals_before_background_universe(
+def test_build_ohlcv_priority_plan_puts_pending_signals_in_critical_tier_not_background(
     session_factory, monkeypatch
 ):
-    """2026-08-24 SAHMK real-quota exhaustion incident, root cause:
-    ingest_historical_ohlcv() processes its symbol list in order and
-    stops early the instant the real SAHMK daily quota (confirmed live
-    at ~100/day, far below the ~384-symbol active universe) is
-    exhausted -- every symbol after that point in the list is never
-    attempted. With the old `base + pending` ordering, a mid-run
-    exhaustion always sacrificed the very symbols this method exists to
-    protect (outstanding signals -- that day's frozen Forward Test
-    BUYs among them). Pending-outcome symbols must now appear before
-    every symbol that is only in the list because it's part of the
-    generic background universe, so a truncated run still reaches every
-    outstanding signal first."""
+    """2026-08-24 SAHMK real-quota exhaustion incident, root cause: the
+    generic background universe must never be able to starve an
+    outstanding signal of OHLCV updates. Originally fixed by ordering
+    pending symbols first within one shared list; now fixed more
+    strongly -- pending symbols are priority=CRITICAL, protected by
+    SahmkRateLimiter's own reserve, not merely ordered ahead of
+    priority=BACKGROUND symbols that could still, in principle, exhaust
+    a shared budget before the pending symbol's own acquire() call."""
     monkeypatch.setattr(
         "src.market_data.ingestion.config.get_ingestion_symbol_universe",
         lambda: [],
     )
     session = session_factory()
-    # Background-universe symbols, alphabetically/numerically well
-    # ahead of the pending symbol under the old ordering -- exactly the
-    # shape of production's real active-Stock query result.
     background_stocks = [Stock(symbol=s, name_en=s, is_active=True) for s in ("1010", "1020", "1030")]
     pending_stock = Stock(symbol="4050", name_en="SASCO", is_active=True)
     session.add_all(background_stocks + [pending_stock])
@@ -607,13 +664,13 @@ def test_resolve_ohlcv_target_symbols_orders_pending_signals_before_background_u
     session.close()
 
     scheduler = IngestionScheduler(session_factory=session_factory)
-    resolved = scheduler._resolve_ohlcv_target_symbols()
+    plan = scheduler._build_ohlcv_priority_plan()
 
-    assert resolved[0] == "4050", (
-        "the pending-outcome symbol must be first, so a quota-exhaustion "
-        "truncation still reaches it before any background-only symbol"
+    assert plan.critical_symbols == ["4050"], (
+        "the pending-outcome symbol must be in the critical tier, protected by its own "
+        "reserve rather than merely ordered ahead of the background universe"
     )
-    assert set(resolved) == {"1010", "1020", "1030", "4050"}
+    assert set(plan.background_symbols) == {"1010", "1020", "1030"}
 
 
 @pytest.mark.asyncio

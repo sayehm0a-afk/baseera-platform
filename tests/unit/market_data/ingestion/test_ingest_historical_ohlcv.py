@@ -11,8 +11,20 @@ from sqlalchemy.orm import sessionmaker
 
 from src.core.db.database import Base
 from src.domain.models import PriceBar, Stock, Timeframe
+from src.market_data.ingestion._common import (
+    STOP_REASON_COMPLETED,
+    STOP_REASON_CRITICAL_RESERVE_PROTECTED,
+    STOP_REASON_LIVE_SCAN_RESERVE_PROTECTED,
+    STOP_REASON_NO_WORK,
+    STOP_REASON_UPSTREAM_EXHAUSTED,
+)
 from src.market_data.ingestion.ingest_historical_ohlcv import ingest_historical_ohlcv
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+from src.market_data.sahmk.rate_limiter import (
+    SahmkQuotaReservedForCriticalError,
+    SahmkQuotaReservedForLiveScanError,
+    SahmkUpstreamQuotaExhaustedError,
+)
 
 
 @pytest.fixture
@@ -193,3 +205,124 @@ async def test_no_zero_progress_reason_for_an_already_caught_up_symbol(session_f
 
     result = await ingest_historical_ohlcv(["2222"], provider, session_factory)
     assert result.zero_progress == {}
+
+
+# --- P0 SAHMK quota architecture repair (2026-08-25): observability --------
+# (stop_reason / symbols_skipped_fresh / symbols_skipped_budget) ------------
+
+
+@pytest.mark.asyncio
+async def test_symbols_skipped_fresh_counts_db_first_freshness_skips(session_factory):
+    """Test matrix #15: a symbol already caught up costs zero provider
+    requests -- and is now explicitly counted as such, not merely
+    invisible inside a bare success count."""
+    session = session_factory()
+    stock = Stock(symbol="2222", name_en="Saudi Aramco")
+    session.add(stock)
+    session.flush()
+    session.add(
+        PriceBar(
+            stock_id=stock.id, timeframe=Timeframe.ONE_DAY,
+            timestamp=datetime.now(timezone.utc), open=Decimal("10"), high=Decimal("10"),
+            low=Decimal("10"), close=Decimal("10"), volume=100, source="sahmk", is_synthetic=False,
+        )
+    )
+    session.commit()
+    session.close()
+
+    provider = DevMarketDataProvider()
+    result = await ingest_historical_ohlcv(["2222"], provider, session_factory)
+
+    assert result.symbols_skipped_fresh == 1
+    assert result.stop_reason == STOP_REASON_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_stop_reason_completed_for_a_normal_full_run(session_factory):
+    provider = DevMarketDataProvider()
+    result = await ingest_historical_ohlcv(["1010"], provider, session_factory, backfill_days=5)
+    assert result.stop_reason == STOP_REASON_COMPLETED
+    assert result.symbols_skipped_budget == 0
+
+
+@pytest.mark.asyncio
+async def test_stop_reason_no_work_for_an_empty_symbol_list(session_factory):
+    provider = DevMarketDataProvider()
+    result = await ingest_historical_ohlcv([], provider, session_factory)
+    assert result.stop_reason == STOP_REASON_NO_WORK
+
+
+@pytest.mark.parametrize(
+    "exc_factory,expected_stop_reason",
+    [
+        (lambda: SahmkQuotaReservedForCriticalError("reserved"), STOP_REASON_CRITICAL_RESERVE_PROTECTED),
+        (lambda: SahmkQuotaReservedForLiveScanError("reserved"), STOP_REASON_LIVE_SCAN_RESERVE_PROTECTED),
+        (
+            lambda: SahmkUpstreamQuotaExhaustedError(
+                "exhausted", reset_at_utc=datetime.now(timezone.utc) + timedelta(hours=1)
+            ),
+            STOP_REASON_UPSTREAM_EXHAUSTED,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_quota_exception_sets_the_correct_stop_reason_and_skips_the_remainder(
+    session_factory, exc_factory, expected_stop_reason
+):
+    """Test matrix #17/#22-25 (in spirit): a budget refusal partway
+    through a run must be classified correctly and every remaining
+    symbol counted as a budget skip, never as a per-symbol failure."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+
+    call_count = {"n": 0}
+
+    async def get_historical_ohlcv(symbol, start, end, interval="1d"):
+        call_count["n"] += 1
+        if symbol == "2020":
+            raise exc_factory()
+        return [
+            {
+                "symbol": symbol, "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5,
+                "volume": 1000, "timestamp": "2026-01-05T00:00:00+00:00",
+            }
+        ]
+
+    provider.get_historical_ohlcv = AsyncMock(side_effect=get_historical_ohlcv)
+
+    result = await ingest_historical_ohlcv(["1010", "2020", "3030", "4040"], provider, session_factory)
+
+    assert result.stop_reason == expected_stop_reason
+    assert result.symbols_succeeded == 1  # "1010" only
+    assert result.symbols_failed == 0, "a budget refusal must never be counted as a per-symbol failure"
+    assert result.symbols_skipped_budget == 3  # "2020" (the refused one) + "3030" + "4040"
+    assert call_count["n"] == 2  # never even attempts "3030"/"4040" after the refusal
+
+
+@pytest.mark.asyncio
+async def test_non_quota_exception_does_not_set_a_skip_budget_and_continues_the_run(session_factory):
+    """A genuine per-symbol failure (not a budget refusal) must keep
+    processing the remaining symbols, unlike a quota exception."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+
+    async def get_historical_ohlcv(symbol, start, end, interval="1d"):
+        if symbol == "BAD":
+            raise RuntimeError("simulated provider failure")
+        return [
+            {
+                "symbol": symbol, "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5,
+                "volume": 1000, "timestamp": "2026-01-05T00:00:00+00:00",
+            }
+        ]
+
+    provider.get_historical_ohlcv = AsyncMock(side_effect=get_historical_ohlcv)
+
+    result = await ingest_historical_ohlcv(["1010", "BAD", "3030"], provider, session_factory)
+
+    assert result.stop_reason == STOP_REASON_COMPLETED
+    assert result.symbols_failed == 1
+    assert result.symbols_skipped_budget == 0
+    assert result.symbols_succeeded == 2

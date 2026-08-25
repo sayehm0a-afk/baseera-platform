@@ -35,7 +35,7 @@ from src.domain.models import (
 )
 from src.market_data.sahmk.operation_scope import get_current_operation
 from src.market_data.sahmk.rate_limiter import SahmkRateLimiter
-from src.market_data.sahmk.request_priority import get_current_priority, BACKGROUND
+from src.market_data.sahmk.request_priority import get_current_priority, LIVE_SCAN
 from src.market_intelligence.recurrent_live_scan import (
     ACTIVE_SIGNAL_REVALIDATION,
     NEW_STAGE1_CANDIDATE,
@@ -220,7 +220,11 @@ class _QuotaExhaustedRateLimiter:
 
 class _LowBackgroundQuotaRateLimiter:
     def get_status(self):
-        return {"upstream_confirmed_exhausted": False, "remaining_today_for_background": 1}
+        return {
+            "upstream_confirmed_exhausted": False,
+            "remaining_today_for_background": 1,
+            "remaining_today_for_live_scan": 1,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +482,7 @@ class TestQuotaAllowsARecurrentCycle:
         monkeypatch.setenv("LIVE_RECURRENT_SCAN_REQUEST_RESERVE", "5")
         ok, reason, _ = _quota_allows_a_recurrent_cycle(_LowBackgroundQuotaRateLimiter(), max_candidates=3)
         assert ok is False
-        assert "insufficient_background_quota" in reason
+        assert "insufficient_live_scan_quota" in reason
 
     def test_allows_a_cycle_when_quota_is_healthy(self):
         ok, reason, _ = _quota_allows_a_recurrent_cycle(_ok_rate_limiter(), max_candidates=3)
@@ -679,7 +683,13 @@ class TestRunOneCycle:
         assert cycle.error_summary is None
 
     @pytest.mark.asyncio
-    async def test_stage2_runs_under_background_priority_and_live_recurrent_scan_operation(self, factory):
+    async def test_stage2_runs_under_live_scan_priority_and_live_recurrent_scan_operation(self, factory):
+        """P0 SAHMK quota architecture repair (2026-08-25): this
+        scheduler's own Stage 2 SAHMK calls now run at priority=
+        LIVE_SCAN, not priority=BACKGROUND -- protected by
+        SahmkRateLimiter's own dedicated live-scan reserve so routine
+        ingestion can never starve a live-scan cycle of its own budget
+        (see request_priority.py's module docstring)."""
         session = factory()
         stock = _stock(session, "4050")
         snapshot = _snapshot(session, stock, scan_run_id=999, decision="BUY_CANDIDATE")
@@ -703,7 +713,7 @@ class TestRunOneCycle:
         )
         await scheduler._run_one_cycle()
 
-        assert observed["priority"] == BACKGROUND
+        assert observed["priority"] == LIVE_SCAN
         assert observed["operation"] == "live_recurrent_scan"
 
     @pytest.mark.asyncio

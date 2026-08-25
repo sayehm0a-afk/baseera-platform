@@ -18,6 +18,20 @@ this module's callers haven't been updated to wrap) keeps today's
 existing behavior: it can spend the full daily budget, exactly as
 before this module existed. Only code that explicitly knows it is
 non-urgent background work opts into the lower priority.
+
+P0 SAHMK quota architecture repair (2026-08-25): a third level,
+LIVE_SCAN, sits strictly between CRITICAL and BACKGROUND. It exists
+because "background" had become an undifferentiated pool shared by
+routine ingestion (symbols/historical_ohlcv/fundamentals/dividends)
+AND PR #97's recurrent live-scan cycles -- so a busy ingestion run
+could exhaust the shared background budget before a live-scan cycle
+ever got a turn, with no reserve protecting it. LIVE_SCAN callers are
+protected from BACKGROUND callers (an ingestion job can never spend a
+live-scan cycle's reserved requests) exactly the same way BACKGROUND
+callers are already protected from spending CRITICAL's reserve -- see
+rate_limiter.py's three-cutoff acquire() logic. LIVE_SCAN itself
+cannot dip into the CRITICAL reserve either: active-signal/pending-
+outcome tracking always outranks a live-scan cycle.
 """
 
 import contextlib
@@ -25,6 +39,7 @@ import contextvars
 from typing import Iterator
 
 CRITICAL = "critical"
+LIVE_SCAN = "live_scan"
 BACKGROUND = "background"
 
 _priority_var: "contextvars.ContextVar[str]" = contextvars.ContextVar(
@@ -39,12 +54,12 @@ def get_current_priority() -> str:
 @contextlib.contextmanager
 def priority_scope(priority: str) -> Iterator[None]:
     """Marks every SAHMK request made while this context is active with
-    `priority` (CRITICAL or BACKGROUND). Nestable: a scope's own value
-    is restored on exit, not reset to CRITICAL, so nesting
+    `priority` (CRITICAL, LIVE_SCAN, or BACKGROUND). Nestable: a scope's
+    own value is restored on exit, not reset to CRITICAL, so nesting
     background-inside-background (or a background job calling into a
     critical-priority helper) behaves as the innermost scope intends
     without clobbering an outer one."""
-    if priority not in (CRITICAL, BACKGROUND):
+    if priority not in (CRITICAL, LIVE_SCAN, BACKGROUND):
         raise ValueError(f"Unknown SAHMK request priority: {priority!r}")
     token = _priority_var.set(priority)
     try:
