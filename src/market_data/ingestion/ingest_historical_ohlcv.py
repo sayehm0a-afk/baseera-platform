@@ -26,9 +26,11 @@ from sqlalchemy.orm import Session
 
 from src.domain.models import PriceBar, Timeframe
 from src.market_data.ingestion._common import (
+    STOP_REASON_NO_WORK,
     IngestionResult,
     get_or_create_stock,
     is_quota_exhausted_for_today,
+    quota_exhaustion_stop_reason,
     sleep_if_rate_limited,
     upsert_price_bar,
 )
@@ -63,6 +65,9 @@ async def ingest_historical_ohlcv(
     matching ingest_ohlcv.py/ingest_fundamentals.py's isolation.
     """
     result = IngestionResult(symbols_requested=len(symbols))
+    if not symbols:
+        result.stop_reason = STOP_REASON_NO_WORK
+        return result
     today = datetime.now(timezone.utc).date()
 
     await provider.authenticate()
@@ -79,8 +84,12 @@ async def ingest_historical_ohlcv(
             )
 
             if start > today:
+                # DB-first freshness check (Section 8): today's bar is
+                # already on record for this symbol -- zero provider
+                # requests, not merely a cheap one.
                 session.commit()  # persist a freshly-created placeholder Stock row, if any
                 result.symbols_succeeded += 1
+                result.symbols_skipped_fresh += 1
                 continue
 
             bars = await provider.get_historical_ohlcv(symbol, start, today)
@@ -101,15 +110,24 @@ async def ingest_historical_ohlcv(
             result.symbols_succeeded += 1
         except Exception as exc:
             session.rollback()
+            if is_quota_exhausted_for_today(exc):
+                # A budget refusal, not a per-symbol data/provider
+                # error -- this symbol (and every symbol after it,
+                # never attempted) is a budget skip, not a failure.
+                # Section 11: a partial, budget-limited run must never
+                # be reported indistinguishably from a real failure.
+                result.stop_reason = quota_exhaustion_stop_reason(exc)
+                remaining_index = symbols.index(symbol)
+                result.symbols_skipped_budget += len(symbols) - remaining_index
+                logger.warning(
+                    "ingest_historical_ohlcv: stopping early (%s) -- %d symbol(s) not attempted.",
+                    result.stop_reason,
+                    result.symbols_skipped_budget,
+                )
+                break
             result.symbols_failed += 1
             result.errors[symbol] = str(exc)
             logger.error("Failed to ingest historical OHLCV for symbol '%s': %s", symbol, exc)
-            if is_quota_exhausted_for_today(exc):
-                logger.warning(
-                    "ingest_historical_ohlcv: stopping early -- SAHMK daily quota exhausted, "
-                    "remaining symbol(s) in this run not attempted."
-                )
-                break
             await sleep_if_rate_limited(exc)
         finally:
             session.close()

@@ -68,7 +68,7 @@ from src.domain.models import (
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.operation_scope import LIVE_RECURRENT_SCAN, operation_scope
 from src.market_data.sahmk.rate_limiter import SahmkRateLimiter, get_default_rate_limiter
-from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
+from src.market_data.sahmk.request_priority import LIVE_SCAN, priority_scope
 from src.market_data.ingestion.outcome_tracking import pending_signal_symbols
 from src.market_intelligence.config import (
     get_confidence_change_threshold,
@@ -410,21 +410,39 @@ def _quota_allows_a_recurrent_cycle(
     docstring) always wins over any local optimistic counter, exactly
     like IntervalMarketIntelligenceScheduler's own
     _quota_allows_a_new_cycle. On top of that existing check, this
-    scheduler additionally requires enough background-eligible quota to
-    cover its own worst-case per-cycle spend (max_candidates) PLUS a
-    dedicated reserve (get_live_recurrent_scan_request_reserve()) so a
-    recurrent cycle never itself pushes remaining background quota down
-    to the point where the opening scan or ingestion backfill would be
-    starved later the same day."""
+    scheduler additionally requires enough of its OWN reserved
+    live-scan-eligible quota (remaining_today_for_live_scan -- P0 quota
+    architecture repair, protected from routine ingestion the same way
+    the critical reserve is protected from background work) to cover
+    its own worst-case per-cycle spend (max_candidates) PLUS a further
+    self-imposed margin (get_live_recurrent_scan_request_reserve()) so
+    a recurrent cycle never itself pushes its own remaining reserve
+    down to the point where the NEXT cycle later the same day would be
+    starved."""
     status = rate_limiter.get_status()
     if status.get("upstream_confirmed_exhausted"):
         return False, "upstream_confirmed_exhausted", status
 
-    remaining_bg = status.get("remaining_today_for_background")
+    # P0 quota architecture repair: this cycle now spends its requests
+    # at priority=LIVE_SCAN (see the call site below), which draws from
+    # its own protected reserve -- remaining_today_for_live_scan --
+    # rather than the undivided background pool routine ingestion also
+    # draws from. Checked here as a pre-flight (this scheduler's own
+    # existing self-limiting guard, unchanged in spirit) purely to fail
+    # fast with a clear skip_reason before even selecting candidates;
+    # the rate limiter's own acquire() cutoff (SahmkRateLimiter,
+    # reserved_for_live_scan) remains the true, authoritative guarantee
+    # this cycle cannot spend below its reserve even if this pre-check
+    # were ever skipped or wrong.
+    remaining_live_scan = status.get("remaining_today_for_live_scan")
     floor = get_scan_min_background_quota_remaining()
     required = max(floor, max_candidates + get_live_recurrent_scan_request_reserve())
-    if remaining_bg is not None and remaining_bg < required:
-        return False, f"insufficient_background_quota:remaining={remaining_bg},required={required}", status
+    if remaining_live_scan is not None and remaining_live_scan < required:
+        return (
+            False,
+            f"insufficient_live_scan_quota:remaining={remaining_live_scan},required={required}",
+            status,
+        )
 
     return True, None, status
 
@@ -647,7 +665,7 @@ class RecurrentLiveScanScheduler:
             run = self._repository.create_scan_run(session, symbols_requested=len(selection.symbols))
             run_id = run.id
 
-            with priority_scope(BACKGROUND), operation_scope(LIVE_RECURRENT_SCAN):
+            with priority_scope(LIVE_SCAN), operation_scope(LIVE_RECURRENT_SCAN):
                 provider = await self._get_market_provider()
                 await self._run_market_scan_job(run_id, self._session_factory, provider, symbols=selection.symbols)
 

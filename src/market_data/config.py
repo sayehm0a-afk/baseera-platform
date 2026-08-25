@@ -152,41 +152,97 @@ def get_sahmk_max_requests_per_day() -> Optional[int]:
     up to 3x per logical call with no awareness this is a quota, not a
     transient failure).
 
-    Confirmed real account limit (2026-08-09 production evidence, from
-    SAHMK's own 429 body: "Daily rate limit exceeded (5000 requests/day)")
-    is 5000/day. Default here is 4500, not 5000 -- deliberate headroom
-    for: (a) this being a per-process counter (see rate_limiter.py's
-    module docstring -- a second process/worker/replica has its own
-    independent 4500 budget, so the true cross-process ceiling can only
-    be bounded, not hit exactly, without a shared Redis-backed counter,
-    which is a disclosed, not-yet-built limitation); (b) any request
-    made through a channel this limiter doesn't see (e.g. a manual
-    curl against the API using the same key, outside this application
-    entirely). Override with SAHMK_MAX_REQUESTS_PER_DAY once a
-    Redis-backed cross-process counter exists and/or the plan's true
-    quota is reconfirmed; set to "" (empty string) to disable the
-    client-side cap entirely and rely on SAHMK's own 429 only, as
-    before this default existed."""
-    raw = os.getenv("SAHMK_MAX_REQUESTS_PER_DAY", "4500")
+    P0 SAHMK quota architecture repair (2026-08-25 production evidence,
+    superseding the 2026-08-09 "5000 requests/day" 429-body claim
+    below): the real, currently-effective upstream ceiling is
+    approximately 100 requests/day (repeated live 429 evidence: "IP
+    daily rate limit exceeded (100 requests/day)", most recently
+    reconfirmed 2026-08-25 via `upstream_confirmed_exhausted=true` with
+    `remaining_today_for_background=0`). The 5000/day figure from
+    2026-08-09's 429 body was real evidence at the time but is no
+    longer the operative constraint -- whether that reflects a plan
+    downgrade, a shared/IP-level cap distinct from the per-key figure
+    that 429 body described, or some other change is not established
+    here; only the currently observed ceiling is. This default (100)
+    is deliberately NOT the sole safety mechanism: SahmkRateLimiter.
+    acquire() checks SAHMK's own real 429-evidence-based exhaustion
+    FIRST, before this (or any) static day_count estimate, and that
+    check always wins (see this module's own docstring, "provider
+    truth always overrides this limiter's own bookkeeping") --
+    changing this default cannot make the system less safe if the real
+    quota turns out to be lower still, only better-calibrated when it
+    isn't. Override with SAHMK_MAX_REQUESTS_PER_DAY once the plan's
+    true quota is reconfirmed differently; set to "" (empty string) to
+    disable the client-side cap entirely and rely on SAHMK's own 429
+    only, as before this default existed."""
+    raw = os.getenv("SAHMK_MAX_REQUESTS_PER_DAY", "100")
     return int(raw) if raw.strip() else None
 
 
 def get_sahmk_reserved_for_critical_requests_per_day() -> Optional[int]:
     """How many of get_sahmk_max_requests_per_day()'s requests are
     reserved for priority=CRITICAL callers only (live Decision
-    Engine / market-scan quote lookups -- see
-    src.market_data.sahmk.request_priority) once background work
-    (ingestion backfills, admin diagnostics) has used up the rest.
-    None (the default when SAHMK_MAX_REQUESTS_PER_DAY is unset,
-    disabling the daily cap entirely) or 0 disables the reservation --
-    background and critical work then draw from the same undivided
-    daily budget, exactly as before this mechanism existed. Default
-    1000 (of the default 4500/day budget): sized to comfortably cover
-    one full market-scan cycle of the current ~384-symbol active
-    universe (1 request/symbol, see docs/SAHMK_INTEGRATION.md's
-    request-budget model) even on a day background jobs have already
-    spent the rest."""
-    raw = os.getenv("SAHMK_RESERVED_FOR_CRITICAL_REQUESTS_PER_DAY", "1000")
+    Engine / market-scan quote lookups, active-signal and
+    pending-outcome tracking -- see
+    src.market_data.sahmk.request_priority) once background and
+    live-scan work (ingestion backfills, admin diagnostics, the
+    recurrent live-scan scheduler) has used up the rest. None (the
+    default when SAHMK_MAX_REQUESTS_PER_DAY is unset, disabling the
+    daily cap entirely) or 0 disables the reservation -- all priorities
+    then draw from the same undivided daily budget, exactly as before
+    this mechanism existed.
+
+    P0 SAHMK quota architecture repair (2026-08-25): default lowered
+    from 1000 (sized against the stale 4500/day assumption -- see
+    get_sahmk_max_requests_per_day()'s own docstring) to 30, sized
+    against the REAL ~100/day ceiling: production evidence
+    (2026-08-25) shows 14 actively-tracked symbols (active_signal_count)
+    with 40 pending outcome rows total -- 30 comfortably covers one
+    bounded (1-day-range, already-tracked-symbol) refresh pass over
+    that whole set with headroom, while still leaving the majority of
+    the real 100/day budget for live-scan and background work. A
+    reserve close to or exceeding the total daily budget would starve
+    every other priority permanently, which 1000-of-100 effectively
+    did before this fix (the reservation checks below force
+    reserved_for_critical + reserved_for_live_scan <= max_per_day)."""
+    raw = os.getenv("SAHMK_RESERVED_FOR_CRITICAL_REQUESTS_PER_DAY", "30")
+    if not raw.strip():
+        return None
+    value = int(raw)
+    return value if value > 0 else None
+
+
+def get_sahmk_reserved_for_live_scan_requests_per_day() -> Optional[int]:
+    """How many of get_sahmk_max_requests_per_day()'s requests --
+    immediately outside the critical reserve -- are reserved for
+    priority=LIVE_SCAN callers only (the recurrent live-scan scheduler,
+    src.market_intelligence.recurrent_live_scan) once background work
+    (routine symbols/historical_ohlcv/fundamentals/dividends ingestion,
+    admin diagnostics) has used up the rest. This is the P0 quota-
+    architecture fix's core addition: before it, live-scan and routine
+    ingestion shared one undivided BACKGROUND-priority pool, so a busy
+    ingestion run could exhaust the shared budget before a live-scan
+    cycle ever got a turn -- see
+    src.market_data.sahmk.request_priority's module docstring. None
+    (the default when SAHMK_MAX_REQUESTS_PER_DAY is unset) or 0
+    disables the reservation -- live-scan and background work then draw
+    from the same pool, exactly as before this mechanism existed
+    (LIVE_RECURRENT_SCAN_ENABLED remains independently gated and stays
+    OFF regardless of this value; this only protects a budget for it to
+    use once/if a separate task enables it).
+
+    Default 20: get_live_recurrent_scan_max_candidates() (3) plus one
+    STRICT_REAL_DATA preflight request = ~4 requests/cycle (see
+    src.market_intelligence.config's own "Recurrent Live Scan" section);
+    20 covers 5 cycles -- comfortably more than
+    get_live_recurrent_scan_interval_minutes()'s default (60 minutes)
+    would produce across a ~5-hour Tadawul session (~5 cycles) -- while
+    still leaving the majority of the real ~100/day budget (100 - 30
+    critical - 20 live-scan = 50) for background ingestion. See this
+    task's own PRODUCTION_SCALE_SIMULATION_DAYS report for the
+    scenario-by-scenario sizing evidence (Section 9's 1/2/3/4-cycle
+    table)."""
+    raw = os.getenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", "20")
     if not raw.strip():
         return None
     value = int(raw)

@@ -12,13 +12,14 @@ import pytest
 import src.market_data.sahmk.rate_limiter as rate_limiter_module
 from src.market_data.sahmk.rate_limiter import (
     SahmkQuotaReservedForCriticalError,
+    SahmkQuotaReservedForLiveScanError,
     SahmkRateLimitExceededError,
     SahmkRateLimiter,
     SahmkUpstreamQuotaExhaustedError,
     get_default_rate_limiter,
     reset_default_rate_limiter,
 )
-from src.market_data.sahmk.request_priority import BACKGROUND, CRITICAL
+from src.market_data.sahmk.request_priority import BACKGROUND, CRITICAL, LIVE_SCAN
 
 # Captured before the autouse fixture below ever patches the module
 # attribute of the same name -- test_shared_redis_client_construction_
@@ -207,9 +208,13 @@ def test_rejects_negative_reserved_for_critical():
         SahmkRateLimiter(max_per_minute=10, max_per_day=10, reserved_for_critical=-1)
 
 
-def test_rejects_reserved_for_critical_exceeding_max_per_day():
-    with pytest.raises(ValueError):
-        SahmkRateLimiter(max_per_minute=10, max_per_day=10, reserved_for_critical=11)
+def test_clamps_reserved_for_critical_exceeding_max_per_day_instead_of_raising():
+    """P0 remediation (independent PR #99 audit, P1 finding #1): a
+    reserve exceeding the daily cap must fail safe (clamp) rather than
+    crash the constructor -- a plausible real-world quota-lowering
+    reconfiguration must never take down SAHMK access entirely."""
+    limiter = SahmkRateLimiter(max_per_minute=10, max_per_day=10, reserved_for_critical=11)
+    assert limiter._reserved_for_critical == 10
 
 
 @pytest.mark.asyncio
@@ -259,6 +264,217 @@ async def test_zero_reserved_for_critical_disables_the_reservation():
         await limiter.acquire(priority=BACKGROUND)
 
 
+# --- P0 SAHMK quota architecture repair (2026-08-25): the LIVE_SCAN ---------
+# reserve, strictly between the critical reserve and ordinary background
+# capacity. Mirrors the existing CRITICAL/BACKGROUND test block above --
+# every scenario there has a LIVE_SCAN-aware analogue here.
+
+
+def test_rejects_reserved_for_live_scan_without_max_per_day():
+    with pytest.raises(ValueError):
+        SahmkRateLimiter(max_per_minute=10, reserved_for_live_scan=5)
+
+
+def test_rejects_negative_reserved_for_live_scan():
+    with pytest.raises(ValueError):
+        SahmkRateLimiter(max_per_minute=10, max_per_day=10, reserved_for_live_scan=-1)
+
+
+def test_clamps_combined_reserves_exceeding_max_per_day_preserving_critical_first():
+    """P0 remediation (independent PR #99 audit, P1 finding #1): when
+    reserved_for_critical + reserved_for_live_scan exceeds max_per_day,
+    critical capacity is preserved in full and live_scan absorbs the
+    shortfall (never negative) -- critical safety > live scan >
+    background, exactly the mandate's required priority order."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=10, max_per_day=10, reserved_for_critical=6, reserved_for_live_scan=5
+    )
+    assert limiter._reserved_for_critical == 6
+    assert limiter._reserved_for_live_scan == 4  # 10 - 6, not the configured 5
+
+
+def test_clamping_never_produces_a_negative_reserve():
+    limiter = SahmkRateLimiter(
+        max_per_minute=10, max_per_day=5, reserved_for_critical=100, reserved_for_live_scan=100
+    )
+    assert limiter._reserved_for_critical == 5
+    assert limiter._reserved_for_live_scan == 0
+
+
+def test_reserve_clamping_at_exactly_zero_max_per_day():
+    """Edge case: max_per_day itself is 0 -- both reserves must clamp
+    to 0, never negative, never crash."""
+    limiter = SahmkRateLimiter(max_per_minute=10, max_per_day=1, reserved_for_critical=0, reserved_for_live_scan=0)
+    assert limiter._reserved_for_critical == 0
+    assert limiter._reserved_for_live_scan == 0
+
+
+@pytest.mark.asyncio
+async def test_clamped_reserves_still_correctly_gate_admission():
+    """Clamping must not merely avoid a crash -- the resulting (smaller)
+    reserves must still be genuinely enforced at acquire() time."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=10, reserved_for_critical=100, reserved_for_live_scan=100
+    )
+    # Clamped to reserved_for_critical=10, reserved_for_live_scan=0 --
+    # background and live_scan should both be refused immediately.
+    with pytest.raises(SahmkQuotaReservedForCriticalError):
+        await limiter.acquire(priority=BACKGROUND)
+    with pytest.raises(SahmkQuotaReservedForCriticalError):
+        await limiter.acquire(priority=LIVE_SCAN)
+    await limiter.acquire(priority=CRITICAL)  # still works, full daily cap
+
+
+@pytest.mark.asyncio
+async def test_upstream_exhaustion_still_wins_over_a_clamped_reserve_config():
+    """Even with an invalid/clamped reserve configuration, real
+    upstream-evidence-based exhaustion remains the highest-priority
+    truth for every caller."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=20, reserved_for_critical=30, reserved_for_live_scan=30
+    )
+    limiter.record_upstream_daily_exhaustion(retry_after_seconds=3600, raw_message="test exhaustion")
+    for priority in (CRITICAL, LIVE_SCAN, BACKGROUND):
+        with pytest.raises(SahmkUpstreamQuotaExhaustedError):
+            await limiter.acquire(priority=priority)
+
+
+@pytest.mark.asyncio
+async def test_background_cannot_consume_the_live_scan_reserve(monkeypatch):
+    """Test matrix #7: background must never spend requests reserved for
+    live-scan, even with plenty of daily quota still nominally left."""
+    # max_per_day=10, reserved_for_critical=2, reserved_for_live_scan=3
+    # -> background may only spend the first 5.
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=10, reserved_for_critical=2, reserved_for_live_scan=3
+    )
+    for _ in range(5):
+        await limiter.acquire(priority=BACKGROUND)
+    with pytest.raises(SahmkQuotaReservedForLiveScanError):
+        await limiter.acquire(priority=BACKGROUND)
+
+
+@pytest.mark.asyncio
+async def test_background_cannot_consume_the_critical_reserve_even_with_live_scan_reserve_configured():
+    """Test matrix #6: the critical reserve is still fully protected
+    from background once both reserves are configured together."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=10, reserved_for_critical=2, reserved_for_live_scan=3
+    )
+    for _ in range(5):
+        await limiter.acquire(priority=BACKGROUND)
+    # Live-scan-reserved error fires first (it's the tighter cutoff) --
+    # background never reaches the critical cutoff at all.
+    with pytest.raises(SahmkQuotaReservedForLiveScanError):
+        await limiter.acquire(priority=BACKGROUND)
+
+
+@pytest.mark.asyncio
+async def test_live_scan_can_spend_up_to_the_critical_cutoff_but_not_past_it():
+    """LIVE_SCAN is blocked only by the critical reserve, never by its
+    own -- it may spend everything BACKGROUND could plus its own
+    reserve, but not the critical slice."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=10, reserved_for_critical=2, reserved_for_live_scan=3
+    )
+    for _ in range(8):  # up to the critical cutoff (10 - 2)
+        await limiter.acquire(priority=LIVE_SCAN)
+    with pytest.raises(SahmkQuotaReservedForCriticalError):
+        await limiter.acquire(priority=LIVE_SCAN)
+
+
+@pytest.mark.asyncio
+async def test_critical_request_allowed_when_background_and_live_scan_budget_exhausted():
+    """Test matrix #8: CRITICAL is never blocked by either reserve --
+    only by the absolute max_per_day."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=10, reserved_for_critical=2, reserved_for_live_scan=3
+    )
+    for _ in range(5):
+        await limiter.acquire(priority=BACKGROUND)
+    with pytest.raises(SahmkQuotaReservedForLiveScanError):
+        await limiter.acquire(priority=BACKGROUND)
+    # CRITICAL still works even though background is now refused.
+    for _ in range(5):  # remaining 5 of the daily cap (10 - 5 already used)
+        await limiter.acquire(priority=CRITICAL)
+    with pytest.raises(SahmkRateLimitExceededError):
+        await limiter.acquire(priority=CRITICAL)
+
+
+@pytest.mark.asyncio
+async def test_live_scan_allowed_when_background_budget_exhausted():
+    """Test matrix #9: LIVE_SCAN is never blocked by the background
+    cutoff -- only by the critical reserve above it."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=10, reserved_for_critical=2, reserved_for_live_scan=3
+    )
+    for _ in range(5):
+        await limiter.acquire(priority=BACKGROUND)
+    with pytest.raises(SahmkQuotaReservedForLiveScanError):
+        await limiter.acquire(priority=BACKGROUND)
+    # LIVE_SCAN still works, using its own reserve.
+    for _ in range(3):
+        await limiter.acquire(priority=LIVE_SCAN)
+    with pytest.raises(SahmkQuotaReservedForCriticalError):
+        await limiter.acquire(priority=LIVE_SCAN)
+
+
+@pytest.mark.asyncio
+async def test_upstream_exhaustion_blocks_every_priority_regardless_of_reserves():
+    """Test matrix #10: upstream-confirmed-exhaustion is checked first,
+    before any reserve math, and refuses CRITICAL/LIVE_SCAN/BACKGROUND
+    alike."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=100, reserved_for_critical=10, reserved_for_live_scan=10
+    )
+    limiter.record_upstream_daily_exhaustion(retry_after_seconds=3600, raw_message="test exhaustion")
+    for priority in (CRITICAL, LIVE_SCAN, BACKGROUND):
+        with pytest.raises(SahmkUpstreamQuotaExhaustedError):
+            await limiter.acquire(priority=priority)
+
+
+@pytest.mark.asyncio
+async def test_live_scan_reserved_error_is_a_rate_limit_exceeded_error():
+    """Existing callers written against SahmkRateLimitExceededError
+    (is_quota_exhausted_for_today, ingestion jobs' except blocks) must
+    keep working unchanged for this new subclass too."""
+    limiter = SahmkRateLimiter(max_per_minute=100, max_per_day=1, reserved_for_live_scan=1)
+    with pytest.raises(SahmkRateLimitExceededError):
+        await limiter.acquire(priority=BACKGROUND)
+
+
+@pytest.mark.asyncio
+async def test_zero_reserved_for_live_scan_disables_the_reservation():
+    limiter = SahmkRateLimiter(max_per_minute=100, max_per_day=2, reserved_for_live_scan=0)
+    await limiter.acquire(priority=BACKGROUND)
+    await limiter.acquire(priority=BACKGROUND)  # would be refused if the reservation were active
+    with pytest.raises(SahmkRateLimitExceededError):
+        await limiter.acquire(priority=BACKGROUND)
+
+
+@pytest.mark.asyncio
+async def test_full_request_sum_equals_total_recorded_usage_across_three_priorities():
+    """Test matrix #27: every accepted acquire() call is attributed to
+    exactly one of critical/live_scan/background, and the three sum to
+    the total day_count -- no request is ever double-counted or lost."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=20, reserved_for_critical=3, reserved_for_live_scan=3
+    )
+    for _ in range(2):
+        await limiter.acquire(priority=CRITICAL)
+    for _ in range(2):
+        await limiter.acquire(priority=LIVE_SCAN)
+    for _ in range(2):
+        await limiter.acquire(priority=BACKGROUND)
+    status = limiter.get_status()
+    assert status["requests_used_today"] == 6
+    assert (
+        status["critical_requests_used_today"]
+        + status["live_scan_requests_used_today"]
+        + status["background_requests_used_today"]
+    ) == status["requests_used_today"]
+
+
 # --- get_status() ------------------------------------------------------------
 
 
@@ -296,6 +512,95 @@ def test_get_status_with_no_daily_cap_configured():
     assert status["remaining_today_for_background"] is None
 
 
+def test_get_status_reports_the_live_scan_reserve_and_the_narrower_background_ceiling():
+    limiter = SahmkRateLimiter(
+        max_per_minute=20, max_per_day=100, reserved_for_critical=10, reserved_for_live_scan=20
+    )
+    status = limiter.get_status()
+    assert status["reserved_for_live_scan"] == 20
+    # Legacy "background" cap: everything outside the critical reserve
+    # (unchanged meaning from before the live-scan reserve existed).
+    assert status["remaining_today_for_background"] == 90
+    # New, precise fields:
+    assert status["remaining_today_for_live_scan"] == 90
+    assert status["remaining_today_for_background_after_live_scan_reserve"] == 70
+
+
+@pytest.mark.asyncio
+async def test_get_status_tracks_usage_by_priority_including_live_scan():
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=100, reserved_for_critical=10, reserved_for_live_scan=10
+    )
+    await limiter.acquire(priority=CRITICAL)
+    await limiter.acquire(priority=LIVE_SCAN)
+    await limiter.acquire(priority=LIVE_SCAN)
+    await limiter.acquire(priority=BACKGROUND)
+    status = limiter.get_status()
+    assert status["requests_used_today"] == 4
+    assert status["critical_requests_used_today"] == 1
+    assert status["live_scan_requests_used_today"] == 2
+    assert status["background_requests_used_today"] == 1
+
+
+def test_upstream_exhaustion_forces_live_scan_remaining_to_zero_too():
+    limiter = SahmkRateLimiter(
+        max_per_minute=20, max_per_day=100, reserved_for_critical=10, reserved_for_live_scan=20
+    )
+    limiter.record_upstream_daily_exhaustion(retry_after_seconds=3600, raw_message="test exhaustion")
+    status = limiter.get_status()
+    assert status["remaining_today"] == 0
+    assert status["remaining_today_for_background"] == 0
+    assert status["remaining_today_for_live_scan"] == 0
+    assert status["remaining_today_for_background_after_live_scan_reserve"] == 0
+
+
+# --- budget-query convenience methods (can_run_*) ---------------------------
+
+
+def test_can_run_critical_request_true_when_healthy():
+    limiter = SahmkRateLimiter(max_per_minute=20, max_per_day=100, reserved_for_critical=10)
+    assert limiter.can_run_critical_request() is True
+
+
+def test_can_run_critical_request_false_when_upstream_exhausted():
+    limiter = SahmkRateLimiter(max_per_minute=20, max_per_day=100)
+    limiter.record_upstream_daily_exhaustion(retry_after_seconds=3600, raw_message="test exhaustion")
+    assert limiter.can_run_critical_request() is False
+
+
+@pytest.mark.asyncio
+async def test_can_run_live_scan_cycle_checks_the_whole_estimated_cost_not_just_one_request():
+    limiter = SahmkRateLimiter(max_per_minute=100, max_per_day=10, reserved_for_live_scan=3)
+    assert limiter.can_run_live_scan_cycle(estimated_cost=3) is True
+    assert limiter.can_run_live_scan_cycle(estimated_cost=8) is True  # up to the critical cutoff (10)
+    assert limiter.can_run_live_scan_cycle(estimated_cost=11) is False  # exceeds max_per_day itself
+
+
+def test_can_run_live_scan_cycle_rejects_negative_cost():
+    limiter = SahmkRateLimiter(max_per_minute=20, max_per_day=100)
+    with pytest.raises(ValueError):
+        limiter.can_run_live_scan_cycle(estimated_cost=-1)
+
+
+@pytest.mark.asyncio
+async def test_can_run_background_request_accounts_for_both_reserves():
+    """Test matrix #17 (in spirit): background's own can-run check must
+    reflect the SMALLER of the two reserves, not just the legacy
+    critical-only ceiling."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=10, reserved_for_critical=2, reserved_for_live_scan=3
+    )
+    assert limiter.can_run_background_request() is True
+    for _ in range(5):
+        await limiter.acquire(priority=BACKGROUND)  # exactly fills the background-eligible slice
+    assert limiter.can_run_background_request() is False
+
+
+def test_can_run_backfill_request_matches_can_run_background_request():
+    limiter = SahmkRateLimiter(max_per_minute=20, max_per_day=100, reserved_for_live_scan=10)
+    assert limiter.can_run_backfill_request() == limiter.can_run_background_request()
+
+
 # --- process-wide default singleton -----------------------------------------
 
 
@@ -322,18 +627,24 @@ def test_reset_default_rate_limiter_forces_a_fresh_instance(monkeypatch):
 
 
 def test_default_singleton_enforces_the_confirmed_real_daily_quota(monkeypatch):
-    """2026-08-09 production evidence: SAHMK's real account quota is
-    5000 requests/day. The singleton's default (no env override) must
-    stay safely under that, with a real reserve carved out for
-    live-market-critical work -- this is what actually fixes the root
-    cause (the daily cap was previously None/unenforced by default)."""
+    """P0 SAHMK quota architecture repair (2026-08-25 production
+    evidence, superseding the 2026-08-09 "5000 requests/day" 429-body
+    claim): the real, currently-effective upstream ceiling is
+    approximately 100 requests/day (repeated live 429 evidence, most
+    recently reconfirmed via upstream_confirmed_exhausted=true). The
+    singleton's default (no env override) must reflect that, with real
+    reserves carved out for live-market-critical work AND the recurrent
+    live-scan scheduler -- see src.market_data.config's own docstrings
+    for the full evidence and sizing rationale."""
     reset_default_rate_limiter()
     monkeypatch.delenv("SAHMK_MAX_REQUESTS_PER_DAY", raising=False)
     monkeypatch.delenv("SAHMK_RESERVED_FOR_CRITICAL_REQUESTS_PER_DAY", raising=False)
+    monkeypatch.delenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", raising=False)
     limiter = get_default_rate_limiter()
-    assert limiter._max_per_day == 4500
-    assert limiter._max_per_day < 5000
-    assert limiter._reserved_for_critical == 1000
+    assert limiter._max_per_day == 100
+    assert limiter._reserved_for_critical == 30
+    assert limiter._reserved_for_live_scan == 20
+    assert limiter._reserved_for_critical + limiter._reserved_for_live_scan < limiter._max_per_day
     reset_default_rate_limiter()
 
 

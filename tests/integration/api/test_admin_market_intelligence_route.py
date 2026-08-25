@@ -1657,12 +1657,46 @@ def test_continue_scan_cycle_stops_when_background_quota_is_low(client, session_
     def _low_background_status():
         return {
             "upstream_confirmed_exhausted": False, "remaining_today_for_background": 5,
+            "remaining_today_for_background_after_live_scan_reserve": 5,
             "remaining_today": 100, "critical_requests_used_today": 0,
         }
 
     class _FakeRateLimiter:
         def get_status(self):
             return _low_background_status()
+
+    monkeypatch.setattr(admin_mi_module, "get_default_rate_limiter", lambda: _FakeRateLimiter())
+    monkeypatch.setattr(admin_mi_module, "get_market_scan_symbols_per_cycle", lambda: 20)
+
+    response = client.post("/api/v1/admin/market-intelligence/continue-scan-cycle")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executed"] is False
+    assert body["stop_reason"] == "background_quota_low"
+
+
+def test_continue_scan_cycle_stops_when_only_the_live_scan_reserve_is_protecting_the_budget(
+    client, session_factory, as_staff, monkeypatch
+):
+    """P0 remediation (independent PR #99 audit, P1 finding #2): the
+    legacy `remaining_today_for_background` field does not account for
+    the live-scan reserve -- a status where that legacy field still
+    looks healthy but the live-scan-aware field is low must still stop
+    the cycle, proving this route reads the correct, precise field."""
+    from src.api.routes.admin import market_intelligence as admin_mi_module
+
+    def _live_scan_reserve_protected_status():
+        return {
+            "upstream_confirmed_exhausted": False,
+            "remaining_today_for_background": 40,  # legacy field: looks healthy
+            "remaining_today_for_background_after_live_scan_reserve": 5,  # true budget: low
+            "remaining_today": 100, "critical_requests_used_today": 0,
+        }
+
+    class _FakeRateLimiter:
+        def get_status(self):
+            return _live_scan_reserve_protected_status()
 
     monkeypatch.setattr(admin_mi_module, "get_default_rate_limiter", lambda: _FakeRateLimiter())
     monkeypatch.setattr(admin_mi_module, "get_market_scan_symbols_per_cycle", lambda: 20)

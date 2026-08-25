@@ -114,8 +114,28 @@ def get_sector_recheck_days() -> int:
 def get_ohlcv_backfill_days() -> int:
     """How many days of history to backfill the first time a symbol is
     ingested (subsequent runs are incremental regardless of this
-    value -- see ingest_historical_ohlcv.py)."""
+    value -- see ingest_historical_ohlcv.py). Used for the BACKGROUND-
+    priority pass (Tiers 2-4) -- see get_critical_refresh_backfill_days()
+    for the smaller value the CRITICAL-priority pass (Tiers 0-1) uses."""
     return int(os.getenv("INGESTION_OHLCV_BACKFILL_DAYS", "90"))
+
+
+def get_critical_refresh_backfill_days() -> int:
+    """P0 SAHMK quota architecture repair (2026-08-25), Section 7's
+    DAILY_CRITICAL_REFRESH: how many days of history to backfill for a
+    Tier 0/1 (active-position/pending-signal) symbol that somehow has
+    zero PriceBar rows yet -- deliberately much smaller than
+    get_ohlcv_backfill_days()'s default (90): a symbol only reaches
+    Tier 0/1 by already having a DecisionV2Snapshot/DecisionV2Outcome,
+    which itself requires prior price history to have been computed,
+    so this case is expected to be rare. For the overwhelmingly common
+    case (a Tier 0/1 symbol that already has bars),
+    ingest_historical_ohlcv.py's own incremental catch-up already
+    requests only from the latest ingested day forward regardless of
+    this value -- it only bounds the rare zero-history edge case, which
+    is exactly what keeps the critical pass small and bounded as
+    Section 7 requires."""
+    return int(os.getenv("INGESTION_CRITICAL_REFRESH_BACKFILL_DAYS", "5"))
 
 
 def get_fundamentals_period_type() -> str:
