@@ -27,6 +27,7 @@ from src.domain.models import (
     DecisionV2Snapshot,
     MarketScanRun,
     MarketScanStatus,
+    RecurrentScanCycle,
     RecurrentScanCycleStatus,
     ShadowLifecycleResult,
     ShadowLiveSignal,
@@ -496,16 +497,70 @@ def _fake_run_market_scan_job_writing_snapshots(snapshot_specs):
     session (matching the real run_market_scan_job's own contract) and
     writing one DecisionV2Snapshot per requested symbol that has a spec
     -- a symbol with no spec is silently skipped, mirroring a real
-    Stage 2 failure/skip for that symbol."""
+    Stage 2 failure/skip for that symbol. Also finalizes the real
+    MarketScanRun row (status=SUCCESS, symbols_succeeded/failed) the
+    same way MarketIntelligenceEngine.execute_scan's own finish_run()
+    call always does -- a fake that left this row at its PENDING/
+    all-zero default would silently defeat any assertion that reads
+    MarketScanRun back (see the symbols_evaluated_count regression
+    this exact gap let through)."""
 
     async def _fake(run_id, session_factory, provider, symbols=None, **kwargs):
         db = session_factory()
         try:
+            succeeded = 0
             for symbol in symbols or []:
                 if symbol not in snapshot_specs:
                     continue
                 stock = db.query(Stock).filter_by(symbol=symbol).one()
                 _snapshot(db, stock, scan_run_id=run_id, **snapshot_specs[symbol])
+                succeeded += 1
+            failed = len(symbols or []) - succeeded
+            db.query(MarketScanRun).filter_by(id=run_id).update(
+                {"status": MarketScanStatus.SUCCESS, "symbols_succeeded": succeeded, "symbols_failed": failed}
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    return _fake
+
+
+def _fake_stage2(succeeded_specs=None, failed_symbols=(), skipped_symbols=(), engine_status=MarketScanStatus.SUCCESS):
+    """A more explicit Stage 2 double than
+    _fake_run_market_scan_job_writing_snapshots, for the
+    symbols_evaluated_count/PARTIAL_PROVIDER_FAILURE regression matrix:
+    distinguishes real successes (a DecisionV2Snapshot is written, plus
+    MarketScanRun.symbols_succeeded), real per-symbol provider failures
+    (MarketScanRun.symbols_failed only -- no snapshot, matching a real
+    build_analysis_context/quote failure), and skipped symbols
+    (MarketScanRun.symbols_skipped only -- insufficient data, never
+    counted as a failure). `engine_status=MarketScanStatus.FAILED`
+    simulates MarketIntelligenceEngine.execute_scan's own exception
+    path, which always zeroes every count regardless of what happened
+    before the exception -- exactly like the real engine."""
+    succeeded_specs = succeeded_specs or {}
+
+    async def _fake(run_id, session_factory, provider, symbols=None, **kwargs):
+        db = session_factory()
+        try:
+            if engine_status != MarketScanStatus.FAILED:
+                for symbol in symbols or []:
+                    if symbol in succeeded_specs:
+                        stock = db.query(Stock).filter_by(symbol=symbol).one()
+                        _snapshot(db, stock, scan_run_id=run_id, **succeeded_specs[symbol])
+                succeeded_n, failed_n, skipped_n = len(succeeded_specs), len(failed_symbols), len(skipped_symbols)
+            else:
+                succeeded_n = failed_n = skipped_n = 0
+            db.query(MarketScanRun).filter_by(id=run_id).update(
+                {
+                    "status": engine_status,
+                    "symbols_succeeded": succeeded_n,
+                    "symbols_failed": failed_n,
+                    "symbols_skipped": skipped_n,
+                }
+            )
+            db.commit()
         finally:
             db.close()
 
@@ -579,6 +634,8 @@ class TestRunOneCycle:
         assert cycle.status == RecurrentScanCycleStatus.SUCCESS
         assert cycle.signals_new_opportunity_count == 1
         assert cycle.symbols_selected_count == 1
+        assert cycle.symbols_evaluated_count == 1
+        assert cycle.error_summary is None
 
         session = factory()
         assert session.query(ShadowLiveSignal).filter_by(symbol="4050").count() == 1
@@ -618,6 +675,8 @@ class TestRunOneCycle:
 
         assert cycle.status == RecurrentScanCycleStatus.SUCCESS_NO_CHANGE
         assert cycle.signals_unchanged_count == 1
+        assert cycle.symbols_evaluated_count == 1
+        assert cycle.error_summary is None
 
     @pytest.mark.asyncio
     async def test_stage2_runs_under_background_priority_and_live_recurrent_scan_operation(self, factory):
@@ -697,6 +756,226 @@ class TestRunOneCycle:
 
         assert cycle.status == RecurrentScanCycleStatus.FAILED
         assert "connection refused" in cycle.error_summary
+
+
+class TestSymbolsEvaluatedCountAndPartialProviderFailure:
+    """Regression coverage for the two defects the independent PR #97
+    audit found: (1) symbols_evaluated_count previously reported
+    len(selected symbols) regardless of how many actually produced a
+    real DecisionV2Snapshot; (2) PARTIAL_PROVIDER_FAILURE existed in
+    the enum/schema but the scheduler never set it. Both are now
+    derived from the real MarketScanRun row's own symbols_succeeded/
+    symbols_failed/status -- the same canonical accounting
+    MarketIntelligenceEngine.execute_scan already writes for every
+    caller, not a second, independently-maintained counter.
+
+    `factory` always seeds exactly one active-signal candidate symbol
+    per test (a DecisionV2Outcome in PENDING status) unless noted, so
+    selection is deterministic without depending on Stage 1/price
+    history fixtures.
+    """
+
+    @staticmethod
+    def _seed_pending_symbols(factory, symbols):
+        session = factory()
+        for symbol in symbols:
+            stock = _stock(session, symbol)
+            snap = _snapshot(session, stock, scan_run_id=900 + hash(symbol) % 100, decision="WATCH")
+            session.add(
+                DecisionV2Outcome(
+                    decision_v2_snapshot_id=snap.id, symbol=symbol,
+                    due_at=datetime.now(timezone.utc) + timedelta(days=1),
+                )
+            )
+        session.commit()
+        session.close()
+
+    # -- A: full success ---------------------------------------------
+    @pytest.mark.asyncio
+    async def test_full_success_evaluated_equals_selected(self, factory):
+        self._seed_pending_symbols(factory, ["4050"])
+        fake_job = _fake_stage2(succeeded_specs={"4050": {"decision": "BUY_CANDIDATE"}})
+        scheduler = RecurrentLiveScanScheduler(
+            session_factory=factory, market_provider_getter=_fake_market_provider_getter,
+            rate_limiter=_ok_rate_limiter(), run_market_scan_job_fn=fake_job,
+        )
+        cycle = await scheduler._run_one_cycle()
+        assert cycle.status == RecurrentScanCycleStatus.SUCCESS
+        assert cycle.symbols_selected_count == 1
+        assert cycle.symbols_evaluated_count == 1
+        assert cycle.error_summary is None
+
+    # -- B: total engine-level failure before any symbol -------------
+    @pytest.mark.asyncio
+    async def test_engine_level_failure_is_failed_with_zero_evaluated(self, factory):
+        self._seed_pending_symbols(factory, ["4050"])
+        fake_job = _fake_stage2(engine_status=MarketScanStatus.FAILED)
+        scheduler = RecurrentLiveScanScheduler(
+            session_factory=factory, market_provider_getter=_fake_market_provider_getter,
+            rate_limiter=_ok_rate_limiter(), run_market_scan_job_fn=fake_job,
+        )
+        cycle = await scheduler._run_one_cycle()
+        assert cycle.status == RecurrentScanCycleStatus.FAILED
+        assert cycle.symbols_evaluated_count == 0
+        assert cycle.symbols_selected_count == 1
+        assert cycle.error_summary is not None
+
+    # -- C/E/I/J: 1 success then a real per-symbol provider failure ---
+    @pytest.mark.asyncio
+    async def test_partial_completion_is_partial_provider_failure_not_success(self, factory):
+        self._seed_pending_symbols(factory, ["4050"])
+        session = factory()
+        stock2 = _stock(session, "6060")
+        snap2 = _snapshot(session, stock2, scan_run_id=901, decision="WATCH")
+        session.add(DecisionV2Outcome(
+            decision_v2_snapshot_id=snap2.id, symbol="6060", due_at=datetime.now(timezone.utc) + timedelta(days=1),
+        ))
+        session.commit()
+        session.close()
+
+        fake_job = _fake_stage2(
+            succeeded_specs={"4050": {"decision": "BUY_CANDIDATE"}}, failed_symbols=("6060",),
+        )
+        scheduler = RecurrentLiveScanScheduler(
+            session_factory=factory, market_provider_getter=_fake_market_provider_getter,
+            rate_limiter=_ok_rate_limiter(), run_market_scan_job_fn=fake_job,
+        )
+        cycle = await scheduler._run_one_cycle()
+
+        assert cycle.status == RecurrentScanCycleStatus.PARTIAL_PROVIDER_FAILURE
+        assert cycle.symbols_selected_count == 2
+        assert cycle.symbols_evaluated_count == 1  # NOT 2 -- this is exactly the old overstatement bug
+        assert cycle.error_summary is not None
+        assert "1 of 2" in cycle.error_summary
+
+    # -- D: provider exhaustion discovered mid/after-run, zero explicit
+    #    per-symbol failures recorded, but real quota evidence exists --
+    @pytest.mark.asyncio
+    async def test_upstream_exhaustion_discovered_after_a_partial_run_is_partial_provider_failure(self, factory):
+        self._seed_pending_symbols(factory, ["4050"])
+
+        class _RateLimiterThatBecomesExhausted:
+            def __init__(self):
+                self.calls = 0
+
+            def get_status(self):
+                self.calls += 1
+                # First call (pre-cycle quota gate) reports healthy;
+                # every call after Stage 2 ran reports real upstream
+                # exhaustion -- simulating quota running out mid-cycle.
+                if self.calls == 1:
+                    return {"upstream_confirmed_exhausted": False, "remaining_today_for_background": 999}
+                return {"upstream_confirmed_exhausted": True, "remaining_today_for_background": 0}
+
+        fake_job = _fake_stage2(succeeded_specs={"4050": {"decision": "BUY_CANDIDATE"}})
+        scheduler = RecurrentLiveScanScheduler(
+            session_factory=factory, market_provider_getter=_fake_market_provider_getter,
+            rate_limiter=_RateLimiterThatBecomesExhausted(), run_market_scan_job_fn=fake_job,
+        )
+        cycle = await scheduler._run_one_cycle()
+
+        assert cycle.status == RecurrentScanCycleStatus.PARTIAL_PROVIDER_FAILURE
+        assert cycle.symbols_evaluated_count == 1
+
+    # -- F: a skipped (insufficient-data) symbol is NOT a provider
+    #    failure -- it must not push the cycle into PARTIAL_PROVIDER_FAILURE
+    @pytest.mark.asyncio
+    async def test_skipped_symbol_alone_is_not_a_partial_provider_failure(self, factory):
+        self._seed_pending_symbols(factory, ["4050"])
+        session = factory()
+        stock2 = _stock(session, "6060")
+        snap2 = _snapshot(session, stock2, scan_run_id=902, decision="WATCH")
+        session.add(DecisionV2Outcome(
+            decision_v2_snapshot_id=snap2.id, symbol="6060", due_at=datetime.now(timezone.utc) + timedelta(days=1),
+        ))
+        session.commit()
+        session.close()
+
+        fake_job = _fake_stage2(
+            succeeded_specs={"4050": {"decision": "BUY_CANDIDATE"}}, skipped_symbols=("6060",),
+        )
+        scheduler = RecurrentLiveScanScheduler(
+            session_factory=factory, market_provider_getter=_fake_market_provider_getter,
+            rate_limiter=_ok_rate_limiter(), run_market_scan_job_fn=fake_job,
+        )
+        cycle = await scheduler._run_one_cycle()
+
+        assert cycle.status == RecurrentScanCycleStatus.SUCCESS
+        assert cycle.symbols_evaluated_count == 1
+        assert cycle.error_summary is None
+
+    # -- all selected symbols individually fail, engine itself reports
+    #    SUCCESS (didn't raise) -- zero usable output must be FAILED,
+    #    not PARTIAL (there is no partial output to speak of) --------
+    @pytest.mark.asyncio
+    async def test_all_symbols_failed_with_zero_successes_is_failed_not_partial(self, factory):
+        self._seed_pending_symbols(factory, ["4050"])
+        fake_job = _fake_stage2(succeeded_specs={}, failed_symbols=("4050",))
+        scheduler = RecurrentLiveScanScheduler(
+            session_factory=factory, market_provider_getter=_fake_market_provider_getter,
+            rate_limiter=_ok_rate_limiter(), run_market_scan_job_fn=fake_job,
+        )
+        cycle = await scheduler._run_one_cycle()
+
+        assert cycle.status == RecurrentScanCycleStatus.FAILED
+        assert cycle.symbols_evaluated_count == 0
+
+    # -- accounting invariant, across every scenario above -----------
+    @pytest.mark.asyncio
+    async def test_evaluated_never_exceeds_selected_across_scenarios(self, factory):
+        scenarios = [
+            ("S1", _fake_stage2(succeeded_specs={"S1": {"decision": "BUY_CANDIDATE"}})),
+            ("S2", _fake_stage2(succeeded_specs={"S2": {"decision": "BUY_CANDIDATE"}}, failed_symbols=("6060",))),
+            ("S3", _fake_stage2(engine_status=MarketScanStatus.FAILED)),
+            ("S4", _fake_stage2(succeeded_specs={}, failed_symbols=("S4",))),
+        ]
+        for symbol, fake_job in scenarios:
+            self._seed_pending_symbols(factory, [symbol])
+            session = factory()
+            session.query(MarketScanRun).delete()
+            session.commit()
+            session.close()
+            scheduler = RecurrentLiveScanScheduler(
+                session_factory=factory, market_provider_getter=_fake_market_provider_getter,
+                rate_limiter=_ok_rate_limiter(), run_market_scan_job_fn=fake_job,
+            )
+            cycle = await scheduler._run_one_cycle()
+            assert 0 <= cycle.symbols_evaluated_count <= cycle.symbols_selected_count, (
+                f"invariant violated: evaluated={cycle.symbols_evaluated_count} "
+                f"selected={cycle.symbols_selected_count} status={cycle.status}"
+            )
+
+    # -- self-challenge: an exception raised while persisting the
+    #    successful classification must not silently double-count or
+    #    lose the real MarketScanRun-derived numbers -- it must fall
+    #    through to the existing outer FAILED handler untouched -------
+    @pytest.mark.asyncio
+    async def test_exception_after_classification_still_yields_a_single_failed_row_not_a_corrupted_success(
+        self, factory, monkeypatch
+    ):
+        self._seed_pending_symbols(factory, ["4050"])
+        fake_job = _fake_stage2(succeeded_specs={"4050": {"decision": "BUY_CANDIDATE"}})
+
+        import src.market_intelligence.recurrent_live_scan as module
+
+        def _raising_emit(*args, **kwargs):
+            raise RuntimeError("simulated persistence failure after classification")
+
+        monkeypatch.setattr(module, "emit_shadow_signals", _raising_emit)
+
+        scheduler = RecurrentLiveScanScheduler(
+            session_factory=factory, market_provider_getter=_fake_market_provider_getter,
+            rate_limiter=_ok_rate_limiter(), run_market_scan_job_fn=fake_job,
+        )
+        cycle = await scheduler._run_one_cycle()
+
+        assert cycle.status == RecurrentScanCycleStatus.FAILED
+        assert "simulated persistence failure" in cycle.error_summary
+
+        session = factory()
+        rows = session.query(RecurrentScanCycle).filter_by(cycle_id=cycle.cycle_id).all()
+        assert len(rows) == 1, "exactly one row must exist for this cycle_id -- no duplicate/corrupted accounting"
+        session.close()
 
 
 class TestSchedulerLifecycleAndLeadership:

@@ -59,6 +59,7 @@ from src.analysis.decision_v2.decision_freshness import is_decision_fresh
 from src.analysis.decision_v2.types import Decision, EntryStatus
 from src.domain.models import (
     DecisionV2Snapshot,
+    MarketScanStatus,
     RecurrentScanCycle,
     RecurrentScanCycleStatus,
     ShadowLifecycleResult,
@@ -652,6 +653,22 @@ class RecurrentLiveScanScheduler:
 
             session.expire_all()
 
+            # The canonical, already-computed per-symbol accounting for
+            # scan_run_id lives on the MarketScanRun row itself --
+            # MarketIntelligenceEngine.execute_scan always calls
+            # repository.finish_run() with real symbols_succeeded/
+            # symbols_skipped/symbols_failed (and a final SUCCESS/FAILED
+            # status) before returning, on every path including its own
+            # exception handler (see market_engine.py). Reading it back
+            # here -- rather than assuming every selected symbol was
+            # evaluated -- is the single source of truth this cycle's
+            # own counters must agree with; no second, independently-
+            # maintained accounting is introduced.
+            run_row = self._repository.get_run(session, run_id)
+            symbols_succeeded = (run_row.symbols_succeeded or 0) if run_row is not None else 0
+            symbols_failed = (run_row.symbols_failed or 0) if run_row is not None else 0
+            stage2_run_status = run_row.status if run_row is not None else None
+
             emission = emit_shadow_signals(
                 session, cycle_id, run_id, selection, selection.stage1_score_by_symbol, emitted_at=triggered_at
             )
@@ -674,16 +691,47 @@ class RecurrentLiveScanScheduler:
                     ShadowLifecycleResult.INVALIDATED_SIGNAL,
                 )
             )
-            final_status = (
-                RecurrentScanCycleStatus.SUCCESS if total_persisted > 0 else RecurrentScanCycleStatus.SUCCESS_NO_CHANGE
-            )
+
+            # A cycle whose Stage 2 run produced zero successful
+            # evaluations (the engine's own exception path, or every
+            # selected symbol individually failed even though the
+            # engine itself did not raise) is FAILED -- there is no
+            # usable output to call partial. A cycle that produced SOME
+            # real evaluations but also had real per-symbol failures,
+            # or discovered upstream-confirmed SAHMK exhaustion by the
+            # time it finished, is PARTIAL_PROVIDER_FAILURE: usable
+            # output exists, but the cycle did not complete as
+            # intended. Everything else is a clean SUCCESS/
+            # SUCCESS_NO_CHANGE, exactly as before. `skipped` symbols
+            # (insufficient data -- a normal candidate-eligibility
+            # outcome, tracked separately from `failed`) are never
+            # counted as a provider failure here.
+            provider_signal = symbols_failed > 0 or bool(quota_status_after.get("upstream_confirmed_exhausted"))
+            error_summary = None
+            if stage2_run_status == MarketScanStatus.FAILED or (symbols_succeeded == 0 and symbols_failed > 0):
+                final_status = RecurrentScanCycleStatus.FAILED
+                error_summary = (
+                    f"Stage 2 scan run {run_id} produced zero successful evaluations "
+                    f"(status={stage2_run_status}, succeeded={symbols_succeeded}, failed={symbols_failed})."
+                )
+            elif symbols_succeeded > 0 and provider_signal:
+                final_status = RecurrentScanCycleStatus.PARTIAL_PROVIDER_FAILURE
+                error_summary = (
+                    f"{symbols_failed} of {len(selection.symbols)} selected symbol(s) failed during Stage 2 "
+                    f"(succeeded={symbols_succeeded})."
+                )
+            else:
+                final_status = (
+                    RecurrentScanCycleStatus.SUCCESS if total_persisted > 0 else RecurrentScanCycleStatus.SUCCESS_NO_CHANGE
+                )
 
             return self._persist_cycle(
                 session, cycle_id, triggered_at, final_status,
+                error_summary=error_summary,
                 active_signal_candidate_count=selection.active_signal_total_count,
                 new_stage1_candidate_count=selection.new_stage1_candidate_count,
                 symbols_selected_count=len(selection.symbols),
-                symbols_evaluated_count=len(selection.symbols),
+                symbols_evaluated_count=symbols_succeeded,
                 emission=emission,
                 quota_remaining_before=quota_remaining_before,
                 quota_remaining_after=quota_remaining_after,
