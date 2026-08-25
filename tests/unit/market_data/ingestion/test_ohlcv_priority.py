@@ -21,7 +21,6 @@ from src.domain.models import (
     Timeframe,
 )
 from src.market_data.ingestion.ohlcv_priority import (
-    OhlcvPriorityPlan,
     build_priority_plan,
     estimate_max_background_refresh_age_days,
     tier0_active_position_symbols,
@@ -261,7 +260,7 @@ def test_never_ingested_symbols_sort_before_symbols_with_a_bar(session_factory):
     session = session_factory()
     fresh_stock = _stock(session, "4444")
     _bar(session, fresh_stock, days_ago=0)
-    never_ingested_stock = _stock(session, "5555")
+    _stock(session, "5555")  # never gets a PriceBar
     session.commit()
 
     plan = build_priority_plan(session, base_symbols=["4444", "5555"])

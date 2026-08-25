@@ -208,9 +208,13 @@ def test_rejects_negative_reserved_for_critical():
         SahmkRateLimiter(max_per_minute=10, max_per_day=10, reserved_for_critical=-1)
 
 
-def test_rejects_reserved_for_critical_exceeding_max_per_day():
-    with pytest.raises(ValueError):
-        SahmkRateLimiter(max_per_minute=10, max_per_day=10, reserved_for_critical=11)
+def test_clamps_reserved_for_critical_exceeding_max_per_day_instead_of_raising():
+    """P0 remediation (independent PR #99 audit, P1 finding #1): a
+    reserve exceeding the daily cap must fail safe (clamp) rather than
+    crash the constructor -- a plausible real-world quota-lowering
+    reconfiguration must never take down SAHMK access entirely."""
+    limiter = SahmkRateLimiter(max_per_minute=10, max_per_day=10, reserved_for_critical=11)
+    assert limiter._reserved_for_critical == 10
 
 
 @pytest.mark.asyncio
@@ -276,11 +280,63 @@ def test_rejects_negative_reserved_for_live_scan():
         SahmkRateLimiter(max_per_minute=10, max_per_day=10, reserved_for_live_scan=-1)
 
 
-def test_rejects_combined_reserves_exceeding_max_per_day():
-    with pytest.raises(ValueError):
-        SahmkRateLimiter(
-            max_per_minute=10, max_per_day=10, reserved_for_critical=6, reserved_for_live_scan=5
-        )
+def test_clamps_combined_reserves_exceeding_max_per_day_preserving_critical_first():
+    """P0 remediation (independent PR #99 audit, P1 finding #1): when
+    reserved_for_critical + reserved_for_live_scan exceeds max_per_day,
+    critical capacity is preserved in full and live_scan absorbs the
+    shortfall (never negative) -- critical safety > live scan >
+    background, exactly the mandate's required priority order."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=10, max_per_day=10, reserved_for_critical=6, reserved_for_live_scan=5
+    )
+    assert limiter._reserved_for_critical == 6
+    assert limiter._reserved_for_live_scan == 4  # 10 - 6, not the configured 5
+
+
+def test_clamping_never_produces_a_negative_reserve():
+    limiter = SahmkRateLimiter(
+        max_per_minute=10, max_per_day=5, reserved_for_critical=100, reserved_for_live_scan=100
+    )
+    assert limiter._reserved_for_critical == 5
+    assert limiter._reserved_for_live_scan == 0
+
+
+def test_reserve_clamping_at_exactly_zero_max_per_day():
+    """Edge case: max_per_day itself is 0 -- both reserves must clamp
+    to 0, never negative, never crash."""
+    limiter = SahmkRateLimiter(max_per_minute=10, max_per_day=1, reserved_for_critical=0, reserved_for_live_scan=0)
+    assert limiter._reserved_for_critical == 0
+    assert limiter._reserved_for_live_scan == 0
+
+
+@pytest.mark.asyncio
+async def test_clamped_reserves_still_correctly_gate_admission():
+    """Clamping must not merely avoid a crash -- the resulting (smaller)
+    reserves must still be genuinely enforced at acquire() time."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=10, reserved_for_critical=100, reserved_for_live_scan=100
+    )
+    # Clamped to reserved_for_critical=10, reserved_for_live_scan=0 --
+    # background and live_scan should both be refused immediately.
+    with pytest.raises(SahmkQuotaReservedForCriticalError):
+        await limiter.acquire(priority=BACKGROUND)
+    with pytest.raises(SahmkQuotaReservedForCriticalError):
+        await limiter.acquire(priority=LIVE_SCAN)
+    await limiter.acquire(priority=CRITICAL)  # still works, full daily cap
+
+
+@pytest.mark.asyncio
+async def test_upstream_exhaustion_still_wins_over_a_clamped_reserve_config():
+    """Even with an invalid/clamped reserve configuration, real
+    upstream-evidence-based exhaustion remains the highest-priority
+    truth for every caller."""
+    limiter = SahmkRateLimiter(
+        max_per_minute=100, max_per_day=20, reserved_for_critical=30, reserved_for_live_scan=30
+    )
+    limiter.record_upstream_daily_exhaustion(retry_after_seconds=3600, raw_message="test exhaustion")
+    for priority in (CRITICAL, LIVE_SCAN, BACKGROUND):
+        with pytest.raises(SahmkUpstreamQuotaExhaustedError):
+            await limiter.acquire(priority=priority)
 
 
 @pytest.mark.asyncio

@@ -398,8 +398,14 @@ async def _run_one_bounded_background_cycle(
         provider calls (fewer once cache hits are counted); refusing
         to start unless that full worst case still fits comfortably
         inside the remaining background budget is what actually
-        prevents this path from ever running the critical reserve
-        down.
+        prevents this path from ever running the critical OR the
+        live-scan reserve down (P0 remediation, independent PR #99
+        audit P1 finding #2: this pre-flight now reads
+        remaining_today_for_background_after_live_scan_reserve, not
+        the legacy remaining_today_for_background, which does not
+        account for the live-scan reserve and could let a manually
+        triggered scan start believing it had budget the live-scan
+        reserve had already claimed).
       * database/redis health probes.
       * SAHMK connectivity probe (current_provider_kind == "sahmk").
       * The same overlap guard (`has_in_flight_run`) every other
@@ -435,7 +441,7 @@ async def _run_one_bounded_background_cycle(
     if quota_before.get("upstream_confirmed_exhausted"):
         return _stopped("upstream_confirmed_exhausted", quota_before)
 
-    remaining_bg = quota_before.get("remaining_today_for_background")
+    remaining_bg = quota_before.get("remaining_today_for_background_after_live_scan_reserve")
     safety_threshold = max(get_market_scan_symbols_per_cycle(), get_scan_min_background_quota_remaining())
     if remaining_bg is not None and remaining_bg < safety_threshold:
         return _stopped("background_quota_low", quota_before)

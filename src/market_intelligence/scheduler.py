@@ -231,14 +231,22 @@ class IntervalMarketIntelligenceScheduler:
     def _quota_allows_a_new_cycle(self) -> bool:
         """Circuit breaker, checked before touching the DB or SAHMK at
         all this cycle -- see this module's own docstring for the
-        2026-08-13 incident this closes."""
+        2026-08-13 incident this closes. P0 remediation (independent
+        PR #99 audit, P2 finding #2): reads
+        remaining_today_for_background_after_live_scan_reserve, not the
+        legacy remaining_today_for_background -- the legacy field does
+        not account for the live-scan reserve, so this circuit breaker
+        could otherwise let a cycle start that then hits
+        SahmkQuotaReservedForLiveScanError partway through (caught and
+        degraded gracefully per-symbol, but wastes a cycle it should
+        have skipped proactively)."""
         status = self._rate_limiter.get_status()
         if status.get("upstream_confirmed_exhausted"):
             logger.warning(
                 "MarketIntelligenceScheduler: SAHMK upstream quota is confirmed exhausted -- skipping this cycle."
             )
             return False
-        remaining_bg = status.get("remaining_today_for_background")
+        remaining_bg = status.get("remaining_today_for_background_after_live_scan_reserve")
         threshold = get_scan_min_background_quota_remaining()
         if remaining_bg is not None and remaining_bg < threshold:
             logger.warning(

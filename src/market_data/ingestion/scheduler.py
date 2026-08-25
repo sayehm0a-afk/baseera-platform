@@ -50,6 +50,24 @@ often much longer, interval) keeps `self._is_leader` current, and each
 job loop skips its own tick's work entirely (zero SAHMK cost, no
 `IngestionRunLog` row written) whenever this worker does not currently
 hold the lease.
+
+P0 SAHMK quota architecture repair, DEPLOYED_BUT_FEATURE_DISABLED vs
+NOT_DEPLOYED (independent PR #99 audit, P1 finding #3): the
+CRITICAL/BACKGROUND tiered-refresh split in `_run_historical_ohlcv`
+below, and the corrected SAHMK_MAX_REQUESTS_PER_DAY/
+SAHMK_RESERVED_FOR_CRITICAL_REQUESTS_PER_DAY/
+SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY defaults, are NOT gated
+behind any feature flag. They take effect for the very next scheduled
+`historical_ohlcv` run the moment this module is deployed to an
+environment where INGESTION_SCHEDULER_ENABLED=true (true in
+production) -- unlike LIVE_RECURRENT_SCAN_ENABLED and Shadow Mode
+(src.market_intelligence.recurrent_live_scan), which genuinely stay
+inert (the scheduler that would use the new LIVE_SCAN priority is
+never even instantiated) until a separate, explicit flag is flipped.
+"PR #99 ships disabled" is only true for that recurrent-scan/Shadow-
+Mode portion -- deploying this module is a real, immediate change to
+already-active production ingestion behavior (DEPLOYED, not
+DEPLOYED_BUT_FEATURE_DISABLED), not a no-op.
 """
 
 import asyncio

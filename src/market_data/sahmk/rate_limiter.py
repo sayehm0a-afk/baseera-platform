@@ -43,7 +43,7 @@ import logging
 import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict, Optional, Tuple
 
 import redis as redis_lib
 
@@ -73,6 +73,62 @@ _DEFAULT_EXHAUSTION_HOLD_SECONDS = 3600
 # claim about when SAHMK's own quota resets), short enough that stale
 # days don't accumulate forever.
 _DAY_COUNT_TTL_SECONDS = 2 * 24 * 3600
+
+# P0 remediation (independent PR #99 audit, P1 finding #4): atomic
+# check-and-increment for the daily quota admission decision.
+#
+# Before this script existed, acquire() read this process's own
+# Redis-reconciled day_count (_roll_day_window_locked), decided
+# admission against it LOCALLY, and only then incremented Redis via a
+# separate HINCRBY -- a classic non-atomic check-then-act. Under real
+# concurrent multi-process load (the actual Gunicorn --workers topology
+# this limiter is designed for), two workers can each read a
+# still-valid day_count, both independently conclude "admit," and both
+# increment -- overspending the true daily cap by a small amount before
+# either worker's own next read would have caught it. Reproduced
+# empirically: 8 real OS processes racing a shared real Redis instance
+# overspent max_per_day by 1 in 3 of 8 trials; reserve *partitions*
+# never leaked in any trial (this script closes the remaining gap).
+#
+# A single EVAL is atomic on the Redis server (Redis's command
+# execution is single-threaded) -- reading the current total AND
+# deciding admission AND incrementing all happen as one indivisible
+# step, so no interleaving between two callers is possible, without
+# introducing a separate distributed lock. This mirrors the exact same
+# three-cutoff logic acquire()'s own local fallback still implements
+# (kept, unchanged, for when Redis is unavailable -- see
+# _atomic_admit_and_increment's own docstring).
+_ATOMIC_ADMIT_LUA_SCRIPT = """
+local total = tonumber(redis.call('HGET', KEYS[1], 'total') or '0')
+local max_per_day = tonumber(ARGV[1])
+local reserved_critical = tonumber(ARGV[2])
+local reserved_live_scan = tonumber(ARGV[3])
+local priority = ARGV[4]
+local priority_field = ARGV[5]
+local ttl = tonumber(ARGV[6])
+local operation_field = ARGV[7]
+
+if total >= max_per_day then
+    return {0, 'daily_cap', total}
+end
+
+local critical_cutoff = max_per_day - reserved_critical
+if (priority == 'background' or priority == 'live_scan') and reserved_critical > 0 and total >= critical_cutoff then
+    return {0, 'critical_reserve', total}
+end
+
+local live_scan_cutoff = critical_cutoff - reserved_live_scan
+if priority == 'background' and reserved_live_scan > 0 and total >= live_scan_cutoff then
+    return {0, 'live_scan_reserve', total}
+end
+
+redis.call('HINCRBY', KEYS[1], 'total', 1)
+redis.call('HINCRBY', KEYS[1], priority_field, 1)
+redis.call('EXPIRE', KEYS[1], ttl)
+redis.call('HINCRBY', KEYS[2], operation_field, 1)
+redis.call('EXPIRE', KEYS[2], ttl)
+return {1, 'admitted', total + 1}
+"""
 
 
 def _operation_key(endpoint: Optional[str], subsystem: Optional[str]) -> str:
@@ -216,26 +272,71 @@ class SahmkRateLimiter:
             raise ValueError("max_per_minute must be positive")
         if max_per_day is not None and max_per_day <= 0:
             raise ValueError("max_per_day must be positive if set")
+        # These remain hard construction errors -- they indicate a
+        # genuine programming/config mistake (a reserve set without a
+        # cap to reserve from, or a negative value), never a real-world
+        # "the upstream quota changed" scenario, so failing loudly here
+        # is correct and does not need fail-safe clamping.
         if reserved_for_critical is not None:
             if max_per_day is None:
                 raise ValueError("reserved_for_critical requires max_per_day to be set")
             if reserved_for_critical < 0:
                 raise ValueError("reserved_for_critical must not be negative")
-            if reserved_for_critical > max_per_day:
-                raise ValueError("reserved_for_critical must not exceed max_per_day")
         if reserved_for_live_scan is not None:
             if max_per_day is None:
                 raise ValueError("reserved_for_live_scan requires max_per_day to be set")
             if reserved_for_live_scan < 0:
                 raise ValueError("reserved_for_live_scan must not be negative")
-            if (reserved_for_critical or 0) + reserved_for_live_scan > max_per_day:
-                raise ValueError(
-                    "reserved_for_critical + reserved_for_live_scan must not exceed max_per_day"
+
+        # P0 remediation (independent PR #99 audit, P1 finding #1):
+        # reserved_for_critical + reserved_for_live_scan exceeding
+        # max_per_day used to raise ValueError out of this constructor
+        # -- including out of the process-wide get_default_rate_limiter()
+        # singleton every SahmkClient call depends on. That is a crash,
+        # not a degradation: a plausible real-world reconfiguration
+        # (SAHMK_MAX_REQUESTS_PER_DAY lowered to reflect a newly
+        # discovered, smaller real quota -- exactly the pattern that has
+        # repeated multiple times for this integration -- without
+        # proportionally lowering the reserve env vars) would take down
+        # SAHMK access application-wide on the very next construction.
+        #
+        # Fail-safe instead: clamp, preserving critical capacity first
+        # (the highest-priority protection), then live-scan, with
+        # background absorbing whatever is left (down to zero, never
+        # negative). This can never let a lower priority exceed its
+        # intended ceiling -- it only ever shrinks reserves to fit, so
+        # background can only end up MORE restricted than configured,
+        # never less. A clamp is logged as a warning (observability),
+        # never silent.
+        clamped_critical = reserved_for_critical or 0
+        clamped_live_scan = reserved_for_live_scan or 0
+        if max_per_day is not None:
+            if clamped_critical > max_per_day:
+                logger.warning(
+                    "SahmkRateLimiter: configured reserved_for_critical (%d) exceeds "
+                    "max_per_day (%d) -- clamping to %d to fail safe instead of refusing "
+                    "to construct. Fix SAHMK_RESERVED_FOR_CRITICAL_REQUESTS_PER_DAY.",
+                    clamped_critical, max_per_day, max_per_day,
                 )
+                clamped_critical = max_per_day
+            if clamped_critical + clamped_live_scan > max_per_day:
+                safe_live_scan = max(0, max_per_day - clamped_critical)
+                logger.warning(
+                    "SahmkRateLimiter: configured reserved_for_critical + "
+                    "reserved_for_live_scan (%d + %d = %d) exceeds max_per_day (%d) -- "
+                    "clamping reserved_for_live_scan to %d (critical capacity preserved "
+                    "first) to fail safe instead of refusing to construct. Fix "
+                    "SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY and/or "
+                    "SAHMK_MAX_REQUESTS_PER_DAY.",
+                    clamped_critical, clamped_live_scan, clamped_critical + clamped_live_scan,
+                    max_per_day, safe_live_scan,
+                )
+                clamped_live_scan = safe_live_scan
+
         self._max_per_minute = max_per_minute
         self._max_per_day = max_per_day
-        self._reserved_for_critical = reserved_for_critical or 0
-        self._reserved_for_live_scan = reserved_for_live_scan or 0
+        self._reserved_for_critical = clamped_critical
+        self._reserved_for_live_scan = clamped_live_scan
         self._minute_window: Deque[float] = deque()
         self._day_key: Optional[str] = None
         self._day_count = 0
@@ -261,6 +362,48 @@ class SahmkRateLimiter:
 
     def _redis(self) -> "Optional[redis_lib.Redis]":
         return self._redis_override if self._redis_override is not None else _get_shared_redis_client()
+
+    def _atomic_admit_and_increment(
+        self, priority: str, operation_key: str, day_key: str
+    ) -> "Optional[Tuple[bool, str]]":
+        """Atomically decides admission AND increments Redis in one
+        indivisible step (see _ATOMIC_ADMIT_LUA_SCRIPT's own docstring
+        for the race this closes). Returns (admitted, reason) when the
+        check was actually performed against real Redis -- `reason` is
+        'admitted' on success, or one of 'daily_cap'/'critical_reserve'/
+        'live_scan_reserve' on refusal. Returns None (never raises) when
+        Redis is unavailable or the script itself fails for any reason
+        -- callers must treat None as "fall back to the existing
+        local-only check-then-act logic," exactly the same degradation
+        every other Redis-dependent path in this class already uses."""
+        client = self._redis()
+        if client is None:
+            return None
+        priority_field = "background" if priority == BACKGROUND else ("live_scan" if priority == LIVE_SCAN else "critical")
+        try:
+            result = client.eval(
+                _ATOMIC_ADMIT_LUA_SCRIPT,
+                2,
+                self._redis_day_hash_key(day_key),
+                self._redis_operation_hash_key(day_key),
+                str(self._max_per_day),
+                str(self._reserved_for_critical),
+                str(self._reserved_for_live_scan),
+                priority,
+                priority_field,
+                str(_DAY_COUNT_TTL_SECONDS),
+                operation_key,
+            )
+            admitted = bool(int(result[0]))
+            reason = result[1].decode() if isinstance(result[1], bytes) else str(result[1])
+            return admitted, reason
+        except Exception:
+            logger.warning(
+                "SahmkRateLimiter: atomic Redis admission check failed -- falling back to "
+                "this process's own local-only tracking for this request.",
+                exc_info=True,
+            )
+            return None
 
     async def acquire(
         self,
@@ -296,39 +439,97 @@ class SahmkRateLimiter:
 
         async with self._lock:
             self._roll_day_window_locked()
-            if self._max_per_day is not None and self._day_count >= self._max_per_day:
-                raise SahmkRateLimitExceededError(
-                    f"SAHMK daily request quota ({self._max_per_day}) already reached for today (UTC)."
-                )
-            # Two nested cutoffs, most-protected first: the critical
-            # cutoff blocks BACKGROUND and LIVE_SCAN alike; the
-            # live-scan cutoff (strictly inside the critical one) blocks
-            # only BACKGROUND. CRITICAL is never blocked by either --
-            # only by the absolute max_per_day check above.
+            operation_key = _operation_key(endpoint, subsystem)
+
+            # P0 remediation (independent PR #99 audit, P1 finding #4):
+            # when Redis is reachable and a daily cap is configured, the
+            # admission decision AND the increment happen as one atomic
+            # Redis-side operation (_ATOMIC_ADMIT_LUA_SCRIPT) -- this is
+            # what actually closes the cross-process race the audit
+            # reproduced; everything below this point stays local-only
+            # bookkeeping (mirrored into this process's own counters for
+            # get_status(), never re-persisted to Redis for this same
+            # request). `atomic_result` is None when there is no daily
+            # cap to protect (max_per_day is None -- nothing to admit
+            # against) or Redis is unavailable, in which case the
+            # unchanged pre-existing local-only check-then-act logic
+            # below is the fallback, exactly as before this remediation.
+            atomic_result: Optional[Tuple[bool, str]] = None
             if self._max_per_day is not None:
-                critical_cutoff = self._max_per_day - self._reserved_for_critical
-                if (
-                    priority in (BACKGROUND, LIVE_SCAN)
-                    and self._reserved_for_critical > 0
-                    and self._day_count >= critical_cutoff
-                ):
-                    raise SahmkQuotaReservedForCriticalError(
-                        f"SAHMK daily quota: only the last {self._reserved_for_critical} of "
-                        f"{self._max_per_day} today's requests remain, reserved for "
-                        f"live-market-critical operations -- refusing this {priority} request."
+                atomic_result = self._atomic_admit_and_increment(priority, operation_key, self._day_key)
+
+            if atomic_result is not None:
+                admitted, reason = atomic_result
+                if not admitted:
+                    if reason == "critical_reserve":
+                        raise SahmkQuotaReservedForCriticalError(
+                            f"SAHMK daily quota: only the last {self._reserved_for_critical} of "
+                            f"{self._max_per_day} today's requests remain, reserved for "
+                            f"live-market-critical operations -- refusing this {priority} request."
+                        )
+                    if reason == "live_scan_reserve":
+                        raise SahmkQuotaReservedForLiveScanError(
+                            f"SAHMK daily quota: only the last {self._reserved_for_live_scan} of "
+                            f"{self._max_per_day - self._reserved_for_critical} background-eligible "
+                            "requests remain, reserved for the recurrent live-scan scheduler -- "
+                            "refusing this background request."
+                        )
+                    raise SahmkRateLimitExceededError(
+                        f"SAHMK daily request quota ({self._max_per_day}) already reached for today (UTC)."
                     )
-                live_scan_cutoff = critical_cutoff - self._reserved_for_live_scan
-                if (
-                    priority == BACKGROUND
-                    and self._reserved_for_live_scan > 0
-                    and self._day_count >= live_scan_cutoff
-                ):
-                    raise SahmkQuotaReservedForLiveScanError(
-                        f"SAHMK daily quota: only the last {self._reserved_for_live_scan} of "
-                        f"{self._max_per_day - self._reserved_for_critical} background-eligible "
-                        "requests remain, reserved for the recurrent live-scan scheduler -- "
-                        "refusing this background request."
+                # Admitted -- Redis already incremented atomically.
+                # Mirror into this process's own local counters (used by
+                # get_status()'s local view) WITHOUT calling
+                # _persist_day_counts_increment, which would double-count
+                # against the Redis total the Lua script already bumped.
+                self._day_count += 1
+                if priority == BACKGROUND:
+                    self._background_count += 1
+                elif priority == LIVE_SCAN:
+                    self._live_scan_count += 1
+                else:
+                    self._critical_count += 1
+                self._operation_counts[operation_key] = self._operation_counts.get(operation_key, 0) + 1
+            else:
+                # Redis unavailable, or no daily cap configured -- the
+                # original, unchanged local-only check-then-act logic.
+                # Not cross-process-race-free (see the module docstring
+                # for the disclosed, pre-existing degradation), but
+                # correct within this one process, which is the best
+                # achievable without Redis as a shared source of truth.
+                if self._max_per_day is not None and self._day_count >= self._max_per_day:
+                    raise SahmkRateLimitExceededError(
+                        f"SAHMK daily request quota ({self._max_per_day}) already reached for today (UTC)."
                     )
+                # Two nested cutoffs, most-protected first: the critical
+                # cutoff blocks BACKGROUND and LIVE_SCAN alike; the
+                # live-scan cutoff (strictly inside the critical one)
+                # blocks only BACKGROUND. CRITICAL is never blocked by
+                # either -- only by the absolute max_per_day check above.
+                if self._max_per_day is not None:
+                    critical_cutoff = self._max_per_day - self._reserved_for_critical
+                    if (
+                        priority in (BACKGROUND, LIVE_SCAN)
+                        and self._reserved_for_critical > 0
+                        and self._day_count >= critical_cutoff
+                    ):
+                        raise SahmkQuotaReservedForCriticalError(
+                            f"SAHMK daily quota: only the last {self._reserved_for_critical} of "
+                            f"{self._max_per_day} today's requests remain, reserved for "
+                            f"live-market-critical operations -- refusing this {priority} request."
+                        )
+                    live_scan_cutoff = critical_cutoff - self._reserved_for_live_scan
+                    if (
+                        priority == BACKGROUND
+                        and self._reserved_for_live_scan > 0
+                        and self._day_count >= live_scan_cutoff
+                    ):
+                        raise SahmkQuotaReservedForLiveScanError(
+                            f"SAHMK daily quota: only the last {self._reserved_for_live_scan} of "
+                            f"{self._max_per_day - self._reserved_for_critical} background-eligible "
+                            "requests remain, reserved for the recurrent live-scan scheduler -- "
+                            "refusing this background request."
+                        )
 
             while True:
                 now = time.monotonic()
@@ -346,16 +547,21 @@ class SahmkRateLimiter:
                 await asyncio.sleep(max(wait_seconds, 0.01))
 
             self._minute_window.append(time.monotonic())
-            self._day_count += 1
-            if priority == BACKGROUND:
-                self._background_count += 1
-            elif priority == LIVE_SCAN:
-                self._live_scan_count += 1
-            else:
-                self._critical_count += 1
-            operation_key = _operation_key(endpoint, subsystem)
-            self._operation_counts[operation_key] = self._operation_counts.get(operation_key, 0) + 1
-            self._persist_day_counts_increment(priority, operation_key)
+
+            if atomic_result is None:
+                # Local-only path: increment local counters AND
+                # best-effort persist to Redis (unchanged pre-existing
+                # behavior -- _persist_day_counts_increment itself
+                # already degrades gracefully if Redis is unreachable).
+                self._day_count += 1
+                if priority == BACKGROUND:
+                    self._background_count += 1
+                elif priority == LIVE_SCAN:
+                    self._live_scan_count += 1
+                else:
+                    self._critical_count += 1
+                self._operation_counts[operation_key] = self._operation_counts.get(operation_key, 0) + 1
+                self._persist_day_counts_increment(priority, operation_key)
 
     def record_upstream_daily_exhaustion(
         self, *, retry_after_seconds: Optional[float], raw_message: str

@@ -190,6 +190,7 @@ class _LowBackgroundQuotaRateLimiter:
         return {
             "upstream_confirmed_exhausted": False,
             "remaining_today_for_background": 3,
+            "remaining_today_for_background_after_live_scan_reserve": 3,
         }
 
 
@@ -364,6 +365,42 @@ async def test_run_one_cycle_skips_when_background_quota_reserve_is_low(factory,
         session_factory=factory,
         market_provider_getter=_fake_market_provider_getter,
         rate_limiter=_LowBackgroundQuotaRateLimiter(),
+    )
+
+    await scheduler._run_one_cycle()
+
+    assert calls == []
+
+
+class _LiveScanReserveProtectedRateLimiter:
+    """P0 remediation (independent PR #99 audit, P2 finding #2): the
+    legacy remaining_today_for_background field looks healthy, but the
+    live-scan-aware field is low -- the circuit breaker must still
+    trip, proving _quota_allows_a_new_cycle reads the correct field."""
+
+    def get_status(self):
+        return {
+            "upstream_confirmed_exhausted": False,
+            "remaining_today_for_background": 40,  # legacy field: looks healthy
+            "remaining_today_for_background_after_live_scan_reserve": 3,  # true budget: low
+        }
+
+
+@pytest.mark.asyncio
+async def test_run_one_cycle_stops_when_only_the_live_scan_reserve_is_protecting_the_budget(
+    factory, monkeypatch
+):
+    calls = []
+
+    async def _fake_run_job(run_id, session_factory, market_provider, symbols=None, **kwargs):
+        calls.append((run_id, symbols))
+
+    monkeypatch.setattr(scheduler_module, "run_market_scan_job", _fake_run_job)
+
+    scheduler = IntervalMarketIntelligenceScheduler(
+        session_factory=factory,
+        market_provider_getter=_fake_market_provider_getter,
+        rate_limiter=_LiveScanReserveProtectedRateLimiter(),
     )
 
     await scheduler._run_one_cycle()
