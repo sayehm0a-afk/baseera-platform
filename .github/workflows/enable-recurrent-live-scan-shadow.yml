@@ -1,0 +1,105 @@
+name: Enable Recurrent Live-Scan Shadow Mode (one-shot, production env change)
+
+# PM-authorized controlled Day-1 Shadow activation, explicitly requested
+# by the user for 2026-08-26 after the market opened at 10:00 Asia/Riyadh.
+# Sets LIVE_RECURRENT_SCAN_ENABLED=true and
+# LIVE_RECURRENT_SCAN_INTERVAL_MINUTES=150 on the backend Railway
+# service so RecurrentLiveScanScheduler (src/market_intelligence/
+# recurrent_live_scan.py, PR #97/#99) actually starts. Shadow Mode
+# itself (LIVE_RECURRENT_SCAN_SHADOW_MODE) is left at its existing
+# default (true) -- there is no consumer-emission code path gated on
+# it today (see is_live_recurrent_scan_shadow_mode()'s own docstring),
+# so recurrent cycles write only to RecurrentScanCycle/ShadowLiveSignal
+# and never touch RadarOpportunity or any consumer-facing endpoint.
+#
+# 150-minute interval is deliberately chosen (not the scheduler's own
+# 60-minute default) to keep today's first live day to at most two
+# natural cycles within the ~10:00-15:00 Riyadh trading window, per
+# the PM's explicit Day-1 policy (TARGET_MAX_SHADOW_CYCLES_TODAY=2)
+# validated against the real request-cost-per-cycle accounting
+# (min 3 / typical 4 / worst-case 7 requests) and the 20-request
+# live-scan reserve.
+#
+# `railway variable set` triggers a real redeploy by default (needed
+# here -- both flags are only read at process startup) and does NOT
+# unset any other variable deploy-railway.yml already manages.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not readable by this job."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Confirm current state (before)
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -iE "LIVE_RECURRENT_SCAN_ENABLED|LIVE_RECURRENT_SCAN_INTERVAL_MINUTES" \
+            || echo "Neither variable currently set (LIVE_RECURRENT_SCAN_ENABLED defaults to false, interval defaults to 60)."
+
+      - name: Set LIVE_RECURRENT_SCAN_ENABLED=true and LIVE_RECURRENT_SCAN_INTERVAL_MINUTES=150 (triggers a redeploy)
+        run: |
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" \
+            --set "LIVE_RECURRENT_SCAN_ENABLED=true" \
+            --set "LIVE_RECURRENT_SCAN_INTERVAL_MINUTES=150"
+
+      - name: Confirm the variables are now set
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -iE "LIVE_RECURRENT_SCAN_ENABLED|LIVE_RECURRENT_SCAN_INTERVAL_MINUTES"
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Wait for backend to become healthy again after the redeploy
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          echo "Polling $BACKEND_URL/health/live ..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Backend did not become healthy within the timeout after setting the variables."
+          exit 1
+
+      - name: Real evidence the recurrent live-scan scheduler actually started (grep the live deployment's own stdout)
+        run: |
+          sleep 10
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" --deployment --lines 500 2>&1 \
+            | grep -i "Recurrent live-scan scheduler started\|RecurrentLiveScanScheduler started" \
+            || echo "No recurrent-scheduler start log line found yet in the last 500 lines -- may need a later re-check if the deployment just rolled over."
+
+      - name: Confirm application health (DB/Redis, deployed commit) after the restart
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/ready" -w "\nHTTP %{http_code}\n"
+          echo "=== deployment_commit ==="
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/live" -w "\nHTTP %{http_code}\n"
