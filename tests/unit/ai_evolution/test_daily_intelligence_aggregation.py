@@ -236,3 +236,186 @@ class TestAggregateDailyIntelligence:
 
         result = module.aggregate_daily_intelligence(session)
         assert result.snapshot_date == yesterday
+
+
+class TestConcurrentAggregation:
+    """Production evidence (2026-08-26): every Gunicorn worker runs its
+    own independent DailyIntelligenceAggregationScheduler (scheduler.py
+    has no leader lock for this one), so two or more workers can call
+    aggregate_daily_intelligence for the same snapshot_date within
+    milliseconds of each other -- reproduced a real
+    sqlalchemy.exc.IntegrityError on uq_daily_intelligence_snapshot_date
+    in production. These tests use two real threads against a real
+    file-based SQLite database (not :memory: -- a shared in-memory DB
+    doesn't exercise independent connections the way separate
+    Gunicorn worker processes/connections do) with a real
+    threading.Barrier forcing both threads past their own SELECT
+    before either commits its INSERT, deterministically reproducing
+    the exact race instead of hoping for it."""
+
+    @pytest.fixture
+    def file_engine(self, tmp_path):
+        db_path = tmp_path / "race.db"
+        # A real `timeout` (sqlite3.connect's busy-wait, seconds) so a
+        # writer blocked behind another connection's write transaction
+        # actually waits for the lock instead of immediately raising
+        # "database is locked" -- without this, the second worker in
+        # the tests below could fail on OperationalError before ever
+        # reaching the INSERT this fix is meant to make race-safe.
+        engine = create_engine(f"sqlite:///{db_path}", connect_args={"timeout": 30})
+        Base.metadata.create_all(bind=engine)
+        yield engine
+        Base.metadata.drop_all(bind=engine)
+
+    @pytest.fixture
+    def file_session_factory(self, file_engine):
+        return sessionmaker(bind=file_engine)
+
+    def test_two_concurrent_first_writes_yield_exactly_one_row_no_integrity_error_escapes(
+        self, file_session_factory, monkeypatch,
+    ):
+        import threading
+
+        import src.ai_evolution.daily_intelligence_aggregation as module
+
+        setup_session = file_session_factory()
+        stock = Stock(symbol="1111", name_en="Stock 1111", sector="Energy")
+        setup_session.add(stock)
+        setup_session.commit()
+        setup_session.close()
+
+        barrier = threading.Barrier(2)
+        real_agent_panel_stats = module._agent_panel_stats
+
+        def _synced_agent_panel_stats(session, snapshot_date):
+            result = real_agent_panel_stats(session, snapshot_date)
+            barrier.wait(timeout=5)
+            return result
+
+        monkeypatch.setattr(module, "_agent_panel_stats", _synced_agent_panel_stats)
+
+        results = {}
+        errors = {}
+
+        def _worker(name):
+            worker_session = file_session_factory()
+            try:
+                results[name] = module.aggregate_daily_intelligence(worker_session, snapshot_date=_SNAPSHOT_DATE)
+            except Exception as exc:  # noqa: BLE001 -- captured for the assertion below, not swallowed silently
+                errors[name] = exc
+            finally:
+                worker_session.close()
+
+        thread_a = threading.Thread(target=_worker, args=("a",))
+        thread_b = threading.Thread(target=_worker, args=("b",))
+        thread_a.start()
+        thread_b.start()
+        thread_a.join(timeout=10)
+        thread_b.join(timeout=10)
+
+        assert errors == {}, f"no IntegrityError (or any other exception) should escape either worker: {errors}"
+        assert "a" in results and "b" in results
+
+        verify_session = file_session_factory()
+        rows = verify_session.query(DailyIntelligenceSnapshot).filter_by(snapshot_date=_SNAPSHOT_DATE).all()
+        assert len(rows) == 1, f"expected exactly one row per date under concurrency, got {len(rows)}"
+        verify_session.close()
+
+    def test_four_concurrent_first_writes_yield_exactly_one_row(self, file_session_factory, monkeypatch):
+        import threading
+
+        import src.ai_evolution.daily_intelligence_aggregation as module
+
+        setup_session = file_session_factory()
+        stock = Stock(symbol="2222", name_en="Stock 2222", sector="Energy")
+        setup_session.add(stock)
+        setup_session.commit()
+        setup_session.close()
+
+        worker_count = 4
+        barrier = threading.Barrier(worker_count)
+        real_agent_panel_stats = module._agent_panel_stats
+
+        def _synced_agent_panel_stats(session, snapshot_date):
+            result = real_agent_panel_stats(session, snapshot_date)
+            barrier.wait(timeout=5)
+            return result
+
+        monkeypatch.setattr(module, "_agent_panel_stats", _synced_agent_panel_stats)
+
+        errors = {}
+
+        def _worker(name):
+            worker_session = file_session_factory()
+            try:
+                module.aggregate_daily_intelligence(worker_session, snapshot_date=_SNAPSHOT_DATE)
+            except Exception as exc:  # noqa: BLE001
+                errors[name] = exc
+            finally:
+                worker_session.close()
+
+        threads = [threading.Thread(target=_worker, args=(i,)) for i in range(worker_count)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert errors == {}, f"no exception should escape any of the {worker_count} simulated workers: {errors}"
+
+        verify_session = file_session_factory()
+        rows = verify_session.query(DailyIntelligenceSnapshot).filter_by(snapshot_date=_SNAPSHOT_DATE).all()
+        assert len(rows) == 1
+        verify_session.close()
+
+    def test_repeated_invocation_after_the_race_stays_idempotent(self, file_session_factory, monkeypatch):
+        """After a real concurrent race has already resolved to one
+        row, a normal (non-concurrent) re-run must still update that
+        same row, not create a second one -- proving the fix didn't
+        change the already-covered sequential-idempotency contract."""
+        import threading
+
+        import src.ai_evolution.daily_intelligence_aggregation as module
+
+        setup_session = file_session_factory()
+        stock = Stock(symbol="3333", name_en="Stock 3333", sector="Energy")
+        setup_session.add(stock)
+        setup_session.commit()
+        setup_session.close()
+
+        barrier = threading.Barrier(2)
+        real_agent_panel_stats = module._agent_panel_stats
+
+        def _synced_agent_panel_stats(session, snapshot_date):
+            result = real_agent_panel_stats(session, snapshot_date)
+            barrier.wait(timeout=5)
+            return result
+
+        monkeypatch.setattr(module, "_agent_panel_stats", _synced_agent_panel_stats)
+
+        def _worker():
+            worker_session = file_session_factory()
+            try:
+                module.aggregate_daily_intelligence(worker_session, snapshot_date=_SNAPSHOT_DATE)
+            finally:
+                worker_session.close()
+
+        thread_a = threading.Thread(target=_worker)
+        thread_b = threading.Thread(target=_worker)
+        thread_a.start()
+        thread_b.start()
+        thread_a.join(timeout=10)
+        thread_b.join(timeout=10)
+
+        monkeypatch.undo()
+        rerun_session = file_session_factory()
+        rerun_stock = rerun_session.query(Stock).filter_by(symbol="3333").one()
+        s1 = _snapshot(rerun_session, rerun_stock)
+        _outcome(rerun_session, s1, RecommendationOutcomeStatus.SUCCESSFUL)
+        module.aggregate_daily_intelligence(rerun_session, snapshot_date=_SNAPSHOT_DATE)
+        rerun_session.close()
+
+        verify_session = file_session_factory()
+        rows = verify_session.query(DailyIntelligenceSnapshot).filter_by(snapshot_date=_SNAPSHOT_DATE).all()
+        assert len(rows) == 1
+        assert rows[0].recommendations_evaluated == 1
+        verify_session.close()

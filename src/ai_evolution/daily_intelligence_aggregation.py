@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.ai_evolution.confidence_calibration import expected_calibration_error
@@ -130,6 +131,11 @@ def _agent_panel_stats(session: Session, snapshot_date: date) -> Tuple[int, int,
     return panel_count, debate_count, agreement_rate
 
 
+def _apply_computed_fields(snapshot: DailyIntelligenceSnapshot, **fields) -> None:
+    for name, value in fields.items():
+        setattr(snapshot, name, value)
+
+
 def aggregate_daily_intelligence(
     session: Session,
     snapshot_date: Optional[date] = None,
@@ -140,7 +146,20 @@ def aggregate_daily_intelligence(
     evaluations only finish landing after it ends) and writes/updates
     the corresponding `DailyIntelligenceSnapshot` row. Idempotent:
     re-running for an already-aggregated day updates that row's
-    numbers rather than creating a duplicate."""
+    numbers rather than creating a duplicate.
+
+    Race-safe across concurrent callers for the same `snapshot_date`
+    (production evidence, 2026-08-26: every one of this process's
+    Gunicorn workers runs its own independent
+    `DailyIntelligenceAggregationScheduler` instance -- see
+    scheduler.py -- so two or more can call this function for the same
+    date within milliseconds of each other, e.g. right after a
+    deploy). The read-then-insert below is not by itself atomic, so on
+    a genuine race the loser's INSERT raises IntegrityError against
+    `uq_daily_intelligence_snapshot_date` -- caught here and turned
+    into what this function's own docstring already promises for a
+    duplicate: an UPDATE of the winner's row with this call's freshly
+    computed numbers, never a surfaced error and never a second row."""
     snapshot_date = snapshot_date or (datetime.now(timezone.utc).date() - timedelta(days=1))
 
     rows = _outcome_rows(session, snapshot_date)
@@ -158,24 +177,39 @@ def aggregate_daily_intelligence(
     best_patterns, worst_patterns = _best_and_worst_patterns(session, pattern_limit)
     panel_count, debate_count, agreement_rate = _agent_panel_stats(session, snapshot_date)
 
+    computed_fields = dict(
+        recommendations_evaluated=len(rows),
+        successful_count=successful_count,
+        failed_count=failed_count,
+        partial_count=partial_count,
+        expired_count=expired_count,
+        win_rate=win_rate,
+        calibration_error=calibration_error,
+        agent_panel_snapshot_count=panel_count,
+        agent_debate_count=debate_count,
+        agent_agreement_rate=agreement_rate,
+        best_patterns=best_patterns,
+        worst_patterns=worst_patterns,
+        sector_breakdown=sector_breakdown,
+    )
+
     snapshot = session.query(DailyIntelligenceSnapshot).filter_by(snapshot_date=snapshot_date).one_or_none()
-    if snapshot is None:
+    is_new = snapshot is None
+    if is_new:
         snapshot = DailyIntelligenceSnapshot(snapshot_date=snapshot_date)
         session.add(snapshot)
+    _apply_computed_fields(snapshot, **computed_fields)
 
-    snapshot.recommendations_evaluated = len(rows)
-    snapshot.successful_count = successful_count
-    snapshot.failed_count = failed_count
-    snapshot.partial_count = partial_count
-    snapshot.expired_count = expired_count
-    snapshot.win_rate = win_rate
-    snapshot.calibration_error = calibration_error
-    snapshot.agent_panel_snapshot_count = panel_count
-    snapshot.agent_debate_count = debate_count
-    snapshot.agent_agreement_rate = agreement_rate
-    snapshot.best_patterns = best_patterns
-    snapshot.worst_patterns = worst_patterns
-    snapshot.sector_breakdown = sector_breakdown
+    if is_new:
+        try:
+            session.commit()
+        except IntegrityError:
+            # A concurrent caller committed the same snapshot_date first.
+            session.rollback()
+            snapshot = session.query(DailyIntelligenceSnapshot).filter_by(snapshot_date=snapshot_date).one()
+            _apply_computed_fields(snapshot, **computed_fields)
+            session.commit()
+    else:
+        session.commit()
 
-    session.commit()
     return snapshot
