@@ -1,0 +1,91 @@
+name: Disable Recurrent Live-Scan Shadow Mode (one-shot, production env change)
+
+# PM-authorized Day-1 Shadow safe stop, 2026-08-26. Two natural
+# recurrent Shadow cycles have completed cleanly (07:17 and 09:47 UTC,
+# both SUCCESS_NO_CHANGE, cost 5 requests each, zero consumer emission,
+# zero duplicate cycles, zero Forward Test mutation -- see
+# RecurrentScanCycle rows b60ee4e10a1140bf928cb2299b02531a and
+# 9fc60bc042ba4f4eb67223b326c21338). Day-1 policy caps today at 2
+# natural cycles, and no MAX_CYCLES_PER_SESSION config exists in this
+# codebase, so the only way to guarantee no third cycle today is to
+# set LIVE_RECURRENT_SCAN_ENABLED=false, exactly reversing
+# enable-recurrent-live-scan-shadow.yml.
+#
+# This does NOT remove or disable the Shadow architecture itself --
+# RecurrentLiveScanScheduler, ShadowLiveSignal, RecurrentScanCycle all
+# remain fully intact in code and in the database. Only the recurrent
+# scheduler's own startup gate flips back to false, matching its
+# pre-activation default, so the next production deploy or restart
+# will not start it again until explicitly re-enabled.
+#
+# `railway variable set` triggers a real redeploy (needed -- the flag
+# is only read at process startup).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  disable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not readable by this job."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Confirm current state (before)
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -iE "LIVE_RECURRENT_SCAN_ENABLED|LIVE_RECURRENT_SCAN_INTERVAL_MINUTES"
+
+      - name: Set LIVE_RECURRENT_SCAN_ENABLED=false (triggers a redeploy)
+        run: |
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" \
+            --set "LIVE_RECURRENT_SCAN_ENABLED=false"
+
+      - name: Confirm the variable is now set
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -iE "LIVE_RECURRENT_SCAN_ENABLED|LIVE_RECURRENT_SCAN_INTERVAL_MINUTES"
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Wait for backend to become healthy again after the redeploy
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          echo "Polling $BACKEND_URL/health/live ..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Backend did not become healthy within the timeout after setting the variable."
+          exit 1
+
+      - name: Confirm application health (DB/Redis) after the restart
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/ready" -w "\nHTTP %{http_code}\n"
