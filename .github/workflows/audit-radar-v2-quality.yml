@@ -71,6 +71,18 @@ jobs:
           ).json()
           print(f"live_count={len(opps)}")
 
+          print("\n=== BUY_CANDIDATE summary rows (full fields, no preview cap) ===")
+          buy_fields = [
+              "symbol", "company_name_en", "company_name_ar", "decision_v2_snapshot_id",
+              "emitted_at", "decision_freshness_status", "is_decision_fresh",
+              "price_at_signal", "entry_zone_low", "entry_zone_high", "stop_loss",
+              "target_1", "target_2", "target_3", "risk_reward_target_1",
+              "confidence_score", "basirah_score", "entry_status", "stage1_rank",
+          ]
+          for o in opps:
+              if o.get("classification") == "BUY_CANDIDATE":
+                  print({k: o.get(k) for k in buy_fields})
+
           print("\n=== per-opportunity full detail ===")
           for o in opps:
               oid = o["id"]
