@@ -61,6 +61,8 @@ from src.api.schemas.market_intelligence import (
     RadarOpportunitySummaryOut,
     RadarStage1ComponentScoresOut,
     RecurrentLiveScanStatusOut,
+    ShadowCycleDetailOut,
+    ShadowCycleSymbolOut,
     RadarV2ExtendedPerformanceOut,
     RadarV2GroupPerformanceOut,
     RadarV2PerformanceOut,
@@ -101,6 +103,7 @@ from src.domain.models import (
     PriceBar,
     RadarOpportunity,
     RecurrentScanCycle,
+    ShadowLiveSignal,
     StaffRole,
     Stock,
     SymbolIntelligenceRecord,
@@ -1024,6 +1027,110 @@ async def get_recurrent_live_scan_status(
         last_cycle_signals_invalidated_count=last_cycle.signals_invalidated_count if last_cycle else None,
         last_cycle_signals_unchanged_count=last_cycle.signals_unchanged_count if last_cycle else None,
         cycles_today_count=cycles_today,
+    )
+
+
+@router.get("/recurrent-live-scan/cycles/{cycle_id}", response_model=ShadowCycleDetailOut)
+async def get_recurrent_live_scan_cycle_detail(
+    cycle_id: str,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> ShadowCycleDetailOut:
+    """Per-symbol detail for one recurrent Shadow cycle -- the
+    observability gap the Day-1 Shadow validation surfaced: the status
+    endpoint above only ever reports aggregate counts.
+
+    Read-only against already-persisted rows only, never a second
+    computation and never a SAHMK request: DecisionV2Snapshot already
+    holds one insert-only audit row per symbol Stage 2 evaluated this
+    cycle (`scan_run_id=cycle.scan_run_id`, written by
+    MarketIntelligenceRepository.save_symbol_records for every symbol,
+    material or not -- see that model's own docstring), joined against
+    ShadowLiveSignal (present only for symbols whose evaluation was
+    material enough to produce one; Phase 9 of recurrent_live_scan.py
+    never persists an UNCHANGED_SIGNAL result as its own row). A symbol
+    with no matching ShadowLiveSignal row is therefore reported as
+    state_change="UNCHANGED" by that same documented invariant, not by
+    fabricating a comparison.
+
+    A cycle with no scan_run_id (skipped before Stage 2 -- quota
+    protection, lock contention, no candidates, market closed) returns
+    cycle-level fields with an empty symbols list, never a 404: the
+    cycle itself is real, it simply never reached Stage 2."""
+    cycle = db.query(RecurrentScanCycle).filter(RecurrentScanCycle.cycle_id == cycle_id).first()
+    if cycle is None:
+        raise HTTPException(status_code=404, detail="Recurrent scan cycle not found.")
+
+    symbols_out: List[ShadowCycleSymbolOut] = []
+    if cycle.scan_run_id is not None:
+        snapshots = (
+            db.query(DecisionV2Snapshot)
+            .filter(DecisionV2Snapshot.scan_run_id == cycle.scan_run_id)
+            .order_by(DecisionV2Snapshot.symbol)
+            .all()
+        )
+        snapshot_ids = [s.id for s in snapshots]
+        shadow_signals_by_snapshot_id = {
+            row.decision_v2_snapshot_id: row
+            for row in (
+                db.query(ShadowLiveSignal)
+                .filter(ShadowLiveSignal.decision_v2_snapshot_id.in_(snapshot_ids))
+                .all()
+                if snapshot_ids
+                else []
+            )
+        }
+        for snapshot in snapshots:
+            shadow_row = shadow_signals_by_snapshot_id.get(snapshot.id)
+            symbols_out.append(
+                ShadowCycleSymbolOut(
+                    symbol=snapshot.symbol,
+                    decision_v2_snapshot_id=snapshot.id,
+                    selection_rank=None,
+                    selection_reason=shadow_row.selection_reason if shadow_row else None,
+                    decision=snapshot.decision,
+                    confidence_score=float(snapshot.confidence_score),
+                    basirah_score=(
+                        float(snapshot.opportunity_quality_score)
+                        if snapshot.opportunity_quality_score is not None
+                        else None
+                    ),
+                    signal_price=float(snapshot.current_price) if snapshot.current_price is not None else None,
+                    entry_zone_low=float(snapshot.entry_zone_low) if snapshot.entry_zone_low is not None else None,
+                    entry_zone_high=(
+                        float(snapshot.entry_zone_high) if snapshot.entry_zone_high is not None else None
+                    ),
+                    stop_loss=float(snapshot.stop_loss) if snapshot.stop_loss is not None else None,
+                    target_1=float(snapshot.target_1) if snapshot.target_1 is not None else None,
+                    target_2=float(snapshot.target_2) if snapshot.target_2 is not None else None,
+                    target_3=float(snapshot.target_3) if snapshot.target_3 is not None else None,
+                    data_freshness_status=snapshot.data_freshness_status,
+                    decision_timestamp=snapshot.decision_timestamp,
+                    previous_decision=shadow_row.previous_classification if shadow_row else None,
+                    state_change=shadow_row.lifecycle_result.value if shadow_row else "UNCHANGED",
+                    state_change_reason=shadow_row.change_reason if shadow_row else None,
+                )
+            )
+
+    return ShadowCycleDetailOut(
+        cycle_id=cycle.cycle_id,
+        market_scan_run_id=cycle.scan_run_id,
+        triggered_at=cycle.triggered_at,
+        finished_at=cycle.finished_at,
+        status=cycle.status.value,
+        skip_reason=cycle.skip_reason,
+        stage1_count=cycle.new_stage1_candidate_count,
+        stage2_count=cycle.symbols_evaluated_count,
+        request_cost=(
+            cycle.quota_remaining_before - cycle.quota_remaining_after
+            if cycle.quota_remaining_before is not None and cycle.quota_remaining_after is not None
+            else None
+        ),
+        new_count=cycle.signals_new_opportunity_count,
+        updated_count=cycle.signals_refreshed_count,
+        unchanged_count=cycle.signals_unchanged_count,
+        invalidated_count=cycle.signals_invalidated_count,
+        symbols=symbols_out,
     )
 
 
