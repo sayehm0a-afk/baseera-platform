@@ -203,8 +203,15 @@ def aggregate_daily_intelligence(
     if is_new:
         try:
             session.commit()
-        except IntegrityError:
-            # A concurrent caller committed the same snapshot_date first.
+        except IntegrityError as exc:
+            # Only fall back to "a concurrent caller already committed
+            # this snapshot_date" for that specific constraint -- any
+            # other IntegrityError on this insert is a genuinely
+            # different failure and must keep surfacing as itself, not
+            # be masked by a confusing NoResultFound from re-querying a
+            # row that was never actually written.
+            if "snapshot_date" not in str(exc.orig).lower():
+                raise
             session.rollback()
             snapshot = session.query(DailyIntelligenceSnapshot).filter_by(snapshot_date=snapshot_date).one()
             _apply_computed_fields(snapshot, **computed_fields)
