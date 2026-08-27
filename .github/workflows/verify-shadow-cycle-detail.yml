@@ -1,0 +1,74 @@
+name: Verify Shadow Cycle Detail (temporary, one-shot, read-only, zero SAHMK cost)
+
+# Calls the new PR #102 endpoint (GET /admin/market-intelligence/
+# recurrent-live-scan/cycles/{cycle_id}) against production to recover
+# per-symbol detail for a real Day-1 Shadow cycle. Read-only: the
+# endpoint itself never reaches SAHMK, never mutates any table (see
+# PR #102's own tests) -- same pattern as verify-recurrent-live-scan-
+# status.yml, parameterized by cycle_id.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cycle_id:
+        description: "RecurrentScanCycle.cycle_id (hex UUID) to inspect"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      CYCLE_ID: ${{ inputs.cycle_id }}
+    steps:
+      - if: ${{ !env.RAILWAY_TOKEN || !env.STAFF_EMAIL || !env.STAFF_PASSWORD }}
+        run: |
+          echo "::error::RAILWAY_TOKEN/STAFF_EMAIL/STAFF_PASSWORD not set."
+          exit 1
+
+      - run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as the staff account
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Staff login failed."
+            exit 1
+          fi
+
+      - name: Fetch Shadow cycle detail (zero SAHMK cost)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/recurrent-live-scan/cycles/$CYCLE_ID" -o /tmp/cycle.json -w "%{http_code}")
+          echo "HTTP $HTTP_CODE"
+          python3 -m json.tool /tmp/cycle.json || cat /tmp/cycle.json
+          echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::cycles/{cycle_id} returned non-200."
+            exit 1
+          fi
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: rm -f /tmp/staff_cookies.txt /tmp/login_body.json /tmp/backend_domains.json /tmp/cycle.json
