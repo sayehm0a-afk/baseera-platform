@@ -1243,3 +1243,65 @@ class RecurrentLiveScanStatusOut(BaseModel):
     last_cycle_signals_invalidated_count: Optional[int] = None
     last_cycle_signals_unchanged_count: Optional[int] = None
     cycles_today_count: int = 0
+
+
+class ShadowCycleSymbolOut(BaseModel):
+    """One symbol evaluated during a recurrent Shadow cycle -- read
+    entirely from real, already-persisted rows (never a second
+    computation): the DecisionV2Snapshot Stage 2 wrote for this symbol
+    under the cycle's own scan_run_id (the same insert-only audit row
+    /decision-v2 and every other scan already write), joined against
+    ShadowLiveSignal when this symbol's evaluation was material enough
+    to produce one (Phase 9 of recurrent_live_scan.py: an UNCHANGED_SIGNAL
+    result is never persisted as its own row). `selection_rank`/
+    `selection_reason`/`previous_decision`/`state_change_reason` are
+    therefore only populated when a ShadowLiveSignal row exists for this
+    symbol -- for the (common) unchanged case they are honestly None
+    rather than fabricated, and `state_change` reports "UNCHANGED" by
+    the documented invariant that a Shadow-cycle-produced DecisionV2Snapshot
+    with no matching ShadowLiveSignal row means the material-change
+    classifier returned UNCHANGED_SIGNAL for it."""
+
+    symbol: str
+    decision_v2_snapshot_id: int
+    selection_rank: Optional[int] = None
+    selection_reason: Optional[str] = None
+    decision: str
+    confidence_score: float
+    basirah_score: Optional[float] = None
+    signal_price: Optional[float] = None
+    entry_zone_low: Optional[float] = None
+    entry_zone_high: Optional[float] = None
+    stop_loss: Optional[float] = None
+    target_1: Optional[float] = None
+    target_2: Optional[float] = None
+    target_3: Optional[float] = None
+    data_freshness_status: str
+    decision_timestamp: datetime
+    previous_decision: Optional[str] = None
+    state_change: str
+    state_change_reason: Optional[str] = None
+
+
+class ShadowCycleDetailOut(BaseModel):
+    """GET .../recurrent-live-scan/cycles/{cycle_id} -- per-symbol detail
+    for one recurrent Shadow cycle, entirely derived from real persisted
+    rows (RecurrentScanCycle + DecisionV2Snapshot + ShadowLiveSignal).
+    Never triggers a SAHMK request: read-only against already-ingested
+    data. Not exposed to consumer routes; staff-auth only (see the route's
+    own dependency)."""
+
+    cycle_id: str
+    market_scan_run_id: Optional[int] = None
+    triggered_at: datetime
+    finished_at: Optional[datetime] = None
+    status: str
+    skip_reason: Optional[str] = None
+    stage1_count: Optional[int] = None
+    stage2_count: Optional[int] = None
+    request_cost: Optional[int] = None
+    new_count: int = 0
+    updated_count: int = 0
+    unchanged_count: int = 0
+    invalidated_count: int = 0
+    symbols: List[ShadowCycleSymbolOut] = []
