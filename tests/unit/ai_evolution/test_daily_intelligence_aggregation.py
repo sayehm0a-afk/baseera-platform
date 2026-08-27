@@ -419,3 +419,72 @@ class TestConcurrentAggregation:
         assert len(rows) == 1
         assert rows[0].recommendations_evaluated == 1
         verify_session.close()
+
+    @pytest.mark.parametrize("worker_count", [2, 4, 8])
+    def test_concurrent_first_writes_yield_exactly_one_row_at_scale(self, worker_count, tmp_path_factory, monkeypatch):
+        """Independent pre-merge audit requirement: the single-trial
+        2-worker and 4-worker tests above prove the fix handles the
+        race at least once, but a narrow timing window could in
+        principle slip through a single trial. This repeats the exact
+        same real-thread, real-file-SQLite, barrier-forced race 20
+        times at each of 2, 4, and 8 simultaneous workers (fresh
+        on-disk DB per trial, so no trial's outcome depends on a
+        previous trial's state) and requires every single trial to
+        land on exactly one row with zero escaped exceptions."""
+        import threading
+
+        import src.ai_evolution.daily_intelligence_aggregation as module
+
+        real_agent_panel_stats = module._agent_panel_stats
+        trial_count = 20
+
+        for trial in range(trial_count):
+            db_path = tmp_path_factory.mktemp("race") / "race.db"
+            engine = create_engine(f"sqlite:///{db_path}", connect_args={"timeout": 30})
+            Base.metadata.create_all(bind=engine)
+            session_factory = sessionmaker(bind=engine)
+
+            setup_session = session_factory()
+            stock = Stock(symbol="9999", name_en="Stock 9999", sector="Energy")
+            setup_session.add(stock)
+            setup_session.commit()
+            setup_session.close()
+
+            barrier = threading.Barrier(worker_count)
+
+            def _synced_agent_panel_stats(session, snapshot_date, _real=real_agent_panel_stats, _barrier=barrier):
+                result = _real(session, snapshot_date)
+                _barrier.wait(timeout=5)
+                return result
+
+            monkeypatch.setattr(module, "_agent_panel_stats", _synced_agent_panel_stats)
+
+            errors = {}
+
+            def _worker(name, _factory=session_factory):
+                worker_session = _factory()
+                try:
+                    module.aggregate_daily_intelligence(worker_session, snapshot_date=_SNAPSHOT_DATE)
+                except Exception as exc:  # noqa: BLE001 -- captured for the assertion below, not swallowed silently
+                    errors[name] = exc
+                finally:
+                    worker_session.close()
+
+            threads = [threading.Thread(target=_worker, args=(i,)) for i in range(worker_count)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+
+            assert errors == {}, (
+                f"worker_count={worker_count} trial={trial}: no exception should escape any worker: {errors}"
+            )
+
+            verify_session = session_factory()
+            rows = verify_session.query(DailyIntelligenceSnapshot).filter_by(snapshot_date=_SNAPSHOT_DATE).all()
+            assert len(rows) == 1, (
+                f"worker_count={worker_count} trial={trial}: expected exactly one row, got {len(rows)}"
+            )
+            verify_session.close()
+            engine.dispose()
+            monkeypatch.undo()
