@@ -74,7 +74,7 @@ def _latest_market_breadth(session: Session):
     to `None`, which `classify_market_risk` already handles honestly as
     INSUFFICIENT_DATA rather than failing the whole request."""
     try:
-        run = _repository.get_latest_successful_run(session)
+        run = _repository.get_latest_consumer_visible_run(session)
         if run is None:
             return None
         return _repository.get_market_breadth(session, run.id)

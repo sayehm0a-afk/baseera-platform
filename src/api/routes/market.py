@@ -124,12 +124,17 @@ def _to_run_out(run: MarketScanRun) -> MarketScanRunOut:
 
 
 def _resolve_run(session: Session, run_id: Optional[int]) -> MarketScanRun:
+    """Consumer-facing resolution only -- a Shadow-internal run (see
+    MarketIntelligenceRepository._exclude_shadow_internal_runs) is
+    treated exactly like a run that does not exist, whether requested
+    by explicit run_id or picked up as "latest": Shadow runs are
+    readable only through the staff-only admin observability routes."""
     if run_id is not None:
-        run = _repository.get_run(session, run_id)
+        run = _repository.get_consumer_visible_run(session, run_id)
         if run is None:
             raise MarketScanRunNotFoundError(f"No market scan run {run_id}.")
         return run
-    run = _repository.get_latest_successful_run(session)
+    run = _repository.get_latest_consumer_visible_run(session)
     if run is None:
         raise NoMarketScanDataError("No completed market scan exists yet -- POST /api/v1/market/scan to run one.")
     return run
@@ -418,7 +423,7 @@ def get_rankings(
     records = _repository.get_symbol_records_by_symbol(session, run.id)
     outcomes = [outcome_from_record(r) for r in records.values()]
 
-    previous_run = _repository.get_latest_successful_run(session, before_run_id=run.id)
+    previous_run = _repository.get_latest_consumer_visible_run(session, before_run_id=run.id)
     _, change_rows = _repository.get_change_events(session, limit=1000, offset=0, run_id=run.id)
     change_result = _change_detection_result_from_events(
         change_rows, previous_run.id if previous_run is not None else None
@@ -471,7 +476,7 @@ def get_opportunities(
     records = _repository.get_symbol_records_by_symbol(session, run.id)
     outcomes = [outcome_from_record(r) for r in records.values()]
 
-    previous_run = _repository.get_latest_successful_run(session, before_run_id=run.id)
+    previous_run = _repository.get_latest_consumer_visible_run(session, before_run_id=run.id)
     _, change_rows = _repository.get_change_events(session, limit=1000, offset=0, run_id=run.id)
     change_result = _change_detection_result_from_events(
         change_rows, previous_run.id if previous_run is not None else None
@@ -564,7 +569,7 @@ def get_personal_top_opportunities(
     Arabic empty state -- never a fabricated pick -- when either no
     candidate currently qualifies or the underlying scan is too old to
     trust."""
-    run = _repository.get_latest_successful_run(session)
+    run = _repository.get_latest_consumer_visible_run(session)
     result = select_top_opportunities(session, run, max_results=max_results)
 
     if result.is_stale:
