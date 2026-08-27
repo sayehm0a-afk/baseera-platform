@@ -144,6 +144,57 @@ def test_no_public_unauthenticated_access_even_for_a_real_cycle(client, session_
     assert response.status_code in (401, 403)
 
 
+def test_ordinary_consumer_user_is_denied(client, session_factory):
+    consumer = User(email="consumer@example.com", password_hash="hashed", is_staff=False, staff_role=None)
+    main.app.dependency_overrides[get_current_user] = lambda: consumer
+    try:
+        response = client.get(_url("nope"))
+        assert response.status_code in (401, 403)
+    finally:
+        del main.app.dependency_overrides[get_current_user]
+
+
+def test_support_staff_role_is_denied_not_in_the_allowed_set(client, session_factory):
+    """require_any_staff_role is an exact-membership check
+    (ANALYST/ADMIN/OWNER) -- SUPPORT is real staff but must still be
+    denied, proving there is no role-ladder inheritance bypass."""
+    support_user = User(
+        email="support@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.SUPPORT,
+    )
+    main.app.dependency_overrides[get_current_user] = lambda: support_user
+    try:
+        response = client.get(_url("nope"))
+        assert response.status_code in (401, 403)
+    finally:
+        del main.app.dependency_overrides[get_current_user]
+
+
+@pytest.mark.parametrize("role", [StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER])
+def test_each_allowed_staff_role_can_read_a_real_cycle(client, session_factory, role):
+    session = session_factory()
+    _cycle(session, "cyc-role-check")
+    session.close()
+
+    role_user = User(email=f"{role.value.lower()}@example.com", password_hash="hashed", is_staff=True, staff_role=role)
+    main.app.dependency_overrides[get_current_user] = lambda: role_user
+    try:
+        response = client.get(_url("cyc-role-check"))
+        assert response.status_code == 200
+    finally:
+        del main.app.dependency_overrides[get_current_user]
+
+
+def test_missing_cycle_id_path_segment_does_not_match_this_route(client, session_factory, as_staff):
+    """No cycle_id at all (.../cycles or .../cycles/) must not silently
+    resolve to some default/latest cycle -- it's simply not this
+    route (FastAPI 404s on an unmatched path), never a 200 with
+    unintended data."""
+    response = client.get("/api/v1/admin/market-intelligence/recurrent-live-scan/cycles")
+    assert response.status_code == 404
+    response_trailing_slash = client.get("/api/v1/admin/market-intelligence/recurrent-live-scan/cycles/")
+    assert response_trailing_slash.status_code == 404
+
+
 # --- lookup --------------------------------------------------------------
 
 
@@ -363,3 +414,114 @@ def test_an_old_cycle_from_days_ago_is_still_readable(client, session_factory, a
     body = response.json()
     assert body["cycle_id"] == "cyc-old-stale"
     assert len(body["symbols"]) == 1
+
+
+# --- cross-cycle / cross-scan contamination -------------------------------
+
+
+def test_two_cycles_with_different_scan_run_ids_never_mix_symbols(client, session_factory, as_staff):
+    session = session_factory()
+    stock_a = _stock(session, "1313")
+    stock_b = _stock(session, "1414")
+    _snapshot(session, stock_a, scan_run_id=900)
+    _snapshot(session, stock_b, scan_run_id=901)
+    session.commit()
+    _cycle(session, "cyc-900", scan_run_id=900)
+    _cycle(session, "cyc-901", scan_run_id=901)
+    session.close()
+
+    body_900 = client.get(_url("cyc-900")).json()
+    body_901 = client.get(_url("cyc-901")).json()
+
+    assert [row["symbol"] for row in body_900["symbols"]] == ["1313"]
+    assert [row["symbol"] for row in body_901["symbols"]] == ["1414"]
+
+
+def test_an_ordinary_non_shadow_scan_run_never_leaks_into_a_shadow_cycle(client, session_factory, as_staff):
+    """Simulates the real Day-1 topology: an ordinary opening-scan
+    MarketScanRun (like production's run 131) that no RecurrentScanCycle
+    ever references. Its DecisionV2Snapshot rows must never appear when
+    querying an unrelated Shadow cycle's own, different scan_run_id."""
+    session = session_factory()
+    consumer_stock = _stock(session, "1515")
+    _snapshot(session, consumer_stock, scan_run_id=131)  # the "ordinary opening scan" analogue
+    shadow_stock = _stock(session, "1616")
+    _snapshot(session, shadow_stock, scan_run_id=132)  # the Shadow cycle's own scan
+    session.commit()
+    _cycle(session, "cyc-132-only", scan_run_id=132)
+    session.close()
+
+    body = client.get(_url("cyc-132-only")).json()
+    symbols = [row["symbol"] for row in body["symbols"]]
+    assert symbols == ["1616"]
+    assert "1515" not in symbols
+
+
+# --- immutability ----------------------------------------------------------
+
+
+def test_no_row_count_changes_anywhere_across_all_relevant_tables(client, session_factory, as_staff):
+    session = session_factory()
+    stock = _stock(session, "1717")
+    _snapshot(session, stock, scan_run_id=1000)
+    session.commit()
+    _cycle(session, "cyc-immutable", scan_run_id=1000)
+    session.close()
+
+    from src.domain.models import DecisionV2Outcome, DecisionV2Snapshot, RadarOpportunity, ShadowLiveSignal
+
+    def _counts():
+        s = session_factory()
+        try:
+            return {
+                "RecurrentScanCycle": s.query(RecurrentScanCycle).count(),
+                "DecisionV2Snapshot": s.query(DecisionV2Snapshot).count(),
+                "ShadowLiveSignal": s.query(ShadowLiveSignal).count(),
+                "RadarOpportunity": s.query(RadarOpportunity).count(),
+                "DecisionV2Outcome": s.query(DecisionV2Outcome).count(),
+            }
+        finally:
+            s.close()
+
+    before = _counts()
+    response = client.get(_url("cyc-immutable"))
+    assert response.status_code == 200
+    after = _counts()
+
+    assert before == after, f"row counts changed from a read-only GET: before={before} after={after}"
+
+
+def test_repeated_reads_of_the_same_cycle_are_byte_identical(client, session_factory, as_staff):
+    session = session_factory()
+    stock = _stock(session, "1818")
+    _snapshot(session, stock, scan_run_id=1100)
+    session.commit()
+    _cycle(session, "cyc-repeat", scan_run_id=1100)
+    session.close()
+
+    first = client.get(_url("cyc-repeat"))
+    second = client.get(_url("cyc-repeat"))
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+
+
+# --- query boundedness ------------------------------------------------------
+
+
+def test_a_large_unrelated_snapshot_table_does_not_leak_into_a_small_cycle(client, session_factory, as_staff):
+    """Proves the query is bounded by scan_run_id, not an accidental
+    full-table read: many unrelated DecisionV2Snapshot rows exist
+    (different scan_run_ids, simulating routine ingestion/other scans),
+    but the cycle's own response only ever contains its own symbols."""
+    session = session_factory()
+    for i in range(50):
+        stock = _stock(session, f"U{i:03d}")
+        _snapshot(session, stock, scan_run_id=2000 + i)
+    target_stock = _stock(session, "TARGET")
+    _snapshot(session, target_stock, scan_run_id=9999)
+    session.commit()
+    _cycle(session, "cyc-bounded", scan_run_id=9999)
+    session.close()
+
+    body = client.get(_url("cyc-bounded")).json()
+    assert [row["symbol"] for row in body["symbols"]] == ["TARGET"]
