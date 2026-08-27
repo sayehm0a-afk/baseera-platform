@@ -111,6 +111,59 @@ def test_new_buy_opportunities_exclude_symbols_already_held(session):
     assert plan.new_buy_opportunities == []
 
 
+def test_new_buy_opportunities_never_selects_a_newer_shadow_run(session):
+    """PR #105 independent audit: rebalance_engine.py's
+    _find_new_buy_opportunities is the highest-severity of the three
+    secondary call sites the leak fix touched -- it serves full
+    opportunity data (symbols, targets, stops) via GET /api/v1/
+    portfolio/{id}/rebalance, not just a breadth metadata field. A
+    newer, Shadow-internal MarketScanRun (linked via
+    RecurrentScanCycle.scan_run_id, exactly like
+    RecurrentLiveScanScheduler creates) with a DIFFERENT BUY symbol
+    must never be selected over the real, older consumer scan."""
+    from src.domain.models import RecurrentScanCycle, RecurrentScanCycleStatus
+
+    consumer_run = _seed_market_scan(session, [("2222", "STRONG_BUY")])
+    shadow_run = _seed_market_scan(session, [("7777", "STRONG_BUY")])
+    assert shadow_run.id > consumer_run.id
+
+    session.add(RecurrentScanCycle(
+        cycle_id="audit-rebalance-shadow-cycle", status=RecurrentScanCycleStatus.SUCCESS_NO_CHANGE,
+        scan_run_id=shadow_run.id, triggered_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+    ))
+    session.commit()
+
+    holdings = [make_holding_analysis(symbol="9999", decision=make_decision(symbol="9999"))]
+    plan = RebalanceEngine(session).plan(holdings, _risk_profile(), [])
+
+    symbols = {o.symbol for o in plan.new_buy_opportunities}
+    assert symbols == {"2222"}
+    assert "7777" not in symbols
+    assert plan.new_buy_opportunities_source == f"market_scan_run_{consumer_run.id}"
+
+
+def test_new_buy_opportunities_shadow_only_returns_empty_not_shadow_data(session):
+    """Case E for this call site: if the ONLY MarketScanRun that
+    exists is Shadow-internal, the route's honest-empty-state contract
+    (already proven by test_no_completed_scan_means_no_new_buy_
+    opportunities above) must hold -- never a silent fallback to
+    Shadow's real opportunity data."""
+    from src.domain.models import RecurrentScanCycle, RecurrentScanCycleStatus
+
+    shadow_run = _seed_market_scan(session, [("2222", "STRONG_BUY")])
+    session.add(RecurrentScanCycle(
+        cycle_id="audit-rebalance-shadow-only", status=RecurrentScanCycleStatus.SUCCESS_NO_CHANGE,
+        scan_run_id=shadow_run.id, triggered_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+    ))
+    session.commit()
+
+    holdings = [make_holding_analysis(symbol="9999", decision=make_decision(symbol="9999"))]
+    plan = RebalanceEngine(session).plan(holdings, _risk_profile(), [])
+
+    assert plan.new_buy_opportunities == []
+    assert "POST /api/v1/market/scan" in plan.new_buy_opportunities_source
+
+
 def test_new_buy_opportunities_respects_max_count(session, monkeypatch):
     monkeypatch.setenv("PORTFOLIO_MAX_NEW_BUY_OPPORTUNITIES", "1")
     _seed_market_scan(session, [("2222", "STRONG_BUY"), ("1010", "STRONG_BUY")])

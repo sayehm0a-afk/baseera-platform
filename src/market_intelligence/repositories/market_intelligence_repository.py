@@ -46,6 +46,7 @@ from src.domain.models import (
     MarketScanStatus,
     RecommendationLabel,
     RecommendationSnapshot,
+    RecurrentScanCycle,
     SectorIntelligenceSummary,
     Stock,
     SymbolIntelligenceRecord,
@@ -233,6 +234,54 @@ class MarketIntelligenceRepository:
 
     def get_run(self, session: Session, run_id: int) -> Optional[MarketScanRun]:
         return session.query(MarketScanRun).filter_by(id=run_id).one_or_none()
+
+    @staticmethod
+    def _exclude_shadow_internal_runs(session: Session, query):
+        """Shared filter for every consumer-facing scan-resolution
+        query below: a `MarketScanRun` is Shadow-internal if and only
+        if a `RecurrentScanCycle` row references it via `scan_run_id`
+        -- that column is written exclusively by
+        `recurrent_live_scan.py`'s own cycle-completion path (no other
+        module ever constructs a `RecurrentScanCycle`), so this is a
+        persisted, structural fact rather than a timestamp/ID heuristic,
+        and it stays correct for every future Shadow cycle without any
+        code change here. Only `RecurrentScanCycle` rows with a real
+        `scan_run_id` count (a cycle skipped before Stage 2 has none,
+        and has no `MarketScanRun` to exclude anyway)."""
+        shadow_run_ids = session.query(RecurrentScanCycle.scan_run_id).filter(
+            RecurrentScanCycle.scan_run_id.isnot(None)
+        )
+        return query.filter(~MarketScanRun.id.in_(shadow_run_ids))
+
+    def get_consumer_visible_run(self, session: Session, run_id: int) -> Optional[MarketScanRun]:
+        """Same lookup as `get_run`, except a run that belongs to a
+        Shadow-internal cycle (see `_exclude_shadow_internal_runs`)
+        returns `None` -- exactly the same "does not exist" outcome an
+        unknown `run_id` produces. Consumer-facing routes (`/api/v1/
+        market/*`, `/api/v1/radar/*`, `/api/v1/stocks/*`, `/api/v1/
+        portfolio/*`) must use this instead of `get_run`; Shadow runs
+        remain fully readable through the staff-only admin observability
+        routes, which intentionally keep calling `get_run`/
+        `get_latest_successful_run` unfiltered."""
+        query = session.query(MarketScanRun).filter(MarketScanRun.id == run_id)
+        return self._exclude_shadow_internal_runs(session, query).one_or_none()
+
+    def get_latest_consumer_visible_run(
+        self, session: Session, before_run_id: Optional[int] = None
+    ) -> Optional[MarketScanRun]:
+        """Same "latest successful run" resolution as
+        `get_latest_successful_run`, except a Shadow-internal run can
+        never be selected -- see `_exclude_shadow_internal_runs`.
+        Consumer-facing routes must use this instead of
+        `get_latest_successful_run` wherever the result is served (or
+        used to derive served data) to an ordinary subscriber; internal
+        engine computation and staff-only admin routes are unaffected
+        and keep using the unfiltered method."""
+        query = session.query(MarketScanRun).filter(MarketScanRun.status == MarketScanStatus.SUCCESS)
+        if before_run_id is not None:
+            query = query.filter(MarketScanRun.id < before_run_id)
+        query = self._exclude_shadow_internal_runs(session, query)
+        return query.order_by(MarketScanRun.id.desc()).first()
 
     def reap_stale_runs(self, session: Session, max_age_hours: float) -> List[MarketScanRun]:
         """A run that crashed or was cancelled (e.g. a killed GitHub

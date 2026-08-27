@@ -188,6 +188,72 @@ def test_opportunity_detail_requires_active_subscription(client, customer):
 # --- empty states -------------------------------------------------------
 
 
+def test_summary_market_risk_never_selects_a_newer_shadow_run(client, db_session, authenticated_as_staff, monkeypatch):
+    """PR #105 independent audit: radar.py's _latest_market_breadth()
+    (module docstring: "identical convention to
+    src.api.routes.stocks._latest_market_breadth") shares the same
+    repository call site market.py's leak used. A newer, Shadow-
+    internal MarketScanRun with a deliberately different breadth
+    signature (would classify as DEFENSIVE_EXIT-biased) must never be
+    selected over the real, older consumer scan (STRONG_ENTRY-biased)."""
+    from src.market_intelligence.market_status import MarketSessionStatus, MarketStatusInfo
+    from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
+    from src.analysis.recommendation.types import Recommendation
+    from tests.unit.market_intelligence._fixtures import make_decision, make_outcome
+
+    def _open_status():
+        return MarketStatusInfo(
+            status=MarketSessionStatus.OPEN, label_ar="السوق مفتوح", is_trading_day=True,
+            server_time_riyadh=datetime(2026, 1, 4, 12, 0, tzinfo=timezone.utc),
+            seconds_until_next_open=0.0, seconds_until_close=3600.0, last_completed_session_date=None,
+        )
+
+    monkeypatch.setattr("src.api.routes.radar.get_market_status", _open_status)
+
+    async def _seed_breadth(prefix, buy_count, sell_count):
+        repo = MarketIntelligenceRepository()
+        total = buy_count + sell_count
+        symbols = [f"{prefix}{i:02d}" for i in range(total)]
+        for symbol in symbols:
+            db_session.add(Stock(symbol=symbol, name_en=f"Stock {symbol}"))
+        db_session.commit()
+        run = repo.create_scan_run(db_session, symbols_requested=total)
+        outcomes = [
+            make_outcome(symbol=s, decision=make_decision(symbol=s, recommendation=Recommendation.BUY, confidence=80.0))
+            for s in symbols[:buy_count]
+        ] + [
+            make_outcome(symbol=s, decision=make_decision(symbol=s, recommendation=Recommendation.SELL, confidence=80.0))
+            for s in symbols[buy_count:]
+        ]
+        await repo.save_symbol_records(db_session, run.id, outcomes)
+        repo.finish_run(db_session, run.id, MarketScanStatus.SUCCESS, symbols_succeeded=total, symbols_skipped=0, symbols_failed=0)
+        return repo.get_run(db_session, run.id)
+
+    import asyncio
+
+    consumer_run = asyncio.run(_seed_breadth("92", 18, 2))  # STRONG_ENTRY-biased
+    shadow_run = asyncio.run(_seed_breadth("93", 1, 19))  # DEFENSIVE_EXIT-biased
+    assert shadow_run.id > consumer_run.id
+
+    from src.domain.models import RecurrentScanCycle, RecurrentScanCycleStatus
+
+    db_session.add(RecurrentScanCycle(
+        cycle_id="audit-radar-shadow-cycle", status=RecurrentScanCycleStatus.SUCCESS_NO_CHANGE,
+        scan_run_id=shadow_run.id, triggered_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+    ))
+    db_session.commit()
+
+    real_response = client.get(_SUMMARY_ROUTE)
+    assert real_response.status_code == 200
+    real_state = real_response.json()["market_risk_state"]
+    assert real_state not in ("MARKET_CLOSED", "INSUFFICIENT_DATA")
+
+    # If Shadow leaked in, this exact scenario would classify
+    # DEFENSIVE_EXIT (entries blocked) -- must not happen.
+    assert real_response.json()["entry_permitted"] is True
+    assert real_state != "DEFENSIVE_EXIT"
+
+
 def test_summary_on_an_empty_database_is_an_honest_empty_state(client, db_session, authenticated_as_staff):
     response = client.get(_SUMMARY_ROUTE)
     assert response.status_code == 200

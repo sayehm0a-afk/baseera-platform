@@ -65,7 +65,7 @@ class RebalanceEngine:
         )
 
     def _find_new_buy_opportunities(self, holdings: List[HoldingAnalysis]):
-        run = self._repository.get_latest_successful_run(self._session)
+        run = self._repository.get_latest_consumer_visible_run(self._session)
         if run is None:
             return [], _NO_SCAN_SOURCE
 

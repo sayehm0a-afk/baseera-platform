@@ -450,13 +450,17 @@ def test_decision_v2_response_never_exposes_credentials(client, db_session):
 # hit the route itself). ------------------------------------------------
 
 
-async def _seed_real_breadth(db_session: Session, *, buy_count: int, sell_count: int, confidence: float) -> None:
+async def _seed_real_breadth(
+    db_session: Session, *, buy_count: int, sell_count: int, confidence: float, symbol_prefix: str = "90"
+) -> None:
     """Seeds `buy_count` real BUY outcomes and `sell_count` real SELL
     outcomes into a completed MarketScanRun, via the same repository
-    methods a real scan run uses -- not a hand-built MarketBreadthSummary."""
+    methods a real scan run uses -- not a hand-built MarketBreadthSummary.
+    `symbol_prefix` lets a test seed two independent breadth runs
+    without a Stock.symbol collision on the second call."""
     repo = MarketIntelligenceRepository()
     total = buy_count + sell_count
-    symbols = [f"90{i:02d}" for i in range(total)]
+    symbols = [f"{symbol_prefix}{i:02d}" for i in range(total)]
     for symbol in symbols:
         db_session.add(Stock(symbol=symbol, name_en=f"Stock {symbol}"))
     db_session.commit()
@@ -480,6 +484,7 @@ async def _seed_real_breadth(db_session: Session, *, buy_count: int, sell_count:
         db_session, run.id, MarketScanStatus.SUCCESS,
         symbols_succeeded=total, symbols_skipped=0, symbols_failed=0,
     )
+    return repo.get_run(db_session, run.id)
 
 
 def _open_market_status() -> MarketStatusInfo:
@@ -520,6 +525,43 @@ async def test_decision_v2_includes_live_market_risk_fields_from_a_real_scan_run
     assert body["market_breadth_sell_count"] == 2
     assert body["market_breadth_symbols_scanned"] == 20
     assert body["market_risk_basis_ar"]
+
+
+@pytest.mark.asyncio
+async def test_decision_v2_market_breadth_never_selects_a_newer_shadow_run(client, db_session, monkeypatch):
+    """PR #105 independent audit: stocks.py's _latest_market_breadth()
+    shares the exact same repository call sites market.py's leak used.
+    A newer, Shadow-internal MarketScanRun (linked via
+    RecurrentScanCycle.scan_run_id, exactly like
+    RecurrentLiveScanScheduler creates) with DIFFERENT breadth numbers
+    must never be selected -- the response must still reflect the
+    real, older consumer scan's breadth."""
+    from src.domain.models import RecurrentScanCycle, RecurrentScanCycleStatus
+
+    monkeypatch.setattr("src.api.routes.stocks.get_market_status", _open_market_status)
+    consumer_run = await _seed_real_breadth(db_session, buy_count=18, sell_count=2, confidence=80.0)
+
+    # A newer Shadow-internal run with deliberately different breadth
+    # numbers, so a leak would be trivially observable in the response.
+    shadow_run = await _seed_real_breadth(db_session, buy_count=1, sell_count=19, confidence=80.0, symbol_prefix="91")
+    assert shadow_run.id > consumer_run.id
+    db_session.add(RecurrentScanCycle(
+        cycle_id="audit-shadow-cycle", status=RecurrentScanCycleStatus.SUCCESS_NO_CHANGE,
+        scan_run_id=shadow_run.id, triggered_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+    ))
+    db_session.commit()
+
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    response = client.get("/api/v1/stocks/2222/decision-v2")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["market_breadth_buy_count"] == 18
+    assert body["market_breadth_sell_count"] == 2
+    assert body["market_breadth_symbols_scanned"] == 20
 
 
 @pytest.mark.asyncio

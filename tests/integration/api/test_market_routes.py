@@ -35,6 +35,8 @@ from src.domain.models import (
     PeriodType,
     PriceBar,
     RecommendationLabel,
+    RecurrentScanCycle,
+    RecurrentScanCycleStatus,
     StaffRole,
     Stock,
     SymbolIntelligenceRecord,
@@ -733,3 +735,182 @@ def test_personal_top_opportunities_never_touches_sahmk_even_when_called_repeate
     for _ in range(5):
         response = client.get("/api/v1/market/personal/top-opportunities")
         assert response.status_code == 200
+
+
+# --- PR #105 independent audit: route-level Shadow isolation ----------------
+# Repository-level coverage already lives in
+# tests/unit/market_intelligence/repositories/test_market_intelligence_repository.py
+# (TestConsumerVisibleRunExcludesShadow). These prove the same property at
+# the real HTTP layer: a real POST /scan creates a genuine consumer run
+# through the ordinary route; a Shadow-internal run is constructed directly
+# (mirroring exactly what RecurrentLiveScanScheduler does -- a MarketScanRun
+# row plus a RecurrentScanCycle row linking back via scan_run_id) and given a
+# HIGHER id than the consumer run, so any leak would be trivially observable
+# as "latest" picking the wrong one. Every request here goes through the same
+# `client` fixture's staff/OWNER-role user (see session_factory above) --
+# proving Case L: even a staff identity hitting a *consumer* route gets the
+# filtered result, because the enforcement is route-based, not role-based.
+
+
+def _mark_shadow(session_factory, run_id):
+    session = session_factory()
+    session.add(RecurrentScanCycle(
+        cycle_id=f"shadow-cycle-{run_id}", status=RecurrentScanCycleStatus.SUCCESS_NO_CHANGE, scan_run_id=run_id,
+        triggered_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+    ))
+    session.commit()
+    session.close()
+
+
+def _create_shadow_run(session_factory):
+    """Mirrors exactly what RecurrentLiveScanScheduler does: a real
+    MarketScanRun (via the same repository method a consumer scan
+    uses), finished SUCCESS, then linked via RecurrentScanCycle."""
+    session = session_factory()
+    repo = MarketIntelligenceRepository()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    repo.finish_run(session, run.id, MarketScanStatus.SUCCESS, symbols_succeeded=1, symbols_skipped=0, symbols_failed=0)
+    run_id = run.id
+    session.close()
+    _mark_shadow(session_factory, run_id)
+    return run_id
+
+
+def test_default_summary_never_selects_a_newer_shadow_run(client, session_factory):
+    _seed_stock_with_bars(session_factory, "2222")
+    consumer_run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    shadow_run_id = _create_shadow_run(session_factory)
+    assert shadow_run_id > consumer_run_id  # Shadow really is "newer" by id
+
+    response = client.get("/api/v1/market/summary")
+    assert response.status_code == 200
+    assert response.json()["scan_run_id"] == consumer_run_id
+
+
+def test_default_opportunities_never_selects_a_newer_shadow_run(client, session_factory):
+    _seed_stock_with_bars(session_factory, "2222")
+    consumer_run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    shadow_run_id = _create_shadow_run(session_factory)
+    assert shadow_run_id > consumer_run_id
+
+    response = client.get("/api/v1/market/opportunities")
+    assert response.status_code == 200
+    assert response.json()["scan_run_id"] == consumer_run_id
+
+
+def test_default_rankings_and_top_buy_never_select_a_newer_shadow_run(client, session_factory):
+    _seed_stock_with_bars(session_factory, "2222")
+    consumer_run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    shadow_run_id = _create_shadow_run(session_factory)
+    assert shadow_run_id > consumer_run_id
+
+    assert client.get("/api/v1/market/rankings").json()["scan_run_id"] == consumer_run_id
+    assert client.get("/api/v1/market/top-buy").status_code == 200
+    assert client.get("/api/v1/market/watchlists").json()["scan_run_id"] == consumer_run_id
+    assert client.get("/api/v1/market/sectors").json()["scan_run_id"] == consumer_run_id
+
+
+def test_explicit_shadow_run_id_404s_via_scan_route(client, session_factory):
+    shadow_run_id = _create_shadow_run(session_factory)
+    response = client.get(f"/api/v1/market/scan/{shadow_run_id}")
+    assert response.status_code == 404
+
+
+def test_explicit_shadow_run_id_404s_via_scan_progress_route(client, session_factory):
+    shadow_run_id = _create_shadow_run(session_factory)
+    response = client.get(f"/api/v1/market/scan/{shadow_run_id}/progress")
+    assert response.status_code == 404
+
+
+def test_explicit_shadow_run_id_404s_via_summary_route(client, session_factory):
+    shadow_run_id = _create_shadow_run(session_factory)
+    response = client.get("/api/v1/market/summary", params={"run_id": shadow_run_id})
+    assert response.status_code == 404
+
+
+def test_explicit_shadow_run_id_404s_via_opportunities_route(client, session_factory):
+    """The exact production leak this PR closes: GET /opportunities?
+    run_id=<shadow_run_id> must now behave as if that run never
+    existed, not serve its real BUY/WATCH candidate data."""
+    shadow_run_id = _create_shadow_run(session_factory)
+    response = client.get("/api/v1/market/opportunities", params={"run_id": shadow_run_id})
+    assert response.status_code == 404
+
+
+def test_explicit_shadow_run_id_404s_via_rankings_watchlists_sectors_changes(client, session_factory):
+    shadow_run_id = _create_shadow_run(session_factory)
+    assert client.get("/api/v1/market/rankings", params={"run_id": shadow_run_id}).status_code == 404
+    assert client.get("/api/v1/market/watchlists", params={"run_id": shadow_run_id}).status_code == 404
+    assert client.get("/api/v1/market/sectors", params={"run_id": shadow_run_id}).status_code == 404
+    assert client.get("/api/v1/market/changes", params={"run_id": shadow_run_id}).status_code == 404
+
+
+def test_shadow_only_no_consumer_scan_yet_returns_404_not_shadow_data(client, session_factory):
+    """Case E: if the only MarketScanRun that exists at all is
+    Shadow-internal, every default-resolution consumer route must
+    behave exactly as if no scan had ever completed (its normal
+    honest-empty-state contract) -- never silently fall back to
+    serving the Shadow run's data."""
+    _create_shadow_run(session_factory)
+
+    assert client.get("/api/v1/market/summary").status_code == 404
+    assert client.get("/api/v1/market/opportunities").status_code == 404
+    assert client.get("/api/v1/market/rankings").status_code == 404
+
+    personal = client.get("/api/v1/market/personal/top-opportunities")
+    assert personal.status_code == 200  # this route's contract is an honest empty state, not 404
+    assert personal.json()["scan_run_id"] is None
+    assert personal.json()["message_ar"] is not None
+
+
+def test_personal_top_opportunities_never_selects_a_newer_shadow_run(client, session_factory):
+    _seed_stock_with_bars(session_factory, "2222", sector="Energy")
+    _add_fundamentals(session_factory, "2222")
+    consumer_run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    assert client.get(f"/api/v1/market/scan/{consumer_run_id}").json()["status"] == "SUCCESS"
+    shadow_run_id = _create_shadow_run(session_factory)
+    assert shadow_run_id > consumer_run_id
+
+    response = client.get("/api/v1/market/personal/top-opportunities")
+    assert response.status_code == 200
+    assert response.json()["scan_run_id"] == consumer_run_id
+
+
+def test_multiple_shadow_cycles_all_excluded_even_when_newest(client, session_factory):
+    """Case H: several Shadow runs, all newer than the one legitimate
+    consumer run -- every one of them must be excluded, not just the
+    single most recent."""
+    _seed_stock_with_bars(session_factory, "2222")
+    consumer_run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+    for _ in range(4):
+        _create_shadow_run(session_factory)
+
+    response = client.get("/api/v1/market/summary")
+    assert response.status_code == 200
+    assert response.json()["scan_run_id"] == consumer_run_id
+
+
+def test_unrelated_pending_and_failed_runs_do_not_affect_shadow_exclusion(client, session_factory):
+    """Case J: ordinary non-Shadow PENDING/FAILED rows sitting in the
+    table (e.g. a crashed scan) must not interact with the Shadow
+    exclusion at all -- the real successful consumer run is still
+    correctly selected over a newer Shadow run."""
+    _seed_stock_with_bars(session_factory, "2222")
+    consumer_run_id = client.post("/api/v1/market/scan", json={}).json()["id"]
+
+    session = session_factory()
+    repo = MarketIntelligenceRepository()
+    pending = repo.create_scan_run(session, symbols_requested=1)
+    pending_id = pending.id
+    failed = repo.create_scan_run(session, symbols_requested=1)
+    failed_id = failed.id
+    repo.finish_run(session, failed_id, MarketScanStatus.FAILED, symbols_succeeded=0, symbols_skipped=0, symbols_failed=1)
+    session.close()
+    assert pending_id > consumer_run_id  # unrelated PENDING row, never excluded, never selected either
+
+    shadow_run_id = _create_shadow_run(session_factory)
+    assert shadow_run_id > failed_id
+
+    response = client.get("/api/v1/market/summary")
+    assert response.status_code == 200
+    assert response.json()["scan_run_id"] == consumer_run_id

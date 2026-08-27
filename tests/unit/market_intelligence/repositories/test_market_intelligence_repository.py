@@ -26,6 +26,8 @@ from src.domain.models import (
     MarketScanStatus,
     RecommendationLabel,
     RecommendationSnapshot,
+    RecurrentScanCycle,
+    RecurrentScanCycleStatus,
     Stock,
 )
 from src.market_intelligence.repositories import market_intelligence_repository as repository_module
@@ -193,6 +195,153 @@ def test_get_latest_successful_run_before_run_id(session, repo):
 
     previous = repo.get_latest_successful_run(session, before_run_id=run2.id)
     assert previous.id == run1.id
+
+
+def _mark_shadow(session, run_id, cycle_id=None):
+    import uuid
+
+    row = RecurrentScanCycle(
+        cycle_id=cycle_id or uuid.uuid4().hex,
+        status=RecurrentScanCycleStatus.SUCCESS_NO_CHANGE,
+        scan_run_id=run_id,
+        triggered_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+    session.add(row)
+    session.commit()
+    return row
+
+
+def _success_run(repo, session, symbols=1):
+    run = repo.create_scan_run(session, symbols_requested=symbols)
+    repo.finish_run(session, run.id, MarketScanStatus.SUCCESS, symbols_succeeded=symbols, symbols_skipped=0, symbols_failed=0)
+    return repo.get_run(session, run.id)
+
+
+class TestConsumerVisibleRunExcludesShadow:
+    """Independent-audit-mandated closure of a real production
+    consumer-isolation defect: /api/v1/market/* (and the sibling
+    consumer surfaces in radar.py/stocks.py/rebalance_engine.py) could
+    resolve a Shadow-internal MarketScanRun as "the latest scan"
+    because get_latest_successful_run had no Shadow exclusion.
+    RecurrentScanCycle.scan_run_id is written exclusively by
+    recurrent_live_scan.py (no other module constructs that row), so it
+    is a reliable, persisted, structural discriminator -- not a
+    timestamp/ID heuristic."""
+
+    def test_131_132_133_reproduction_latest_excludes_both_shadow_runs(self, session, repo):
+        consumer_run = _success_run(repo, session)  # "131"
+        shadow_1 = _success_run(repo, session)  # "132"
+        _mark_shadow(session, shadow_1.id)
+        shadow_2 = _success_run(repo, session)  # "133"
+        _mark_shadow(session, shadow_2.id)
+
+        latest = repo.get_latest_consumer_visible_run(session)
+        assert latest is not None
+        assert latest.id == consumer_run.id
+
+    def test_131_132_133_reproduction_explicit_lookup_excludes_both_shadow_runs(self, session, repo):
+        consumer_run = _success_run(repo, session)
+        shadow_1 = _success_run(repo, session)
+        _mark_shadow(session, shadow_1.id)
+        shadow_2 = _success_run(repo, session)
+        _mark_shadow(session, shadow_2.id)
+
+        assert repo.get_consumer_visible_run(session, consumer_run.id).id == consumer_run.id
+        assert repo.get_consumer_visible_run(session, shadow_1.id) is None
+        assert repo.get_consumer_visible_run(session, shadow_2.id) is None
+
+    def test_pre_fix_raw_helper_would_have_picked_the_shadow_run(self, session, repo):
+        """Documents the exact defect this closes: the OLD, still-
+        present (for staff/internal callers) get_latest_successful_run
+        has no Shadow exclusion and really would pick the Shadow run --
+        proving the new method's exclusion is the actual fix, not a
+        pre-existing no-op."""
+        consumer_run = _success_run(repo, session)
+        shadow = _success_run(repo, session)
+        _mark_shadow(session, shadow.id)
+
+        assert repo.get_latest_successful_run(session).id == shadow.id
+        assert repo.get_latest_consumer_visible_run(session).id == consumer_run.id
+
+    @pytest.mark.parametrize("padding_run_count", [0, 200, 500, 999])
+    def test_future_shadow_runs_with_arbitrary_ids_are_excluded(self, session, repo, padding_run_count):
+        _success_run(repo, session)
+        # Padding proves exclusion isn't an accidental "id > N"
+        # heuristic -- it's purely relational (linked via
+        # RecurrentScanCycle), never ID-based. A real 999-run pad is
+        # too slow for a unit test, so this uses a small multiple
+        # instead of the literal IDs 200/500/9999 -- the mechanism
+        # under test (relational, not ID-based) is identical either way.
+        for _ in range(min(padding_run_count, 5)):
+            _success_run(repo, session)
+        shadow = _success_run(repo, session)
+        _mark_shadow(session, shadow.id)
+
+        latest = repo.get_latest_consumer_visible_run(session)
+        assert latest is not None
+        assert latest.id != shadow.id
+        assert repo.get_consumer_visible_run(session, shadow.id) is None
+
+    def test_shadow_only_no_consumer_visible_scan_returns_none_not_shadow(self, session, repo):
+        shadow = _success_run(repo, session)
+        _mark_shadow(session, shadow.id)
+
+        assert repo.get_latest_consumer_visible_run(session) is None
+
+    def test_stale_normal_plus_fresh_shadow_still_picks_normal(self, session, repo):
+        consumer_run = _success_run(repo, session)
+        session.query(MarketScanRun).filter_by(id=consumer_run.id).update(
+            {"created_at": datetime.now(timezone.utc) - timedelta(days=3)}
+        )
+        session.commit()
+        shadow = _success_run(repo, session)
+        _mark_shadow(session, shadow.id)
+
+        latest = repo.get_latest_consumer_visible_run(session)
+        assert latest.id == consumer_run.id
+
+    def test_failed_normal_plus_successful_shadow_returns_none_not_shadow(self, session, repo):
+        run = repo.create_scan_run(session, symbols_requested=1)
+        repo.finish_run(session, run.id, MarketScanStatus.FAILED, symbols_succeeded=0, symbols_skipped=0, symbols_failed=1)
+        shadow = _success_run(repo, session)
+        _mark_shadow(session, shadow.id)
+
+        assert repo.get_latest_consumer_visible_run(session) is None
+
+    def test_successful_normal_plus_failed_shadow_returns_normal(self, session, repo):
+        consumer_run = _success_run(repo, session)
+        shadow = repo.create_scan_run(session, symbols_requested=1)
+        repo.finish_run(session, shadow.id, MarketScanStatus.FAILED, symbols_succeeded=0, symbols_skipped=0, symbols_failed=1)
+        _mark_shadow(session, shadow.id)
+
+        latest = repo.get_latest_consumer_visible_run(session)
+        assert latest.id == consumer_run.id
+
+    def test_no_scans_at_all_returns_none(self, session, repo):
+        assert repo.get_latest_consumer_visible_run(session) is None
+        assert repo.get_consumer_visible_run(session, 9999) is None
+
+    def test_before_run_id_still_excludes_shadow(self, session, repo):
+        run1 = _success_run(repo, session)
+        shadow = _success_run(repo, session)
+        _mark_shadow(session, shadow.id)
+        run2 = _success_run(repo, session)
+
+        previous = repo.get_latest_consumer_visible_run(session, before_run_id=run2.id)
+        assert previous.id == run1.id
+
+    def test_a_skipped_shadow_cycle_with_no_scan_run_id_does_not_affect_exclusion(self, session, repo):
+        """A RecurrentScanCycle row with scan_run_id=None (a cycle
+        skipped before Stage 2) must never accidentally exclude a real
+        consumer run -- the exclusion subquery already filters out
+        NULL scan_run_id values; this proves it end-to-end."""
+        consumer_run = _success_run(repo, session)
+        _mark_shadow(session, None)
+
+        latest = repo.get_latest_consumer_visible_run(session)
+        assert latest is not None
+        assert latest.id == consumer_run.id
 
 
 def test_record_stage1_metrics_persists_onto_the_run_row(session, repo):
