@@ -641,6 +641,10 @@ class TestRunOneCycle:
         assert cycle.symbols_evaluated_count == 1
         assert cycle.error_summary is None
 
+        session = factory()
+        assert session.query(ShadowLiveSignal).filter_by(symbol="4050").count() == 1
+        session.close()
+
     @pytest.mark.asyncio
     async def test_run_one_cycle_persists_shadow_internal_on_created_market_scan_run(self, factory, monkeypatch):
         """Market Engine Shadow contamination fix, permanent regression
@@ -687,10 +691,6 @@ class TestRunOneCycle:
         # the very same MarketScanRun the scheduler actually created.
         linked_cycle = session.query(RecurrentScanCycle).filter_by(id=cycle.id).one()
         assert linked_cycle.scan_run_id == run.id
-        session.close()
-
-        session = factory()
-        assert session.query(ShadowLiveSignal).filter_by(symbol="4050").count() == 1
         session.close()
 
     @pytest.mark.asyncio
