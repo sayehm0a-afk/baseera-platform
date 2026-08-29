@@ -89,9 +89,18 @@ class MarketIntelligenceEngine:
         # Best-effort: a missing/failed lookup degrades to None, which
         # classify_market_risk already handles honestly as
         # INSUFFICIENT_DATA rather than failing the whole scan.
+        #
+        # Market Engine Shadow contamination fix: this is Decision V2
+        # input, not staff observability -- a Shadow-internal run (see
+        # `RecurrentLiveScanScheduler`) must never be selected here, or
+        # its breadth would silently cap confidence / block entries for
+        # this run's *real* symbols via `classify_market_risk`. Uses
+        # the same `get_latest_consumer_visible_run` PR #105 already
+        # routes every consumer-facing route through -- see that
+        # method's own docstring for the exclusion mechanism.
         breadth_session = self._session_factory()
         try:
-            latest_run = self._repository.get_latest_successful_run(breadth_session)
+            latest_run = self._repository.get_latest_consumer_visible_run(breadth_session)
             market_breadth = (
                 self._repository.get_market_breadth(breadth_session, latest_run.id)
                 if latest_run is not None
@@ -134,7 +143,12 @@ class MarketIntelligenceEngine:
             try:
                 await self._repository.save_symbol_records(write_session, run_id, outcomes)
 
-                previous_run = self._repository.get_latest_successful_run(write_session, before_run_id=run_id)
+                # Market Engine Shadow contamination fix: same reasoning
+                # as the breadth read above -- a Shadow-internal run
+                # must never be selected as "the previous run" this
+                # real run's sector momentum/previous-symbol-record
+                # comparison is computed against.
+                previous_run = self._repository.get_latest_consumer_visible_run(write_session, before_run_id=run_id)
                 previous_sector_scores = (
                     self._repository.get_sector_average_scores(write_session, previous_run.id)
                     if previous_run is not None

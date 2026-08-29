@@ -8,7 +8,7 @@ symbol-level counters. This is the layer's "scan history."
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Enum, Integer, Numeric, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum, Integer, Numeric, Text
 from sqlalchemy.sql import func
 
 from src.core.db.database import Base
@@ -54,6 +54,19 @@ class MarketScanRun(Base):
     stage1_universe_size = Column(Integer, nullable=True)
     stage1_evaluated_count = Column(Integer, nullable=True)
     stage1_candidate_count = Column(Integer, nullable=True)
+
+    # Market Engine Shadow contamination fix (concurrency closure): set
+    # atomically in the same INSERT that creates this row -- true only
+    # for a run `RecurrentLiveScanScheduler` created for a Shadow Mode
+    # cycle (see `create_scan_run`'s `is_shadow_internal` parameter).
+    # Unlike the pre-existing `RecurrentScanCycle.scan_run_id` link
+    # (written only after the scan finishes), this column can never lag
+    # behind the run's own status, so it closes the race window where a
+    # Shadow run could reach SUCCESS before any exclusion signal for it
+    # existed. `MarketIntelligenceRepository._exclude_shadow_internal_
+    # runs` checks both signals; every pre-existing (necessarily
+    # non-Shadow) row defaults to False via `server_default`.
+    is_shadow_internal = Column(Boolean, nullable=False, default=False, server_default="false")
 
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
