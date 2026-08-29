@@ -662,7 +662,9 @@ class RecurrentLiveScanScheduler:
                     quota_remaining_before=quota_remaining_before, quota_remaining_after=quota_remaining_before,
                 )
 
-            run = self._repository.create_scan_run(session, symbols_requested=len(selection.symbols))
+            run = self._repository.create_scan_run(
+                session, symbols_requested=len(selection.symbols), is_shadow_internal=True
+            )
             run_id = run.id
 
             with priority_scope(LIVE_SCAN), operation_scope(LIVE_RECURRENT_SCAN):

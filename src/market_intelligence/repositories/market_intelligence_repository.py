@@ -182,8 +182,21 @@ def _is_duplicate_recommendation(
 class MarketIntelligenceRepository:
     # --- scan run lifecycle -------------------------------------------
 
-    def create_scan_run(self, session: Session, symbols_requested: int) -> MarketScanRun:
-        run = MarketScanRun(status=MarketScanStatus.PENDING, symbols_requested=symbols_requested)
+    def create_scan_run(
+        self, session: Session, symbols_requested: int, is_shadow_internal: bool = False
+    ) -> MarketScanRun:
+        """`is_shadow_internal=True` must be passed only by
+        `RecurrentLiveScanScheduler` (Shadow Mode) -- every other
+        caller (POST /market/scan, the scheduled real scan, admin
+        diagnostic scans) uses the default `False`. Writing this flag
+        in the same INSERT that creates the row is what makes it a
+        race-safe discriminator: see the column's own docstring on
+        `MarketScanRun` and `_exclude_shadow_internal_runs` below."""
+        run = MarketScanRun(
+            status=MarketScanStatus.PENDING,
+            symbols_requested=symbols_requested,
+            is_shadow_internal=is_shadow_internal,
+        )
         session.add(run)
         session.commit()
         return run
@@ -237,21 +250,40 @@ class MarketIntelligenceRepository:
 
     @staticmethod
     def _exclude_shadow_internal_runs(session: Session, query):
-        """Shared filter for every consumer-facing scan-resolution
-        query below: a `MarketScanRun` is Shadow-internal if and only
-        if a `RecurrentScanCycle` row references it via `scan_run_id`
-        -- that column is written exclusively by
-        `recurrent_live_scan.py`'s own cycle-completion path (no other
-        module ever constructs a `RecurrentScanCycle`), so this is a
-        persisted, structural fact rather than a timestamp/ID heuristic,
-        and it stays correct for every future Shadow cycle without any
-        code change here. Only `RecurrentScanCycle` rows with a real
-        `scan_run_id` count (a cycle skipped before Stage 2 has none,
-        and has no `MarketScanRun` to exclude anyway)."""
+        """Shared filter for every consumer-facing (and, since the
+        Market Engine contamination fix, every internal-engine-
+        reference) scan-resolution query below. A `MarketScanRun` is
+        Shadow-internal if EITHER of two independent signals says so:
+
+        1. `MarketScanRun.is_shadow_internal is True` -- written
+           atomically in the same INSERT that creates the row (see
+           `create_scan_run`), so this signal exists the instant the
+           row exists, before it can ever reach RUNNING or SUCCESS.
+           This is what makes the exclusion race-safe: a concurrent
+           reader can never observe a Shadow run as SUCCESS without
+           this flag already being true.
+        2. A `RecurrentScanCycle` row references it via `scan_run_id`
+           -- written exclusively by `recurrent_live_scan.py`'s own
+           cycle-completion path (no other module ever constructs a
+           `RecurrentScanCycle`), so this is also a persisted,
+           structural fact rather than a timestamp/ID heuristic. Kept
+           as a second, redundant signal (rather than replaced) so
+           every existing Shadow run and every existing PR #105 test
+           that seeds a Shadow run purely via `RecurrentScanCycle`
+           (without exercising `create_scan_run`'s new parameter)
+           keeps behaving identically -- this is a strictly additive
+           widening of what gets excluded, never a narrowing.
+
+        Only `RecurrentScanCycle` rows with a real `scan_run_id` count
+        (a cycle skipped before Stage 2 has none, and has no
+        `MarketScanRun` to exclude anyway)."""
         shadow_run_ids = session.query(RecurrentScanCycle.scan_run_id).filter(
             RecurrentScanCycle.scan_run_id.isnot(None)
         )
-        return query.filter(~MarketScanRun.id.in_(shadow_run_ids))
+        return query.filter(
+            MarketScanRun.is_shadow_internal.isnot(True),
+            ~MarketScanRun.id.in_(shadow_run_ids),
+        )
 
     def get_consumer_visible_run(self, session: Session, run_id: int) -> Optional[MarketScanRun]:
         """Same lookup as `get_run`, except a run that belongs to a

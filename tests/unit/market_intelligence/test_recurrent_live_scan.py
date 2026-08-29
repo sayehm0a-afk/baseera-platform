@@ -646,6 +646,54 @@ class TestRunOneCycle:
         session.close()
 
     @pytest.mark.asyncio
+    async def test_run_one_cycle_persists_shadow_internal_on_created_market_scan_run(self, factory, monkeypatch):
+        """Market Engine Shadow contamination fix, permanent regression
+        coverage: the exclusion in `MarketIntelligenceRepository.
+        _exclude_shadow_internal_runs` depends entirely on every
+        MarketScanRun the recurrent Shadow scheduler creates carrying
+        `is_shadow_internal=True` -- written atomically at
+        `_run_one_cycle`'s own `create_scan_run(...)` call site
+        (recurrent_live_scan.py). This exercises the REAL scheduler
+        path end to end (no repository mocking) and queries the
+        resulting row back from the test database, so a future
+        refactor that drops or misplaces that keyword argument fails
+        this test, not just a unit test of create_scan_run in
+        isolation."""
+        session = factory()
+        stock = _stock(session, "4050")
+        outcome_snapshot = _snapshot(session, stock, scan_run_id=999, decision="WATCH")
+        session.add(
+            DecisionV2Outcome(
+                decision_v2_snapshot_id=outcome_snapshot.id, symbol="4050",
+                due_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        )
+        session.commit()
+        session.close()
+
+        fake_job = _fake_run_market_scan_job_writing_snapshots({"4050": {"decision": "BUY_CANDIDATE"}})
+
+        scheduler = RecurrentLiveScanScheduler(
+            session_factory=factory, market_provider_getter=_fake_market_provider_getter,
+            rate_limiter=_ok_rate_limiter(), run_market_scan_job_fn=fake_job,
+        )
+        cycle = await scheduler._run_one_cycle()
+
+        assert cycle.status == RecurrentScanCycleStatus.SUCCESS
+        assert cycle.scan_run_id is not None
+
+        session = factory()
+        run = session.query(MarketScanRun).filter_by(id=cycle.scan_run_id).one()
+        assert run.is_shadow_internal is True
+
+        # The pre-existing (legacy) discriminator must also still be
+        # correctly linked to the same run -- both signals agree on
+        # the very same MarketScanRun the scheduler actually created.
+        linked_cycle = session.query(RecurrentScanCycle).filter_by(id=cycle.id).one()
+        assert linked_cycle.scan_run_id == run.id
+        session.close()
+
+    @pytest.mark.asyncio
     async def test_no_material_change_is_success_no_change(self, factory):
         session = factory()
         stock = _stock(session, "4050")

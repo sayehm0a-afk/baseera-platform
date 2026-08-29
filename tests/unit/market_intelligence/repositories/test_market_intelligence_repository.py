@@ -344,6 +344,97 @@ class TestConsumerVisibleRunExcludesShadow:
         assert latest.id == consumer_run.id
 
 
+def _success_run_is_shadow(repo, session, symbols=1):
+    """Same as `_success_run`, but creates the run the way
+    `RecurrentLiveScanScheduler` actually does in production --
+    `is_shadow_internal=True` written atomically at creation, via
+    `create_scan_run`'s own parameter -- rather than via a
+    separately-committed `RecurrentScanCycle` row (`_mark_shadow`).
+    Used to prove the race-safe exclusion signal (Market Engine Shadow
+    contamination fix, concurrency closure) independently of the
+    pre-existing `RecurrentScanCycle`-based one."""
+    run = repo.create_scan_run(session, symbols_requested=symbols, is_shadow_internal=True)
+    repo.finish_run(session, run.id, MarketScanStatus.SUCCESS, symbols_succeeded=symbols, symbols_skipped=0, symbols_failed=0)
+    return repo.get_run(session, run.id)
+
+
+class TestConsumerVisibleRunExclusionIsRaceSafe:
+    """Market Engine Shadow contamination fix, Phase 14 (concurrency):
+    `RecurrentLiveScanScheduler._run_one_cycle` creates the
+    `MarketScanRun` and calls `finish_run()` (status=SUCCESS, committed)
+    well before it ever calls `_persist_cycle()` (the `RecurrentScanCycle`
+    row, with `scan_run_id` set, committed) -- a real window in which a
+    Shadow run is SUCCESS but has no `RecurrentScanCycle` association
+    yet. `is_shadow_internal` closes it: it is written in the SAME
+    INSERT that creates the `MarketScanRun` row, so it is never absent
+    for a run `create_scan_run(is_shadow_internal=True)` created, at any
+    point in that run's lifecycle -- these tests simulate exactly that
+    window by creating and finishing a Shadow run WITHOUT ever creating
+    a `RecurrentScanCycle` row for it."""
+
+    def test_is_shadow_internal_alone_excludes_a_run_with_no_recurrentscancycle_row(self, session, repo):
+        """Simulates the race window directly: a Shadow run that has
+        already reached SUCCESS but whose RecurrentScanCycle row (which
+        `_persist_cycle` would write moments later in production) does
+        not exist yet. Pre-fix (before `is_shadow_internal` existed),
+        this exact state was indistinguishable from a real run and
+        would have been selected."""
+        shadow = _success_run_is_shadow(repo, session)
+        assert session.query(RecurrentScanCycle).filter_by(scan_run_id=shadow.id).first() is None
+
+        assert repo.get_latest_consumer_visible_run(session) is None
+        assert repo.get_consumer_visible_run(session, shadow.id) is None
+
+    def test_is_shadow_internal_flag_survives_before_run_id_lookup_with_no_cycle_row(self, session, repo):
+        real = _success_run(repo, session)
+        shadow = _success_run_is_shadow(repo, session)  # more recent id, no RecurrentScanCycle row
+
+        previous = repo.get_latest_consumer_visible_run(session, before_run_id=shadow.id + 1)
+        assert previous.id == real.id
+
+    def test_real_run_created_via_create_scan_run_defaults_is_shadow_internal_false(self, session, repo):
+        """Every non-Shadow caller of create_scan_run (POST /market/scan,
+        the scheduled real scan, admin diagnostic scans) never passes
+        is_shadow_internal -- confirms the default keeps a real run
+        fully visible with no code change required at those call sites."""
+        real = _success_run(repo, session)
+        assert real.is_shadow_internal is False
+
+        latest = repo.get_latest_consumer_visible_run(session)
+        assert latest is not None
+        assert latest.id == real.id
+
+    def test_legacy_recurrentscancycle_only_shadow_marking_still_excludes(self, session, repo):
+        """Backward compatibility: a Shadow run recorded the old way
+        (RecurrentScanCycle.scan_run_id only, is_shadow_internal=False
+        as every pre-migration row necessarily is) must still be
+        excluded -- the new column is additive, not a replacement."""
+        shadow = _success_run(repo, session)
+        assert shadow.is_shadow_internal is False
+        _mark_shadow(session, shadow.id)
+
+        assert repo.get_latest_consumer_visible_run(session) is None
+        assert repo.get_consumer_visible_run(session, shadow.id) is None
+
+    def test_both_signals_present_still_excludes_exactly_once(self, session, repo):
+        """A Shadow run whose RecurrentScanCycle row has since been
+        written (the race window has closed) is excluded by both
+        signals at once -- redundant, not conflicting."""
+        shadow = _success_run_is_shadow(repo, session)
+        _mark_shadow(session, shadow.id)
+
+        assert repo.get_latest_consumer_visible_run(session) is None
+        assert repo.get_consumer_visible_run(session, shadow.id) is None
+
+    def test_real_run_more_recent_than_shadow_is_still_selected(self, session, repo):
+        _success_run_is_shadow(repo, session)
+        real = _success_run(repo, session)
+
+        latest = repo.get_latest_consumer_visible_run(session)
+        assert latest is not None
+        assert latest.id == real.id
+
+
 def test_record_stage1_metrics_persists_onto_the_run_row(session, repo):
     run = repo.create_scan_run(session, symbols_requested=15)
     repo.record_stage1_metrics(session, run.id, universe_size=231, candidate_count=52, evaluated_count=228)
