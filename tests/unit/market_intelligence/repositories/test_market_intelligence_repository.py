@@ -467,7 +467,51 @@ def test_get_latest_run_with_stage1_metrics_returns_the_most_recent_one(session,
     latest = repo.get_latest_run_with_stage1_metrics(session)
     assert latest.id == newer.id
     assert latest.stage1_universe_size == 231
-    assert latest.stage1_candidate_count == 52
+
+
+def test_get_latest_run_with_stage1_metrics_excludes_a_shadow_run_even_when_most_recent(session, repo):
+    """PR #107 consumer-isolation regression test: this PR makes
+    RecurrentLiveScanScheduler call record_stage1_metrics too (Shadow
+    observability), which means a Shadow-internal MarketScanRun can now
+    have stage1_universe_size populated. Without this exclusion, a
+    Shadow cycle running more recently than the last real Radar V2 scan
+    would leak its Stage 1 funnel numbers into GET /api/v1/radar/summary
+    (a consumer-facing route) -- exactly the class of defect PR #106
+    fixed for market breadth/previous-run resolution, now proven closed
+    for this reader too."""
+    real_run = repo.create_scan_run(session, symbols_requested=1)
+    repo.record_stage1_metrics(session, real_run.id, universe_size=372, candidate_count=279, evaluated_count=305)
+
+    shadow_run = repo.create_scan_run(session, symbols_requested=3, is_shadow_internal=True)
+    repo.record_stage1_metrics(session, shadow_run.id, universe_size=372, candidate_count=0, evaluated_count=372)
+
+    latest = repo.get_latest_run_with_stage1_metrics(session)
+    assert latest is not None
+    assert latest.id == real_run.id
+
+
+def test_get_latest_run_with_stage1_metrics_is_none_when_only_a_shadow_run_has_metrics(session, repo):
+    shadow_run = repo.create_scan_run(session, symbols_requested=3, is_shadow_internal=True)
+    repo.record_stage1_metrics(session, shadow_run.id, universe_size=372, candidate_count=0, evaluated_count=372)
+
+    assert repo.get_latest_run_with_stage1_metrics(session) is None
+
+
+def test_get_latest_run_with_stage1_metrics_excludes_shadow_marked_only_via_recurrent_scan_cycle(session, repo):
+    """Same exclusion, exercised via the second (RecurrentScanCycle-
+    based) discriminator rather than is_shadow_internal, matching
+    _exclude_shadow_internal_runs's own "either signal" contract."""
+    real_run = repo.create_scan_run(session, symbols_requested=1)
+    repo.record_stage1_metrics(session, real_run.id, universe_size=372, candidate_count=279, evaluated_count=305)
+
+    shadow_run = repo.create_scan_run(session, symbols_requested=3)
+    repo.record_stage1_metrics(session, shadow_run.id, universe_size=372, candidate_count=0, evaluated_count=372)
+    _mark_shadow(session, shadow_run.id)
+
+    latest = repo.get_latest_run_with_stage1_metrics(session)
+    assert latest is not None
+    assert latest.id == real_run.id
+    assert latest.stage1_candidate_count == 279
 
 
 def test_has_in_flight_run_returns_none_when_nothing_is_running(session, repo):

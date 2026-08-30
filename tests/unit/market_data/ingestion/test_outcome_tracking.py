@@ -146,6 +146,56 @@ class TestPendingSignalSymbols:
     def test_no_pending_outcomes_returns_empty_list(self, session):
         assert pending_signal_symbols(session) == []
 
+    def test_ordered_oldest_pending_first(self, session):
+        """PR #107 Phase 6: previously an unordered DISTINCT query --
+        Shadow's recurrent candidate selection fills bounded slots from
+        this list, so an unspecified order was a latent determinism
+        gap. Now explicitly ordered by each symbol's own earliest still-
+        PENDING outcome's `created_at`, oldest first."""
+        newer_stock = Stock(symbol="4260", name_en="Stock 4260", is_active=True)
+        older_stock = Stock(symbol="6004", name_en="Stock 6004", is_active=True)
+        session.add_all([newer_stock, older_stock])
+        session.commit()
+
+        newer_snapshot = _make_snapshot(session, newer_stock, datetime(2026, 8, 26, tzinfo=timezone.utc))
+        older_snapshot = _make_snapshot(session, older_stock, datetime(2026, 8, 18, tzinfo=timezone.utc))
+
+        newer_outcome = _make_pending_outcome(session, newer_snapshot)
+        newer_outcome.created_at = datetime(2026, 8, 26, 7, 0, tzinfo=timezone.utc)
+        older_outcome = _make_pending_outcome(session, older_snapshot)
+        older_outcome.created_at = datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc)
+        session.commit()
+
+        assert pending_signal_symbols(session) == ["6004", "4260"]
+
+    def test_tie_break_is_symbol_ascending(self, session):
+        stock_b = Stock(symbol="4260", name_en="Stock 4260", is_active=True)
+        stock_a = Stock(symbol="1180", name_en="Stock 1180", is_active=True)
+        session.add_all([stock_b, stock_a])
+        session.commit()
+
+        same_ts = datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc)
+        snapshot_b = _make_snapshot(session, stock_b, same_ts)
+        snapshot_a = _make_snapshot(session, stock_a, same_ts)
+        outcome_b = _make_pending_outcome(session, snapshot_b)
+        outcome_b.created_at = same_ts
+        outcome_a = _make_pending_outcome(session, snapshot_a)
+        outcome_a.created_at = same_ts
+        session.commit()
+
+        assert pending_signal_symbols(session) == ["1180", "4260"]
+
+    def test_ordering_change_does_not_alter_which_symbols_qualify(self, session):
+        """The set of returned symbols is identical to the pre-PR-107
+        (unordered) behavior -- only iteration order changed."""
+        stock = Stock(symbol="2222", name_en="Stock 2222", is_active=True)
+        session.add(stock)
+        session.commit()
+        snapshot = _make_snapshot(session, stock, datetime(2026, 1, 1, tzinfo=timezone.utc))
+        _make_pending_outcome(session, snapshot)
+
+        assert set(pending_signal_symbols(session)) == {"2222"}
+
 
 class TestOldestPendingSignalDecisionTimestamp:
     def test_returns_the_earliest_decision_timestamp_among_pending_rows(self, session):

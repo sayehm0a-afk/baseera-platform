@@ -1283,13 +1283,39 @@ class ShadowCycleSymbolOut(BaseModel):
     state_change_reason: Optional[str] = None
 
 
+class Stage1TopCandidateOut(BaseModel):
+    """PR #107: one entry of the bounded (<=10) Stage 1 top-candidate
+    telemetry `RecurrentScanCycle.top_stage1_candidates` persists --
+    `score` is Stage 1's own already-computed `ranking_score`, never
+    recalculated here."""
+
+    symbol: str
+    rank: int
+    score: Optional[float] = None
+    selected_for_stage2: bool
+    selection_source: Optional[str] = None
+
+
 class ShadowCycleDetailOut(BaseModel):
     """GET .../recurrent-live-scan/cycles/{cycle_id} -- per-symbol detail
     for one recurrent Shadow cycle, entirely derived from real persisted
     rows (RecurrentScanCycle + DecisionV2Snapshot + ShadowLiveSignal).
     Never triggers a SAHMK request: read-only against already-ingested
     data. Not exposed to consumer routes; staff-auth only (see the route's
-    own dependency)."""
+    own dependency).
+
+    PR #107 observability fields: `active_signal_candidate_count` and
+    `stage1_count` (renamed here from `new_stage1_candidate_count` for
+    API stability) were already persisted on `RecurrentScanCycle` but
+    never exposed through this route; `selected_active_signal_count` is
+    derived (`stage2_count - stage1_count`), not a new column;
+    `stage1_universe_size`/`stage1_evaluated_count`/`stage1_candidate_count`
+    are read from the linked `MarketScanRun` (see
+    `MarketIntelligenceRepository.record_stage1_metrics`, now also
+    called by the Shadow scheduler); `top_stage1_candidates` is the new
+    bounded forensic list. All are `None`/empty for a cycle that never
+    reached Stage 1 (skipped before candidate selection) or for a
+    pre-PR-107 historical row."""
 
     cycle_id: str
     market_scan_run_id: Optional[int] = None
@@ -1304,4 +1330,10 @@ class ShadowCycleDetailOut(BaseModel):
     updated_count: int = 0
     unchanged_count: int = 0
     invalidated_count: int = 0
+    active_signal_candidate_count: Optional[int] = None
+    selected_active_signal_count: Optional[int] = None
+    stage1_universe_size: Optional[int] = None
+    stage1_evaluated_count: Optional[int] = None
+    stage1_candidate_count: Optional[int] = None
+    top_stage1_candidates: List[Stage1TopCandidateOut] = []
     symbols: List[ShadowCycleSymbolOut] = []

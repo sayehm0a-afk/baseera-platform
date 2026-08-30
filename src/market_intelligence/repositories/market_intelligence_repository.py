@@ -398,15 +398,22 @@ class MarketIntelligenceRepository:
         """The most recent Radar V2 cycle that actually reached Stage 2
         and had its Stage 1 funnel numbers recorded -- used by the
         consumer-facing `/radar/summary` route to report real scan
-        coverage without spending any new SAHMK quota. Ordinary
-        (non-Radar-V2) `MarketScanRun` rows never get these columns
-        populated, so this query naturally skips them."""
-        return (
-            session.query(MarketScanRun)
-            .filter(MarketScanRun.stage1_universe_size.isnot(None))
-            .order_by(MarketScanRun.id.desc())
-            .first()
+        coverage without spending any new SAHMK quota.
+
+        PR #107: since `RecurrentLiveScanScheduler` now also calls
+        `record_stage1_metrics` (for the same admin-observability
+        reason Radar V2 already did -- see that PR's own description),
+        a Shadow-internal `MarketScanRun` can have these columns
+        populated too. Routed through `_exclude_shadow_internal_runs`
+        (the same PR #105/#106 exclusion every other consumer-facing
+        query already uses) so this consumer-facing route can never
+        resolve to a Shadow run merely because Shadow ran more recently
+        than the last real opening scan -- unchanged consumer-isolation
+        guarantee, now also covering this query."""
+        query = self._exclude_shadow_internal_runs(
+            session, session.query(MarketScanRun).filter(MarketScanRun.stage1_universe_size.isnot(None))
         )
+        return query.order_by(MarketScanRun.id.desc()).first()
 
     # --- symbol intelligence records -----------------------------------
 

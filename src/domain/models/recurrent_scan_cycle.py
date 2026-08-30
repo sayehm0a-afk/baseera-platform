@@ -25,7 +25,7 @@ process restart the way a long scan could be.
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Enum, Integer, String, Text
+from sqlalchemy import JSON, Column, DateTime, Enum, Integer, String, Text
 from sqlalchemy.sql import func
 
 from src.core.db.database import Base
@@ -82,6 +82,19 @@ class RecurrentScanCycle(Base):
     new_stage1_candidate_count = Column(Integer, nullable=True)
     symbols_selected_count = Column(Integer, nullable=True)
     symbols_evaluated_count = Column(Integer, nullable=True)
+
+    # PR #107 forensic observability: Stage 1's own top-ranked
+    # candidates this cycle (bounded to 10; see
+    # `select_recurrent_candidates`'s own docstring), each carrying its
+    # already-computed `ranking_score` (never recalculated here),
+    # whether it was actually selected into this cycle's bounded Stage
+    # 2 slate, and which pool selected it -- so a future audit of a
+    # "why did the same symbols repeat" question is directly provable
+    # from this row instead of requiring source-code reconstruction.
+    # Nullable: absent for every cycle status that never reaches Stage
+    # 1 (e.g. SKIPPED_QUOTA, SKIPPED_LOCKED) and for every pre-PR-107
+    # historical row.
+    top_stage1_candidates = Column(JSON, nullable=True)
 
     # Phase 9/11 lifecycle-result funnel for this cycle -- mirrors
     # ShadowLifecycleResult's members. signals_unchanged_count is the

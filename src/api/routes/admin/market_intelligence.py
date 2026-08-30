@@ -78,6 +78,7 @@ from src.api.schemas.market_intelligence import (
     Stage1ComponentScoresOut,
     Stage1ScanOut,
     Stage1SignalOut,
+    Stage1TopCandidateOut,
     Stage2ValidateRequest,
     SymbolLookupCheckOut,
     SymbolLookupDiagnosticOut,
@@ -1112,6 +1113,21 @@ async def get_recurrent_live_scan_cycle_detail(
                 )
             )
 
+    # PR #107: stage1_universe_size/evaluated_count/candidate_count live
+    # on the linked MarketScanRun (record_stage1_metrics), not on
+    # RecurrentScanCycle itself -- see that repository method's own
+    # docstring for why this is reused infrastructure, not a new table.
+    market_scan_run = (
+        db.query(MarketScanRun).filter(MarketScanRun.id == cycle.scan_run_id).first()
+        if cycle.scan_run_id is not None
+        else None
+    )
+    selected_active_signal_count = (
+        cycle.symbols_evaluated_count - cycle.new_stage1_candidate_count
+        if cycle.symbols_evaluated_count is not None and cycle.new_stage1_candidate_count is not None
+        else None
+    )
+
     return ShadowCycleDetailOut(
         cycle_id=cycle.cycle_id,
         market_scan_run_id=cycle.scan_run_id,
@@ -1130,6 +1146,14 @@ async def get_recurrent_live_scan_cycle_detail(
         updated_count=cycle.signals_refreshed_count,
         unchanged_count=cycle.signals_unchanged_count,
         invalidated_count=cycle.signals_invalidated_count,
+        active_signal_candidate_count=cycle.active_signal_candidate_count,
+        selected_active_signal_count=selected_active_signal_count,
+        stage1_universe_size=market_scan_run.stage1_universe_size if market_scan_run else None,
+        stage1_evaluated_count=market_scan_run.stage1_evaluated_count if market_scan_run else None,
+        stage1_candidate_count=market_scan_run.stage1_candidate_count if market_scan_run else None,
+        top_stage1_candidates=[
+            Stage1TopCandidateOut(**entry) for entry in (cycle.top_stage1_candidates or [])
+        ],
         symbols=symbols_out,
     )
 
