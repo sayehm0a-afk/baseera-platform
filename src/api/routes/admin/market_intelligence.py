@@ -112,6 +112,7 @@ from src.domain.models import (
     User,
 )
 from src.market_data.ingestion import config as ingestion_config
+from src.market_data.ingestion.historical_ohlcv_lock import HistoricalOhlcvExecutionLock
 from src.market_data.ingestion.outcome_tracking import (
     oldest_pending_signal_decision_timestamp,
     pending_signal_symbols,
@@ -1623,16 +1624,33 @@ async def trigger_historical_ohlcv_run_once(
     `historical_ohlcv` tick already uses -- no parallel ingestion path,
     no quota/circuit-breaker bypass, no direct SAHMK call.
 
-    Concurrency: the in-flight guard below is scoped to `historical_
+    Concurrency: the in-flight DB check below is scoped to `historical_
     ohlcv` alone (unlike `/full-discovery`'s guard, which checks all
     four job names) -- a concurrently running symbols/fundamentals/
     dividends pass never blocks this route, and this route never blocks
-    them; only a second, overlapping `historical_ohlcv` attempt is
-    rejected as a no-op.
+    them. That DB check alone is NOT atomic (a plain SELECT, no
+    SELECT...FOR UPDATE or equivalent) and is kept only because it
+    gives a specific, informative rejection message ("started at X")
+    for the common case; the actual exclusivity guarantee -- including
+    against a second concurrent request racing this same check, AND
+    against the recurring scheduler's own historical_ohlcv tick, AND
+    against /full-discovery -- comes from
+    `HistoricalOhlcvExecutionLock` below (PR #108 P0 remediation:
+    independent concurrency testing reproduced two near-simultaneous
+    requests both being accepted and both actually running before this
+    lock existed). The lock is acquired synchronously, HERE, before
+    this route decides accepted=True/False at all -- never after
+    dispatching -- so a losing caller gets a truthful, immediate
+    rejection instead of a falsely-accepted response that silently
+    no-ops later. On success, the already-acquired lock is handed to
+    the background task so it is held for the job's entire run
+    (including every internal retry) and released exactly once, not
+    re-acquired a second time.
 
-    Dispatched as a background task -- see `/full-discovery`'s own
-    docstring for why -- so this call returns immediately; poll
-    GET /coverage's latest_ingestion_runs for real progress and counts.
+    Dispatched as a background task once accepted -- see
+    `/full-discovery`'s own docstring for why -- so this call returns
+    immediately; poll GET /coverage's latest_ingestion_runs for real
+    progress and counts.
     """
     triggered_at = datetime.now(timezone.utc)
 
@@ -1656,10 +1674,22 @@ async def trigger_historical_ohlcv_run_once(
             ),
         )
 
+    lock = HistoricalOhlcvExecutionLock()
+    if not lock.acquire(ingestion_config.get_historical_ohlcv_execution_lock_ttl_seconds()):
+        return HistoricalOhlcvRunOnceOut(
+            triggered_at=triggered_at,
+            accepted=False,
+            message=(
+                "Skipped: historical_ohlcv execution lock is already held (another execution -- manual, "
+                "scheduled, or full-discovery -- is in progress) -- wait for it to finish before "
+                "triggering another controlled run."
+            ),
+        )
+
     from src.market_data.ingestion.scheduler import IngestionScheduler
 
     scheduler = IngestionScheduler()
-    background_tasks.add_task(scheduler.run_historical_ohlcv_once)
+    background_tasks.add_task(scheduler.run_historical_ohlcv_once, lock)
 
     return HistoricalOhlcvRunOnceOut(
         triggered_at=triggered_at,

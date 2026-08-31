@@ -82,10 +82,12 @@ from src.core.db import database
 from src.domain.models import IngestionJobStatus, IngestionRunLog, Stock
 from src.market_data.ingestion import config as ingestion_config
 from src.market_data.ingestion._common import (
+    STOP_REASON_ALREADY_RUNNING,
     STOP_REASON_COMPLETED,
     STOP_REASON_NO_WORK,
     IngestionResult,
 )
+from src.market_data.ingestion.historical_ohlcv_lock import HistoricalOhlcvExecutionLock
 from src.market_data.ingestion.ingest_dividends import ingest_dividends
 from src.market_data.ingestion.ingest_fundamentals import ingest_fundamentals
 from src.market_data.ingestion.ingest_historical_ohlcv import ingest_historical_ohlcv
@@ -474,14 +476,44 @@ class IngestionScheduler:
         run_logs: List[IngestionRunLog] = []
         for job_name, job_fn in (
             ("symbols", self._run_symbols),
-            ("historical_ohlcv", self._run_historical_ohlcv),
+            ("historical_ohlcv", self._run_historical_ohlcv_locked),
             ("fundamentals", self._run_fundamentals),
             ("dividends", self._run_dividends),
         ):
             run_logs.append(await run_ingestion_job(job_name, job_fn, self._session_factory))
         return run_logs
 
-    async def run_historical_ohlcv_once(self) -> IngestionRunLog:
+    async def _run_historical_ohlcv_locked(self) -> IngestionResult:
+        """PR #108 P0 remediation: wraps the real `_run_historical_
+        ohlcv` in the shared, cross-process `HistoricalOhlcvExecutionLock`
+        (src.market_data.ingestion.historical_ohlcv_lock) -- the single
+        choke point every entry point that does NOT itself already hold
+        the lock (the recurring scheduler tick below, and
+        `run_all_jobs_once()` above) goes through, so at most one
+        `historical_ohlcv` execution can be active at a time regardless
+        of which path triggered it. A failed acquire (another execution
+        already holds it, from any entry point) is reported as a clean,
+        truthful `STOP_REASON_ALREADY_RUNNING` skip -- zero symbols
+        requested, zero provider calls, zero quota spent -- never a job
+        failure, never retried by this call, and never silently
+        swallowed (the resulting IngestionRunLog row records exactly
+        what happened)."""
+        lock = HistoricalOhlcvExecutionLock()
+        if not lock.acquire(ingestion_config.get_historical_ohlcv_execution_lock_ttl_seconds()):
+            logger.info(
+                "historical_ohlcv: execution lock already held by another entry point -- skipping this attempt."
+            )
+            result = IngestionResult(symbols_requested=0)
+            result.stop_reason = STOP_REASON_ALREADY_RUNNING
+            return result
+        try:
+            return await self._run_historical_ohlcv()
+        finally:
+            lock.release()
+
+    async def run_historical_ohlcv_once(
+        self, lock: Optional[HistoricalOhlcvExecutionLock] = None
+    ) -> IngestionRunLog:
         """PR #108: the single-job counterpart to `run_all_jobs_once()`
         -- runs ONLY `historical_ohlcv`, once, immediately. Exists for
         narrow, controlled manual recovery/diagnosis (e.g. after a
@@ -491,8 +523,30 @@ class IngestionScheduler:
         `run_ingestion_job` and the same private job wiring `start()`'s
         loop and `run_all_jobs_once()` already use -- no parallel
         ingestion implementation, no new quota/provider/circuit-breaker
-        path."""
-        return await run_ingestion_job("historical_ohlcv", self._run_historical_ohlcv, self._session_factory)
+        path.
+
+        `lock`: PR #108 P0 remediation. The manual admin route acquires
+        `HistoricalOhlcvExecutionLock` itself, synchronously, BEFORE
+        deciding whether to dispatch this method as a background task
+        at all (so a caller that loses the race gets a truthful,
+        immediate "already running" HTTP response instead of a
+        falsely-accepted one that silently no-ops later) -- when it
+        does dispatch, it hands that same already-acquired lock in here
+        so this method runs the job directly (still through the exact
+        same `run_ingestion_job`/`_run_historical_ohlcv` path
+        `_run_historical_ohlcv_locked` uses) and releases it exactly
+        once, when this whole call (including every internal retry
+        `run_ingestion_job` performs) finishes. When called with no
+        lock (not currently done by any caller, kept for symmetry/
+        direct testability), it acquires and releases its own via
+        `_run_historical_ohlcv_locked`, identically to the scheduler
+        and full-discovery paths above."""
+        if lock is not None:
+            try:
+                return await run_ingestion_job("historical_ohlcv", self._run_historical_ohlcv, self._session_factory)
+            finally:
+                lock.release()
+        return await run_ingestion_job("historical_ohlcv", self._run_historical_ohlcv_locked, self._session_factory)
 
     def start(self) -> None:
         if self._tasks:
@@ -515,7 +569,13 @@ class IngestionScheduler:
             (
                 "historical_ohlcv",
                 ingestion_config.get_ohlcv_sync_next_delay_seconds,
-                self._run_historical_ohlcv,
+                # PR #108 P0 remediation: the recurring scheduler's own
+                # tick previously called self._run_historical_ohlcv
+                # directly, with no awareness of a concurrently active
+                # manual controlled run (or vice versa) -- routed
+                # through the same shared execution lock every other
+                # historical_ohlcv entry point now uses.
+                self._run_historical_ohlcv_locked,
             ),
             (
                 "fundamentals",

@@ -849,6 +849,162 @@ async def test_run_historical_ohlcv_once_records_a_genuine_failure_truthfully(se
     assert run_log.finished_at is not None
 
 
+# --- historical_ohlcv execution lock integration (PR #108 P0 remediation) --
+#
+# These exercise the REAL HistoricalOhlcvExecutionLock against the real
+# local Redis this sandbox/CI both provision (see ci.yml's redis:6-alpine
+# service, matching this file's lack of any historical-ohlcv-lock-specific
+# isolation fixture -- _no_real_shared_redis_for_leader_lock above only
+# patches SchedulerLeaderLock's own singleton reference, a deliberate,
+# pre-existing scope, not something this remediation touches). A lock key
+# is always deleted before/after each test below so no state leaks
+# between tests or into any other suite that shares the same Redis.
+
+
+@pytest.fixture(autouse=True)
+def _clean_historical_ohlcv_lock_key():
+    from src.market_data.ingestion.historical_ohlcv_lock import (
+        HISTORICAL_OHLCV_EXECUTION_LOCK_KEY,
+        _get_shared_redis_client,
+    )
+
+    client = _get_shared_redis_client()
+    if client is not None:
+        client.delete(HISTORICAL_OHLCV_EXECUTION_LOCK_KEY)
+    yield
+    if client is not None:
+        client.delete(HISTORICAL_OHLCV_EXECUTION_LOCK_KEY)
+
+
+def _probe_lock_is_free() -> bool:
+    """True if a brand-new HistoricalOhlcvExecutionLock can acquire
+    right now -- used to prove a previous call genuinely released (or
+    never held) the lock, without depending on internal state."""
+    from src.market_data.ingestion.historical_ohlcv_lock import HistoricalOhlcvExecutionLock
+
+    probe = HistoricalOhlcvExecutionLock()
+    won = probe.acquire(ttl_seconds=30)
+    if won:
+        probe.release()
+    return won
+
+
+@pytest.mark.asyncio
+async def test_run_historical_ohlcv_once_with_no_lock_releases_via_locked_path(session_factory):
+    """`run_historical_ohlcv_once()` called with no `lock=` argument (not
+    currently done by any caller, kept for symmetry/direct testability
+    per its own docstring) delegates to `_run_historical_ohlcv_locked`,
+    which must acquire AND release its own lock -- the lock must be free
+    again immediately after the call returns."""
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._run_historical_ohlcv = _make_success_job()
+
+    run_log = await scheduler.run_historical_ohlcv_once()
+
+    assert run_log.status == IngestionJobStatus.SUCCESS
+    assert _probe_lock_is_free() is True
+
+
+def _make_success_job():
+    async def _job():
+        return IngestionResult(symbols_requested=1, symbols_succeeded=1)
+
+    return _job
+
+
+@pytest.mark.asyncio
+async def test_locked_historical_ohlcv_releases_the_lock_even_when_the_job_raises(session_factory):
+    """Exception safety: `_run_historical_ohlcv_locked`'s try/finally
+    must release the lock even when the wrapped `_run_historical_ohlcv`
+    raises -- a crash inside the job body must never leave the lock
+    held past this attempt (run_ingestion_job's own retry loop calls
+    `job_fn` -- here, `_run_historical_ohlcv_locked` -- fresh on each
+    attempt, so each attempt must itself end with the lock free again,
+    not just the last one)."""
+
+    async def _always_raises():
+        raise RuntimeError("simulated provider crash")
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._run_historical_ohlcv = _always_raises
+
+    run_log = await scheduler.run_historical_ohlcv_once()  # no lock= -> uses _run_historical_ohlcv_locked
+
+    assert run_log.status == IngestionJobStatus.FAILED  # run_ingestion_job never raises out
+    assert _probe_lock_is_free() is True
+
+
+@pytest.mark.asyncio
+async def test_locked_historical_ohlcv_skips_cleanly_when_another_execution_already_holds_the_lock(session_factory):
+    """The actual P0 property at the scheduler level (not just the bare
+    lock class): when something else already holds
+    HistoricalOhlcvExecutionLock, `_run_historical_ohlcv_locked` must
+    never invoke the real `_run_historical_ohlcv` job body at all, and
+    must report STOP_REASON_ALREADY_RUNNING -- zero symbols requested,
+    zero provider calls, zero quota spent, never treated as a
+    failure."""
+    from src.market_data.ingestion._common import STOP_REASON_ALREADY_RUNNING
+    from src.market_data.ingestion.historical_ohlcv_lock import HistoricalOhlcvExecutionLock
+
+    external_holder = HistoricalOhlcvExecutionLock()
+    assert external_holder.acquire(ttl_seconds=30) is True
+    try:
+        job_called = False
+
+        async def _job():
+            nonlocal job_called
+            job_called = True
+            return IngestionResult(symbols_requested=1, symbols_succeeded=1)
+
+        scheduler = IngestionScheduler(session_factory=session_factory)
+        scheduler._run_historical_ohlcv = _job
+
+        result = await scheduler._run_historical_ohlcv_locked()
+
+        assert job_called is False
+        assert result.stop_reason == STOP_REASON_ALREADY_RUNNING
+        assert result.symbols_requested == 0
+    finally:
+        external_holder.release()
+
+
+@pytest.mark.asyncio
+async def test_manual_path_pre_acquired_lock_is_held_across_every_internal_retry_and_released_once(session_factory):
+    """The manual admin route's documented design: it acquires the lock
+    itself and hands the SAME instance into `run_historical_ohlcv_once
+    (lock=...)`, which must hold it across run_ingestion_job's ENTIRE
+    retry sequence (not release-and-reacquire between attempts, unlike
+    the scheduler/full-discovery `_run_historical_ohlcv_locked` path)
+    and release exactly once at the very end. Proven here by probing
+    lock availability from *inside* the job body on every attempt --
+    every attempt but none must ever observe the lock as free."""
+    from src.market_data.ingestion.historical_ohlcv_lock import HistoricalOhlcvExecutionLock
+
+    probe_results = []
+
+    async def _failing_job():
+        probe_results.append(_probe_lock_is_free())
+        raise RuntimeError("simulated provider crash")
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._run_historical_ohlcv = _failing_job
+
+    manual_lock = HistoricalOhlcvExecutionLock()
+    assert manual_lock.acquire(ttl_seconds=30) is True
+
+    run_log = await scheduler.run_historical_ohlcv_once(manual_lock)
+
+    assert run_log.status == IngestionJobStatus.FAILED
+    # The job body ran (via run_historical_ohlcv_once's own internal
+    # run_ingestion_job, default max_attempts) and never once observed
+    # the lock as free while it was still running.
+    assert len(probe_results) >= 1
+    assert all(is_free is False for is_free in probe_results)
+    # Released exactly once, after the whole call (all internal
+    # retries) completed.
+    assert _probe_lock_is_free() is True
+
+
 def test_reap_stale_ingestion_runs_marks_an_old_running_row_as_failed(session_factory):
     """Production found a 'symbols' IngestionRunLog row stuck RUNNING
     for 4+ days (a container restart mid-run) -- permanently blocking
