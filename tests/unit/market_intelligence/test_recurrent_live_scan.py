@@ -41,6 +41,7 @@ from src.market_intelligence.recurrent_live_scan import (
     NEW_STAGE1_CANDIDATE,
     RecurrentCandidateSelection,
     RecurrentLiveScanScheduler,
+    _allocate_candidate_slots,
     _quota_allows_a_recurrent_cycle,
     classify_lifecycle,
     current_live_shadow_signal,
@@ -284,6 +285,324 @@ class TestSelectRecurrentCandidates:
         stage1_result = _stage1_result([_stage1_candidate("6060", score=91.5)])
         selection = select_recurrent_candidates(session, max_candidates=5, stage1_result=stage1_result)
         assert selection.stage1_score_by_symbol["6060"] == 91.5
+
+    def test_top_stage1_candidates_is_bounded_to_ten_and_marks_selection(self, session):
+        stock = _stock(session, "4050")
+        snapshot = _snapshot(session, stock, scan_run_id=1)
+        session.add(
+            DecisionV2Outcome(
+                decision_v2_snapshot_id=snapshot.id, symbol="4050", due_at=datetime.now(timezone.utc) + timedelta(days=1)
+            )
+        )
+        session.commit()
+
+        candidates = [_stage1_candidate(f"S{i}", score=100.0 - i) for i in range(15)]
+        stage1_result = _stage1_result(candidates)
+        selection = select_recurrent_candidates(session, max_candidates=3, stage1_result=stage1_result)
+
+        assert len(selection.top_stage1_candidates) == 10
+        top1 = selection.top_stage1_candidates[0]
+        assert top1["symbol"] == "S0"
+        assert top1["rank"] == 1
+        assert top1["score"] == 100.0
+        assert top1["selected_for_stage2"] is True
+        assert top1["selection_source"] == NEW_STAGE1_CANDIDATE
+        # 4050 was active, filled ahead of any discovery candidate; not
+        # among Stage 1's own ranked output at all, so it never appears
+        # in this list -- only Stage 1's own candidates are eligible.
+        assert all(c["symbol"] != "4050" for c in selection.top_stage1_candidates)
+        not_selected = [c for c in selection.top_stage1_candidates if not c["selected_for_stage2"]]
+        assert not_selected  # with cap=3 and 15 candidates, most are unselected
+        assert all(c["selection_source"] is None for c in not_selected)
+
+
+# ---------------------------------------------------------------------------
+# PR #107: Shadow discovery fairness -- candidate SOURCE allocation.
+#
+# Production evidence this closes (BASIRAH forensic audit,
+# MarketScanRun 134/135/136, 2026-08-30): the old
+# `select_recurrent_candidates` filled every bounded Stage-2 slot from
+# `pending_signal_symbols()` (active/pending-signal revalidation)
+# before ever considering Stage 1's ranked new-candidate output. With
+# `active_signal_count=14` sitting far above `max_candidates=3` for an
+# entire live session, new Stage 1 discovery got 0 of 3 slots in all
+# three observed cycles, even though Stage 1 itself genuinely evaluated
+# the full ~372-symbol local universe every cycle at zero SAHMK cost.
+# `_allocate_candidate_slots` is the pure, DB-free allocation policy
+# `select_recurrent_candidates` now delegates to; testing it directly
+# (rather than only through the DB-backed `select_recurrent_candidates`)
+# lets this matrix cover every edge case in Phase 5/14 of the PR #107
+# mandate cheaply and exhaustively.
+# ---------------------------------------------------------------------------
+
+
+class TestAllocateCandidateSlots:
+    def test_active_at_or_above_cap_no_longer_starves_discovery(self):
+        """THE regression this PR exists to fix. Must fail under the old
+        two-flat-loop logic (active fills all 3 slots first, discovery
+        gets 0) and pass under the new reservation policy."""
+        active = ["A1", "A2", "A3", "A4", "A5"]
+        discovery = ["D1", "D2"]
+        selected, reasons = _allocate_candidate_slots(active, discovery, max_candidates=3)
+
+        assert len(selected) == 3
+        discovery_selected = [s for s in selected if reasons[s] == NEW_STAGE1_CANDIDATE]
+        assert len(discovery_selected) >= 1
+        active_selected = [s for s in selected if reasons[s] == ACTIVE_SIGNAL_REVALIDATION]
+        assert len(active_selected) <= 2
+        assert len(set(selected)) == len(selected)
+
+    def test_active_exactly_at_cap_still_yields_a_discovery_slot(self):
+        active = ["A1", "A2", "A3"]
+        discovery = ["D1"]
+        selected, reasons = _allocate_candidate_slots(active, discovery, max_candidates=3)
+        assert "D1" in selected
+        assert reasons["D1"] == NEW_STAGE1_CANDIDATE
+        assert len(selected) == 3
+
+    def test_single_discovery_candidate_against_many_active(self):
+        active = [f"A{i}" for i in range(100)]
+        discovery = ["D1"]
+        selected, reasons = _allocate_candidate_slots(active, discovery, max_candidates=3)
+        assert "D1" in selected
+        assert sum(1 for s in selected if reasons[s] == NEW_STAGE1_CANDIDATE) == 1
+        assert len(selected) == 3
+
+    def test_few_active_lets_discovery_fill_more_than_its_reservation(self):
+        active = ["A1", "A2"]
+        discovery = [f"D{i}" for i in range(100)]
+        selected, reasons = _allocate_candidate_slots(active, discovery, max_candidates=3)
+        assert len(selected) == 3
+        assert set(active) <= set(selected)
+        assert sum(1 for s in selected if reasons[s] == NEW_STAGE1_CANDIDATE) == 1
+
+    def test_no_active_signals_discovery_fills_the_cap(self):
+        selected, reasons = _allocate_candidate_slots([], ["D1", "D2", "D3", "D4"], max_candidates=3)
+        assert len(selected) == 3
+        assert all(reasons[s] == NEW_STAGE1_CANDIDATE for s in selected)
+
+    def test_no_discovery_active_fills_the_cap(self):
+        selected, reasons = _allocate_candidate_slots(["A1", "A2", "A3", "A4"], [], max_candidates=3)
+        assert len(selected) == 3
+        assert all(reasons[s] == ACTIVE_SIGNAL_REVALIDATION for s in selected)
+
+    def test_duplicate_symbol_between_pools_selected_once(self):
+        # Callers are expected to pre-filter discovery against active
+        # (select_recurrent_candidates does), but the allocator defends
+        # against a duplicate anyway.
+        selected, reasons = _allocate_candidate_slots(["X"], ["X", "D1"], max_candidates=3)
+        assert selected.count("X") == 1
+        assert reasons["X"] == ACTIVE_SIGNAL_REVALIDATION
+
+    def test_cap_one_prefers_discovery_when_both_exist(self):
+        selected, reasons = _allocate_candidate_slots(["A1"], ["D1"], max_candidates=1)
+        assert selected == ["D1"]
+        assert reasons["D1"] == NEW_STAGE1_CANDIDATE
+
+    def test_cap_one_active_only(self):
+        selected, reasons = _allocate_candidate_slots(["A1"], [], max_candidates=1)
+        assert selected == ["A1"]
+
+    def test_cap_one_discovery_only(self):
+        selected, reasons = _allocate_candidate_slots([], ["D1"], max_candidates=1)
+        assert selected == ["D1"]
+
+    def test_cap_zero_is_always_empty(self):
+        selected, reasons = _allocate_candidate_slots(["A1"], ["D1"], max_candidates=0)
+        assert selected == []
+        assert reasons == {}
+
+    def test_cap_two_reserves_exactly_one_for_discovery(self):
+        selected, reasons = _allocate_candidate_slots(["A1", "A2", "A3"], ["D1", "D2"], max_candidates=2)
+        assert len(selected) == 2
+        assert sum(1 for s in selected if reasons[s] == NEW_STAGE1_CANDIDATE) == 1
+        assert sum(1 for s in selected if reasons[s] == ACTIVE_SIGNAL_REVALIDATION) == 1
+
+    def test_both_pools_empty(self):
+        selected, reasons = _allocate_candidate_slots([], [], max_candidates=3)
+        assert selected == []
+        assert reasons == {}
+
+    def test_deterministic_same_inputs_same_output_repeated(self):
+        active = ["A1", "A2", "A3", "A4"]
+        discovery = ["D1", "D2", "D3"]
+        first = _allocate_candidate_slots(active, discovery, max_candidates=3)
+        for _ in range(20):
+            again = _allocate_candidate_slots(active, discovery, max_candidates=3)
+            assert again == first
+
+    def test_preserves_pool_order_active_prefix_taken_in_order(self):
+        active = ["A1", "A2", "A3", "A4", "A5"]
+        selected, reasons = _allocate_candidate_slots(active, [], max_candidates=3)
+        assert selected == ["A1", "A2", "A3"]
+
+    def test_preserves_pool_order_discovery_prefix_taken_in_order(self):
+        discovery = ["D1", "D2", "D3", "D4", "D5"]
+        selected, reasons = _allocate_candidate_slots([], discovery, max_candidates=3)
+        assert selected == ["D1", "D2", "D3"]
+
+
+class TestFairnessSimulation:
+    """PR #107 Phase 21: synthetic multi-cycle fairness simulation
+    (>=100 cycles across the mandate's Scenarios A-F), asserting the
+    three invariants that must hold in every single cycle: no
+    discovery starvation whenever discovery exists, no cap breach, no
+    duplicate symbol. Deterministic (seeded), no DB/IO -- pure calls
+    into `_allocate_candidate_slots`."""
+
+    def test_100_plus_synthetic_cycles_zero_starvation_zero_breach_zero_duplicates(self):
+        import random
+
+        rng = random.Random(107)
+        max_candidates = 3
+        starvation_events = 0
+        cap_breaches = 0
+        duplicate_events = 0
+        active_represented_when_present = 0
+        active_present_cycles = 0
+        cycles_run = 0
+
+        def _check(active, discovery, cap):
+            nonlocal starvation_events, cap_breaches, duplicate_events
+            nonlocal active_represented_when_present, active_present_cycles, cycles_run
+            cycles_run += 1
+            selected, reasons = _allocate_candidate_slots(active, discovery, cap)
+
+            if len(selected) > cap:
+                cap_breaches += 1
+            if len(set(selected)) != len(selected):
+                duplicate_events += 1
+            discovery_selected = sum(1 for s in selected if reasons.get(s) == NEW_STAGE1_CANDIDATE)
+            # The discovery guarantee only applies to *genuinely new*
+            # discovery candidates -- a symbol present in both pools
+            # (Scenario D deliberately constructs this; the real caller,
+            # select_recurrent_candidates, always pre-filters it out of
+            # discovery_symbols before calling this function at all) has
+            # no distinct discovery identity to guarantee a slot for
+            # once it is legitimately classified as active-revalidation.
+            genuinely_new_discovery = [s for s in discovery if s not in set(active)]
+            if genuinely_new_discovery and cap > 0 and discovery_selected == 0:
+                starvation_events += 1
+            if active:
+                active_present_cycles += 1
+                if any(reasons.get(s) == ACTIVE_SIGNAL_REVALIDATION for s in selected):
+                    active_represented_when_present += 1
+
+        # Scenario A: 14 persistent active signals (production's actual
+        # observed count), Stage1 pool rotating/changing size each cycle.
+        persistent_active = [f"A{i}" for i in range(14)]
+        for cycle in range(30):
+            pool_size = rng.randint(0, 20)
+            discovery = [f"SD{cycle}-{i}" for i in range(pool_size)]
+            _check(list(persistent_active), discovery, max_candidates)
+
+        # Scenario B: active signals change membership over time
+        # (some resolve, new ones appear), discovery pool also varies.
+        universe = [f"U{i}" for i in range(50)]
+        for cycle in range(30):
+            active_count = rng.randint(0, 20)
+            active = rng.sample(universe, active_count)
+            remaining = [s for s in universe if s not in active]
+            discovery_count = rng.randint(0, len(remaining))
+            discovery = rng.sample(remaining, discovery_count)
+            _check(active, discovery, max_candidates)
+
+        # Scenario C: Stage1 top candidates rotate cycle to cycle
+        # (different discovery pool contents each time), active pool
+        # fixed at exactly the cap (the production-defect boundary
+        # condition).
+        boundary_active = ["A1", "A2", "A3"]
+        for cycle in range(15):
+            discovery = [f"ROT{cycle}-{i}" for i in range(rng.randint(1, 5))]
+            _check(list(boundary_active), discovery, max_candidates)
+
+        # Scenario D: duplicate candidates across sources (caller is
+        # expected to pre-filter, but the allocator must defend anyway).
+        for cycle in range(10):
+            shared = [f"SH{i}" for i in range(rng.randint(0, 3))]
+            active = shared + [f"A{cycle}-{i}" for i in range(rng.randint(0, 5))]
+            discovery = shared + [f"D{cycle}-{i}" for i in range(rng.randint(0, 5))]
+            _check(active, discovery, max_candidates)
+
+        # Scenario E: a single Stage1 candidate against many active
+        # candidates -- the discovery guarantee's tightest case.
+        for cycle in range(10):
+            active = [f"MANY{cycle}-{i}" for i in range(rng.randint(3, 200))]
+            _check(active, ["LONE"], max_candidates)
+
+        # Scenario F: no Stage1 candidates at all -- active must still
+        # be able to fill the cap; no starvation check applies (nothing
+        # to starve).
+        for cycle in range(10):
+            active = [f"ONLY{cycle}-{i}" for i in range(rng.randint(0, 10))]
+            _check(active, [], max_candidates)
+
+        assert cycles_run >= 100, f"simulation only ran {cycles_run} cycles, expected >=100"
+        assert starvation_events == 0, f"{starvation_events} starvation events observed"
+        assert cap_breaches == 0, f"{cap_breaches} cap breaches observed"
+        assert duplicate_events == 0, f"{duplicate_events} duplicate-symbol events observed"
+        # Active revalidation must remain represented in the vast
+        # majority of cycles where it was available -- it is not
+        # eliminated by the fairness fix, only no longer guaranteed
+        # 100% of the cap when discovery also exists and needs its
+        # single reserved slot.
+        assert active_present_cycles > 0
+        assert active_represented_when_present / active_present_cycles > 0.8
+
+    def test_cap_breaches_and_duplicates_are_zero_across_varying_cap_sizes(self):
+        import random
+
+        rng = random.Random(2107)
+        cap_breaches = 0
+        duplicate_events = 0
+        cycles_run = 0
+        for cap in (0, 1, 2, 3):
+            for _ in range(25):
+                active = [f"A{i}" for i in range(rng.randint(0, 10))]
+                discovery = [f"D{i}" for i in range(rng.randint(0, 10))]
+                selected, _reasons = _allocate_candidate_slots(active, discovery, cap)
+                cycles_run += 1
+                if len(selected) > cap:
+                    cap_breaches += 1
+                if len(set(selected)) != len(selected):
+                    duplicate_events += 1
+
+        assert cycles_run == 100
+        assert cap_breaches == 0
+        assert duplicate_events == 0
+
+
+class TestHistoricalProductionDefectRegression:
+    """PR #107 Phase 15: a realistic reproduction of the exact
+    MarketScanRun 134/135/136 evidence -- 1180/4260/6004 all present as
+    active/pending signals, cap=3, plus a genuine new Stage 1
+    candidate. Old behavior: all 3 slots go to 1180/4260/6004, 0
+    discovery. New behavior: at least 1 discovery slot, guaranteed."""
+
+    def test_1180_4260_6004_no_longer_fully_starve_discovery(self, session):
+        for symbol in ("1180", "4260", "6004"):
+            stock = _stock(session, symbol)
+            snapshot = _snapshot(session, stock, scan_run_id=1)
+            session.add(
+                DecisionV2Outcome(
+                    decision_v2_snapshot_id=snapshot.id,
+                    symbol=symbol,
+                    due_at=datetime.now(timezone.utc) + timedelta(days=1),
+                )
+            )
+        session.commit()
+
+        stage1_result = _stage1_result([_stage1_candidate("2222", score=88.0)])
+        selection = select_recurrent_candidates(session, max_candidates=3, stage1_result=stage1_result)
+
+        assert len(selection.symbols) == 3
+        assert selection.new_stage1_candidate_count >= 1
+        assert "2222" in selection.symbols
+        assert selection.selection_reason_by_symbol["2222"] == NEW_STAGE1_CANDIDATE
+        # Exactly which 2 of the 3 pending symbols fill the remaining
+        # active slots depends on pending_signal_symbols()'s own
+        # deterministic (oldest-first) ordering -- not asserted here,
+        # only that discovery is no longer fully starved.
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +888,90 @@ def _fake_stage2(succeeded_specs=None, failed_symbols=(), skipped_symbols=(), en
             db.close()
 
     return _fake
+
+
+class TestPersistenceRoundTrip:
+    """PR #107 Phase 16: direct DB proof, no inference -- construct
+    synthetic telemetry, persist it, read it back with a *fresh* query
+    (not the same in-memory ORM instance), assert exact equality field
+    by field, then confirm the admin API reports the identical values
+    (covered by
+    test_admin_detail_exposes_new_selection_and_stage1_telemetry in
+    tests/integration/api/test_recurrent_live_scan_cycle_detail_route.py)."""
+
+    def test_full_telemetry_round_trips_exactly(self, session):
+        run = MarketScanRun(symbols_requested=3, is_shadow_internal=True)
+        session.add(run)
+        session.commit()
+        run.stage1_universe_size = 372
+        run.stage1_evaluated_count = 350
+        run.stage1_candidate_count = 25
+        session.commit()
+        run_id = run.id
+
+        top_stage1_candidates = [
+            {"symbol": "2222", "rank": 1, "score": 91.2, "selected_for_stage2": True, "selection_source": "NEW_STAGE1_CANDIDATE"},
+            {"symbol": "1120", "rank": 2, "score": 88.5, "selected_for_stage2": False, "selection_source": None},
+        ]
+        cycle = RecurrentScanCycle(
+            cycle_id="cyc-roundtrip",
+            status=RecurrentScanCycleStatus.SUCCESS,
+            active_signal_candidate_count=14,
+            # Selected-discovery count -- see select_recurrent_candidates's
+            # own docstring: this field already IS "how many symbols were
+            # selected via NEW_STAGE1_CANDIDATE this cycle," not the size
+            # of Stage 1's full candidate pool (that number lives on
+            # MarketScanRun.stage1_candidate_count, read above).
+            new_stage1_candidate_count=1,
+            symbols_selected_count=3,
+            symbols_evaluated_count=3,
+            top_stage1_candidates=top_stage1_candidates,
+            scan_run_id=run_id,
+            triggered_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc),
+        )
+        session.add(cycle)
+        session.commit()
+        cycle_id = cycle.cycle_id
+
+        # Force a fresh read -- not the same Python object still held
+        # above -- so this is a genuine round trip through the DB, not
+        # merely re-reading unflushed in-memory state.
+        session.expire_all()
+
+        reloaded_cycle = session.query(RecurrentScanCycle).filter_by(cycle_id=cycle_id).one()
+        assert reloaded_cycle.active_signal_candidate_count == 14
+        assert reloaded_cycle.new_stage1_candidate_count == 1
+        assert reloaded_cycle.symbols_selected_count == 3
+        assert reloaded_cycle.symbols_evaluated_count == 3
+        assert reloaded_cycle.top_stage1_candidates == top_stage1_candidates
+        selected_active_signal_count = reloaded_cycle.symbols_evaluated_count - reloaded_cycle.new_stage1_candidate_count
+        assert selected_active_signal_count == 2
+
+        reloaded_run = session.query(MarketScanRun).filter_by(id=run_id).one()
+        assert reloaded_run.stage1_universe_size == 372
+        assert reloaded_run.stage1_evaluated_count == 350
+        assert reloaded_run.stage1_candidate_count == 25
+
+    def test_legacy_row_with_null_pr107_fields_round_trips_as_none(self, session):
+        """Phase 14 test 16: an old row (pre-PR-107) with the new
+        columns never written must remain fully readable, all new
+        fields None -- proving backward compatibility, not just that
+        the migration ran."""
+        cycle = RecurrentScanCycle(
+            cycle_id="cyc-legacy-roundtrip",
+            status=RecurrentScanCycleStatus.SUCCESS_NO_CHANGE,
+            triggered_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc),
+        )
+        session.add(cycle)
+        session.commit()
+        session.expire_all()
+
+        reloaded = session.query(RecurrentScanCycle).filter_by(cycle_id="cyc-legacy-roundtrip").one()
+        assert reloaded.top_stage1_candidates is None
+        assert reloaded.active_signal_candidate_count is None
+        assert reloaded.new_stage1_candidate_count is None
 
 
 class TestRunOneCycle:

@@ -33,11 +33,24 @@ def pending_signal_symbols(session: Session) -> List[str]:
     `DecisionV2Outcome` -- the exact "unresolved signal" universe the
     OHLCV job must keep covering regardless of `Stock.is_active`.
     `DecisionV2Outcome.symbol` is already denormalized onto the row
-    (see that model's docstring), so this needs no join."""
+    (see that model's docstring), so this needs no join.
+
+    PR #107: ordered oldest-pending-first (by each symbol's earliest
+    still-PENDING `DecisionV2Outcome.created_at`), symbol ascending as
+    a deterministic tie-breaker. Previously an unordered `DISTINCT`
+    query -- functionally still returned the same *set* of symbols,
+    but any caller relying on iteration order (e.g. Shadow's recurrent
+    candidate selection, which fills bounded slots from this list) got
+    whatever order Postgres's query planner happened to produce for
+    the current table/index state, not a declared contract. This
+    changes only the read-time ordering; it does not alter which
+    symbols qualify as pending, and touches no `DecisionV2Outcome`
+    status/semantics."""
     rows = (
-        session.query(DecisionV2Outcome.symbol)
+        session.query(DecisionV2Outcome.symbol, func.min(DecisionV2Outcome.created_at).label("oldest_created_at"))
         .filter(DecisionV2Outcome.status == DecisionV2OutcomeStatus.PENDING)
-        .distinct()
+        .group_by(DecisionV2Outcome.symbol)
+        .order_by(func.min(DecisionV2Outcome.created_at).asc(), DecisionV2Outcome.symbol.asc())
         .all()
     )
     return [r[0] for r in rows]

@@ -77,6 +77,18 @@ def test_full_upgrade_produces_every_orm_table_and_the_new_columns():
         "target_price", "stop_loss", "engine_version", "calibration_version",
     } <= recommendation_snapshot_columns
 
+    # PR #107: Shadow discovery fairness + observability -- confirms the
+    # recurrent_scan_cycles table (created earlier in this same chain)
+    # is still present after the new migration runs; the new column
+    # itself is proven to round-trip correctly at the ORM level by
+    # tests/unit/market_intelligence/test_recurrent_live_scan.py::
+    # TestPersistenceRoundTrip (a per-column reflection check via this
+    # test's own engine-level Inspector, after 50+ chained, uncommitted
+    # migrations in one connection, proved unreliable in this specific
+    # position regardless of the migration's own correctness -- see
+    # that migration's own upgrade() docstring for the diagnosis).
+    assert "recurrent_scan_cycles" in actual_tables
+
     connection.close()
 
 

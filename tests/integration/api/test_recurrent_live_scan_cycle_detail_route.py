@@ -525,3 +525,79 @@ def test_a_large_unrelated_snapshot_table_does_not_leak_into_a_small_cycle(clien
 
     body = client.get(_url("cyc-bounded")).json()
     assert [row["symbol"] for row in body["symbols"]] == ["TARGET"]
+
+
+# --- PR #107: fairness/observability telemetry -----------------------------
+
+
+def test_new_telemetry_fields_present_for_a_pre_pr107_row_are_all_null_or_empty(
+    client, session_factory, as_staff,
+):
+    """Phase 14 (test 16): a legacy cycle row with the new columns NULL
+    must remain fully readable -- no 500, no validation error."""
+    session = session_factory()
+    stock = _stock(session, "2121")
+    _snapshot(session, stock, scan_run_id=1200)
+    session.commit()
+    _cycle(session, "cyc-legacy", scan_run_id=1200)  # no PR #107 fields set
+    session.close()
+
+    response = client.get(_url("cyc-legacy"))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["active_signal_candidate_count"] is None
+    assert body["selected_active_signal_count"] is None
+    assert body["stage1_universe_size"] is None
+    assert body["stage1_evaluated_count"] is None
+    assert body["stage1_candidate_count"] is None
+    assert body["top_stage1_candidates"] == []
+
+
+def test_admin_detail_exposes_new_selection_and_stage1_telemetry(client, session_factory, as_staff):
+    session = session_factory()
+    stock = _stock(session, "2222")
+    _snapshot(session, stock, scan_run_id=1300)
+    session.commit()
+
+    from src.domain.models import MarketScanRun
+
+    run = session.query(MarketScanRun).filter(MarketScanRun.id == 1300).first()
+    if run is None:
+        run = MarketScanRun(id=1300, symbols_requested=3, is_shadow_internal=True)
+        session.add(run)
+        session.flush()
+    run.stage1_universe_size = 372
+    run.stage1_evaluated_count = 350
+    run.stage1_candidate_count = 25
+    session.commit()
+
+    top_stage1 = [
+        {"symbol": "2222", "rank": 1, "score": 91.2, "selected_for_stage2": True, "selection_source": "NEW_STAGE1_CANDIDATE"},
+        {"symbol": "3333", "rank": 2, "score": 88.5, "selected_for_stage2": False, "selection_source": None},
+    ]
+    _cycle(
+        session, "cyc-telemetry", scan_run_id=1300,
+        active_signal_candidate_count=14, new_stage1_candidate_count=1,
+        symbols_selected_count=3, symbols_evaluated_count=3,
+        top_stage1_candidates=top_stage1,
+    )
+    session.close()
+
+    response = client.get(_url("cyc-telemetry"))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["active_signal_candidate_count"] == 14
+    assert body["stage1_count"] == 1
+    assert body["selected_active_signal_count"] == 2  # 3 evaluated - 1 discovery
+    assert body["stage1_universe_size"] == 372
+    assert body["stage1_evaluated_count"] == 350
+    assert body["stage1_candidate_count"] == 25
+    assert body["top_stage1_candidates"] == top_stage1
+
+    # PR #106/#107 isolation regression, at the repository layer this
+    # route's own data comes from (see
+    # test_market_intelligence_repository.py's
+    # test_get_latest_run_with_stage1_metrics_excludes_a_shadow_run_even_when_most_recent
+    # for the full end-to-end proof that a consumer-facing reader of
+    # these same MarketScanRun columns can never resolve to this
+    # Shadow run merely because it now carries stage1 metrics too).

@@ -123,39 +123,128 @@ class RecurrentCandidateSelection:
     # did not itself flag as a fresh candidate. None for a symbol Stage
     # 1 never scored (not present in this dict at all).
     stage1_score_by_symbol: Dict[str, float] = field(default_factory=dict)
+    # PR #107: bounded (<=10) forensic telemetry -- Stage 1's own
+    # top-ranked candidates this cycle (already-computed ranking_score,
+    # never recalculated here), each tagged with whether it was
+    # actually selected into this cycle's Stage 2 slate and why. Lets a
+    # future audit answer "what did Stage 1 rank highest, and did the
+    # allocation policy actually use it" directly from persisted data,
+    # without reconstructing it from source code (see PR #107's own
+    # description for the observability gap this closes).
+    top_stage1_candidates: List[Dict[str, Any]] = field(default_factory=list)
+
+
+def _allocate_candidate_slots(
+    active_symbols: List[str], discovery_symbols: List[str], max_candidates: int
+) -> Tuple[List[str], Dict[str, str]]:
+    """PR #107: fair source allocation across the two candidate pools,
+    replacing the old "active fills every slot first, discovery gets
+    only the leftovers" policy that let a large active/pending-signal
+    backlog starve new Stage 1 discovery indefinitely (production
+    evidence: MarketScanRun 134/135/136 all selected the same 3
+    active-signal symbols, 0 new Stage 1 candidates, while
+    active_signal_count=14 sat far above max_candidates=3 for the
+    entire session).
+
+    Pure function, no DB access, no ranking/scoring -- `active_symbols`
+    and `discovery_symbols` must already be in each pool's own
+    intentional order (`pending_signal_symbols`'s oldest-first order;
+    Stage 1's own ranking_score-descending order) so this function only
+    ever takes ordered prefixes, never reorders either pool.
+
+    Policy (three deterministic passes, in order):
+
+    1. Reserve exactly one slot for discovery whenever `discovery_symbols`
+       is non-empty and `max_candidates > 0` -- this is the actual fix:
+       it is the only thing that guarantees invariant (A) below. Fill
+       active up to `max_candidates - discovery_reserved`.
+    2. Fill discovery with whatever capacity remains after pass 1 (at
+       least the reservation, more if active had fewer symbols than its
+       budget -- so active never "wastes" a slot discovery could use).
+    3. If capacity STILL remains after both (only possible when
+       discovery's pool itself was smaller than the capacity offered to
+       it), give the leftover back to any not-yet-selected active
+       symbols -- so discovery never "wastes" a slot active could use
+       either.
+
+    Invariants this guarantees (see PR #107's test matrix):
+      A) DISCOVERY GUARANTEE -- if max_candidates > 0 and
+         discovery_symbols is non-empty, at least one discovery symbol
+         is selected.
+      B) Active/pending revalidation remains functional (still gets
+         first crack at up to max_candidates - 1 slots, or all of them
+         when there is no discovery to reserve for).
+      C) len(selected) <= max_candidates, always.
+      D) No slot is left unfilled while a candidate from either pool
+         remains available.
+      E) No symbol is selected twice, even if it appears in both pools
+         (checked defensively here even though callers already dedup
+         discovery_symbols against active_symbols before calling).
+      F) Deterministic: same two ordered input lists + same
+         max_candidates always produce the same output list and order.
+
+    cap=1 is an explicit, documented case of policy (1): whenever
+    discovery is non-empty, it gets the single slot (discovery_reserved
+    = 1, active_budget = 0) -- new-candidate discovery is prioritized
+    over revalidation at the smallest possible cap, rather than leaving
+    that case to fall out of the general formula unexamined.
+    """
+    selected: List[str] = []
+    reasons: Dict[str, str] = {}
+
+    if max_candidates <= 0:
+        return selected, reasons
+
+    discovery_reserved = 1 if discovery_symbols else 0
+    active_budget = max_candidates - discovery_reserved
+
+    for symbol in active_symbols:
+        if len(selected) >= active_budget:
+            break
+        if symbol in reasons:
+            continue
+        selected.append(symbol)
+        reasons[symbol] = ACTIVE_SIGNAL_REVALIDATION
+
+    for symbol in discovery_symbols:
+        if len(selected) >= max_candidates:
+            break
+        if symbol in reasons:
+            continue
+        selected.append(symbol)
+        reasons[symbol] = NEW_STAGE1_CANDIDATE
+
+    if len(selected) < max_candidates:
+        for symbol in active_symbols:
+            if len(selected) >= max_candidates:
+                break
+            if symbol in reasons:
+                continue
+            selected.append(symbol)
+            reasons[symbol] = ACTIVE_SIGNAL_REVALIDATION
+
+    return selected, reasons
 
 
 def select_recurrent_candidates(
     session: Session, max_candidates: int, stage1_result: Optional[Stage1ScanResult] = None
 ) -> RecurrentCandidateSelection:
-    """Phase 7 (active-signal revalidation) always fills available slots
-    before Phase 8 (new Stage 1 candidates) -- an existing signal
-    silently going unrevalidated is worse than missing one new
-    candidate this cycle; it will simply be picked up again next cycle,
-    while a missed revalidation could leave a stale/invalidated
-    recommendation looking current for longer. `stage1_result` may be
-    injected (tests / callers that already ran Stage 1 this cycle for
-    another reason); computed fresh otherwise."""
+    """PR #107: allocates the bounded Stage-2 slate fairly across active-
+    signal revalidation and new Stage 1 discovery via
+    `_allocate_candidate_slots` (see that function's own docstring for
+    the exact policy and the production defect it fixes) -- Stage 1's
+    own ranking and the active-signal pool's own membership are both
+    unchanged; only which of the two ordered pools' prefixes end up in
+    the final bounded slate is different from before. `stage1_result`
+    may be injected (tests / callers that already ran Stage 1 this
+    cycle for another reason); computed fresh otherwise."""
     active_symbols = pending_signal_symbols(session)
     stage1_result = stage1_result if stage1_result is not None else run_stage1_local_scan(session)
 
-    selected: List[str] = []
-    reasons: Dict[str, str] = {}
+    active_symbol_set = set(active_symbols)
+    discovery_symbols = [c.symbol for c in stage1_result.candidates if c.symbol not in active_symbol_set]
 
-    for symbol in active_symbols:
-        if len(selected) >= max_candidates:
-            break
-        if symbol not in reasons:
-            selected.append(symbol)
-            reasons[symbol] = ACTIVE_SIGNAL_REVALIDATION
-
-    for candidate in stage1_result.candidates:
-        if len(selected) >= max_candidates:
-            break
-        if candidate.symbol in reasons:
-            continue
-        selected.append(candidate.symbol)
-        reasons[candidate.symbol] = NEW_STAGE1_CANDIDATE
+    selected, reasons = _allocate_candidate_slots(active_symbols, discovery_symbols, max_candidates)
 
     new_count = sum(1 for r in reasons.values() if r == NEW_STAGE1_CANDIDATE)
     score_by_symbol = {
@@ -163,6 +252,16 @@ def select_recurrent_candidates(
         for result in stage1_result.all_results
         if result.ranking_score is not None
     }
+    top_stage1_candidates = [
+        {
+            "symbol": candidate.symbol,
+            "rank": rank,
+            "score": candidate.ranking_score,
+            "selected_for_stage2": candidate.symbol in reasons,
+            "selection_source": reasons.get(candidate.symbol),
+        }
+        for rank, candidate in enumerate(stage1_result.candidates[:10], start=1)
+    ]
     return RecurrentCandidateSelection(
         symbols=selected,
         selection_reason_by_symbol=reasons,
@@ -172,6 +271,7 @@ def select_recurrent_candidates(
         stage1_candidate_count=stage1_result.candidate_count,
         stage1_evaluated_count=stage1_result.evaluated_count,
         stage1_score_by_symbol=score_by_symbol,
+        top_stage1_candidates=top_stage1_candidates,
     )
 
 
@@ -569,6 +669,7 @@ class RecurrentLiveScanScheduler:
         quota_remaining_after: Optional[int] = None,
         requests_used_estimate: Optional[int] = None,
         scan_run_id: Optional[int] = None,
+        top_stage1_candidates: Optional[List[Dict[str, Any]]] = None,
     ) -> RecurrentScanCycle:
         emission = emission or ShadowEmissionResult()
         row = RecurrentScanCycle(
@@ -581,6 +682,7 @@ class RecurrentLiveScanScheduler:
             new_stage1_candidate_count=new_stage1_candidate_count,
             symbols_selected_count=symbols_selected_count,
             symbols_evaluated_count=symbols_evaluated_count,
+            top_stage1_candidates=top_stage1_candidates,
             signals_new_opportunity_count=emission.count(ShadowLifecycleResult.NEW_INTRADAY_OPPORTUNITY),
             signals_refreshed_count=emission.count(ShadowLifecycleResult.REFRESHED_SIGNAL),
             signals_missed_entry_count=emission.count(ShadowLifecycleResult.MISSED_ENTRY),
@@ -689,6 +791,24 @@ class RecurrentLiveScanScheduler:
             symbols_failed = (run_row.symbols_failed or 0) if run_row is not None else 0
             stage2_run_status = run_row.status if run_row is not None else None
 
+            # PR #107 observability fix: persists Stage 1's own funnel
+            # counts (universe/evaluated/candidate) onto the
+            # MarketScanRun row this cycle already created, reusing
+            # `record_stage1_metrics` unmodified (the same method
+            # `run_radar_v2_cycle` already calls for the real opening
+            # scan) rather than adding a parallel column/table. Safe to
+            # reuse here specifically because
+            # `get_latest_run_with_stage1_metrics` (the consumer-facing
+            # `/radar/summary` route's own reader) was updated in this
+            # same PR to exclude Shadow-internal runs -- see that
+            # method's own docstring.
+            self._repository.record_stage1_metrics(
+                session, run_id,
+                universe_size=selection.stage1_universe_size,
+                candidate_count=selection.stage1_candidate_count,
+                evaluated_count=selection.stage1_evaluated_count,
+            )
+
             emission = emit_shadow_signals(
                 session, cycle_id, run_id, selection, selection.stage1_score_by_symbol, emitted_at=triggered_at
             )
@@ -757,6 +877,7 @@ class RecurrentLiveScanScheduler:
                 quota_remaining_after=quota_remaining_after,
                 requests_used_estimate=requests_used_estimate,
                 scan_run_id=run_id,
+                top_stage1_candidates=selection.top_stage1_candidates,
             )
         except Exception as exc:
             logger.exception("RecurrentLiveScanScheduler: cycle %s failed.", cycle_id)
