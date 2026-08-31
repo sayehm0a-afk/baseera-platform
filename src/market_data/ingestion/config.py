@@ -193,3 +193,25 @@ def get_max_ingestion_job_run_duration_hours() -> float:
     pass can legitimately run for "many minutes" per that route's own
     docstring, so this default is generous, not tight."""
     return float(os.getenv("INGESTION_MAX_JOB_RUN_DURATION_HOURS", "6"))
+
+
+def get_historical_ohlcv_execution_lock_ttl_seconds() -> float:
+    """TTL for the shared cross-process `historical_ohlcv` execution
+    lock (PR #108 P0 remediation, see
+    src.market_data.ingestion.historical_ohlcv_lock.
+    HistoricalOhlcvExecutionLock) -- deliberately generous, defaulting
+    to the same duration `get_max_ingestion_job_run_duration_hours()`
+    already uses to decide a RUNNING IngestionRunLog row is stuck/
+    crashed rather than merely slow (real production evidence: a full
+    historical_ohlcv pass over ~384 symbols took ~19 minutes, far under
+    this default), so a legitimately still-running job is never
+    preempted by its own lock expiring mid-execution. A crashed
+    holder's lock instead self-expires at this same bound rather than
+    blocking every future attempt forever -- no separate renewal
+    mechanism is introduced."""
+    return float(
+        os.getenv(
+            "HISTORICAL_OHLCV_EXECUTION_LOCK_TTL_SECONDS",
+            str(get_max_ingestion_job_run_duration_hours() * 3600),
+        )
+    )

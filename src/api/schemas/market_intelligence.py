@@ -482,6 +482,25 @@ class FullDiscoveryTriggerOut(BaseModel):
     job_names: List[str] = Field(default_factory=list)
 
 
+class HistoricalOhlcvRunOnceOut(BaseModel):
+    """POST /api/v1/admin/market-intelligence/historical-ohlcv/run-once
+    -- PR #108: ack for a staff-triggered manual run of ONLY the
+    existing `historical_ohlcv` ingestion job (symbols/fundamentals/
+    dividends are never invoked by this route), dispatched as a
+    background task for the same reason `/full-discovery` is
+    (historical_ohlcv's own CRITICAL+BACKGROUND passes can take many
+    minutes). `accepted=False` means an in-progress historical_ohlcv
+    run (started by this route, the recurring scheduler, or
+    `/full-discovery`) was already found and this call was a genuine
+    no-op -- poll GET /coverage's latest_ingestion_runs for real
+    before/after status."""
+
+    triggered_at: datetime
+    accepted: bool
+    message: str
+    job_name: str = "historical_ohlcv"
+
+
 class SectorCoverageOut(BaseModel):
     """One Saudi sector's coverage: how many Stock rows carry this
     sector value, how many of those are eligible/active, and how many

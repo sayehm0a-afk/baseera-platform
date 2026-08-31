@@ -107,6 +107,11 @@ STOP_REASON_CRITICAL_RESERVE_PROTECTED = "CRITICAL_RESERVE_PROTECTED"
 STOP_REASON_LIVE_SCAN_RESERVE_PROTECTED = "LIVE_SCAN_RESERVE_PROTECTED"
 STOP_REASON_UPSTREAM_EXHAUSTED = "UPSTREAM_EXHAUSTED"
 STOP_REASON_NO_WORK = "NO_WORK"
+# PR #108 P0 remediation: a call site skipped its attempt because
+# another historical_ohlcv execution (from any entry point -- the
+# manual admin route, the recurring scheduler, or /full-discovery)
+# already holds the shared execution lock. Never a job failure.
+STOP_REASON_ALREADY_RUNNING = "ALREADY_RUNNING"
 
 
 @dataclass

@@ -943,6 +943,296 @@ def test_full_discovery_still_blocks_on_a_genuinely_recent_running_row(client, s
     assert "already running" in body["message"]
 
 
+# --- POST /historical-ohlcv/run-once (PR #108) ----------------------------
+#
+# Single-job counterpart to /full-discovery -- these tests exist
+# specifically to prove the one behavioral difference from that route
+# (concurrency is scoped to historical_ohlcv alone, never blocked or
+# blocking on symbols/fundamentals/dividends) plus the same staff-gating/
+# reap/overlap guarantees /full-discovery already has, applied to this
+# narrower route.
+
+_ROUTE = "/api/v1/admin/market-intelligence/historical-ohlcv/run-once"
+
+
+def test_historical_ohlcv_run_once_requires_staff_role(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+
+    response = client.post(_ROUTE)
+
+    assert response.status_code == 403
+
+
+def test_historical_ohlcv_run_once_rejects_an_analyst_account(client, session_factory):
+    analyst = User(
+        email="analyst@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.ANALYST
+    )
+    main.app.dependency_overrides[get_current_user] = lambda: analyst
+
+    response = client.post(_ROUTE)
+
+    assert response.status_code == 403
+
+
+def test_historical_ohlcv_run_once_accepts_and_runs_only_that_job(client, session_factory, as_staff, monkeypatch):
+    """Proves the route accepts the request, runs the real
+    IngestionScheduler.run_historical_ohlcv_once() (not a parallel
+    implementation), and persists exactly one real IngestionRunLog row
+    -- for historical_ohlcv only. symbols/fundamentals/dividends must
+    never be invoked."""
+
+    async def _get_dev_market_provider():
+        return DevMarketDataProvider()
+
+    monkeypatch.setattr("src.market_data.ingestion.scheduler.get_market_data_provider", _get_dev_market_provider)
+
+    response = client.post(_ROUTE)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["job_name"] == "historical_ohlcv"
+
+    session = session_factory()
+    from src.domain.models import IngestionRunLog
+
+    logged_jobs = {row.job_name for row in session.query(IngestionRunLog).all()}
+    session.close()
+    assert logged_jobs == {"historical_ohlcv"}
+
+
+def test_historical_ohlcv_run_once_reports_overlap_when_historical_ohlcv_already_running(
+    client, session_factory, as_staff
+):
+    from src.domain.models import IngestionJobStatus, IngestionRunLog
+
+    session = session_factory()
+    session.add(
+        IngestionRunLog(
+            job_name="historical_ohlcv", started_at=datetime.now(timezone.utc), status=IngestionJobStatus.RUNNING
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.post(_ROUTE)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert "already running" in body["message"]
+
+
+def test_historical_ohlcv_run_once_is_not_blocked_by_an_in_flight_unrelated_job(
+    client, session_factory, as_staff, monkeypatch
+):
+    """The key behavioral difference from /full-discovery: a
+    concurrently RUNNING symbols/fundamentals/dividends row must never
+    block this route -- only an in-flight historical_ohlcv row does."""
+    from src.domain.models import IngestionJobStatus, IngestionRunLog
+
+    session = session_factory()
+    session.add(
+        IngestionRunLog(
+            job_name="fundamentals", started_at=datetime.now(timezone.utc), status=IngestionJobStatus.RUNNING
+        )
+    )
+    session.add(
+        IngestionRunLog(
+            job_name="dividends", started_at=datetime.now(timezone.utc), status=IngestionJobStatus.RUNNING
+        )
+    )
+    session.add(
+        IngestionRunLog(job_name="symbols", started_at=datetime.now(timezone.utc), status=IngestionJobStatus.RUNNING)
+    )
+    session.commit()
+    session.close()
+
+    async def _get_dev_market_provider():
+        return DevMarketDataProvider()
+
+    monkeypatch.setattr("src.market_data.ingestion.scheduler.get_market_data_provider", _get_dev_market_provider)
+
+    response = client.post(_ROUTE)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["job_name"] == "historical_ohlcv"
+
+    session = session_factory()
+    from src.domain.models import IngestionRunLog as _IngestionRunLog
+
+    logged_jobs = {row.job_name for row in session.query(_IngestionRunLog).all()}
+    session.close()
+    # The three pre-seeded rows remain untouched (still RUNNING, never
+    # reaped/finished by this route), plus exactly one new
+    # historical_ohlcv row this route itself created.
+    assert logged_jobs == {"fundamentals", "dividends", "symbols", "historical_ohlcv"}
+    historical_rows = session_factory().query(_IngestionRunLog).filter_by(job_name="historical_ohlcv").all()
+    assert len(historical_rows) == 1
+
+
+def test_historical_ohlcv_run_once_reaps_a_stale_running_row_instead_of_blocking_forever(
+    client, session_factory, as_staff, monkeypatch
+):
+    """Mirrors /full-discovery's own stale-row reap guarantee, scoped
+    to historical_ohlcv: a row RUNNING with no finished_at, older than
+    the configured max age, must be reaped (marked FAILED) rather than
+    permanently blocking every future controlled run."""
+    from src.domain.models import IngestionJobStatus, IngestionRunLog
+
+    monkeypatch.setenv("INGESTION_MAX_JOB_RUN_DURATION_HOURS", "6")
+
+    session = session_factory()
+    stale_started_at = datetime.now(timezone.utc) - timedelta(hours=100)
+    session.add(
+        IngestionRunLog(job_name="historical_ohlcv", started_at=stale_started_at, status=IngestionJobStatus.RUNNING)
+    )
+    session.commit()
+    stale_row_id = session.query(IngestionRunLog).filter_by(job_name="historical_ohlcv").first().id
+    session.close()
+
+    async def _get_dev_market_provider():
+        return DevMarketDataProvider()
+
+    monkeypatch.setattr("src.market_data.ingestion.scheduler.get_market_data_provider", _get_dev_market_provider)
+
+    response = client.post(_ROUTE)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+
+    session = session_factory()
+    stale_row = session.query(IngestionRunLog).filter_by(id=stale_row_id).one()
+    assert stale_row.status == IngestionJobStatus.FAILED
+    assert stale_row.finished_at is not None
+    assert "Reaped" in stale_row.error_summary
+    session.close()
+
+
+def test_historical_ohlcv_run_once_still_blocks_on_a_genuinely_recent_running_row(
+    client, session_factory, as_staff
+):
+    """The reap only clears rows older than the configured max age --
+    a historical_ohlcv job that started moments ago must still be
+    treated as in-flight."""
+    from src.domain.models import IngestionJobStatus, IngestionRunLog
+
+    session = session_factory()
+    session.add(
+        IngestionRunLog(
+            job_name="historical_ohlcv", started_at=datetime.now(timezone.utc), status=IngestionJobStatus.RUNNING
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.post(_ROUTE)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert "already running" in body["message"]
+
+
+# --- historical-ohlcv/run-once lock layer (PR #108 P0 remediation) --------
+#
+# Independent audit reproduced two near-simultaneous requests both being
+# accepted=True and both actually running -- the DB in-flight check above
+# is a plain, non-atomic SELECT. These tests exercise the atomic
+# HistoricalOhlcvExecutionLock layer specifically, against the real local
+# Redis this sandbox/CI both provision -- the DB check alone can never
+# prove this property, only the lock can.
+
+
+@pytest.fixture(autouse=True)
+def _clean_historical_ohlcv_lock_key():
+    from src.market_data.ingestion.historical_ohlcv_lock import (
+        HISTORICAL_OHLCV_EXECUTION_LOCK_KEY,
+        _get_shared_redis_client,
+    )
+
+    redis_client = _get_shared_redis_client()
+    if redis_client is not None:
+        redis_client.delete(HISTORICAL_OHLCV_EXECUTION_LOCK_KEY)
+    yield
+    if redis_client is not None:
+        redis_client.delete(HISTORICAL_OHLCV_EXECUTION_LOCK_KEY)
+
+
+def test_historical_ohlcv_run_once_rejects_when_lock_held_even_with_a_clean_db(client, session_factory, as_staff):
+    """The DB in-flight check alone would accept this request (no
+    RUNNING row exists) -- proves the real gate is the Redis lock, not
+    the informative-only DB check, and that a rejection here creates
+    ZERO new IngestionRunLog rows (never reports "started" when it was
+    actually rejected)."""
+    from src.domain.models import IngestionRunLog
+    from src.market_data.ingestion.historical_ohlcv_lock import HistoricalOhlcvExecutionLock
+
+    external_holder = HistoricalOhlcvExecutionLock()
+    assert external_holder.acquire(ttl_seconds=30) is True
+    try:
+        response = client.post(_ROUTE)
+    finally:
+        external_holder.release()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert "lock" in body["message"].lower()
+
+    session = session_factory()
+    assert session.query(IngestionRunLog).count() == 0
+    session.close()
+
+
+def test_historical_ohlcv_run_once_concurrent_requests_never_both_accept(
+    client, session_factory, as_staff, monkeypatch
+):
+    """Regression test for the reproduced P0 defect: fires 8 real,
+    near-simultaneous POST requests (threading.Barrier-synchronized,
+    same convention the independent audit used to reproduce the
+    defect) and asserts at most one is ever accepted=True, and at most
+    one historical_ohlcv IngestionRunLog row is ever created."""
+    import threading
+
+    async def _get_dev_market_provider():
+        return DevMarketDataProvider()
+
+    monkeypatch.setattr("src.market_data.ingestion.scheduler.get_market_data_provider", _get_dev_market_provider)
+
+    n = 8
+    results = [None] * n
+    barrier = threading.Barrier(n)
+
+    def _fire(i):
+        barrier.wait()
+        try:
+            resp = client.post(_ROUTE)
+            results[i] = resp.json()
+        except Exception:
+            results[i] = None
+
+    threads = [threading.Thread(target=_fire, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    accepted_count = sum(1 for r in results if r and r.get("accepted") is True)
+    assert accepted_count <= 1
+
+    from src.domain.models import IngestionRunLog
+
+    session = session_factory()
+    row_count = session.query(IngestionRunLog).filter_by(job_name="historical_ohlcv").count()
+    session.close()
+    assert row_count <= 1
+
+
 # --- GET /decision-intelligence -------------------------------------------
 
 
