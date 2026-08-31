@@ -784,6 +784,71 @@ async def test_run_all_jobs_once_records_a_failed_job_but_still_runs_the_rest(se
     assert call_order[-3:] == ["historical_ohlcv", "fundamentals", "dividends"]
 
 
+# --- run_historical_ohlcv_once (PR #108) ----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_historical_ohlcv_once_runs_only_that_job(session_factory):
+    """The single-job counterpart to run_all_jobs_once() -- the staff-
+    only controlled-recovery admin route (PR #108) calls this. Must
+    invoke `_run_historical_ohlcv` exactly once and never touch
+    `_run_symbols`/`_run_fundamentals`/`_run_dividends` at all."""
+    call_order = []
+
+    async def _make_job(name):
+        async def _job():
+            call_order.append(name)
+            return IngestionResult(symbols_requested=1, symbols_succeeded=1)
+
+        return _job
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._run_historical_ohlcv = await _make_job("historical_ohlcv")
+
+    async def _unexpected(name):
+        async def _job():
+            raise AssertionError(f"{name} must never be called by run_historical_ohlcv_once()")
+
+        return _job
+
+    scheduler._run_symbols = await _unexpected("symbols")
+    scheduler._run_fundamentals = await _unexpected("fundamentals")
+    scheduler._run_dividends = await _unexpected("dividends")
+
+    run_log = await scheduler.run_historical_ohlcv_once()
+
+    assert call_order == ["historical_ohlcv"]
+    assert run_log.job_name == "historical_ohlcv"
+    assert run_log.status == IngestionJobStatus.SUCCESS
+
+    session = session_factory()
+    logged = session.query(IngestionRunLog).all()
+    session.close()
+    assert len(logged) == 1
+    assert logged[0].job_name == "historical_ohlcv"
+
+
+@pytest.mark.asyncio
+async def test_run_historical_ohlcv_once_records_a_genuine_failure_truthfully(session_factory):
+    """A provider/circuit-breaker failure must be recorded truthfully
+    (FAILED, real error_summary), never swallowed or misreported as
+    success -- run_ingestion_job's own existing contract, exercised
+    here through the new single-job entry point."""
+
+    async def _failing_historical_ohlcv():
+        raise RuntimeError("StrictRealDataUnavailableError: SAHMK connectivity probe failed: Circuit Breaker is OPEN")
+
+    scheduler = IngestionScheduler(session_factory=session_factory)
+    scheduler._run_historical_ohlcv = _failing_historical_ohlcv
+
+    run_log = await scheduler.run_historical_ohlcv_once()
+
+    assert run_log.job_name == "historical_ohlcv"
+    assert run_log.status == IngestionJobStatus.FAILED
+    assert "Circuit Breaker is OPEN" in run_log.error_summary
+    assert run_log.finished_at is not None
+
+
 def test_reap_stale_ingestion_runs_marks_an_old_running_row_as_failed(session_factory):
     """Production found a 'symbols' IngestionRunLog row stuck RUNNING
     for 4+ days (a container restart mid-run) -- permanently blocking

@@ -481,6 +481,19 @@ class IngestionScheduler:
             run_logs.append(await run_ingestion_job(job_name, job_fn, self._session_factory))
         return run_logs
 
+    async def run_historical_ohlcv_once(self) -> IngestionRunLog:
+        """PR #108: the single-job counterpart to `run_all_jobs_once()`
+        -- runs ONLY `historical_ohlcv`, once, immediately. Exists for
+        narrow, controlled manual recovery/diagnosis (e.g. after a
+        provider outage or a suspected scheduler-execution gap) without
+        touching symbols/fundamentals/dividends the way the existing
+        full-discovery route's `run_all_jobs_once()` does. Reuses
+        `run_ingestion_job` and the same private job wiring `start()`'s
+        loop and `run_all_jobs_once()` already use -- no parallel
+        ingestion implementation, no new quota/provider/circuit-breaker
+        path."""
+        return await run_ingestion_job("historical_ohlcv", self._run_historical_ohlcv, self._session_factory)
+
     def start(self) -> None:
         if self._tasks:
             logger.warning("IngestionScheduler.start() called while already running -- ignoring.")

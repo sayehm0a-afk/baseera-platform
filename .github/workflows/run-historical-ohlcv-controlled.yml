@@ -1,0 +1,107 @@
+name: Historical OHLCV -- Controlled Run Once (PR #108, manual, confirmation-gated)
+
+# PR #108: invokes the new staff-only, single-job admin route
+# (POST /admin/market-intelligence/historical-ohlcv/run-once) that runs
+# ONLY the existing historical_ohlcv ingestion job -- never symbols,
+# fundamentals, dividends, a Radar/Shadow scan, or Decision V2. Exists
+# for a future, separately-authorized controlled recovery/diagnostic
+# run; this workflow file being present does NOT itself authorize
+# running it -- a human must explicitly dispatch it with the exact
+# confirmation string, and each dispatch is a single, non-repeating,
+# non-scheduled action against the real production route.
+#
+# workflow_dispatch only: no schedule, no push, no pull_request trigger
+# -- this must never fire automatically. The confirm input is checked
+# verbatim before anything else runs; any other value fails the job
+# immediately with no request made.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type exactly "RUN_HISTORICAL_OHLCV" to proceed'
+        required: true
+      reason:
+        description: "Why this controlled run is being triggered now (for the audit trail)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  run_once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      CONFIRM: ${{ inputs.confirm }}
+      REASON: ${{ inputs.reason }}
+    steps:
+      - name: Require the exact confirmation string (fail before anything else if it does not match)
+        run: |
+          if [ "$CONFIRM" != "RUN_HISTORICAL_OHLCV" ]; then
+            echo "::error::confirm input did not match 'RUN_HISTORICAL_OHLCV' exactly -- refusing to proceed. No request was made."
+            exit 1
+          fi
+          echo "Confirmation matched. Reason given: $REASON"
+
+      - name: Fail fast if RAILWAY_TOKEN/STAFF_EMAIL/STAFF_PASSWORD are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ] || [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::RAILWAY_TOKEN/STAFF_EMAIL/STAFF_PASSWORD not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Log in as the staff account
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/staff_cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Staff login failed."
+            exit 1
+          fi
+
+      - name: Trigger the single-job historical_ohlcv controlled run
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          CSRF_TOKEN=$(python3 -c "
+          import re
+          with open('/tmp/staff_cookies.txt') as f:
+              content = f.read()
+          m = re.search(r'csrf_token\s+(\S+)', content)
+          print(m.group(1) if m else '')
+          ")
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 -b /tmp/staff_cookies.txt \
+            -H "X-CSRF-Token: $CSRF_TOKEN" \
+            -X POST "$BACKEND_URL/api/v1/admin/market-intelligence/historical-ohlcv/run-once" \
+            -o /tmp/run_once.json -w "%{http_code}")
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/run_once.json
+          echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::historical-ohlcv/run-once returned non-200."
+            exit 1
+          fi
+
+      - name: Clean up local session artifacts
+        if: always()
+        run: rm -f /tmp/staff_cookies.txt /tmp/login_body.json /tmp/run_once.json /tmp/backend_domains.json

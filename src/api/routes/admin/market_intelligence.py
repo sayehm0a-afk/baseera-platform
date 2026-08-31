@@ -48,6 +48,7 @@ from src.api.schemas.market_intelligence import (
     DiagnosticScanOut,
     DirectoryPaginationDiagnosticsOut,
     FullDiscoveryTriggerOut,
+    HistoricalOhlcvRunOnceOut,
     IngestionJobStatusOut,
     MarketCoverageOut,
     MarketScanRequest,
@@ -1600,6 +1601,70 @@ async def trigger_full_discovery(
         accepted=True,
         message="Full discovery/ingestion pass started in the background.",
         job_names=list(_INGESTION_JOB_NAMES),
+    )
+
+
+@router.post("/historical-ohlcv/run-once", response_model=HistoricalOhlcvRunOnceOut)
+async def trigger_historical_ohlcv_run_once(
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> HistoricalOhlcvRunOnceOut:
+    """PR #108: staff-only, single-job counterpart to `/full-discovery`
+    -- manually runs ONLY the existing `historical_ohlcv` ingestion job
+    (see `IngestionScheduler.run_historical_ohlcv_once`), never
+    `symbols`/`fundamentals`/`dividends`. Exists for narrow, controlled
+    manual recovery/diagnosis of `historical_ohlcv` specifically (e.g.
+    after a suspected provider or scheduler-execution issue) without
+    the broader universe-growing side effects `/full-discovery`
+    deliberately has. Uses the exact same provider selection, SAHMK
+    rate limiter/quota admission, circuit breaker, and OHLCV priority-
+    tier target resolution the recurring scheduler's own
+    `historical_ohlcv` tick already uses -- no parallel ingestion path,
+    no quota/circuit-breaker bypass, no direct SAHMK call.
+
+    Concurrency: the in-flight guard below is scoped to `historical_
+    ohlcv` alone (unlike `/full-discovery`'s guard, which checks all
+    four job names) -- a concurrently running symbols/fundamentals/
+    dividends pass never blocks this route, and this route never blocks
+    them; only a second, overlapping `historical_ohlcv` attempt is
+    rejected as a no-op.
+
+    Dispatched as a background task -- see `/full-discovery`'s own
+    docstring for why -- so this call returns immediately; poll
+    GET /coverage's latest_ingestion_runs for real progress and counts.
+    """
+    triggered_at = datetime.now(timezone.utc)
+
+    from src.market_data.ingestion.scheduler import reap_stale_ingestion_runs
+
+    reap_stale_ingestion_runs(session, ingestion_config.get_max_ingestion_job_run_duration_hours())
+
+    in_flight = (
+        session.query(IngestionRunLog)
+        .filter(IngestionRunLog.job_name == "historical_ohlcv")
+        .filter(IngestionRunLog.finished_at.is_(None))
+        .first()
+    )
+    if in_flight is not None:
+        return HistoricalOhlcvRunOnceOut(
+            triggered_at=triggered_at,
+            accepted=False,
+            message=(
+                f"Skipped: historical_ohlcv (started {in_flight.started_at.isoformat()}) is already "
+                "running -- wait for it to finish before triggering another controlled run."
+            ),
+        )
+
+    from src.market_data.ingestion.scheduler import IngestionScheduler
+
+    scheduler = IngestionScheduler()
+    background_tasks.add_task(scheduler.run_historical_ohlcv_once)
+
+    return HistoricalOhlcvRunOnceOut(
+        triggered_at=triggered_at,
+        accepted=True,
+        message="historical_ohlcv controlled run started in the background.",
     )
 
 
