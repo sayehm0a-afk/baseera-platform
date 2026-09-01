@@ -126,7 +126,16 @@ async def ingest_historical_ohlcv(
                 )
                 break
             result.symbols_failed += 1
-            result.errors[symbol] = str(exc)
+            # Raw-provider-evidence observability fix: str(exc) alone
+            # only ever carries Basirah's own fixed message (e.g. "SAHMK
+            # plan does not permit this endpoint (403 PLAN_LIMIT).") --
+            # SahmkError.sanitized_provider_detail() is the real upstream
+            # response body (bounded, redacted), previously captured on
+            # the exception but never persisted anywhere. Appended, not
+            # substituted, so the existing message text/shape is
+            # unchanged for anything already parsing it.
+            provider_detail = getattr(exc, "sanitized_provider_detail", lambda: "")()
+            result.errors[symbol] = f"{exc} | provider_detail={provider_detail}" if provider_detail else str(exc)
             logger.error("Failed to ingest historical OHLCV for symbol '%s': %s", symbol, exc)
             await sleep_if_rate_limited(exc)
         finally:
