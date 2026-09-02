@@ -6,9 +6,52 @@ confirmed, distinct condition from a 401; a 429 is retried internally by
 SahmkClient and only ever raised as SahmkRateLimitError if every retry
 is exhausted. Every exception here carries the raw response body (when
 available) so nothing is silently swallowed.
-"""
 
+Raw-provider-evidence observability fix: `self.body` was always
+captured here, but every caller that persisted a failure (most notably
+ingest_historical_ohlcv.py) stored only `str(exc)` -- which, because
+`SahmkError.__init__` calls `super().__init__(message)` with just the
+fixed message, never included `body` at all. A real 2026-08-31 Historical
+OHLCV production incident (49/49 symbols failing with a generic "SAHMK
+plan does not permit this endpoint (403 PLAN_LIMIT)" message) could not
+be root-caused from persisted evidence as a direct result: the actual
+upstream response body was discarded the instant the exception was
+caught. `sanitized_provider_detail()` below is the fix -- a bounded,
+defensively-redacted string form of `self.body` that callers can persist
+*alongside* the existing message, without changing `str(exc)` itself (so
+every existing caller/test that depends on the current message shape is
+unaffected)."""
+
+import json
+import re
 from typing import Any, Optional
+
+# Generous enough to hold a real SAHMK JSON error body in full (the
+# largest observed, `docs/SAHMK_INTEGRATION.md`'s quoted bodies, are a
+# few hundred characters), small enough that a pathological/oversized
+# body can never bloat a persisted IngestionRunLog.error_summary row.
+_MAX_PROVIDER_DETAIL_CHARS = 2000
+
+# Defense-in-depth only: `body` is SAHMK's own response, never our own
+# request, so it structurally cannot contain our API key -- but a
+# malformed/unexpected upstream payload (or a misbehaving intermediary)
+# echoing something key-shaped back is exactly the scenario this exists
+# to catch before it ever reaches a log or database row. Two passes:
+# "Bearer <token>" first (its own token immediately follows the
+# keyword, not a "key: value" shape), then every other label ("X-API-
+# Key: ...", "secret=...") -- run in this order so a value that itself
+# starts with "Bearer " (the common Authorization-header shape) has its
+# real token redacted, not just the word "Bearer".
+_BEARER_TOKEN_PATTERN = re.compile(r"(?i)\bbearer\s+\S+")
+_SENSITIVE_KEY_VALUE_PATTERN = re.compile(
+    r'(?i)\b(api[_-]?key|x-api-key|authorization|cookie|secret|token)\b("?\s*[:=]\s*"?)([^\s"\',}]+)'
+)
+
+
+def _redact_sensitive(text: str) -> str:
+    text = _BEARER_TOKEN_PATTERN.sub("bearer [REDACTED]", text)
+    text = _SENSITIVE_KEY_VALUE_PATTERN.sub(r"\1\2[REDACTED]", text)
+    return text
 
 
 class SahmkError(Exception):
@@ -18,6 +61,27 @@ class SahmkError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+
+    def sanitized_provider_detail(self) -> str:
+        """A safe, size-bounded, redacted string form of the real
+        upstream `body` this exception carries -- "" if none was
+        captured (e.g. a network-level failure with no HTTP response
+        at all). Deliberately NOT part of `__str__`/`str(exc)`, which
+        keeps its existing, stable, test-verified shape -- callers that
+        want the real provider evidence call this explicitly."""
+        if self.body is None:
+            return ""
+        if isinstance(self.body, (dict, list)):
+            try:
+                text = json.dumps(self.body, ensure_ascii=False, sort_keys=True)
+            except (TypeError, ValueError):
+                text = str(self.body)
+        else:
+            text = str(self.body)
+        text = _redact_sensitive(text)
+        if len(text) > _MAX_PROVIDER_DETAIL_CHARS:
+            text = text[:_MAX_PROVIDER_DETAIL_CHARS] + "...<truncated>"
+        return text
 
 
 class SahmkConfigurationError(SahmkError):

@@ -20,6 +20,7 @@ from src.market_data.ingestion._common import (
 )
 from src.market_data.ingestion.ingest_historical_ohlcv import ingest_historical_ohlcv
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
+from src.market_data.sahmk.exceptions import SahmkEntitlementError
 from src.market_data.sahmk.rate_limiter import (
     SahmkQuotaReservedForCriticalError,
     SahmkQuotaReservedForLiveScanError,
@@ -141,6 +142,82 @@ async def test_isolates_per_symbol_failures(session_factory):
     session = session_factory()
     assert session.query(Stock).filter_by(symbol="1010").count() == 1
     assert session.query(Stock).filter_by(symbol="BAD").count() == 0
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_isolates_per_symbol_failures_still_works_for_a_plain_exception_with_no_body(session_factory):
+    """The provider_detail fix must degrade gracefully for a raised
+    exception that isn't a SahmkError at all (no sanitized_provider_detail
+    attribute) -- result.errors[symbol] falls back to plain str(exc),
+    identical to before this fix. Reconfirms the pre-existing
+    test_isolates_per_symbol_failures behavior is unaffected."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+
+    async def get_historical_ohlcv(symbol, start, end, interval="1d"):
+        raise RuntimeError("simulated provider failure")
+
+    provider.get_historical_ohlcv = AsyncMock(side_effect=get_historical_ohlcv)
+
+    result = await ingest_historical_ohlcv(["BAD"], provider, session_factory)
+
+    assert result.symbols_failed == 1
+    assert result.errors["BAD"] == "simulated provider failure"
+
+
+@pytest.mark.asyncio
+async def test_real_provider_error_body_is_preserved_in_result_errors(session_factory):
+    """The actual fix under test: a SahmkError with a real captured
+    upstream body must have that body recoverable from
+    result.errors[symbol], not just Basirah's own fixed message --
+    this is the exact evidence a 2026-08-31-shaped production incident
+    needs and previously could not get from persisted data."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+
+    async def get_historical_ohlcv(symbol, start, end, interval="1d"):
+        raise SahmkEntitlementError(
+            "SAHMK plan does not permit this endpoint (403 PLAN_LIMIT).",
+            status_code=403,
+            body={"code": "HISTORICAL_PLAN_LIMIT", "message": "Historical data quota exceeded"},
+        )
+
+    provider.get_historical_ohlcv = AsyncMock(side_effect=get_historical_ohlcv)
+
+    result = await ingest_historical_ohlcv(["2286"], provider, session_factory)
+
+    assert result.symbols_failed == 1
+    # The existing, stable message text is still the prefix (unchanged shape)...
+    assert result.errors["2286"].startswith("SAHMK plan does not permit this endpoint (403 PLAN_LIMIT).")
+    # ...and the real upstream body is now appended, not lost.
+    assert "HISTORICAL_PLAN_LIMIT" in result.errors["2286"]
+    assert "Historical data quota exceeded" in result.errors["2286"]
+
+
+@pytest.mark.asyncio
+async def test_no_fake_pricebar_is_created_on_provider_failure(session_factory):
+    """The observability fix must not change ingestion semantics: a
+    failed symbol still gets zero PriceBar rows, exactly as before."""
+    provider = AsyncMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.disconnect = AsyncMock(return_value=None)
+
+    async def get_historical_ohlcv(symbol, start, end, interval="1d"):
+        raise SahmkEntitlementError("x", status_code=403, body={"code": "HISTORICAL_PLAN_LIMIT"})
+
+    provider.get_historical_ohlcv = AsyncMock(side_effect=get_historical_ohlcv)
+
+    result = await ingest_historical_ohlcv(["2286"], provider, session_factory)
+
+    assert result.rows_upserted == 0
+    # get_or_create_stock's own Stock insert is part of the same
+    # per-symbol transaction the exception handler rolls back -- a
+    # failed symbol leaves no trace at all, not even a placeholder row.
+    session = session_factory()
+    assert session.query(PriceBar).count() == 0
     session.close()
 
 
