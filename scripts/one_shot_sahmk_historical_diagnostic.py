@@ -74,26 +74,47 @@ async def run() -> int:
     _print("=" * 72)
 
     # --- Phase A: read-only, zero-SAHMK-cost -- reproduce the exact
-    # production date-range decision for this symbol -------------------
-    session_factory = get_session_factory()
-    session = session_factory()
+    # production date-range decision for this symbol. Best-effort: a
+    # GitHub Actions runner is outside Railway's private network, so
+    # DATABASE_URL's internal hostname (postgres.railway.internal) may
+    # not resolve here even though `railway run` correctly injects the
+    # real value -- that is a network-reachability fact about this
+    # runner, not about production (the real backend container, running
+    # inside Railway's network, resolves it fine). If unreachable, this
+    # falls back to the SAME code path production itself uses for a
+    # symbol it cannot determine an incremental start date for --
+    # backfill_days=90 (ingest_historical_ohlcv.py's own "no bars yet"
+    # branch) -- not an invented request shape. ------------------------
+    db_available = True
+    db_error = None
+    session_factory = None
+    stock_row = None
+    latest_bar_date = None
+    post_signal_bar_count_before = None
     try:
-        stock_row = session.query(Stock).filter(Stock.symbol == SYMBOL).first()
-        latest_bar_date = None
-        if stock_row is not None:
-            latest_timestamp = (
-                session.query(func.max(PriceBar.timestamp))
-                .filter_by(stock_id=stock_row.id, timeframe=Timeframe.ONE_DAY)
-                .scalar()
-            )
-            latest_bar_date = latest_timestamp.date() if latest_timestamp is not None else None
-        post_signal_bar_count_before = (
-            session.query(func.count(PriceBar.id)).filter_by(stock_id=stock_row.id, timeframe=Timeframe.ONE_DAY).scalar()
-            if stock_row is not None
-            else 0
-        )
-    finally:
-        session.close()
+        session_factory = get_session_factory()
+        session = session_factory()
+        try:
+            stock_row = session.query(Stock).filter(Stock.symbol == SYMBOL).first()
+            if stock_row is not None:
+                latest_timestamp = (
+                    session.query(func.max(PriceBar.timestamp))
+                    .filter_by(stock_id=stock_row.id, timeframe=Timeframe.ONE_DAY)
+                    .scalar()
+                )
+                latest_bar_date = latest_timestamp.date() if latest_timestamp is not None else None
+                post_signal_bar_count_before = (
+                    session.query(func.count(PriceBar.id))
+                    .filter_by(stock_id=stock_row.id, timeframe=Timeframe.ONE_DAY)
+                    .scalar()
+                )
+            else:
+                post_signal_bar_count_before = 0
+        finally:
+            session.close()
+    except Exception as exc:  # noqa: BLE001 -- DB reachability is best-effort from this runner
+        db_available = False
+        db_error = f"{type(exc).__name__}: {exc}"
 
     today = datetime.now(timezone.utc).date()
     if latest_bar_date is not None:
@@ -103,10 +124,20 @@ async def run() -> int:
     date_to = today
 
     _print("")
-    _print("--- Phase A: local DB evidence (zero SAHMK cost) ---")
-    _print(f"stock_row_found: {stock_row is not None}")
-    _print(f"latest_existing_local_bar_date: {latest_bar_date.isoformat() if latest_bar_date else 'None (no bars)'}")
-    _print(f"post_signal_bar_count_before (total ONE_DAY bars on record): {post_signal_bar_count_before}")
+    _print("--- Phase A: local DB evidence (zero SAHMK cost, best-effort) ---")
+    _print(f"db_available_from_this_runner: {db_available}")
+    if not db_available:
+        _print(f"db_error: {db_error}")
+        _print(
+            "Falling back to production's own backfill_days=90 code path "
+            "(ingest_historical_ohlcv.py's 'no determinable incremental start' branch) "
+            "since the real incremental last-bar-date could not be independently verified "
+            "from this runner. This is an existing production code path, not an invented one."
+        )
+    else:
+        _print(f"stock_row_found: {stock_row is not None}")
+        _print(f"latest_existing_local_bar_date: {latest_bar_date.isoformat() if latest_bar_date else 'None (no bars)'}")
+        _print(f"post_signal_bar_count_before (total ONE_DAY bars on record): {post_signal_bar_count_before}")
     _print(f"computed request_start_date: {date_from.isoformat()}")
     _print(f"computed request_end_date: {date_to.isoformat()}")
 
@@ -199,21 +230,28 @@ async def run() -> int:
     _print(f"requests_used_today_after: {quota_after.get('requests_used_today')}")
     _print(f"delta: {quota_after.get('requests_used_today', 0) - quota_before.get('requests_used_today', 0)}")
 
-    # --- Phase E: downstream data state (read-only) ---------------------
-    session2 = session_factory()
-    try:
-        stock_row2 = session2.query(Stock).filter(Stock.symbol == SYMBOL).first()
-        post_signal_bar_count_after = (
-            session2.query(func.count(PriceBar.id)).filter_by(stock_id=stock_row2.id, timeframe=Timeframe.ONE_DAY).scalar()
-            if stock_row2 is not None
-            else 0
-        )
-    finally:
-        session2.close()
+    # --- Phase E: downstream data state (read-only, best-effort) --------
+    post_signal_bar_count_after = None
+    if db_available:
+        try:
+            session2 = session_factory()
+            try:
+                stock_row2 = session2.query(Stock).filter(Stock.symbol == SYMBOL).first()
+                post_signal_bar_count_after = (
+                    session2.query(func.count(PriceBar.id))
+                    .filter_by(stock_id=stock_row2.id, timeframe=Timeframe.ONE_DAY)
+                    .scalar()
+                    if stock_row2 is not None
+                    else 0
+                )
+            finally:
+                session2.close()
+        except Exception as exc:  # noqa: BLE001 -- best-effort, same reachability caveat as Phase A
+            post_signal_bar_count_after = f"UNAVAILABLE ({type(exc).__name__})"
     _print("")
-    _print("--- Phase E: downstream data state (read-only) ---")
-    _print(f"post_signal_bar_count_before: {post_signal_bar_count_before}")
-    _print(f"post_signal_bar_count_after: {post_signal_bar_count_after}")
+    _print("--- Phase E: downstream data state (read-only, best-effort) ---")
+    _print(f"post_signal_bar_count_before: {post_signal_bar_count_before if db_available else 'UNAVAILABLE (DB unreachable from this runner)'}")
+    _print(f"post_signal_bar_count_after: {post_signal_bar_count_after if db_available else 'UNAVAILABLE (DB unreachable from this runner)'}")
 
     _print("")
     _print("=" * 72)
