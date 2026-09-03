@@ -75,6 +75,7 @@ from src.domain.models.shadow_live_signal import (
     ShadowLifecycleResult,
     PERSISTED_LIFECYCLE_RESULTS,
 )
+from src.domain.models.basirah_brain_shadow_decision import BasirahBrainShadowDecision
 
 __all__ = [
     "Stock",
@@ -172,4 +173,5 @@ __all__ = [
     "ShadowLiveSignal",
     "ShadowLifecycleResult",
     "PERSISTED_LIFECYCLE_RESULTS",
+    "BasirahBrainShadowDecision",
 ]
