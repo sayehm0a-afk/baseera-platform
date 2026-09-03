@@ -113,6 +113,23 @@ def hard_gate_override_attempt_response(brain_input: BasirahBrainInputV1) -> str
     return json.dumps(payload)
 
 
+def invented_price_levels_response(brain_input: BasirahBrainInputV1) -> str:
+    """Finding F5 test fixture: a decision that stays WITHIN its
+    permitted hard-gate ceiling (mirrors whatever the deterministic
+    engine allows -- never independently attempts BUY against a
+    reject/watch tier) but invents fabricated entry/stop/target price
+    levels wildly different from the real deterministic geometry.
+    Isolates price-geometry normalization from hard-gate-ceiling
+    enforcement, so a test using this fixture proves normalization
+    specifically, not just that the ceiling also happens to catch it."""
+    payload = json.loads(default_conservative_response(brain_input))
+    payload["entry_zone"] = {"low": 1.23, "high": 4.56}
+    payload["stop_loss"] = 0.01
+    payload["targets"] = [7777.0, 8888.0, 9999.0]
+    payload["holding_horizon"] = {"min_days": 365, "max_days": 730}
+    return json.dumps(payload)
+
+
 def malformed_json_response(_: BasirahBrainInputV1) -> str:
     return "{not valid json"
 

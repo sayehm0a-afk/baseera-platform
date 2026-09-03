@@ -18,11 +18,29 @@ calibrated hit rate, and this schema must not imply one.
 """
 
 import enum
-from typing import Dict, List, Optional
+from typing import Annotated, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 SCHEMA_VERSION = "1"
+
+# F6 remediation (pre-merge hardening audit): explicit bounds on every
+# free-text / model-generated string field, so a pathological or
+# malicious provider response cannot amplify into an oversized DB row,
+# unbounded storage growth, or a token/cost amplification vector on any
+# downstream consumer of a persisted Shadow record. Bounds are sized to
+# comfortably hold real analyst prose (a few sentences to a short
+# paragraph), not to truncate legitimate explanations -- financial
+# NUMBERS are never bounded here, only text length and list item count.
+_SHORT_TEXT_MAX = 300  # one bullet-point-sized claim (bull/bear case item, invalidation/monitoring condition)
+_LONG_TEXT_MAX = 3000  # thesis_summary -- a short paragraph, generously sized
+_LIST_ITEMS_MAX = 20  # bull_case/bear_case/invalidation_conditions/monitoring_conditions/key_evidence
+_REASON_CODE_TEXT_MAX = 64  # reason codes are short fixed-vocabulary identifiers, not prose (see F3)
+
+BoundedShortText = Annotated[str, StringConstraints(max_length=_SHORT_TEXT_MAX)]
+BoundedLongText = Annotated[str, StringConstraints(max_length=_LONG_TEXT_MAX)]
+BoundedReasonCode = Annotated[str, StringConstraints(max_length=_REASON_CODE_TEXT_MAX)]
+BoundedShortTextList = Annotated[List[BoundedShortText], Field(max_length=_LIST_ITEMS_MAX)]
 
 # Explicit, disclosed meaning of confidence_score -- reused verbatim by
 # prompts.py's system prompt and by the API layer whenever this field is
@@ -286,9 +304,9 @@ class BrainKeyEvidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    category: str
-    statement: str
-    source_field: str
+    category: BoundedShortText
+    statement: BoundedShortText
+    source_field: BoundedShortText
 
 
 class BrainDataQualityOut(BaseModel):
@@ -322,12 +340,12 @@ class BasirahBrainDecisionV1(BaseModel):
     holding_horizon: BrainHoldingHorizon = Field(default_factory=BrainHoldingHorizon)
     risk_level: BrainRiskLevel
 
-    thesis_summary: str
-    bull_case: List[str] = Field(default_factory=list)
-    bear_case: List[str] = Field(default_factory=list)
-    key_evidence: List[BrainKeyEvidence] = Field(default_factory=list)
-    invalidation_conditions: List[str] = Field(default_factory=list)
-    monitoring_conditions: List[str] = Field(default_factory=list)
+    thesis_summary: BoundedLongText
+    bull_case: BoundedShortTextList = Field(default_factory=list)
+    bear_case: BoundedShortTextList = Field(default_factory=list)
+    key_evidence: Annotated[List[BrainKeyEvidence], Field(max_length=_LIST_ITEMS_MAX)] = Field(default_factory=list)
+    invalidation_conditions: BoundedShortTextList = Field(default_factory=list)
+    monitoring_conditions: BoundedShortTextList = Field(default_factory=list)
 
     data_quality: BrainDataQualityOut
 
@@ -335,7 +353,13 @@ class BasirahBrainDecisionV1(BaseModel):
     deterministic_decision: str
     brain_decision: str
 
-    reason_codes: List[str] = Field(default_factory=list)
+    # F3 remediation: reason_codes are validated post-parse against a
+    # controlled vocabulary by validators.sanitize_reason_codes() (unknown
+    # codes are mapped to a safe generic value, not rejected) -- the
+    # length/count bound here is a structural safety net independent of
+    # that vocabulary check, so even pre-sanitization the field cannot be
+    # used to smuggle an oversized payload.
+    reason_codes: Annotated[List[BoundedReasonCode], Field(max_length=_LIST_ITEMS_MAX)] = Field(default_factory=list)
 
     @field_validator("confidence_score")
     @classmethod

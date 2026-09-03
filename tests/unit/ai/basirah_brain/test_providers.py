@@ -10,6 +10,8 @@ import asyncio
 import pytest
 
 from src.analysis.decision_v2.types import Decision
+from src.core.llm_abstraction.openai_llm_client import OpenAILLMClient
+from src.ai.basirah_brain.config import get_basirah_brain_max_provider_call_attempts
 from src.ai.basirah_brain.evidence_builder import build_input
 from src.ai.basirah_brain.providers.mock_provider import (
     MockBasirahBrainProvider,
@@ -166,3 +168,39 @@ class TestOpenAIProviderAdapter:
         outcome = await provider.analyze(brain_input)
         assert outcome.success is False
         assert outcome.error_code == "EMPTY_RESPONSE"
+
+
+class TestF4MaxProviderCallCount:
+    """Finding F4 remediation: proves the TRUE maximum number of real
+    provider calls one `analyze()` invocation can generate, using the
+    REAL (not fake) `OpenAILLMClient`, with only the underlying
+    `AsyncOpenAI.chat.completions.create` call replaced -- the same
+    verification method used in the independent pre-merge audit."""
+
+    @pytest.mark.asyncio
+    async def test_max_call_count_is_exactly_one_by_default(self, brain_input, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-not-real")
+        real_client = OpenAILLMClient(model_name="gpt-4o-mini")  # default config -- inherits max_retries=3
+        call_count = {"n": 0}
+
+        async def failing_create(*args, **kwargs):
+            call_count["n"] += 1
+            raise ConnectionError("simulated persistent upstream failure")
+
+        real_client.client.chat.completions.create = failing_create
+        real_client.config = {"max_retries": get_basirah_brain_max_provider_call_attempts(), "retry_delay": 0.001}
+
+        provider = OpenAIBasirahBrainProvider(client=real_client, timeout_seconds=5)
+        outcome = await provider.analyze(brain_input)
+
+        assert outcome.success is False
+        assert call_count["n"] == get_basirah_brain_max_provider_call_attempts() == 1
+
+    @pytest.mark.asyncio
+    async def test_default_client_construction_passes_the_bounded_config(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-not-real")
+        provider = OpenAIBasirahBrainProvider()  # client=None path -- constructs its own OpenAILLMClient
+        assert provider._client.config.get("max_retries") == get_basirah_brain_max_provider_call_attempts()
+        # Confirms this is a LOCAL override, not a change to the shared client's own default.
+        unconfigured_client = OpenAILLMClient(model_name="gpt-4o-mini")
+        assert unconfigured_client.config.get("max_retries", 3) == 3

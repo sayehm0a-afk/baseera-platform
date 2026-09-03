@@ -22,6 +22,18 @@ best-effort, not a hard determinism guarantee.
 
 `analyze()` never raises for an ordinary failure -- see provider.py's
 module docstring for the contract every implementation must satisfy.
+
+Pre-merge hardening audit (Finding F4): when this provider constructs
+its OWN `OpenAILLMClient` (the `client=None` default path -- never when
+a caller injects its own client, e.g. in tests), it passes an explicit,
+local `config={"max_retries": ...}` so `OpenAILLMClient._handle_retry`'s
+own internal retry loop is bounded to exactly
+`get_basirah_brain_max_provider_call_attempts()` (default 1) real calls
+per `generate_response()` invocation -- i.e. per `analyze()` call. This
+does NOT change `OpenAILLMClient`'s shared, global default (still 3 for
+every other caller, e.g. NewsAnalyzer/OpenAILLMAdapter) -- only this
+provider's own instance is configured differently, via the same
+`config=` override point that class already exposes.
 """
 
 import json
@@ -33,6 +45,7 @@ from src.core.llm_abstraction.openai_llm_client import OpenAILLMClient
 
 from ..config import (
     get_basirah_brain_max_output_tokens,
+    get_basirah_brain_max_provider_call_attempts,
     get_basirah_brain_model_name,
     get_basirah_brain_seed,
     get_basirah_brain_temperature,
@@ -50,7 +63,10 @@ class OpenAIBasirahBrainProvider:
     API via the shared `OpenAILLMClient`."""
 
     def __init__(self, client: Optional[OpenAILLMClient] = None, timeout_seconds: Optional[float] = None):
-        self._client = client or OpenAILLMClient(model_name=get_basirah_brain_model_name())
+        self._client = client or OpenAILLMClient(
+            model_name=get_basirah_brain_model_name(),
+            config={"max_retries": get_basirah_brain_max_provider_call_attempts()},
+        )
         self._timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else get_basirah_brain_timeout_seconds()
         )

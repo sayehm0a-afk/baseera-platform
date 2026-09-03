@@ -118,9 +118,7 @@ class BasirahBrainService:
                 reason_codes=[],
             )
 
-        corrected, notes = apply_all_safety_corrections(
-            decision_result.decision.value, brain_input.existing_engine, outcome.decision
-        )
+        corrected, notes = apply_all_safety_corrections(brain_input, outcome.decision)
         policy_corrected = any("Corrected brain_decision" in note for note in notes)
         status = STATUS_POLICY_VIOLATION_CORRECTED if policy_corrected else STATUS_SUCCESS
         if notes:

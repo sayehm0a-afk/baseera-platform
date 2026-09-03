@@ -9,6 +9,7 @@ import pytest
 from src.ai.basirah_brain.providers.mock_provider import (
     MockBasirahBrainProvider,
     hard_gate_override_attempt_response,
+    invented_price_levels_response,
 )
 from src.ai.basirah_brain.service import (
     STATUS_POLICY_VIOLATION_CORRECTED,
@@ -141,3 +142,36 @@ async def test_concurrent_shadow_persistence_does_not_corrupt_or_crash(session, 
     assert len(ids) == 5  # every concurrent call got its own distinct row
     assert session.query(BasirahBrainShadowDecision).count() == 5
     assert all(r.status == STATUS_SUCCESS for r in results)
+
+
+@pytest.mark.asyncio
+async def test_f5_service_level_price_geometry_normalization_is_enforced(session, session_factory, stock):
+    """Finding F5 remediation: proves price-geometry normalization
+    through the REAL, full `analyze_shadow()` service path -- not just
+    the `normalize_price_geometry()` helper in isolation (the original
+    test blind spot the pre-merge audit's Negative Control 3 exposed:
+    the prior CASE F service test only asserted on decision/status, not
+    on the persisted price fields)."""
+    dr = make_decision_result(decision=Decision.BUY_CANDIDATE)  # real geometry: 98-101 / 93 / 108-115-122
+    service = BasirahBrainService(
+        provider=MockBasirahBrainProvider(response_factory=invented_price_levels_response),
+        session_factory=session_factory,
+    )
+
+    result = await service.analyze_shadow(dr, stock)
+
+    assert result.decision.entry_zone.low == 98.0
+    assert result.decision.entry_zone.high == 101.0
+    assert result.decision.stop_loss == 93.0
+    assert result.decision.targets == [108.0, 115.0, 122.0]
+    assert result.decision.holding_horizon.min_days == 10
+    assert result.decision.holding_horizon.max_days == 30
+
+    row = session.query(BasirahBrainShadowDecision).filter_by(id=result.shadow_record_id).one()
+    persisted = row.raw_structured_output
+    assert persisted["entry_zone"] == {"low": 98.0, "high": 101.0}
+    assert persisted["stop_loss"] == 93.0
+    assert persisted["targets"] == [108.0, 115.0, 122.0]
+    # The invented values must not survive anywhere in the persisted record.
+    for invented in (1.23, 4.56, 0.01, 7777.0, 8888.0, 9999.0):
+        assert invented not in (persisted["targets"] + [persisted["entry_zone"]["low"], persisted["entry_zone"]["high"], persisted["stop_loss"]])
