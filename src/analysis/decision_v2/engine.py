@@ -372,14 +372,27 @@ class DecisionEngineV2:
             current_price=price,
             entry_zone_low=entry_low,
             entry_zone_high=entry_high,
-            stop_loss=investment_decision.stop_loss,
-            target_1=investment_decision.target_price,
+            # PRODUCTION TRUTH AUDIT (2026-09-06): AIDecisionEngine._compute_
+            # price_targets always derives stop_loss/target_price from its
+            # own internal final_score>=50 split, never from `direction`
+            # (which is 0 here) -- so for a HOLD recommendation whose score
+            # sits in RecommendationEngine's (sell_threshold, buy_threshold)
+            # band but below that internal 50 split, this leaks a bearish
+            # (short-style) stop-above/target-below pair onto a decision
+            # gates.py never validates or intends as a trade plan (HOLD
+            # returns before Gates 3-5 in gates.py). entry_zone/target_2/
+            # target_3 already null out for direction==0 via structure.py;
+            # this brings stop_loss/target_1 and their derived fields in
+            # line with that same, already-established contract instead of
+            # passing AIDecisionEngine's leftover numbers straight through.
+            stop_loss=investment_decision.stop_loss if direction != 0 else None,
+            target_1=investment_decision.target_price if direction != 0 else None,
             target_2=target_2,
             target_3=target_3,
-            expected_return_target_1=investment_decision.expected_return_pct,
+            expected_return_target_1=investment_decision.expected_return_pct if direction != 0 else None,
             expected_return_target_2=self._pct_return(price, target_2),
-            downside_to_stop=self._pct_return(price, investment_decision.stop_loss),
-            risk_reward_target_1=investment_decision.risk_reward_ratio,
+            downside_to_stop=self._pct_return(price, investment_decision.stop_loss) if direction != 0 else None,
+            risk_reward_target_1=investment_decision.risk_reward_ratio if direction != 0 else None,
             risk_reward_target_2=self._risk_reward(price, investment_decision.stop_loss, target_2),
             expected_holding_period_min_days=holding_min_days,
             expected_holding_period_max_days=holding_max_days,
