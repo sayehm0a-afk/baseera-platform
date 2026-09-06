@@ -316,6 +316,47 @@ class TestHoldAndSellMapping:
         assert result.decision is Decision.HOLD
         assert result.entry_zone_low is None and result.entry_zone_high is None
 
+    def test_hold_recommendation_nulls_leaked_bearish_geometry(self):
+        # PRODUCTION TRUTH AUDIT (2026-09-06): AIDecisionEngine._compute_
+        # price_targets splits bullish/bearish purely on final_score >= 50,
+        # a *different* boundary than RecommendationEngine's HOLD band, so
+        # a real HOLD InvestmentDecision can carry a non-null, bearish
+        # (stop-above-price, target-below-price) stop_loss/target_price
+        # pair -- confirmed live in production for symbol 1301 on
+        # 2026-09-06 (price=18.40, stop=19.06, target=17.59, classified
+        # HOLD). This fixture reproduces that leaked-geometry shape
+        # directly (independent of AIDecisionEngine's own internals, per
+        # this test module's own stated decoupling convention) and proves
+        # DecisionEngineV2 fails closed rather than passing it through.
+        ctx = _context(price=18.40)
+        hold_decision_with_leaked_geometry = InvestmentDecision(
+            symbol="2222", recommendation=Recommendation.HOLD, confidence=78.2, final_score=45.0,
+            target_price=17.59, stop_loss=19.06, time_horizon=TimeHorizon.SHORT_TERM,
+            expected_return_pct=round((17.59 - 18.40) / 18.40 * 100, 2), risk_level=RiskLevel.HIGH,
+            position_size=PositionSize.NONE, reasons=[], breakdown=[], signals=[],
+            generated_at=datetime.now(timezone.utc), risk_reward_ratio=1.24,
+        )
+        result = _decide(ctx, hold_decision_with_leaked_geometry)
+        assert result.decision is Decision.HOLD
+        assert result.stop_loss is None
+        assert result.target_1 is None
+        assert result.target_2 is None and result.target_3 is None
+        assert result.risk_reward_target_1 is None
+        assert result.risk_reward_target_2 is None
+        assert result.expected_return_target_1 is None
+        assert result.downside_to_stop is None
+
+    def test_buy_recommendation_keeps_geometry_negative_control(self):
+        # Negative control for the above: proves the assertions there
+        # actually detect a real defect rather than encoding "always
+        # None" -- the identical geometry shape, on a genuine BUY-family
+        # recommendation, must survive untouched.
+        ctx = _context(price=100.0)
+        result = _decide(ctx, _buy_decision(price=100.0, target=112.0, stop=94.0))
+        assert result.stop_loss is not None
+        assert result.target_1 is not None
+        assert result.risk_reward_target_1 is not None
+
 
 class TestClosedMarketAndFreshness:
     def test_closed_market_caps_confidence_and_warns(self):
