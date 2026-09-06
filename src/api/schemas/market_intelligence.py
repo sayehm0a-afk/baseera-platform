@@ -464,6 +464,20 @@ class IngestionJobStatusOut(BaseModel):
     # live-market-critical operations, not a genuine ingestion defect.
     # When to expect it to resume automatically.
     next_retry_at: Optional[datetime] = None
+    # P0 OHLCV coverage recovery (2026-09-06): why this run ended the
+    # way it did (one of IngestionResult's STOP_REASON_* constants,
+    # src.market_data.ingestion._common) -- COMPLETED unless it stopped
+    # early. Lets a status="success" run that actually only touched a
+    # handful of symbols_requested be told apart from one that
+    # genuinely had nothing left to do.
+    stop_reason: Optional[str] = None
+    # How many of symbols_requested were never attempted because the
+    # run stopped early on stop_reason before reaching them -- distinct
+    # from symbols_failed (a real per-symbol error).
+    symbols_skipped_budget: int = 0
+    # How many of symbols_requested were never attempted because a
+    # zero-cost DB-first freshness check found them already up to date.
+    symbols_skipped_fresh: int = 0
 
 
 class FullDiscoveryTriggerOut(BaseModel):

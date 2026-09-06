@@ -431,6 +431,50 @@ def test_coverage_reports_the_latest_run_of_every_ingestion_job(client, session_
     assert by_job["historical_ohlcv"]["status"] is None  # never run yet
 
 
+def test_coverage_reports_stop_reason_and_skip_counts_for_a_budget_deferred_run(
+    client, session_factory, as_staff
+):
+    # P0 OHLCV COVERAGE RECOVERY (2026-09-06): a real, budget-starved
+    # historical_ohlcv run (most requested symbols never attempted, but
+    # symbols_failed=0) must be visible as such through this route, not
+    # indistinguishable from a run that had nothing left to do.
+    from src.domain.models import IngestionJobStatus, IngestionRunLog
+
+    session = session_factory()
+    now = datetime.now(timezone.utc)
+    session.add(
+        IngestionRunLog(
+            job_name="historical_ohlcv",
+            started_at=now - timedelta(minutes=5),
+            finished_at=now,
+            symbols_requested=386,
+            symbols_succeeded=7,
+            symbols_failed=0,
+            rows_upserted=7,
+            status=IngestionJobStatus.DEFERRED,
+            stop_reason="UPSTREAM_EXHAUSTED",
+            symbols_skipped_budget=379,
+            symbols_skipped_fresh=0,
+            next_retry_at=now + timedelta(hours=6),
+        )
+    )
+    session.commit()
+    session.close()
+
+    response = client.get("/api/v1/admin/market-intelligence/coverage")
+
+    assert response.status_code == 200
+    by_job = {row["job_name"]: row for row in response.json()["latest_ingestion_runs"]}
+    ohlcv = by_job["historical_ohlcv"]
+    assert ohlcv["status"] == "deferred"
+    assert ohlcv["stop_reason"] == "UPSTREAM_EXHAUSTED"
+    assert ohlcv["symbols_skipped_budget"] == 379
+    assert ohlcv["symbols_skipped_fresh"] == 0
+    assert ohlcv["symbols_requested"] == 386
+    assert ohlcv["symbols_succeeded"] == 7
+    assert ohlcv["next_retry_at"] is not None
+
+
 def test_coverage_reports_the_latest_scan_run(client, session_factory, as_staff):
     session = session_factory()
     session.add(

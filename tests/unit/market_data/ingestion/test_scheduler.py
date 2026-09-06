@@ -20,7 +20,11 @@ from src.domain.models import (
     IngestionRunLog,
     Stock,
 )
-from src.market_data.ingestion._common import IngestionResult
+from src.market_data.ingestion._common import (
+    STOP_REASON_COMPLETED,
+    STOP_REASON_UPSTREAM_EXHAUSTED,
+    IngestionResult,
+)
 from src.market_data.ingestion.scheduler import (
     _QUOTA_RETRY_SAFETY_BUFFER,
     IngestionScheduler,
@@ -185,6 +189,127 @@ async def test_run_ingestion_job_records_total_failure_when_nothing_succeeds(ses
 
     run_log = await run_ingestion_job("test_job", job_fn, session_factory)
     assert run_log.status == IngestionJobStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_run_ingestion_job_reports_deferred_when_budget_stopped_early_with_no_failures(
+    session_factory, monkeypatch
+):
+    # P0 OHLCV COVERAGE RECOVERY (2026-09-06): reproduces the real
+    # production shape of the 2026-09-03 historical_ohlcv run (386
+    # requested, 7 succeeded, 0 failed) -- ingest_historical_ohlcv.py's
+    # own per-symbol loop catches SahmkRateLimitExceededError
+    # internally and returns a normal IngestionResult with
+    # stop_reason=UPSTREAM_EXHAUSTED and symbols_skipped_budget=379,
+    # never raising up to run_ingestion_job. Before this fix,
+    # symbols_failed==0 alone made this report SUCCESS -- indistinguishable
+    # from a run that genuinely had nothing left to do.
+    fallback_reset = datetime(2026, 9, 7, 0, 0, 0, tzinfo=timezone.utc)
+
+    class _FakeLimiter:
+        def get_status(self):
+            return {"resets_at_utc": fallback_reset.isoformat()}
+
+    monkeypatch.setattr(
+        "src.market_data.ingestion.scheduler.get_default_rate_limiter", lambda: _FakeLimiter()
+    )
+
+    async def job_fn():
+        return IngestionResult(
+            symbols_requested=386,
+            symbols_succeeded=7,
+            symbols_failed=0,
+            rows_upserted=7,
+            symbols_skipped_budget=379,
+            stop_reason=STOP_REASON_UPSTREAM_EXHAUSTED,
+        )
+
+    run_log = await run_ingestion_job("historical_ohlcv", job_fn, session_factory)
+
+    assert run_log.status == IngestionJobStatus.DEFERRED
+    assert run_log.stop_reason == STOP_REASON_UPSTREAM_EXHAUSTED
+    assert run_log.symbols_skipped_budget == 379
+    # SQLite (this test's in-memory engine) round-trips datetimes as
+    # naive, unlike production Postgres -- compare the naive value,
+    # matching this same file's other DEFERRED-path convention.
+    expected_retry_at = (fallback_reset + _QUOTA_RETRY_SAFETY_BUFFER).replace(tzinfo=None)
+    assert run_log.next_retry_at == expected_retry_at
+    # The real work that DID complete must still be visible, not masked.
+    assert run_log.symbols_requested == 386
+    assert run_log.symbols_succeeded == 7
+    assert run_log.rows_upserted == 7
+
+
+@pytest.mark.asyncio
+async def test_run_ingestion_job_completed_with_no_skips_is_still_success_negative_control(
+    session_factory,
+):
+    # Negative control for the test above: proves the new DEFERRED
+    # branch only fires for a genuine budget-driven early stop, not for
+    # every symbols_failed==0 run -- a plain, fully-completed run must
+    # report SUCCESS exactly as before this change.
+    async def job_fn():
+        return IngestionResult(
+            symbols_requested=7,
+            symbols_succeeded=7,
+            symbols_failed=0,
+            rows_upserted=7,
+            symbols_skipped_budget=0,
+            stop_reason=STOP_REASON_COMPLETED,
+        )
+
+    run_log = await run_ingestion_job("historical_ohlcv", job_fn, session_factory)
+
+    assert run_log.status == IngestionJobStatus.SUCCESS
+    assert run_log.next_retry_at is None
+    assert run_log.symbols_skipped_budget == 0
+
+
+@pytest.mark.asyncio
+async def test_run_ingestion_job_all_skipped_fresh_is_still_success_negative_control(session_factory):
+    # A run where every symbol was already up to date (DB-first
+    # freshness skip, zero provider cost) is COMPLETED, not a budget
+    # stop -- must stay SUCCESS even though symbols_skipped_fresh is
+    # large, and symbols_skipped_budget stays 0.
+    async def job_fn():
+        return IngestionResult(
+            symbols_requested=372,
+            symbols_succeeded=372,
+            symbols_failed=0,
+            symbols_skipped_fresh=372,
+            stop_reason=STOP_REASON_COMPLETED,
+        )
+
+    run_log = await run_ingestion_job("historical_ohlcv", job_fn, session_factory)
+
+    assert run_log.status == IngestionJobStatus.SUCCESS
+    assert run_log.symbols_skipped_fresh == 372
+    assert run_log.symbols_skipped_budget == 0
+    assert run_log.next_retry_at is None
+
+
+@pytest.mark.asyncio
+async def test_run_ingestion_job_real_failures_take_priority_over_budget_stop_reason(session_factory):
+    # Defensive ordering check: a run with real per-symbol failures
+    # must never be reported as a clean DEFERRED budget-wait, even if
+    # stop_reason/symbols_skipped_budget are also populated -- the
+    # existing FAILED/PARTIAL classification always wins when
+    # symbols_failed > 0.
+    async def job_fn():
+        return IngestionResult(
+            symbols_requested=10,
+            symbols_succeeded=5,
+            symbols_failed=1,
+            symbols_skipped_budget=4,
+            stop_reason=STOP_REASON_UPSTREAM_EXHAUSTED,
+            errors={"BAD": "boom"},
+        )
+
+    run_log = await run_ingestion_job("historical_ohlcv", job_fn, session_factory)
+
+    assert run_log.status == IngestionJobStatus.PARTIAL
+    assert run_log.stop_reason == STOP_REASON_UPSTREAM_EXHAUSTED  # still recorded, for observability
+    assert run_log.next_retry_at is None  # only DEFERRED runs get a next_retry_at
 
 
 @pytest.mark.asyncio
