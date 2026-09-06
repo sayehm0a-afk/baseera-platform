@@ -162,6 +162,20 @@ def _compute_quota_retry_at(quota_exc: SahmkRateLimitExceededError) -> datetime:
     return reset_at + _QUOTA_RETRY_SAFETY_BUFFER
 
 
+def _compute_deferred_retry_at_from_status() -> datetime:
+    """Same fallback the plain-exception branch of `_compute_quota_
+    retry_at` above uses, for the case where a job stopped early on a
+    budget refusal without that refusal ever surfacing as a raised
+    exception here (see `run_ingestion_job`'s use of `result.stop_
+    reason` below -- `ingest_historical_ohlcv`'s own per-symbol loop
+    already catches SahmkRateLimitExceededError internally and returns
+    a normal IngestionResult, so there is no exception object to read
+    reset_at_utc from at this call site)."""
+    status = get_default_rate_limiter().get_status()
+    reset_at = datetime.fromisoformat(str(status["resets_at_utc"]))
+    return reset_at + _QUOTA_RETRY_SAFETY_BUFFER
+
+
 class _NonDisconnectingProviderProxy:
     """Wraps a provider obtained from provider_factory/
     fundamental_provider_factory's process-wide cache.
@@ -300,7 +314,30 @@ async def run_ingestion_job(
             run_log.symbols_succeeded = result.symbols_succeeded
             run_log.symbols_failed = result.symbols_failed
             run_log.rows_upserted = result.rows_upserted
-            if result.symbols_failed == 0:
+            run_log.stop_reason = result.stop_reason
+            run_log.symbols_skipped_budget = result.symbols_skipped_budget
+            run_log.symbols_skipped_fresh = result.symbols_skipped_fresh
+            # P0 OHLCV coverage recovery (2026-09-06): a budget refusal
+            # inside a per-symbol loop (e.g. ingest_historical_ohlcv.py's
+            # own `is_quota_exhausted_for_today` handling) is caught
+            # there and returns a normal IngestionResult -- it never
+            # raises up to this function's own try/except above, so the
+            # `deferred_until is not None` branch below never fires for
+            # it. Without this check, a run that stopped early with most
+            # of symbols_requested never attempted (symbols_failed=0)
+            # was reported as plain SUCCESS, indistinguishable from a
+            # run that genuinely had nothing left to do, and the
+            # scheduler's own next_retry_at fast-path (_compute_initial_
+            # delay) never engaged for it.
+            budget_stopped_early = (
+                result.symbols_failed == 0
+                and result.symbols_skipped_budget > 0
+                and result.stop_reason not in (STOP_REASON_COMPLETED, STOP_REASON_NO_WORK)
+            )
+            if budget_stopped_early:
+                run_log.status = IngestionJobStatus.DEFERRED
+                run_log.next_retry_at = _compute_deferred_retry_at_from_status()
+            elif result.symbols_failed == 0:
                 run_log.status = IngestionJobStatus.SUCCESS
             elif result.symbols_succeeded > 0:
                 run_log.status = IngestionJobStatus.PARTIAL

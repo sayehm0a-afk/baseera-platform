@@ -72,6 +72,27 @@ class IngestionRunLog(Base):
     # small safety buffer), not a generic "try again later" guess. NULL
     # for every other status.
     next_retry_at = Column(DateTime(timezone=True), nullable=True)
+    # P0 OHLCV coverage recovery (2026-09-06): one of IngestionResult's
+    # STOP_REASON_* constants (src.market_data.ingestion._common) --
+    # COMPLETED unless the run stopped early. Previously computed
+    # in-memory by ingest_historical_ohlcv.py but discarded before ever
+    # reaching this table, so a run that stopped early on a budget
+    # refusal (symbols_failed=0, most of symbols_requested never
+    # attempted) was indistinguishable from one with genuinely nothing
+    # left to do -- see run_ingestion_job's own use of this field for
+    # the status=DEFERRED decision this enables. NULL for a run from
+    # before this column existed.
+    stop_reason = Column(String(32), nullable=True)
+    # How many of symbols_requested were never attempted because the
+    # run stopped early on `stop_reason` before reaching them --
+    # distinct from symbols_failed (a real per-symbol error). Same
+    # discarded-in-memory-value history as stop_reason above.
+    symbols_skipped_budget = Column(Integer, nullable=False, default=0, server_default="0")
+    # How many of symbols_requested were never attempted because a
+    # zero-cost DB-first freshness check found them already up to date
+    # (ingest_historical_ohlcv.py's `start > today` case) -- zero
+    # provider cost, not a failure, not a budget skip.
+    symbols_skipped_fresh = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

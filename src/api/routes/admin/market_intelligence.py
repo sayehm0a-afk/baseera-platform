@@ -1541,6 +1541,9 @@ def _ingestion_job_status_out(job_name: str, latest: Optional[IngestionRunLog]) 
         error_summary=latest.error_summary,
         zero_progress_summary=latest.zero_progress_summary,
         next_retry_at=latest.next_retry_at,
+        stop_reason=latest.stop_reason,
+        symbols_skipped_budget=latest.symbols_skipped_budget,
+        symbols_skipped_fresh=latest.symbols_skipped_fresh,
     )
 
 
