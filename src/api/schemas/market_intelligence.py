@@ -1223,6 +1223,33 @@ class DailyValidationReportOut(BaseModel):
     verified_sample_size: int = 0
 
 
+class CohortSafeValidationReportOut(BaseModel):
+    """GET .../radar-v2/cohort-report -- QUALITY PROOF INSTRUMENTATION
+    HARDENING: unlike the daily/all-time reports above, this is scoped
+    to exactly one engine_sha+config_hash experiment cohort from a
+    given start date, and separates raw_signal_count (every outcome-
+    tracked snapshot) from independent_signal_count (only those not
+    flagged as a continuation of an already-open trade episode for the
+    same symbol) -- official quality statistics must use the
+    independent count wherever statistical independence is required.
+    matured_count is every signal whose own due_at has already
+    elapsed, regardless of status -- the field to check before trusting
+    any win-rate/expectancy conclusion from this cohort."""
+
+    cohort_engine_sha: str
+    cohort_config_hash: str
+    cohort_start_date: str
+    cohort_age_trading_days: int
+    raw_signal_count: int
+    independent_signal_count: int
+    actionable_count: int
+    entered_count: int
+    resolved_count: int
+    pending_count: int
+    matured_count: int
+    insufficient_data_count: int
+
+
 class RadarV2SahmkConsumptionOut(BaseModel):
     """GET .../radar-v2/sahmk-consumption -- SAHMK quota consumption
     attributable specifically to Radar V2, read verbatim from the

@@ -54,6 +54,7 @@ from src.api.schemas.market_intelligence import (
     MarketScanRequest,
     MarketScanRunOut,
     ObservedFieldOut,
+    CohortSafeValidationReportOut,
     DailyValidationReportOut,
     ObservedFieldValueOut,
     OutcomeTrackingOut,
@@ -136,6 +137,7 @@ from src.market_intelligence.config import (
 )
 from src.market_intelligence.market_status import get_market_status
 from src.market_intelligence.radar_v2 import (
+    compute_cohort_safe_validation_report,
     compute_daily_validation_report,
     compute_radar_v2_extended_performance,
     compute_radar_v2_performance,
@@ -937,6 +939,42 @@ async def get_daily_validation_report(
         target_1_hit_rate=report.target_1_hit_rate,
         stop_before_target_rate=report.stop_before_target_rate,
         verified_sample_size=report.verified_sample_size,
+    )
+
+
+@router.get("/radar-v2/cohort-report", response_model=CohortSafeValidationReportOut)
+async def get_cohort_safe_validation_report(
+    engine_sha: str = Query(..., description="Exact engine_sha the forward-test cohort was approved on."),
+    config_hash: str = Query(..., description="Exact config_hash the forward-test cohort was approved on."),
+    cohort_start_date: str = Query(..., description="UTC calendar date YYYY-MM-DD the cohort began."),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_staff_role(StaffRole.ANALYST, StaffRole.ADMIN, StaffRole.OWNER)),
+) -> CohortSafeValidationReportOut:
+    """QUALITY PROOF INSTRUMENTATION HARDENING -- see
+    `compute_cohort_safe_validation_report`'s own docstring for the
+    exact cohort-isolation and maturity-safety rules. Read-only: never
+    triggers a scan or an outcome re-evaluation, only reads whatever
+    `DecisionV2Snapshot`/`DecisionV2Outcome` rows already exist for the
+    named engine/config cohort."""
+    try:
+        parsed_start = datetime.strptime(cohort_start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="cohort_start_date must be in YYYY-MM-DD format.")
+
+    report = compute_cohort_safe_validation_report(session, engine_sha, config_hash, parsed_start)
+    return CohortSafeValidationReportOut(
+        cohort_engine_sha=report.cohort_engine_sha,
+        cohort_config_hash=report.cohort_config_hash,
+        cohort_start_date=report.cohort_start_date,
+        cohort_age_trading_days=report.cohort_age_trading_days,
+        raw_signal_count=report.raw_signal_count,
+        independent_signal_count=report.independent_signal_count,
+        actionable_count=report.actionable_count,
+        entered_count=report.entered_count,
+        resolved_count=report.resolved_count,
+        pending_count=report.pending_count,
+        matured_count=report.matured_count,
+        insufficient_data_count=report.insufficient_data_count,
     )
 
 

@@ -32,6 +32,7 @@ with no forward bars at all gets DATA_UNAVAILABLE only after
 judge against.
 """
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
@@ -58,6 +59,47 @@ def is_actionable_buy_decision(decision_value: str) -> bool:
     return decision_value in _ACTIONABLE_BUY_DECISIONS
 
 
+def _find_open_independent_signal_key(
+    session: Session, symbol: str, engine_sha: Optional[str], config_hash: Optional[str]
+) -> Optional[str]:
+    """QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06): the
+    analysis-safe independent-signal rule. A brand-new
+    DecisionV2Outcome continues an already-open trade episode (and so
+    must NOT be counted as its own independent observation) only if a
+    still-PENDING outcome already exists for the same symbol, issued
+    under the IDENTICAL engine_sha+config_hash cohort as this new one
+    -- a strategy/config change always starts a new episode even for
+    the same symbol, since otherwise one "episode" could silently span
+    two different engine behaviors, corrupting cohort isolation.
+
+    Uses only information that exists at or before this exact moment
+    (a symbol's currently-PENDING rows) -- never an outcome, never
+    future price data, so this can never be accused of picking which
+    signal counts based on hindsight. Returns None when either this
+    new row's engine_sha/config_hash is unknown (legacy/unversioned
+    caller) or no matching open PENDING row exists -- in both cases
+    the caller starts a fresh, independent episode, which is the
+    conservative choice: we never silently link this row to an
+    existing episode we cannot positively identify."""
+    if engine_sha is None or config_hash is None:
+        return None
+    existing = (
+        session.query(DecisionV2Outcome.independent_signal_key)
+        .join(DecisionV2Snapshot, DecisionV2Outcome.decision_v2_snapshot_id == DecisionV2Snapshot.id)
+        .filter(
+            DecisionV2Outcome.symbol == symbol,
+            DecisionV2Outcome.status == DecisionV2OutcomeStatus.PENDING,
+            DecisionV2Snapshot.engine_sha == engine_sha,
+            DecisionV2Snapshot.config_hash == config_hash,
+        )
+        .order_by(DecisionV2Outcome.created_at.asc())
+        .first()
+    )
+    if existing is None:
+        return None
+    return existing[0]
+
+
 def create_pending_decision_v2_outcome(
     session: Session, snapshot: DecisionV2Snapshot, validation_session_id: Optional[int] = None
 ) -> Optional[DecisionV2Outcome]:
@@ -76,6 +118,20 @@ def create_pending_decision_v2_outcome(
     if existing is not None:
         return None
 
+    # QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06): measurement-
+    # layer-only bookkeeping -- never affects whether this row is
+    # created, never affects any recommendation-facing behavior. See
+    # _find_open_independent_signal_key's own docstring for the rule.
+    parent_key = _find_open_independent_signal_key(
+        session, snapshot.symbol, snapshot.engine_sha, snapshot.config_hash
+    )
+    if parent_key is not None:
+        independent_signal_key = parent_key
+        is_independent_signal = False
+    else:
+        independent_signal_key = str(uuid.uuid4())
+        is_independent_signal = True
+
     horizon_days = snapshot.expected_holding_period_max_days or get_decision_v2_outcome_default_horizon_days()
     outcome = DecisionV2Outcome(
         decision_v2_snapshot_id=snapshot.id,
@@ -89,6 +145,8 @@ def create_pending_decision_v2_outcome(
         # trades into entry_zone_low..entry_zone_high (see
         # evaluate_pending_outcomes below), never assumed to be the
         # signal price.
+        independent_signal_key=independent_signal_key,
+        is_independent_signal=is_independent_signal,
     )
     session.add(outcome)
     return outcome
@@ -269,7 +327,39 @@ def evaluate_pending_outcomes(
         target_2_hit, target_2_at = _first_touch(is_bullish, target_2, "target", horizon_df)
         target_3_hit, target_3_at = _first_touch(is_bullish, target_3, "target", horizon_df)
         stop_hit, stop_at = _first_touch(is_bullish, stop_loss, "stop", horizon_df)
-        mfe, mae = _max_favorable_adverse_excursion(is_bullish, entry_price, horizon_df)
+
+        # QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06): excursion
+        # must never include bars after the trade's own resolution event
+        # -- without this, a delayed evaluation pass (e.g. the scheduler
+        # catching up after a gap) would compute MFE/MAE over price
+        # action from days AFTER a target/stop was already touched,
+        # silently inflating or distorting the excursion of an already-
+        # closed position. When this pass finds no terminal touch yet
+        # (still open, or expiring untouched), the full post-entry
+        # window through `now` is correct, since the position was
+        # genuinely open that whole time.
+        _touch_dates = [t for t in (target_1_at, target_2_at, target_3_at, stop_at) if t is not None]
+        excursion_cutoff = min(_touch_dates) if _touch_dates else None
+        excursion_df = (
+            horizon_df[
+                horizon_df.index.map(lambda ts: _as_utc(pd.Timestamp(ts).to_pydatetime()) <= excursion_cutoff)
+            ]
+            if excursion_cutoff is not None
+            else horizon_df
+        )
+        mfe, mae = _max_favorable_adverse_excursion(is_bullish, entry_price, excursion_df)
+
+        # R-multiple representation (fraction of the entry-to-stop risk
+        # distance) -- comparable across signals with different stop
+        # distances, unlike a raw percentage. None (never 0.0) whenever
+        # the risk distance is zero/unavailable/invalid.
+        risk_distance = (
+            entry_price - stop_loss
+            if entry_price is not None and stop_loss is not None and entry_price > stop_loss
+            else None
+        )
+        mfe_r = (mfe / 100.0 * entry_price) / risk_distance if mfe is not None and risk_distance else None
+        mae_r = (mae / 100.0 * entry_price) / risk_distance if mae is not None and risk_distance else None
 
         row.target_1_hit, row.target_1_hit_at = target_1_hit, target_1_at
         row.target_2_hit, row.target_2_hit_at = target_2_hit, target_2_at
@@ -277,6 +367,8 @@ def evaluate_pending_outcomes(
         row.stop_loss_hit, row.stop_loss_hit_at = stop_hit, stop_at
         row.max_favorable_excursion_pct = mfe
         row.max_adverse_excursion_pct = mae
+        row.max_favorable_excursion_r = mfe_r
+        row.max_adverse_excursion_r = mae_r
 
         # These four are anchored to the SIGNAL (decision_timestamp),
         # not to entry -- always computed off full_horizon_df, never

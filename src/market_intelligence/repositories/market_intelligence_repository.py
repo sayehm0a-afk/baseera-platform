@@ -35,6 +35,7 @@ from src.ai_evolution.validation_session_service import get_active_validation_se
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
 from src.analysis.decision.types import TimeHorizon
 from src.analysis.decision_v2.types import gates_to_dicts, sub_scores_to_dict
+from src.analysis.decision_v2.versioning import compute_decision_v2_config_hash, get_engine_sha
 from src.domain.models import (
     ChangeType as DomainChangeType,
     AlertSeverity as DomainAlertSeverity,
@@ -714,6 +715,13 @@ class MarketIntelligenceRepository:
                             else None
                         ),
                         calibration_version=decision_v2_calibration_version,
+                        # QUALITY PROOF INSTRUMENTATION HARDENING:
+                        # immutable experiment-version provenance,
+                        # computed once here and never recomputed for
+                        # this row afterward -- see
+                        # src.analysis.decision_v2.versioning.
+                        engine_sha=get_engine_sha(),
+                        config_hash=compute_decision_v2_config_hash(),
                     )
                     session.add(decision_v2_snapshot)
                     # M10: only issue an outcome-tracking row while an

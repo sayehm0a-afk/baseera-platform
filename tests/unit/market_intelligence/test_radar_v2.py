@@ -26,9 +26,11 @@ from src.domain.models import (
     Stock,
     Timeframe,
 )
+from src.domain.models.decision_v2_outcome import DecisionV2OutcomeStatus
 from src.market_intelligence.radar_v2 import (
     MINIMUM_SAMPLE_GATE,
     _accumulation_status,
+    compute_cohort_safe_validation_report,
     compute_daily_validation_report,
     compute_radar_v2_extended_performance,
     compute_radar_v2_performance,
@@ -76,6 +78,7 @@ def _candidate(symbol="1111", rank_score=80.0, signals=None):
 def _snapshot(
     session, stock, scan_run_id, decision="BUY_CANDIDATE", confidence=70.0, current_price=100.0,
     market_risk_state=None, sector_ar=None, horizon_type=None, downside_to_stop=None,
+    decision_timestamp=None, engine_sha=None, config_hash=None,
 ):
     row = DecisionV2Snapshot(
         stock_id=stock.id,
@@ -91,13 +94,33 @@ def _snapshot(
         data_freshness_status="LIVE",
         current_price=current_price,
         market_status="OPEN",
-        decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        decision_timestamp=decision_timestamp or datetime(2026, 1, 1, tzinfo=timezone.utc),
         analysis_version="2.0.0",
         data_source="test",
         scan_run_id=scan_run_id,
         market_risk_state=market_risk_state,
         horizon_type=horizon_type,
         downside_to_stop=downside_to_stop,
+        engine_sha=engine_sha,
+        config_hash=config_hash,
+    )
+    session.add(row)
+    session.commit()
+    return row
+
+
+def _outcome(
+    session, snapshot, due_at, status=DecisionV2OutcomeStatus.PENDING, entry_triggered=False,
+    is_independent_signal=None, independent_signal_key=None,
+):
+    row = DecisionV2Outcome(
+        decision_v2_snapshot_id=snapshot.id,
+        symbol=snapshot.symbol,
+        due_at=due_at,
+        status=status,
+        entry_triggered=entry_triggered,
+        is_independent_signal=is_independent_signal,
+        independent_signal_key=independent_signal_key,
     )
     session.add(row)
     session.commit()
@@ -852,3 +875,171 @@ class TestComputeDailyValidationReport:
         report = compute_daily_validation_report(session, report_date=naive_same_day)
         assert report.report_date == "2026-01-01"
         assert report.total_opportunities == 1
+
+
+class TestComputeCohortSafeValidationReport:
+    """QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06), P2-A: unlike
+    `compute_daily_validation_report` (one calendar day, all engine/config
+    versions mixed), this must scope strictly to one engine_sha+config_hash
+    cohort and never silently blend another experiment's signals in."""
+
+    ENGINE = "sha-under-test"
+    CONFIG = "config-under-test"
+    OTHER_ENGINE = "sha-other-experiment"
+    OTHER_CONFIG = "config-other-experiment"
+    START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    NOW = datetime(2026, 1, 20, tzinfo=timezone.utc)
+
+    def _cohort_snapshot(self, session, stock, decision="BUY_CANDIDATE", ts=None, engine_sha=None, config_hash=None):
+        return _snapshot(
+            session, stock, scan_run_id=1, decision=decision,
+            decision_timestamp=ts or self.START + timedelta(days=1),
+            engine_sha=engine_sha if engine_sha is not None else self.ENGINE,
+            config_hash=config_hash if config_hash is not None else self.CONFIG,
+        )
+
+    def test_empty_cohort_returns_safe_zero_defaults(self, session):
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW
+        )
+        assert report.cohort_engine_sha == self.ENGINE
+        assert report.cohort_config_hash == self.CONFIG
+        assert report.cohort_start_date == "2026-01-01"
+        assert report.raw_signal_count == 0
+        assert report.independent_signal_count == 0
+        assert report.actionable_count == 0
+        assert report.entered_count == 0
+        assert report.resolved_count == 0
+        assert report.pending_count == 0
+        assert report.matured_count == 0
+        assert report.insufficient_data_count == 0
+
+    def test_actionable_count_reflects_only_actionable_buy_decisions(self, session):
+        s1 = _stock(session, "1111")
+        s2 = _stock(session, "2222")
+        self._cohort_snapshot(session, s1, decision="BUY_CANDIDATE")
+        self._cohort_snapshot(session, s2, decision="WATCH")
+
+        report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, self.START, now=self.NOW)
+        assert report.actionable_count == 1
+
+    def test_raw_vs_independent_signal_count_distinction(self, session):
+        stock = _stock(session, "1111")
+        snap1 = self._cohort_snapshot(session, stock, ts=self.START + timedelta(days=1))
+        snap2 = self._cohort_snapshot(session, stock, ts=self.START + timedelta(days=2))
+        due = self.START + timedelta(days=10)
+        _outcome(session, snap1, due, is_independent_signal=True, independent_signal_key="key-1")
+        _outcome(session, snap2, due, is_independent_signal=False, independent_signal_key="key-1")
+
+        report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, self.START, now=self.NOW)
+        assert report.raw_signal_count == 2
+        assert report.independent_signal_count == 1
+
+    def test_engine_config_cohort_isolation_excludes_mismatched_snapshots(self, session):
+        """A snapshot from a different engine_sha or config_hash must
+        never leak into this cohort's counts -- the entire point of a
+        cohort-safe report is that it can never silently mix two
+        engine/config versions' signals into one conclusion."""
+        stock = _stock(session, "1111")
+        in_cohort = self._cohort_snapshot(session, stock, ts=self.START + timedelta(days=1))
+        other_engine = self._cohort_snapshot(
+            session, _stock(session, "2222"), ts=self.START + timedelta(days=1), engine_sha=self.OTHER_ENGINE
+        )
+        other_config = self._cohort_snapshot(
+            session, _stock(session, "3333"), ts=self.START + timedelta(days=1), config_hash=self.OTHER_CONFIG
+        )
+        due = self.START + timedelta(days=10)
+        _outcome(session, in_cohort, due, is_independent_signal=True)
+        _outcome(session, other_engine, due, is_independent_signal=True)
+        _outcome(session, other_config, due, is_independent_signal=True)
+
+        report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, self.START, now=self.NOW)
+        assert report.raw_signal_count == 1
+        assert report.independent_signal_count == 1
+
+    def test_cohort_start_date_boundary_excludes_snapshots_before_it(self, session):
+        stock = _stock(session, "1111")
+        before = self._cohort_snapshot(session, stock, ts=self.START - timedelta(days=1))
+        after = self._cohort_snapshot(session, _stock(session, "2222"), ts=self.START + timedelta(hours=1))
+        due = self.START + timedelta(days=10)
+        _outcome(session, before, due, is_independent_signal=True)
+        _outcome(session, after, due, is_independent_signal=True)
+
+        report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, self.START, now=self.NOW)
+        assert report.raw_signal_count == 1
+
+    def test_matured_count_counts_elapsed_due_at_regardless_of_status(self, session):
+        """A `PENDING` row past its own `due_at` must count as BOTH
+        `pending_count` and `matured_count` -- exactly the
+        lagging-evaluator case this field exists to surface. Two
+        PENDING rows are deliberately NOT matured (due_at in the
+        future) so `matured_count` cannot coincidentally equal a
+        PENDING-status count -- it must reflect elapsed `due_at`,
+        nothing else."""
+        stock = _stock(session, "1111")
+        snap_matured_pending = self._cohort_snapshot(session, stock, ts=self.START + timedelta(days=1))
+        snap_matured_resolved = self._cohort_snapshot(session, _stock(session, "2222"), ts=self.START + timedelta(days=1))
+        snap_not_matured_1 = self._cohort_snapshot(session, _stock(session, "3333"), ts=self.START + timedelta(days=1))
+        snap_not_matured_2 = self._cohort_snapshot(session, _stock(session, "4444"), ts=self.START + timedelta(days=1))
+
+        _outcome(
+            session, snap_matured_pending, due_at=self.START + timedelta(days=5),
+            status=DecisionV2OutcomeStatus.PENDING,
+        )
+        _outcome(
+            session, snap_matured_resolved, due_at=self.START + timedelta(days=5),
+            status=DecisionV2OutcomeStatus.TARGET_1_HIT,
+        )
+        _outcome(
+            session, snap_not_matured_1, due_at=self.NOW + timedelta(days=5),
+            status=DecisionV2OutcomeStatus.PENDING,
+        )
+        _outcome(
+            session, snap_not_matured_2, due_at=self.NOW + timedelta(days=5),
+            status=DecisionV2OutcomeStatus.PENDING,
+        )
+
+        report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, self.START, now=self.NOW)
+        assert report.matured_count == 2
+        assert report.pending_count == 3
+        assert report.resolved_count == 1
+
+    def test_insufficient_data_count_reflects_data_unavailable_status(self, session):
+        stock = _stock(session, "1111")
+        snap = self._cohort_snapshot(session, stock, ts=self.START + timedelta(days=1))
+        _outcome(
+            session, snap, due_at=self.START + timedelta(days=5),
+            status=DecisionV2OutcomeStatus.DATA_UNAVAILABLE,
+        )
+
+        report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, self.START, now=self.NOW)
+        assert report.insufficient_data_count == 1
+        # DATA_UNAVAILABLE is a non-resolving status -- must never count
+        # as resolved, or a stale/broken data feed would masquerade as a
+        # legitimate win-rate sample.
+        assert report.resolved_count == 0
+
+    def test_entered_count_reflects_entry_triggered_flag(self, session):
+        stock = _stock(session, "1111")
+        snap1 = self._cohort_snapshot(session, stock, ts=self.START + timedelta(days=1))
+        snap2 = self._cohort_snapshot(session, _stock(session, "2222"), ts=self.START + timedelta(days=1))
+        due = self.START + timedelta(days=5)
+        _outcome(session, snap1, due, entry_triggered=True)
+        _outcome(session, snap2, due, entry_triggered=False)
+
+        report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, self.START, now=self.NOW)
+        assert report.entered_count == 1
+
+    def test_cohort_age_trading_days_uses_tadawul_weekday_count(self, session):
+        report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, self.START, now=self.NOW)
+        assert report.cohort_age_trading_days > 0
+
+    def test_naive_cohort_start_date_is_treated_as_utc(self, session):
+        stock = _stock(session, "1111")
+        naive_start = datetime(2026, 1, 1)
+        snap = self._cohort_snapshot(session, stock, ts=self.START + timedelta(hours=1))
+        _outcome(session, snap, self.START + timedelta(days=5), is_independent_signal=True)
+
+        report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, naive_start, now=self.NOW)
+        assert report.raw_signal_count == 1
+        assert report.cohort_start_date == "2026-01-01"

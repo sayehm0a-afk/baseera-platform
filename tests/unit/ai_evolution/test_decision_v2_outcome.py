@@ -63,6 +63,8 @@ def _make_snapshot(
     stop_loss=90.0,
     expected_holding_period_max_days=None,
     validation_session_id=None,
+    engine_sha=None,
+    config_hash=None,
 ):
     decision_timestamp = decision_timestamp or datetime(2026, 1, 1, tzinfo=timezone.utc)
     snapshot = DecisionV2Snapshot(
@@ -89,6 +91,8 @@ def _make_snapshot(
         analysis_version="2.0.0",
         data_source="test",
         validation_session_id=validation_session_id,
+        engine_sha=engine_sha,
+        config_hash=config_hash,
     )
     session.add(snapshot)
     session.flush()
@@ -493,3 +497,277 @@ class TestEntryTriggeredGating:
         row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
         assert row.entry_triggered is True
         assert row.entry_price == pytest.approx(98.0)  # entry_zone_high, never 105.0 (the signal price)
+
+
+class TestIndependentSignalGrouping:
+    """QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06), P1-A:
+    duplicate-signal / independent-episode grouping. Purely a
+    measurement-layer concern -- every row below is still created
+    exactly as it always was (is_actionable_buy_decision/idempotency
+    behavior unchanged); these tests only cover the new
+    independent_signal_key/is_independent_signal bookkeeping. The
+    grouping decision is made once, at creation time, from only
+    already-existing PENDING rows -- never from a future outcome."""
+
+    def test_first_signal_for_a_symbol_is_independent(self, session, stock):
+        snapshot = _make_snapshot(session, stock, engine_sha="sha1", config_hash="cfg1")
+        outcome = create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        assert outcome.is_independent_signal is True
+        assert outcome.independent_signal_key is not None
+
+    def test_exact_duplicate_emission_while_still_pending_is_not_independent(self, session, stock):
+        s1 = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            engine_sha="sha1", config_hash="cfg1",
+        )
+        o1 = create_pending_decision_v2_outcome(session, s1)
+        session.commit()
+
+        s2 = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            engine_sha="sha1", config_hash="cfg1",
+        )
+        o2 = create_pending_decision_v2_outcome(session, s2)
+        session.commit()
+
+        assert o1.is_independent_signal is True
+        assert o2.is_independent_signal is False
+        assert o2.independent_signal_key == o1.independent_signal_key
+
+    def test_repeated_signal_while_previous_trade_idea_remains_active_is_not_independent(self, session, stock):
+        s1 = _make_snapshot(session, stock, engine_sha="sha1", config_hash="cfg1")
+        create_pending_decision_v2_outcome(session, s1)
+        session.commit()
+
+        s2 = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            engine_sha="sha1", config_hash="cfg1",
+        )
+        o2 = create_pending_decision_v2_outcome(session, s2)
+        session.commit()
+
+        assert o2.is_independent_signal is False
+
+    def test_genuinely_new_trade_idea_after_prior_lifecycle_complete_is_independent(self, session, stock):
+        s1 = _make_snapshot(session, stock, engine_sha="sha1", config_hash="cfg1")
+        o1 = create_pending_decision_v2_outcome(session, s1)
+        session.commit()
+        o1.status = DecisionV2OutcomeStatus.TARGET_1_HIT  # prior episode fully resolved
+        session.commit()
+
+        s2 = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 10, tzinfo=timezone.utc),
+            engine_sha="sha1", config_hash="cfg1",
+        )
+        o2 = create_pending_decision_v2_outcome(session, s2)
+        session.commit()
+
+        assert o2.is_independent_signal is True
+        assert o2.independent_signal_key != o1.independent_signal_key
+
+    def test_different_symbols_are_each_independent(self, session):
+        stock_a = Stock(symbol="1111", name_en="A")
+        stock_b = Stock(symbol="3333", name_en="B")
+        session.add_all([stock_a, stock_b])
+        session.commit()
+
+        sa = _make_snapshot(session, stock_a, engine_sha="sha1", config_hash="cfg1")
+        sb = _make_snapshot(session, stock_b, engine_sha="sha1", config_hash="cfg1")
+        oa = create_pending_decision_v2_outcome(session, sa)
+        ob = create_pending_decision_v2_outcome(session, sb)
+        session.commit()
+
+        assert oa.is_independent_signal is True
+        assert ob.is_independent_signal is True
+        assert oa.independent_signal_key != ob.independent_signal_key
+
+    def test_same_symbol_different_engine_version_is_independent_despite_open_pending(self, session, stock):
+        s1 = _make_snapshot(session, stock, engine_sha="sha1", config_hash="cfg1")
+        o1 = create_pending_decision_v2_outcome(session, s1)
+        session.commit()
+
+        s2 = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            engine_sha="sha2", config_hash="cfg1",
+        )
+        o2 = create_pending_decision_v2_outcome(session, s2)
+        session.commit()
+
+        # A code-version change always starts a new episode, even though
+        # a PENDING row for the same symbol is still open -- mixing
+        # engine versions within one episode would corrupt cohort isolation.
+        assert o2.is_independent_signal is True
+        assert o2.independent_signal_key != o1.independent_signal_key
+
+    def test_same_symbol_different_config_version_is_independent_despite_open_pending(self, session, stock):
+        s1 = _make_snapshot(session, stock, engine_sha="sha1", config_hash="cfgA")
+        o1 = create_pending_decision_v2_outcome(session, s1)
+        session.commit()
+
+        s2 = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            engine_sha="sha1", config_hash="cfgB",
+        )
+        o2 = create_pending_decision_v2_outcome(session, s2)
+        session.commit()
+
+        assert o2.is_independent_signal is True
+        assert o2.independent_signal_key != o1.independent_signal_key
+
+    def test_legacy_row_without_engine_metadata_never_falsely_links(self, session, stock):
+        legacy_snapshot = _make_snapshot(session, stock, engine_sha=None, config_hash=None)
+        legacy_outcome = create_pending_decision_v2_outcome(session, legacy_snapshot)
+        session.commit()
+
+        # Cannot positively identify a legacy row's episode -> conservative
+        # fresh episode, never a silent guess.
+        assert legacy_outcome.is_independent_signal is True
+        assert legacy_outcome.independent_signal_key is not None
+
+        versioned_snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 5, tzinfo=timezone.utc),
+            engine_sha="sha1", config_hash="cfg1",
+        )
+        versioned_outcome = create_pending_decision_v2_outcome(session, versioned_snapshot)
+        session.commit()
+
+        assert versioned_outcome.is_independent_signal is True
+        assert versioned_outcome.independent_signal_key != legacy_outcome.independent_signal_key
+
+    def test_grouping_decision_is_frozen_and_never_uses_future_outcome_information(self, session, stock):
+        s1 = _make_snapshot(session, stock, engine_sha="sha1", config_hash="cfg1")
+        o1 = create_pending_decision_v2_outcome(session, s1)
+        session.commit()
+        key_before, flag_before = o1.independent_signal_key, o1.is_independent_signal
+
+        # A real future outcome occurs -- must have zero effect on the
+        # already-frozen grouping identity.
+        o1.status = DecisionV2OutcomeStatus.STOP_LOSS_HIT
+        session.commit()
+
+        assert o1.independent_signal_key == key_before
+        assert o1.is_independent_signal == flag_before
+
+    def test_raw_vs_independent_count_is_not_inflated_by_repeated_emission(self, session, stock):
+        s1 = _make_snapshot(session, stock, engine_sha="sha1", config_hash="cfg1")
+        create_pending_decision_v2_outcome(session, s1)
+        session.commit()
+        for day in range(2, 6):
+            s = _make_snapshot(
+                session, stock, decision_timestamp=datetime(2026, 1, day, tzinfo=timezone.utc),
+                engine_sha="sha1", config_hash="cfg1",
+            )
+            create_pending_decision_v2_outcome(session, s)
+            session.commit()
+
+        raw_signal_count = session.query(DecisionV2Outcome).count()
+        independent_signal_count = (
+            session.query(DecisionV2Outcome).filter_by(is_independent_signal=True).count()
+        )
+        assert raw_signal_count == 5
+        assert independent_signal_count == 1
+
+
+class TestMaxFavorableAdverseExcursion:
+    """QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06), P1-C:
+    MFE/MAE correctness. `max_favorable_excursion_pct`/
+    `max_adverse_excursion_pct` already existed and were already
+    correctly post-entry-only; these tests additionally prove the
+    excursion window never extends past the bar that actually resolved
+    the trade (a real, provable gap this hardening closes), and cover
+    the new R-multiple representation."""
+
+    def test_excursion_is_none_before_entry_triggers_no_matter_how_favorable_the_move(self, session, stock):
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=95.0, entry_zone_high=100.0, target_1=110.0, stop_loss=90.0,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+        _add_bar(session, stock, datetime(2026, 1, 2), high=150.0, low=140.0, close=145.0)  # never enters zone
+        session.commit()
+
+        evaluate_pending_outcomes(session, now=datetime(2026, 1, 3, tzinfo=timezone.utc))
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.entry_triggered is False
+        assert row.max_favorable_excursion_pct is None
+        assert row.max_favorable_excursion_r is None
+        assert row.max_adverse_excursion_r is None
+
+    def test_excursion_never_includes_bars_after_the_resolving_touch(self, session, stock):
+        """Reproduces a delayed/batched evaluation pass: the target was
+        actually touched on day 3, but this evaluation only runs on
+        day 5, by which point an unrelated, enormous later move (day 4)
+        has occurred. MFE must reflect only price action through the
+        resolving bar (day 3), never the day-4 spike -- otherwise a
+        stale/delayed scheduler run would silently corrupt every
+        already-closed trade's excursion statistics."""
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=95.0, entry_zone_high=100.0, target_1=110.0, stop_loss=90.0,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+        _add_bar(session, stock, datetime(2026, 1, 2), high=100.0, low=96.0, close=99.0)  # entry day
+        _add_bar(session, stock, datetime(2026, 1, 3), high=111.0, low=98.0, close=110.0)  # target hit here
+        _add_bar(session, stock, datetime(2026, 1, 4), high=500.0, low=1.0, close=200.0)  # must NOT leak in
+        session.commit()
+
+        evaluate_pending_outcomes(session, now=datetime(2026, 1, 5, tzinfo=timezone.utc))
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.status == DecisionV2OutcomeStatus.TARGET_1_HIT
+        entry_price = float(row.entry_price)
+        expected_mfe_pct = (111.0 - entry_price) / entry_price * 100.0
+        assert float(row.max_favorable_excursion_pct) == pytest.approx(expected_mfe_pct, abs=0.01)
+
+    def test_r_multiple_matches_pct_and_risk_distance(self, session, stock):
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=95.0, entry_zone_high=100.0, target_1=130.0, stop_loss=90.0,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+        _add_bar(session, stock, datetime(2026, 1, 2), high=100.0, low=96.0, close=99.0)
+        _add_bar(session, stock, datetime(2026, 1, 3), high=115.0, low=94.0, close=110.0)
+        session.commit()
+
+        evaluate_pending_outcomes(session, now=datetime(2026, 1, 4, tzinfo=timezone.utc))
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        entry_price = float(row.entry_price)
+        risk_distance = entry_price - 90.0
+        expected_mfe_pct = (115.0 - entry_price) / entry_price * 100.0
+        expected_mfe_r = (expected_mfe_pct / 100.0 * entry_price) / risk_distance
+        assert row.max_favorable_excursion_r == pytest.approx(expected_mfe_r, abs=0.001)
+
+    def test_missing_ohlcv_leaves_excursion_none_never_zero(self, session, stock):
+        snapshot = _make_snapshot(session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        evaluate_pending_outcomes(session, now=datetime(2026, 1, 2, tzinfo=timezone.utc))
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.max_favorable_excursion_pct is None
+        assert row.max_adverse_excursion_pct is None
+
+    def test_zero_risk_distance_gives_none_r_multiple_not_a_fabricated_number(self, session, stock):
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=90.0, entry_zone_high=90.0, target_1=110.0, stop_loss=90.0,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+        _add_bar(session, stock, datetime(2026, 1, 2), high=95.0, low=90.0, close=93.0)
+        session.commit()
+
+        evaluate_pending_outcomes(session, now=datetime(2026, 1, 3, tzinfo=timezone.utc))
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.entry_triggered is True
+        assert row.max_favorable_excursion_r is None
+        assert row.max_adverse_excursion_r is None
