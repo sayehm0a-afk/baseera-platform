@@ -22,7 +22,7 @@ no reachable Postgres is configured, and run in full wherever one is
 (this development/audit environment always has one)."""
 
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -217,7 +217,7 @@ class TestSequentialSemantics:
         stock_id = _make_stock(Factory, symbol)
         session = Factory()
         s1 = _make_snapshot(session, stock_id, symbol, 1)
-        o1 = create_pending_decision_v2_outcome(session, s1)
+        create_pending_decision_v2_outcome(session, s1)
         session.commit()
         o1_again = create_pending_decision_v2_outcome(session, s1)
         session.commit()
@@ -281,7 +281,6 @@ class TestConcurrentSemantics:
         happens to reach Postgres first."""
         symbol = "C8REVERSE"
         cleanup.append(symbol)
-        stock_id = _make_stock(Factory, symbol)
 
         for attempt in range(3):
             sub_symbol = f"{symbol}_{attempt}"
@@ -321,7 +320,7 @@ class TestImmutabilityAndNonSuppression:
         original_confidence = float(snap.confidence_score)
         original_timestamp = snap.decision_timestamp
 
-        results = self._run_barrier_race_helper(Factory, stock_id, symbol, worker_count=2, start_day=2)
+        self._run_barrier_race_helper(Factory, stock_id, symbol, worker_count=2, start_day=2)
 
         session.refresh(snap)
         assert snap.decision == original_decision
