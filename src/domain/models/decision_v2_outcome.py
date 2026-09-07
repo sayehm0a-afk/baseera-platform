@@ -180,6 +180,19 @@ class DecisionV2Outcome(Base):
     independent_signal_key = Column(String(36), nullable=True, index=True)
     is_independent_signal = Column(Boolean, nullable=True)
 
+    # PR113 P1-1 REMEDIATION (concurrency-safe independent-signal
+    # linkage): denormalized copies of DecisionV2Snapshot.engine_sha/
+    # .config_hash at the moment this row is created -- immutable
+    # afterward, exactly like `symbol` above. Exists so the DB-level
+    # partial unique index below (see the accompanying migration) can
+    # enforce "at most one open independent episode per symbol+cohort"
+    # directly on this table, without depending on a join to
+    # DecisionV2Snapshot inside a race-prone application-level check.
+    # NULL for a legacy/unversioned snapshot -- matches
+    # engine_sha/config_hash's own NULL semantics, never backfilled.
+    engine_sha = Column(String(64), nullable=True)
+    config_hash = Column(String(64), nullable=True)
+
     end_of_session_price = Column(Numeric(18, 4), nullable=True)
     next_session_price = Column(Numeric(18, 4), nullable=True)
 

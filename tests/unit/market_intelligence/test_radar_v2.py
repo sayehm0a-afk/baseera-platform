@@ -28,6 +28,9 @@ from src.domain.models import (
 )
 from src.domain.models.decision_v2_outcome import DecisionV2OutcomeStatus
 from src.market_intelligence.radar_v2 import (
+    MIN_ACTIONABLE_SIGNALS_FOR_MATURITY,
+    MIN_RESOLVED_SIGNALS_FOR_MATURITY,
+    MIN_TRADING_DAYS_FOR_MATURITY,
     MINIMUM_SAMPLE_GATE,
     _accumulation_status,
     compute_cohort_safe_validation_report,
@@ -1042,4 +1045,249 @@ class TestComputeCohortSafeValidationReport:
 
         report = compute_cohort_safe_validation_report(session, self.ENGINE, self.CONFIG, naive_start, now=self.NOW)
         assert report.raw_signal_count == 1
+
+
+class TestCohortMaturityGate:
+    """PR113 P1-2 REMEDIATION (2026-09-07): explicit, fail-closed
+    maturity/sample-adequacy gate on CohortSafeValidationReport. Uses
+    the platform's own previously-approved forward-test thresholds
+    (30 actionable / 20 resolved / 45 trading days) verbatim -- these
+    tests exist specifically to prove the gate can never be tricked
+    into MATURE by a fast-resolving subset, a large-but-young cohort,
+    or a large-but-thin-sample cohort."""
+
+    ENGINE = "sha-maturity-test"
+    CONFIG = "config-maturity-test"
+    START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    # ~70 calendar days after START Sun-Thu-counts to well over 45
+    # trading days -- comfortably "old enough" for the MATURE cases.
+    NOW_OLD_ENOUGH = datetime(2026, 3, 12, tzinfo=timezone.utc)
+    # 10 calendar days -- nowhere near 45 trading days.
+    NOW_TOO_YOUNG = datetime(2026, 1, 11, tzinfo=timezone.utc)
+
+    _symbol_counter = 0
+
+    def _bulk_outcomes(self, session, count, status, due_at, independent=True, ts=None):
+        rows = []
+        for _ in range(count):
+            TestCohortMaturityGate._symbol_counter += 1
+            stock = _stock(session, f"MAT{TestCohortMaturityGate._symbol_counter}")
+            snap = _snapshot(
+                session, stock, scan_run_id=1, decision_timestamp=ts or (self.START + timedelta(days=1)),
+                engine_sha=self.ENGINE, config_hash=self.CONFIG,
+            )
+            row = DecisionV2Outcome(
+                decision_v2_snapshot_id=snap.id, symbol=snap.symbol, due_at=due_at, status=status,
+                is_independent_signal=independent,
+                independent_signal_key=(
+                    f"key-{TestCohortMaturityGate._symbol_counter}" if independent else "shared-non-independent-key"
+                ),
+            )
+            session.add(row)
+            rows.append(row)
+        session.commit()
+        return rows
+
+    def test_m1_ten_actionable_two_wins_eight_pending_is_not_mature(self, session):
+        self._bulk_outcomes(session, 2, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=5))
+        self._bulk_outcomes(session, 8, DecisionV2OutcomeStatus.PENDING, self.NOW_OLD_ENOUGH + timedelta(days=20))
+
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.maturity_status == "NOT_MATURE"
+        assert report.is_cohort_mature is False
+
+    def test_m2_thirty_actionable_twenty_resolved_insufficient_elapsed_window(self, session):
+        self._bulk_outcomes(session, 20, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        self._bulk_outcomes(session, 10, DecisionV2OutcomeStatus.PENDING, self.NOW_TOO_YOUNG + timedelta(days=20))
+
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_TOO_YOUNG
+        )
+        assert report.is_sample_adequate is True
+        assert report.maturity_status == "NOT_MATURE"
+        assert "trading days" in report.maturity_reason
+
+    def test_m3_twenty_nine_actionable_twenty_five_resolved_not_mature(self, session):
+        self._bulk_outcomes(session, 25, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        self._bulk_outcomes(session, 4, DecisionV2OutcomeStatus.PENDING, self.NOW_OLD_ENOUGH + timedelta(days=20))
+
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.observed_independent_actionable_signals == 29
+        assert report.is_sample_adequate is False
+        assert report.maturity_status == "NOT_MATURE"
+
+    def test_m4_thirty_actionable_nineteen_resolved_not_mature(self, session):
+        self._bulk_outcomes(session, 19, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        self._bulk_outcomes(session, 11, DecisionV2OutcomeStatus.PENDING, self.NOW_OLD_ENOUGH + timedelta(days=20))
+
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.observed_independent_actionable_signals == 30
+        assert report.observed_independent_resolved_signals == 19
+        assert report.is_sample_adequate is False
+        assert report.maturity_status == "NOT_MATURE"
+
+    def test_m5_thirty_actionable_twenty_resolved_enough_time_is_mature(self, session):
+        self._bulk_outcomes(session, 20, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        self._bulk_outcomes(session, 10, DecisionV2OutcomeStatus.STOP_LOSS_HIT, self.START + timedelta(days=3))
+
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.observed_independent_actionable_signals == 30
+        assert report.observed_independent_resolved_signals == 30
+        assert report.cohort_age_trading_days >= MIN_TRADING_DAYS_FOR_MATURITY
+        assert report.is_sample_adequate is True
+        assert report.is_cohort_mature is True
+        assert report.maturity_status == "MATURE"
+        assert report.maturity_reason == "all maturity criteria satisfied"
+
+    def test_m6_pending_rows_not_yet_due_are_not_counted_as_matured(self, session):
+        self._bulk_outcomes(
+            session, 30, DecisionV2OutcomeStatus.PENDING, self.NOW_OLD_ENOUGH + timedelta(days=100)
+        )
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.matured_count == 0
+        assert report.pending_or_unmatured_count == 30
+
+    def test_m7_matured_but_still_pending_reports_explicitly_not_resolved(self, session):
+        """A due_at that has already elapsed but whose status is still
+        PENDING (lagging evaluator) must be counted as matured, but
+        must NEVER be silently treated as resolved evidence."""
+        self._bulk_outcomes(session, 5, DecisionV2OutcomeStatus.PENDING, self.START + timedelta(days=2))
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.matured_count == 5
+        assert report.observed_independent_resolved_signals == 0
+        assert report.is_sample_adequate is False
+
+    def test_m8_mixed_engine_config_cohorts_only_selected_cohort_contributes(self, session):
+        self._bulk_outcomes(session, 30, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        # a second, unrelated cohort's outcomes must never leak into this maturity computation
+        other_stock = _stock(session, "OTHERCOHORT")
+        other_snap = _snapshot(
+            session, other_stock, scan_run_id=1, decision_timestamp=self.START + timedelta(days=1),
+            engine_sha="other-engine", config_hash="other-config",
+        )
+        session.add(
+            DecisionV2Outcome(
+                decision_v2_snapshot_id=other_snap.id, symbol=other_snap.symbol,
+                due_at=self.START + timedelta(days=5), status=DecisionV2OutcomeStatus.TARGET_1_HIT,
+                is_independent_signal=True, independent_signal_key="other-key",
+            )
+        )
+        session.commit()
+
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.observed_independent_actionable_signals == 30
+        assert report.is_cohort_mature is True
+
+    def test_m9_legacy_null_cohort_rows_excluded(self, session):
+        self._bulk_outcomes(session, 30, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        legacy_stock = _stock(session, "LEGACYCOHORT")
+        legacy_snap = _snapshot(
+            session, legacy_stock, scan_run_id=1, decision_timestamp=self.START + timedelta(days=1),
+            engine_sha=None, config_hash=None,
+        )
+        session.add(
+            DecisionV2Outcome(
+                decision_v2_snapshot_id=legacy_snap.id, symbol=legacy_snap.symbol,
+                due_at=self.START + timedelta(days=5), status=DecisionV2OutcomeStatus.TARGET_1_HIT,
+                is_independent_signal=True, independent_signal_key="legacy-key",
+            )
+        )
+        session.commit()
+
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.observed_independent_actionable_signals == 30
+
+    def test_m10_all_fast_winners_large_unresolved_tail_not_mature(self, session):
+        self._bulk_outcomes(session, 5, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        self._bulk_outcomes(session, 50, DecisionV2OutcomeStatus.PENDING, self.NOW_OLD_ENOUGH + timedelta(days=100))
+
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.observed_independent_resolved_signals == 5
+        assert report.maturity_status == "NOT_MATURE"
+
+    def test_m11_all_fast_losses_large_unresolved_tail_not_mature(self, session):
+        self._bulk_outcomes(session, 5, DecisionV2OutcomeStatus.STOP_LOSS_HIT, self.START + timedelta(days=2))
+        self._bulk_outcomes(session, 50, DecisionV2OutcomeStatus.PENDING, self.NOW_OLD_ENOUGH + timedelta(days=100))
+
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.observed_independent_resolved_signals == 5
+        assert report.maturity_status == "NOT_MATURE"
+
+    def test_m12_zero_signals_is_not_mature(self, session):
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.observed_independent_actionable_signals == 0
+        assert report.is_sample_adequate is False
+        assert report.maturity_status == "NOT_MATURE"
+
+    def test_m13_boundary_29_vs_30_actionable(self, session):
+        self._bulk_outcomes(session, 29, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        report_29 = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report_29.is_sample_adequate is False
+
+        self._bulk_outcomes(session, 1, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        report_30 = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report_30.observed_independent_actionable_signals == 30
+        assert report_30.is_sample_adequate is True
+
+    def test_m13_boundary_19_vs_20_resolved(self, session):
+        self._bulk_outcomes(session, 19, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        self._bulk_outcomes(session, 11, DecisionV2OutcomeStatus.PENDING, self.NOW_OLD_ENOUGH + timedelta(days=20))
+        report_19 = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report_19.observed_independent_resolved_signals == 19
+        assert report_19.is_sample_adequate is False
+
+        self._bulk_outcomes(session, 1, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        report_20 = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report_20.observed_independent_resolved_signals == 20
+        assert report_20.observed_independent_actionable_signals == 31
+        assert report_20.is_sample_adequate is True
+
+    def test_m14_denominators_are_explicit_no_hidden_win_rate(self, session):
+        self._bulk_outcomes(session, 30, DecisionV2OutcomeStatus.TARGET_1_HIT, self.START + timedelta(days=2))
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert not hasattr(report, "win_rate")
+        assert not hasattr(report, "verified_win_rate")
+        # every count this maturity conclusion is built from is itself exposed
+        assert report.observed_independent_actionable_signals == MIN_ACTIONABLE_SIGNALS_FOR_MATURITY
+        assert report.minimum_actionable_signals_required == MIN_ACTIONABLE_SIGNALS_FOR_MATURITY
+        assert report.minimum_resolved_signals_required == MIN_RESOLVED_SIGNALS_FOR_MATURITY
+        assert report.minimum_trading_days_required == MIN_TRADING_DAYS_FOR_MATURITY
+
+    def test_holiday_calendar_limitation_is_disclosed_not_hidden(self, session):
+        report = compute_cohort_safe_validation_report(
+            session, self.ENGINE, self.CONFIG, self.START, now=self.NOW_OLD_ENOUGH
+        )
+        assert report.trading_day_count_excludes_exchange_holidays is True
         assert report.cohort_start_date == "2026-01-01"

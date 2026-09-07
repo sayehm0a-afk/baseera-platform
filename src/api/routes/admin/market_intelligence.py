@@ -975,6 +975,17 @@ async def get_cohort_safe_validation_report(
         pending_count=report.pending_count,
         matured_count=report.matured_count,
         insufficient_data_count=report.insufficient_data_count,
+        is_sample_adequate=report.is_sample_adequate,
+        is_cohort_mature=report.is_cohort_mature,
+        maturity_status=report.maturity_status,
+        maturity_reason=report.maturity_reason,
+        minimum_actionable_signals_required=report.minimum_actionable_signals_required,
+        minimum_resolved_signals_required=report.minimum_resolved_signals_required,
+        minimum_trading_days_required=report.minimum_trading_days_required,
+        observed_independent_actionable_signals=report.observed_independent_actionable_signals,
+        observed_independent_resolved_signals=report.observed_independent_resolved_signals,
+        pending_or_unmatured_count=report.pending_or_unmatured_count,
+        trading_day_count_excludes_exchange_holidays=report.trading_day_count_excludes_exchange_holidays,
     )
 
 

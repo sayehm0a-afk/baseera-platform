@@ -1249,6 +1249,23 @@ class CohortSafeValidationReportOut(BaseModel):
     matured_count: int
     insufficient_data_count: int
 
+    # PR113 P1-2 REMEDIATION: explicit, fail-closed maturity/sample-
+    # adequacy gate -- see CohortSafeValidationReport's own docstring
+    # for the exact rule. A caller must check maturity_status (or
+    # is_cohort_mature) before treating any rate computed from the
+    # fields above as a trustworthy conclusion.
+    is_sample_adequate: bool
+    is_cohort_mature: bool
+    maturity_status: str
+    maturity_reason: str
+    minimum_actionable_signals_required: int
+    minimum_resolved_signals_required: int
+    minimum_trading_days_required: int
+    observed_independent_actionable_signals: int
+    observed_independent_resolved_signals: int
+    pending_or_unmatured_count: int
+    trading_day_count_excludes_exchange_holidays: bool
+
 
 class RadarV2SahmkConsumptionOut(BaseModel):
     """GET .../radar-v2/sahmk-consumption -- SAHMK quota consumption

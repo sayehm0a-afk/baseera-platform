@@ -38,12 +38,21 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 import pandas as pd
+from sqlalchemy import text as sa_text
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from src.ai_evolution.config import get_outcome_evaluation_stale_grace_days, get_decision_v2_outcome_default_horizon_days
 from src.analysis.decision_v2.types import Decision
 from src.analysis.ohlcv_loader import load_price_bars
 from src.domain.models import DecisionV2Outcome, DecisionV2OutcomeStatus, DecisionV2Snapshot, Stock, Timeframe
+
+# PR113 P1-1 REMEDIATION: name of the DB-level partial unique index
+# (see migration) that enforces "at most one open independent episode
+# per symbol+cohort" -- used to recognize a conflict on this specific
+# constraint (and only this one) inside create_pending_decision_v2_outcome,
+# never masking an unrelated integrity error.
+_OPEN_INDEPENDENT_EPISODE_INDEX_NAME = "ux_decision_v2_outcomes_open_independent_episode"
 
 _ACTIONABLE_BUY_DECISIONS = {Decision.STRONG_BUY_CANDIDATE.value, Decision.BUY_CANDIDATE.value}
 
@@ -122,6 +131,13 @@ def create_pending_decision_v2_outcome(
     # layer-only bookkeeping -- never affects whether this row is
     # created, never affects any recommendation-facing behavior. See
     # _find_open_independent_signal_key's own docstring for the rule.
+    #
+    # PR113 P1-1 REMEDIATION: this initial read is a fast path only,
+    # not the source of correctness -- two concurrent transactions can
+    # both read "no open episode" before either commits (proven on
+    # real Postgres by the independent audit). The actual guarantee
+    # comes from the DB-level partial unique index applied below when
+    # this row claims to be a fresh, independent episode.
     parent_key = _find_open_independent_signal_key(
         session, snapshot.symbol, snapshot.engine_sha, snapshot.config_hash
     )
@@ -145,10 +161,72 @@ def create_pending_decision_v2_outcome(
         # trades into entry_zone_low..entry_zone_high (see
         # evaluate_pending_outcomes below), never assumed to be the
         # signal price.
+        # PR113 P1-1 REMEDIATION: denormalized from the snapshot so the
+        # partial unique index below can be defined on this table alone.
+        engine_sha=snapshot.engine_sha,
+        config_hash=snapshot.config_hash,
         independent_signal_key=independent_signal_key,
         is_independent_signal=is_independent_signal,
     )
-    session.add(outcome)
+
+    if is_independent_signal and snapshot.engine_sha is not None and snapshot.config_hash is not None:
+        # PR113 P1-1 REMEDIATION: this row is claiming to be the sole
+        # open anchor for (symbol, engine_sha, config_hash). Attempt
+        # the insert inside a SAVEPOINT (not the outer transaction) so
+        # a conflict here can be recovered from without discarding any
+        # other work already pending in the same session/transaction
+        # (e.g. other symbols already added earlier in the same scan-
+        # persist loop -- see emit_radar_opportunities/
+        # MarketIntelligenceRepository, which both share one session
+        # across many symbols and commit once at the end).
+        try:
+            with session.begin_nested():
+                if session.bind is not None and session.bind.dialect.name == "postgresql":
+                    # A second concurrent transaction targeting the same
+                    # (symbol, engine_sha, config_hash) tuple would
+                    # otherwise BLOCK on this index entry until the first
+                    # transaction commits or rolls back -- possibly for
+                    # as long as that other transaction's entire scan-
+                    # persist loop takes. That must never turn into an
+                    # indefinite hang on a live request or background
+                    # cycle, so this write is bounded: it fails fast and
+                    # falls back to "someone else already holds this
+                    # episode" rather than blocking Decision V2/Radar
+                    # from finishing its work.
+                    session.execute(sa_text("SET LOCAL lock_timeout = '3s'"))
+                session.add(outcome)
+                session.flush()
+        except (IntegrityError, OperationalError) as exc:
+            conflict_marker = _OPEN_INDEPENDENT_EPISODE_INDEX_NAME
+            lock_timeout_marker = "lock_timeout"
+            message = str(getattr(exc, "orig", exc))
+            if conflict_marker not in message and lock_timeout_marker not in message.lower():
+                raise
+            # Either another transaction committed the anchor for this
+            # exact symbol+cohort between our read above and our own
+            # insert attempt, or another transaction currently holds
+            # this exact lock and we chose not to wait indefinitely for
+            # it -- in both cases the safe, conservative reading is the
+            # same: treat this row as a continuation of whichever
+            # episode is (or is about to be) open for this symbol+
+            # cohort, never as a second independent anchor.
+            winning_key = _find_open_independent_signal_key(
+                session, snapshot.symbol, snapshot.engine_sha, snapshot.config_hash
+            )
+            # A lock-timeout conflict can (rarely) fire while the other
+            # transaction still hasn't committed -- its row is then not
+            # yet visible to our re-query. Never leave
+            # independent_signal_key null in that case: is_independent_
+            # signal=False already guarantees this row can never be
+            # miscounted as its own independent sample, regardless of
+            # which exact key it carries.
+            outcome.independent_signal_key = winning_key or str(uuid.uuid4())
+            outcome.is_independent_signal = False
+            session.add(outcome)
+            session.flush()
+    else:
+        session.add(outcome)
+
     return outcome
 
 

@@ -733,3 +733,36 @@ def test_radar_v2_cohort_report_isolates_engine_config_cohorts_and_ignores_misma
     body = response.json()
     assert body["raw_signal_count"] == 1
     assert body["independent_signal_count"] == 1
+
+
+def test_radar_v2_cohort_report_returns_the_maturity_gate_verbatim(client, session_factory, as_staff):
+    """PR113 P1-2 REMEDIATION, M15: the admin route must surface the
+    same fail-closed maturity fields compute_cohort_safe_validation_report
+    computes, not a re-derived or looser version of them."""
+    response = client.get(
+        "/api/v1/admin/market-intelligence/radar-v2/cohort-report",
+        params={"engine_sha": "empty-cohort", "config_hash": "empty-cohort", "cohort_start_date": "2026-01-01"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["maturity_status"] == "NOT_MATURE"
+    assert body["is_cohort_mature"] is False
+    assert body["is_sample_adequate"] is False
+    assert body["minimum_actionable_signals_required"] == 30
+    assert body["minimum_resolved_signals_required"] == 20
+    assert body["minimum_trading_days_required"] == 45
+    assert body["observed_independent_actionable_signals"] == 0
+    assert body["observed_independent_resolved_signals"] == 0
+    assert body["trading_day_count_excludes_exchange_holidays"] is True
+    assert isinstance(body["maturity_reason"], str) and body["maturity_reason"]
+
+
+def test_radar_v2_daily_validation_report_schema_unaffected_by_p1_2(client, session_factory, as_staff):
+    """PR113 P1-2 REMEDIATION, M16: the maturity gate is scoped to the
+    new cohort-report endpoint only -- the pre-existing daily-
+    validation-report response must carry none of its fields."""
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/daily-validation-report")
+    assert response.status_code == 200
+    body = response.json()
+    for field in ("maturity_status", "is_cohort_mature", "is_sample_adequate", "maturity_reason"):
+        assert field not in body
