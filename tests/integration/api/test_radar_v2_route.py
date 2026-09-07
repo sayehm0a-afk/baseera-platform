@@ -627,3 +627,142 @@ def test_radar_v2_daily_validation_report_for_a_specific_day_reflects_real_outco
         params={"report_date": "2026-01-06"},
     )
     assert other_day_response.json()["total_opportunities"] == 0
+
+
+def test_radar_v2_cohort_report_requires_staff_role(client, session_factory):
+    non_staff = User(email="user@example.com", password_hash="hashed", is_staff=False)
+    main.app.dependency_overrides[get_current_user] = lambda: non_staff
+    response = client.get(
+        "/api/v1/admin/market-intelligence/radar-v2/cohort-report",
+        params={"engine_sha": "sha1", "config_hash": "hash1", "cohort_start_date": "2026-01-01"},
+    )
+    assert response.status_code in (401, 403)
+
+
+def test_radar_v2_cohort_report_requires_all_query_params(client, session_factory, as_staff):
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/cohort-report")
+    assert response.status_code == 422
+
+
+def test_radar_v2_cohort_report_rejects_a_malformed_start_date(client, session_factory, as_staff):
+    response = client.get(
+        "/api/v1/admin/market-intelligence/radar-v2/cohort-report",
+        params={"engine_sha": "sha1", "config_hash": "hash1", "cohort_start_date": "not-a-date"},
+    )
+    assert response.status_code == 422
+
+
+def test_radar_v2_cohort_report_on_an_empty_database(client, session_factory, as_staff):
+    response = client.get(
+        "/api/v1/admin/market-intelligence/radar-v2/cohort-report",
+        params={"engine_sha": "sha1", "config_hash": "hash1", "cohort_start_date": "2026-01-01"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cohort_engine_sha"] == "sha1"
+    assert body["cohort_config_hash"] == "hash1"
+    assert body["cohort_start_date"] == "2026-01-01"
+    assert body["raw_signal_count"] == 0
+    assert body["independent_signal_count"] == 0
+    assert body["matured_count"] == 0
+
+
+def test_radar_v2_cohort_report_isolates_engine_config_cohorts_and_ignores_mismatches(
+    client, session_factory, as_staff
+):
+    """The whole point of this endpoint: a snapshot produced under a
+    different engine_sha or config_hash must never leak into a named
+    cohort's counts."""
+    from src.domain.models import DecisionV2Outcome, DecisionV2Snapshot
+
+    session = session_factory()
+    stock = Stock(symbol="1111", name_en="Stock 1111", is_active=True)
+    session.add(stock)
+    session.commit()
+
+    day = datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc)
+
+    def _snap(engine_sha, config_hash, symbol_suffix):
+        s = Stock(symbol=f"11{symbol_suffix}", name_en=f"Stock 11{symbol_suffix}", is_active=True)
+        session.add(s)
+        session.commit()
+        snap = DecisionV2Snapshot(
+            stock_id=s.id,
+            symbol=s.symbol,
+            company_name_en=s.name_en,
+            decision="BUY_CANDIDATE",
+            decision_label_ar="شراء",
+            confidence_score=75.0,
+            opportunity_quality_score=60.0,
+            risk_score=30.0,
+            data_quality_score=90.0,
+            data_freshness_status="LIVE",
+            current_price=100.0,
+            market_status="OPEN",
+            decision_timestamp=day,
+            analysis_version="2.0.0",
+            data_source="test",
+            scan_run_id=1,
+            engine_sha=engine_sha,
+            config_hash=config_hash,
+        )
+        session.add(snap)
+        session.commit()
+        session.add(
+            DecisionV2Outcome(
+                decision_v2_snapshot_id=snap.id,
+                symbol=s.symbol,
+                status="PENDING",
+                due_at=day + timedelta(days=30),
+                is_independent_signal=True,
+            )
+        )
+        session.commit()
+        return snap
+
+    _snap("sha-target", "hash-target", "1")
+    _snap("sha-other", "hash-target", "2")
+    _snap("sha-target", "hash-other", "3")
+    session.close()
+
+    response = client.get(
+        "/api/v1/admin/market-intelligence/radar-v2/cohort-report",
+        params={"engine_sha": "sha-target", "config_hash": "hash-target", "cohort_start_date": "2026-01-01"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["raw_signal_count"] == 1
+    assert body["independent_signal_count"] == 1
+
+
+def test_radar_v2_cohort_report_returns_the_maturity_gate_verbatim(client, session_factory, as_staff):
+    """PR113 P1-2 REMEDIATION, M15: the admin route must surface the
+    same fail-closed maturity fields compute_cohort_safe_validation_report
+    computes, not a re-derived or looser version of them."""
+    response = client.get(
+        "/api/v1/admin/market-intelligence/radar-v2/cohort-report",
+        params={"engine_sha": "empty-cohort", "config_hash": "empty-cohort", "cohort_start_date": "2026-01-01"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["maturity_status"] == "NOT_MATURE"
+    assert body["is_cohort_mature"] is False
+    assert body["is_sample_adequate"] is False
+    assert body["minimum_actionable_signals_required"] == 30
+    assert body["minimum_resolved_signals_required"] == 20
+    assert body["minimum_trading_days_required"] == 45
+    assert body["observed_independent_actionable_signals"] == 0
+    assert body["observed_independent_resolved_signals"] == 0
+    assert body["trading_day_count_excludes_exchange_holidays"] is True
+    assert isinstance(body["maturity_reason"], str) and body["maturity_reason"]
+
+
+def test_radar_v2_daily_validation_report_schema_unaffected_by_p1_2(client, session_factory, as_staff):
+    """PR113 P1-2 REMEDIATION, M16: the maturity gate is scoped to the
+    new cohort-report endpoint only -- the pre-existing daily-
+    validation-report response must carry none of its fields."""
+    response = client.get("/api/v1/admin/market-intelligence/radar-v2/daily-validation-report")
+    assert response.status_code == 200
+    body = response.json()
+    for field in ("maturity_status", "is_cohort_mature", "is_sample_adequate", "maturity_reason"):
+        assert field not in body

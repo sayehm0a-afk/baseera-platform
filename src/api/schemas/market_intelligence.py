@@ -1223,6 +1223,50 @@ class DailyValidationReportOut(BaseModel):
     verified_sample_size: int = 0
 
 
+class CohortSafeValidationReportOut(BaseModel):
+    """GET .../radar-v2/cohort-report -- QUALITY PROOF INSTRUMENTATION
+    HARDENING: unlike the daily/all-time reports above, this is scoped
+    to exactly one engine_sha+config_hash experiment cohort from a
+    given start date, and separates raw_signal_count (every outcome-
+    tracked snapshot) from independent_signal_count (only those not
+    flagged as a continuation of an already-open trade episode for the
+    same symbol) -- official quality statistics must use the
+    independent count wherever statistical independence is required.
+    matured_count is every signal whose own due_at has already
+    elapsed, regardless of status -- the field to check before trusting
+    any win-rate/expectancy conclusion from this cohort."""
+
+    cohort_engine_sha: str
+    cohort_config_hash: str
+    cohort_start_date: str
+    cohort_age_trading_days: int
+    raw_signal_count: int
+    independent_signal_count: int
+    actionable_count: int
+    entered_count: int
+    resolved_count: int
+    pending_count: int
+    matured_count: int
+    insufficient_data_count: int
+
+    # PR113 P1-2 REMEDIATION: explicit, fail-closed maturity/sample-
+    # adequacy gate -- see CohortSafeValidationReport's own docstring
+    # for the exact rule. A caller must check maturity_status (or
+    # is_cohort_mature) before treating any rate computed from the
+    # fields above as a trustworthy conclusion.
+    is_sample_adequate: bool
+    is_cohort_mature: bool
+    maturity_status: str
+    maturity_reason: str
+    minimum_actionable_signals_required: int
+    minimum_resolved_signals_required: int
+    minimum_trading_days_required: int
+    observed_independent_actionable_signals: int
+    observed_independent_resolved_signals: int
+    pending_or_unmatured_count: int
+    trading_day_count_excludes_exchange_holidays: bool
+
+
 class RadarV2SahmkConsumptionOut(BaseModel):
     """GET .../radar-v2/sahmk-consumption -- SAHMK quota consumption
     attributable specifically to Radar V2, read verbatim from the

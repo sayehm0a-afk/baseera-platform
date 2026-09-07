@@ -150,6 +150,49 @@ class DecisionV2Outcome(Base):
     max_favorable_excursion_pct = Column(Numeric(9, 4), nullable=True)
     max_adverse_excursion_pct = Column(Numeric(9, 4), nullable=True)
 
+    # QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06): the same
+    # excursion, expressed as an R-multiple (fraction of the entry-to-
+    # stop risk distance) rather than a raw percentage of entry price --
+    # needed because a percentage move is not comparable across signals
+    # with different stop distances, while an R-multiple is. NULL
+    # whenever entry_price/stop_loss make the risk distance zero or
+    # unavailable (never a fabricated 0.0/None conflation) -- see
+    # src.ai_evolution.decision_v2_outcome_evaluation's computation.
+    max_favorable_excursion_r = Column(Numeric(9, 4), nullable=True)
+    max_adverse_excursion_r = Column(Numeric(9, 4), nullable=True)
+
+    # QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06): independent-
+    # signal grouping for quality-measurement purposes only -- never
+    # read by any recommendation-facing code path, never used to
+    # suppress or alter a real emitted recommendation. A row starts a
+    # NEW episode (is_independent_signal=True, independent_signal_key
+    # = its own generated key) unless, at the moment this row is
+    # created, another still-PENDING DecisionV2Outcome already exists
+    # for the same symbol under the same engine_sha+config_hash cohort
+    # -- in which case this row inherits that PENDING row's key and is
+    # marked a continuation (is_independent_signal=False). Computed
+    # once, at creation time, from only-prior information (never an
+    # outcome), and never mutated afterward. See
+    # src.ai_evolution.decision_v2_outcome_evaluation.
+    # create_pending_decision_v2_outcome for the exact rule. A row
+    # written before this column existed reads back as NULL/UNKNOWN --
+    # see versioning.LEGACY_UNVERSIONED.
+    independent_signal_key = Column(String(36), nullable=True, index=True)
+    is_independent_signal = Column(Boolean, nullable=True)
+
+    # PR113 P1-1 REMEDIATION (concurrency-safe independent-signal
+    # linkage): denormalized copies of DecisionV2Snapshot.engine_sha/
+    # .config_hash at the moment this row is created -- immutable
+    # afterward, exactly like `symbol` above. Exists so the DB-level
+    # partial unique index below (see the accompanying migration) can
+    # enforce "at most one open independent episode per symbol+cohort"
+    # directly on this table, without depending on a join to
+    # DecisionV2Snapshot inside a race-prone application-level check.
+    # NULL for a legacy/unversioned snapshot -- matches
+    # engine_sha/config_hash's own NULL semantics, never backfilled.
+    engine_sha = Column(String(64), nullable=True)
+    config_hash = Column(String(64), nullable=True)
+
     end_of_session_price = Column(Numeric(18, 4), nullable=True)
     next_session_price = Column(Numeric(18, 4), nullable=True)
 

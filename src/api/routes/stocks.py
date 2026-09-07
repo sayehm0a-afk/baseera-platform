@@ -67,6 +67,7 @@ from src.analysis.context_builder import build_analysis_context
 from src.analysis.decision_pipeline import compute_investment_decision
 from src.analysis.decision_v2.decision_freshness import classify_decision_freshness, is_decision_fresh
 from src.analysis.decision_v2.engine import DecisionEngineV2
+from src.analysis.decision_v2.versioning import compute_decision_v2_config_hash, get_engine_sha
 from src.analysis.decision_v2.types import (
     ANALYSIS_DISCLAIMER_AR,
     CONFIDENCE_DISCLAIMER_AR,
@@ -931,6 +932,12 @@ async def get_decision_v2(
                 round(calibrated_probability * 100.0, 1) if calibrated_probability is not None else None
             ),
             calibration_version=calibration_version,
+            # QUALITY PROOF INSTRUMENTATION HARDENING: immutable
+            # experiment-version provenance, computed once here and
+            # never recomputed for this row afterward -- see
+            # src.analysis.decision_v2.versioning.
+            engine_sha=get_engine_sha(),
+            config_hash=compute_decision_v2_config_hash(),
         )
         session.add(snapshot)
         session.commit()

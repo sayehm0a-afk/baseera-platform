@@ -565,6 +565,223 @@ def compute_daily_validation_report(
     )
 
 
+@dataclass(frozen=True)
+class CohortSafeValidationReport:
+    """QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06): unlike
+    `compute_daily_validation_report` above (one UTC calendar day) or
+    `compute_radar_v2_performance`/`compute_radar_v2_extended_
+    performance` (all-time, unscoped), this reports exactly one
+    experiment cohort -- every `DecisionV2Snapshot` sharing the given
+    `engine_sha`+`config_hash`, from `cohort_start_date` through now --
+    so a forward-test proof can never silently mix two engine/config
+    versions, and never quote a cohort's win rate before it has had a
+    fair chance to resolve.
+
+    `raw_signal_count` counts every outcome-tracked snapshot in the
+    cohort; `independent_signal_count` counts only those whose
+    `DecisionV2Outcome.is_independent_signal` is True (see
+    `decision_v2_outcome_evaluation.create_pending_decision_v2_outcome`)
+    -- official quality statistics must use the independent count
+    wherever statistical independence matters, while the raw count
+    stays available for full audit transparency. `matured_count` is
+    every outcome-tracked signal whose own `due_at` has already
+    elapsed as of `now`, regardless of its current status -- this is
+    the field that lets a caller refuse to read a performance
+    conclusion from a cohort still too young for its own signals to
+    have had a fair chance to resolve (a signal still counted as
+    `pending_count` need not yet be `matured_count`, and vice versa: a
+    `PENDING` row past its own `due_at` is both, and is exactly the
+    lagging-evaluator case worth flagging on its own).
+    """
+
+    cohort_engine_sha: str
+    cohort_config_hash: str
+    cohort_start_date: str
+    cohort_age_trading_days: int
+    raw_signal_count: int
+    independent_signal_count: int
+    actionable_count: int
+    entered_count: int
+    resolved_count: int
+    pending_count: int
+    matured_count: int
+    insufficient_data_count: int
+
+    # PR113 P1-2 REMEDIATION (2026-09-07): explicit, fail-closed
+    # maturity/sample-adequacy gate -- see MIN_ACTIONABLE_SIGNALS_FOR_
+    # MATURITY/MIN_RESOLVED_SIGNALS_FOR_MATURITY/MIN_TRADING_DAYS_FOR_
+    # MATURITY and compute_cohort_safe_validation_report's own
+    # docstring for the exact rule. Deliberately scoped to
+    # INDEPENDENT signals only (raw_signal_count/resolved_count above
+    # can include correlated duplicates that must never count toward
+    # "is this cohort big/mature enough" -- that is the entire point
+    # of P1-1's is_independent_signal flag). `is_sample_adequate`
+    # covers only the two count thresholds; `is_cohort_mature`
+    # additionally requires the elapsed-time threshold, so a caller
+    # can tell WHICH dimension (sample size vs elapsed time) is
+    # blocking a conclusion, not just a single collapsed yes/no.
+    is_sample_adequate: bool
+    is_cohort_mature: bool
+    maturity_status: str
+    maturity_reason: str
+    minimum_actionable_signals_required: int
+    minimum_resolved_signals_required: int
+    minimum_trading_days_required: int
+    observed_independent_actionable_signals: int
+    observed_independent_resolved_signals: int
+    pending_or_unmatured_count: int
+    trading_day_count_excludes_exchange_holidays: bool
+
+
+# PR113 P1-2 REMEDIATION: the previously-approved restricted forward-
+# test design's own thresholds (Decision V2 only, 50 frozen Main-
+# Market symbols, 45 trading days minimum, >=30 actionable independent
+# signals, >=20 matured/resolved signals) -- reused verbatim, never
+# loosened to make a cohort pass. A caller with a genuinely different,
+# separately-approved requirement should compare against these
+# directly rather than have this function silently invent its own.
+MIN_ACTIONABLE_SIGNALS_FOR_MATURITY = 30
+MIN_RESOLVED_SIGNALS_FOR_MATURITY = 20
+MIN_TRADING_DAYS_FOR_MATURITY = 45
+
+
+def _trading_days_between(start: datetime, end: datetime) -> int:
+    """Simple Tadawul-weekday count (Sun-Thu) between two UTC instants
+    -- no exchange-holiday calendar is integrated anywhere in this
+    codebase (a disclosed, pre-existing limitation, see
+    trading_calendar.py's own module docstring), so this is a lower
+    bound on elapsed trading days, never an exact one claiming holiday
+    awareness it does not have."""
+    from src.market_intelligence.trading_calendar import TADAWUL_TRADING_WEEKDAYS
+
+    if end <= start:
+        return 0
+    count = 0
+    cursor = start.date()
+    end_date = end.date()
+    while cursor < end_date:
+        if cursor.weekday() in TADAWUL_TRADING_WEEKDAYS:
+            count += 1
+        cursor += timedelta(days=1)
+    return count
+
+
+def compute_cohort_safe_validation_report(
+    session: Session,
+    engine_sha: str,
+    config_hash: str,
+    cohort_start_date: datetime,
+    now: Optional[datetime] = None,
+) -> CohortSafeValidationReport:
+    """Read-only, zero SAHMK cost -- pure Postgres reads over
+    `decision_v2_snapshots`/`decision_v2_outcomes`. Never triggers a
+    scan or an outcome re-evaluation."""
+    now = now or datetime.now(timezone.utc)
+    if cohort_start_date.tzinfo is None:
+        cohort_start_date = cohort_start_date.replace(tzinfo=timezone.utc)
+
+    snapshots = (
+        session.query(DecisionV2Snapshot)
+        .filter(
+            DecisionV2Snapshot.engine_sha == engine_sha,
+            DecisionV2Snapshot.config_hash == config_hash,
+            DecisionV2Snapshot.decision_timestamp >= cohort_start_date,
+            DecisionV2Snapshot.decision_timestamp <= now,
+        )
+        .all()
+    )
+    actionable_count = sum(1 for s in snapshots if is_actionable_buy_decision(s.decision))
+
+    snapshot_ids = [s.id for s in snapshots]
+    outcomes = (
+        session.query(DecisionV2Outcome)
+        .filter(DecisionV2Outcome.decision_v2_snapshot_id.in_(snapshot_ids))
+        .all()
+        if snapshot_ids
+        else []
+    )
+
+    raw_signal_count = len(outcomes)
+    independent_signal_count = sum(1 for o in outcomes if o.is_independent_signal is True)
+    entered_count = sum(1 for o in outcomes if o.entry_triggered)
+    resolved_count = sum(1 for o in outcomes if o.status not in NON_RESOLVING_STATUSES)
+    pending_count = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.PENDING)
+    matured_count = sum(1 for o in outcomes if _ensure_aware_utc(o.due_at) <= now)
+    insufficient_data_count = sum(1 for o in outcomes if o.status == DecisionV2OutcomeStatus.DATA_UNAVAILABLE)
+
+    # PR113 P1-2 REMEDIATION: independent-only counts -- see the
+    # dataclass docstring for why raw/resolved (which can include
+    # correlated duplicates) must never gate a maturity conclusion.
+    # "Resolved" is a real, permanent outcome (a target/stop touch, an
+    # expiry) that can legitimately happen BEFORE a row's own due_at --
+    # it is deliberately not the same test as `matured_count` (elapsed
+    # due_at, regardless of status), so an early winner correctly
+    # counts as resolved evidence without needing to wait out its full
+    # horizon, while a `due_at`-elapsed row still stuck at PENDING
+    # (lagging evaluator) is correctly excluded from "resolved" here.
+    observed_independent_actionable_signals = independent_signal_count
+    observed_independent_resolved_signals = sum(
+        1 for o in outcomes if o.is_independent_signal is True and o.status not in NON_RESOLVING_STATUSES
+    )
+    cohort_age_trading_days = _trading_days_between(cohort_start_date, now)
+
+    unmet_reasons = []
+    if observed_independent_actionable_signals < MIN_ACTIONABLE_SIGNALS_FOR_MATURITY:
+        unmet_reasons.append(
+            f"insufficient independent actionable signals "
+            f"({observed_independent_actionable_signals}/{MIN_ACTIONABLE_SIGNALS_FOR_MATURITY})"
+        )
+    if observed_independent_resolved_signals < MIN_RESOLVED_SIGNALS_FOR_MATURITY:
+        unmet_reasons.append(
+            f"insufficient independent resolved signals "
+            f"({observed_independent_resolved_signals}/{MIN_RESOLVED_SIGNALS_FOR_MATURITY})"
+        )
+    is_sample_adequate = not unmet_reasons
+
+    if cohort_age_trading_days < MIN_TRADING_DAYS_FOR_MATURITY:
+        unmet_reasons.append(
+            f"insufficient elapsed trading days "
+            f"({cohort_age_trading_days}/{MIN_TRADING_DAYS_FOR_MATURITY}, holiday-naive count -- see "
+            f"trading_day_count_excludes_exchange_holidays)"
+        )
+    is_cohort_mature = not unmet_reasons
+    maturity_reason = "; ".join(unmet_reasons) if unmet_reasons else "all maturity criteria satisfied"
+
+    return CohortSafeValidationReport(
+        cohort_engine_sha=engine_sha,
+        cohort_config_hash=config_hash,
+        cohort_start_date=cohort_start_date.date().isoformat(),
+        cohort_age_trading_days=cohort_age_trading_days,
+        raw_signal_count=raw_signal_count,
+        independent_signal_count=independent_signal_count,
+        actionable_count=actionable_count,
+        entered_count=entered_count,
+        resolved_count=resolved_count,
+        pending_count=pending_count,
+        matured_count=matured_count,
+        insufficient_data_count=insufficient_data_count,
+        is_sample_adequate=is_sample_adequate,
+        is_cohort_mature=is_cohort_mature,
+        maturity_status="MATURE" if is_cohort_mature else "NOT_MATURE",
+        maturity_reason=maturity_reason,
+        minimum_actionable_signals_required=MIN_ACTIONABLE_SIGNALS_FOR_MATURITY,
+        minimum_resolved_signals_required=MIN_RESOLVED_SIGNALS_FOR_MATURITY,
+        minimum_trading_days_required=MIN_TRADING_DAYS_FOR_MATURITY,
+        observed_independent_actionable_signals=observed_independent_actionable_signals,
+        observed_independent_resolved_signals=observed_independent_resolved_signals,
+        pending_or_unmatured_count=raw_signal_count - matured_count,
+        trading_day_count_excludes_exchange_holidays=True,
+    )
+
+
+def _ensure_aware_utc(value: datetime) -> datetime:
+    """SQLite (unit tests) does not round-trip a timezone-aware
+    `DateTime` faithfully -- matches the identical helper already
+    established in `decision_v2_outcome_evaluation.py`/
+    `outcome_evaluation.py` for the same reason."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 # RADAR-C Phase D (mandate section 8, "performance analytics"): unlike
 # `compute_radar_v2_performance` above (a flat, always-on summary) or
 # `src.ai_evolution.validation_metrics.compute_validation_session_metrics`

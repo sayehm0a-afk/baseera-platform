@@ -41,3 +41,21 @@ a28c7360c6fbb82d8fba5517a3bbcb824cdc63c2:tests/unit/market_data/test_config.py:g
 # the quote cannot be edited without rewriting published history, so
 # it is allowlisted the same way as every other entry here.
 d0c36ac715b4fdb7173092380d40f16ce9de2dee:.gitleaksignore:generic-api-key:19
+
+# PR113 (quality-proof instrumentation hardening / P1-1 remediation):
+# three findings, all the identical false-positive shape -- an
+# assertion or assignment reading the `independent_signal_key`
+# attribute of a DecisionV2Outcome ORM object against itself or another
+# instance. That attribute is a domain field (a UUID4 stored in a
+# nullable String(36) column) used purely to group related quality-
+# proof outcome rows for statistical-independence tracking -- it holds
+# no credential, token, password, bearer value, or secret of any kind.
+# generic-api-key is matching on the substring "key" in the Python
+# attribute name itself, not on any actual key material. Each line
+# below was individually confirmed by reading the real source diff at
+# its commit before being added; none of the three lines is quoted
+# here verbatim, for the same self-inflicted-match reason documented
+# above.
+e6aabb5b78bfa4c262965eeb968c57391870a1b5:tests/integration/test_decision_v2_outcome_concurrency.py:generic-api-key:123
+99c1569b6802552375ce9ecb75c581e755ac2e12:tests/unit/ai_evolution/test_decision_v2_outcome.py:generic-api-key:537
+99c1569b6802552375ce9ecb75c581e755ac2e12:tests/unit/ai_evolution/test_decision_v2_outcome.py:generic-api-key:643

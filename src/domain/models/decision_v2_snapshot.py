@@ -205,6 +205,17 @@ class DecisionV2Snapshot(Base):
     calibrated_confidence_score = Column(Numeric(6, 2), nullable=True)
     calibration_version = Column(String(64), nullable=True)
 
+    # QUALITY PROOF INSTRUMENTATION HARDENING (2026-09-06): immutable
+    # experiment-version provenance -- see
+    # src.analysis.decision_v2.versioning for how these are computed.
+    # Set once, at insert time, by the two call sites that construct a
+    # DecisionV2Snapshot; never recomputed or backfilled afterward. A
+    # row written before this column existed reads back as NULL here,
+    # which every consumer must treat as LEGACY_UNVERSIONED, never as
+    # "same as today's engine/config" (see versioning.LEGACY_UNVERSIONED).
+    engine_sha = Column(String(64), nullable=True)
+    config_hash = Column(String(64), nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
