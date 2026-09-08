@@ -119,9 +119,15 @@ jobs:
           # already installed (requirements.txt: psycopg2-binary) -- the
           # standard Railway pattern for one-off admin/migration commands
           # against a private-network-only service.
-          echo "=== railway ssh --help (diagnostic, in case exact invocation syntax needs adjusting) ==="
-          railway ssh --help 2>&1 || true
-          echo "=== end help ==="
+          # `railway ssh` needs a local SSH keypair to exist (confirmed
+          # empirically: "No SSH keys found in your SSH agent or ~/.ssh/" --
+          # exactly the remedy the CLI's own error message suggests). This
+          # runner is ephemeral and disposable, so a fresh throwaway keypair
+          # generated here is fine.
+          if [ ! -f ~/.ssh/id_ed25519 ]; then
+            mkdir -p ~/.ssh
+            ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+          fi
 
           PY_SCRIPT=$(cat <<PYEOF
           import os
