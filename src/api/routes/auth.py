@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_current_user
-from src.api.middleware.rate_limiting import auth_target_key, limiter
+from src.api.middleware.rate_limiting import auth_target_key, enforce_network_ceiling, limiter
 from src.api.schemas.auth import (
     DeleteAccountRequest,
     ForgotPasswordRequest,
@@ -172,21 +172,36 @@ def _revoke_current_access_token_if_present(request: Request) -> None:
 
 @router.post("/register", response_model=UserOut, status_code=201)
 @limiter.limit("5/minute", key_func=auth_target_key)
-def register(request: Request, body: RegisterRequest, session: Session = Depends(get_db)) -> UserOut:
+def register(
+    request: Request,
+    body: RegisterRequest,
+    session: Session = Depends(get_db),
+    _network_ceiling: None = Depends(enforce_network_ceiling("register", "5/minute")),
+) -> UserOut:
     user = user_service.register(session, body.email, body.password, body.full_name)
     return UserOut.model_validate(user)
 
 
 @router.post("/verify-email", response_model=UserOut)
 @limiter.limit("10/minute", key_func=auth_target_key)
-def verify_email(request: Request, body: VerifyEmailRequest, session: Session = Depends(get_db)) -> UserOut:
+def verify_email(
+    request: Request,
+    body: VerifyEmailRequest,
+    session: Session = Depends(get_db),
+    _network_ceiling: None = Depends(enforce_network_ceiling("verify-email", "10/minute")),
+) -> UserOut:
     user = email_verification_service.verify_email(session, body.token)
     return UserOut.model_validate(user)
 
 
 @router.post("/resend-verification", response_model=MessageOut)
 @limiter.limit("5/minute", key_func=auth_target_key)
-def resend_verification(request: Request, body: ResendVerificationRequest, session: Session = Depends(get_db)) -> MessageOut:
+def resend_verification(
+    request: Request,
+    body: ResendVerificationRequest,
+    session: Session = Depends(get_db),
+    _network_ceiling: None = Depends(enforce_network_ceiling("resend-verification", "5/minute")),
+) -> MessageOut:
     # Same enumeration-safe posture as /forgot-password: always the same
     # generic message, and silently a no-op for an unknown email or an
     # already-verified account.
@@ -203,6 +218,7 @@ def login(
     body: LoginRequest,
     response: Response,
     session: Session = Depends(get_db),
+    _network_ceiling: None = Depends(enforce_network_ceiling("login", "10/minute")),
 ) -> UserOut:
     user = user_service.authenticate(session, body.email, body.password)
     device_label = request.headers.get("user-agent")
@@ -213,7 +229,12 @@ def login(
 
 @router.post("/refresh", response_model=MessageOut)
 @limiter.limit("30/minute", key_func=auth_target_key)
-def refresh(request: Request, response: Response, session: Session = Depends(get_db)) -> MessageOut:
+def refresh(
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_db),
+    _network_ceiling: None = Depends(enforce_network_ceiling("refresh", "30/minute")),
+) -> MessageOut:
     raw_refresh_token = request.cookies.get(_REFRESH_COOKIE)
     if not raw_refresh_token:
         raise InvalidOrExpiredTokenError("No refresh token was presented.")
@@ -248,7 +269,12 @@ def logout_all(
 
 @router.post("/forgot-password", response_model=MessageOut)
 @limiter.limit("5/minute", key_func=auth_target_key)
-def forgot_password(request: Request, body: ForgotPasswordRequest, session: Session = Depends(get_db)) -> MessageOut:
+def forgot_password(
+    request: Request,
+    body: ForgotPasswordRequest,
+    session: Session = Depends(get_db),
+    _network_ceiling: None = Depends(enforce_network_ceiling("forgot-password", "5/minute")),
+) -> MessageOut:
     # Always returns the same generic message regardless of whether the
     # email is registered -- responding differently would let a caller
     # enumerate which addresses have an account.
@@ -260,7 +286,12 @@ def forgot_password(request: Request, body: ForgotPasswordRequest, session: Sess
 
 @router.post("/reset-password", response_model=MessageOut)
 @limiter.limit("5/minute", key_func=auth_target_key)
-def reset_password(request: Request, body: ResetPasswordRequest, session: Session = Depends(get_db)) -> MessageOut:
+def reset_password(
+    request: Request,
+    body: ResetPasswordRequest,
+    session: Session = Depends(get_db),
+    _network_ceiling: None = Depends(enforce_network_ceiling("reset-password", "5/minute")),
+) -> MessageOut:
     password_reset_service.reset_password(session, body.token, body.new_password)
     return MessageOut(message="Password has been reset. Please sign in again.")
 
