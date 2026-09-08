@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_current_user
-from src.api.middleware.rate_limiting import limiter
+from src.api.middleware.rate_limiting import auth_target_key, limiter
 from src.api.schemas.auth import (
     DeleteAccountRequest,
     ForgotPasswordRequest,
@@ -171,21 +171,21 @@ def _revoke_current_access_token_if_present(request: Request) -> None:
 
 
 @router.post("/register", response_model=UserOut, status_code=201)
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", key_func=auth_target_key)
 def register(request: Request, body: RegisterRequest, session: Session = Depends(get_db)) -> UserOut:
     user = user_service.register(session, body.email, body.password, body.full_name)
     return UserOut.model_validate(user)
 
 
 @router.post("/verify-email", response_model=UserOut)
-@limiter.limit("10/minute")
+@limiter.limit("10/minute", key_func=auth_target_key)
 def verify_email(request: Request, body: VerifyEmailRequest, session: Session = Depends(get_db)) -> UserOut:
     user = email_verification_service.verify_email(session, body.token)
     return UserOut.model_validate(user)
 
 
 @router.post("/resend-verification", response_model=MessageOut)
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", key_func=auth_target_key)
 def resend_verification(request: Request, body: ResendVerificationRequest, session: Session = Depends(get_db)) -> MessageOut:
     # Same enumeration-safe posture as /forgot-password: always the same
     # generic message, and silently a no-op for an unknown email or an
@@ -197,7 +197,7 @@ def resend_verification(request: Request, body: ResendVerificationRequest, sessi
 
 
 @router.post("/login", response_model=UserOut)
-@limiter.limit("10/minute")
+@limiter.limit("10/minute", key_func=auth_target_key)
 def login(
     request: Request,
     body: LoginRequest,
@@ -212,7 +212,7 @@ def login(
 
 
 @router.post("/refresh", response_model=MessageOut)
-@limiter.limit("30/minute")
+@limiter.limit("30/minute", key_func=auth_target_key)
 def refresh(request: Request, response: Response, session: Session = Depends(get_db)) -> MessageOut:
     raw_refresh_token = request.cookies.get(_REFRESH_COOKIE)
     if not raw_refresh_token:
@@ -247,7 +247,7 @@ def logout_all(
 
 
 @router.post("/forgot-password", response_model=MessageOut)
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", key_func=auth_target_key)
 def forgot_password(request: Request, body: ForgotPasswordRequest, session: Session = Depends(get_db)) -> MessageOut:
     # Always returns the same generic message regardless of whether the
     # email is registered -- responding differently would let a caller
@@ -259,7 +259,7 @@ def forgot_password(request: Request, body: ForgotPasswordRequest, session: Sess
 
 
 @router.post("/reset-password", response_model=MessageOut)
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", key_func=auth_target_key)
 def reset_password(request: Request, body: ResetPasswordRequest, session: Session = Depends(get_db)) -> MessageOut:
     password_reset_service.reset_password(session, body.token, body.new_password)
     return MessageOut(message="Password has been reset. Please sign in again.")
