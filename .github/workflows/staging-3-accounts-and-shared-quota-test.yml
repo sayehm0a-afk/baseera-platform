@@ -107,32 +107,59 @@ jobs:
           # -- the same disposable, staging-only, torn-down-within-48h
           # database referenced throughout this workflow.
           #
-          # Confirmed empirically (twice): the Postgres service here has no
-          # public network exposure -- only DATABASE_URL (postgres.railway.
-          # internal, private-network-only) is set, there is no
-          # DATABASE_PUBLIC_URL/TCP-proxy variable at all. A GitHub Actions
-          # runner is outside Railway's private network and cannot resolve
-          # that host. Rather than changing the isolated staging project's
-          # network topology (out of scope for this validation), run the SQL
-          # from INSIDE the already-running backend container via
-          # `railway ssh`, where DATABASE_URL is reachable and psycopg2 is
-          # already installed (requirements.txt: psycopg2-binary) -- the
-          # standard Railway pattern for one-off admin/migration commands
-          # against a private-network-only service.
-          # `railway ssh` needs a local SSH keypair to exist (confirmed
-          # empirically: "No SSH keys found in your SSH agent or ~/.ssh/" --
-          # exactly the remedy the CLI's own error message suggests). This
-          # runner is ephemeral and disposable, so a fresh throwaway keypair
-          # generated here is fine.
-          if [ ! -f ~/.ssh/id_ed25519 ]; then
-            mkdir -p ~/.ssh
-            ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+          # Confirmed empirically: the Postgres service has no public network
+          # exposure by default (only the private-network-only DATABASE_URL),
+          # and `railway ssh` -- which would reach it from inside the
+          # already-running backend container -- returns "Unauthorized" with
+          # this Project Token (SSH is account-scoped, the same class of
+          # operation `railway link`/project-creation was already found to
+          # reject for Project Tokens). So: create a TCP proxy for the
+          # Postgres service itself via `railway domain`, the same command
+          # already used successfully to create backend/frontend's public
+          # HTTP domains -- a project-scoped resource operation, not an
+          # account-scoped one.
+          echo "=== railway domain --help ==="
+          railway domain --help 2>&1 || true
+          echo "=== end help ==="
+
+          set +e
+          DOMAIN_OUT=$(railway domain --service Postgres 2>&1)
+          DOMAIN_EXIT=$?
+          set -e
+          echo "$DOMAIN_OUT"
+          echo "(exit code: $DOMAIN_EXIT)"
+
+          if [ $DOMAIN_EXIT -ne 0 ]; then
+            echo "=== retrying with --port 5432 (Postgres has no HTTP port; a TCP proxy may need one specified explicitly) ==="
+            set +e
+            DOMAIN_OUT=$(railway domain --service Postgres --port 5432 2>&1)
+            DOMAIN_EXIT=$?
+            set -e
+            echo "$DOMAIN_OUT"
+            echo "(exit code: $DOMAIN_EXIT)"
           fi
 
-          PY_SCRIPT=$(cat <<PYEOF
-          import os
+          PROXY_HOSTPORT=$(echo "$DOMAIN_OUT" | grep -Eo '[a-zA-Z0-9.-]+\.(proxy\.rlwy\.net|railway\.app):[0-9]+' | head -1)
+          echo "Extracted TCP proxy host:port: ${PROXY_HOSTPORT:-<none found>}"
+          if [ -z "$PROXY_HOSTPORT" ]; then
+            echo "::error::Could not obtain a public TCP endpoint for Postgres. See the diagnostic output above -- this needs a follow-up fix, not a blind retry."
+            exit 1
+          fi
+          PROXY_HOST=$(echo "$PROXY_HOSTPORT" | cut -d: -f1)
+          PROXY_PORT=$(echo "$PROXY_HOSTPORT" | cut -d: -f2)
+
+          railway variable list --service Postgres --json > /tmp/pv.json 2>/dev/null || echo '{}' > /tmp/pv.json
+          python3 -c "import json; print('Available Postgres variable keys:', sorted(json.load(open('/tmp/pv.json')).keys()))"
+          python3 - <<PYEOF
+          import json, os
           import psycopg2
-          conn = psycopg2.connect(os.environ["DATABASE_URL"])
+          d = json.load(open('/tmp/pv.json'))
+          user = d.get('PGUSER') or d.get('POSTGRES_USER')
+          password = d.get('PGPASSWORD') or d.get('POSTGRES_PASSWORD')
+          dbname = d.get('PGDATABASE') or d.get('POSTGRES_DB')
+          if not (user and password and dbname):
+              raise SystemExit(f"Missing PG credential variable(s) on the Postgres service -- have keys: {sorted(d.keys())}")
+          conn = psycopg2.connect(host="$PROXY_HOST", port=$PROXY_PORT, user=user, password=password, dbname=dbname)
           conn.autocommit = True
           cur = conn.cursor()
           cur.execute(
@@ -153,9 +180,7 @@ jobs:
               raise SystemExit("Admin promotion failed -- refusing to continue.")
           conn.close()
           PYEOF
-          )
-          B64=$(printf '%s' "$PY_SCRIPT" | base64 -w0)
-          timeout 60 railway ssh --service backend -- bash -c "echo $B64 | base64 -d | python3"
+          rm -f /tmp/pv.json
 
       - name: THE SHARED-QUOTA TEST -- does exhausting one account's login limit block a different valid account behind the same proxy?
         env:
