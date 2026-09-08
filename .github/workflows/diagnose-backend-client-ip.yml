@@ -1,0 +1,105 @@
+name: Diagnose backend client-IP resolution (temporary, one-shot, read-only, zero SAHMK cost)
+
+# PR #114 follow-up: before touching rate-limiting client-address
+# resolution, determine what request.client.host ACTUALLY resolves to
+# for a real external caller hitting the backend's public Railway
+# domain directly today (pre-frontend-proxy topology) -- and whether
+# X-Forwarded-For even reaches the app process. Logs in as staff (same
+# minimal footprint as verify-deployment.yml / audit-radar-v2-quality.yml)
+# and reads back the ip_address recorded on that session via the
+# existing GET /api/v1/auth/sessions route -- no new backend code, no
+# database write beyond the login itself.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet requests
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: This runner's own real public IP (ground truth)
+        run: curl -sS https://api.ipify.org && echo
+
+      - name: Login, then read back the ip_address the backend recorded for THIS session
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import requests
+
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          session = requests.Session()
+          r = session.post(
+              f"{backend_url}/api/v1/auth/login",
+              json={"email": os.environ["STAFF_EMAIL"], "password": os.environ["STAFF_PASSWORD"]},
+              timeout=30,
+          )
+          r.raise_for_status()
+          csrf = session.cookies.get("csrf_token")
+          if csrf:
+              session.headers.update({"X-CSRF-Token": csrf})
+
+          resp = session.get(f"{backend_url}/api/v1/auth/sessions", timeout=30)
+          resp.raise_for_status()
+          sessions = resp.json()
+          print("Sessions returned:", len(sessions))
+          # The one we just created is the most recent.
+          newest = max(sessions, key=lambda s: s["created_at"])
+          print("Newest session ip_address (this is request.client.host at login time):", newest.get("ip_address"))
+          print("Full newest session record:", newest)
+          PYEOF
+
+      - name: Same check again with a forged X-Forwarded-For header (spoofing attempt)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import requests
+
+          backend_url = os.environ["BACKEND_URL"].rstrip("/")
+          session = requests.Session()
+          r = session.post(
+              f"{backend_url}/api/v1/auth/login",
+              json={"email": os.environ["STAFF_EMAIL"], "password": os.environ["STAFF_PASSWORD"]},
+              headers={"X-Forwarded-For": "1.2.3.4"},
+              timeout=30,
+          )
+          r.raise_for_status()
+          csrf = session.cookies.get("csrf_token")
+          if csrf:
+              session.headers.update({"X-CSRF-Token": csrf})
+
+          resp = session.get(f"{backend_url}/api/v1/auth/sessions", timeout=30)
+          resp.raise_for_status()
+          sessions = resp.json()
+          newest = max(sessions, key=lambda s: s["created_at"])
+          print("With forged X-Forwarded-For: 1.2.3.4 -- recorded ip_address:", newest.get("ip_address"))
+          print("(If this prints 1.2.3.4, the backend currently trusts an unauthenticated client-supplied header.)")
+          PYEOF
