@@ -97,64 +97,55 @@ jobs:
                   print(r.text)
           PYEOF
 
-      - name: Fetch verification tokens from the real deployment logs (ConsoleEmailSender)
-        id: tokens
+      - name: Verify both test accounts' email and promote admin, directly against the isolated staging database
         run: |
-          railway logs --service backend --lines 500 2>&1 > /tmp/backend_logs.txt || true
-          python3 - <<'PYEOF'
-          import os, re
-          log = open('/tmp/backend_logs.txt', errors='ignore').read()
-          out = {}
-          for var, email in [("limited_token", os.environ["LIMITED_USER_EMAIL"]), ("admin_token", os.environ["ADMIN_USER_EMAIL"])]:
-              pattern = re.escape(email) + r".*?Token:\s*(\S+)"
-              m = re.search(pattern, log)
-              out[var] = m.group(1) if m else ""
-              print(f"{var}: {'found' if m else 'NOT FOUND'}")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              for k, v in out.items():
-                  f.write(f"{k}={v}\n")
-          PYEOF
-          rm -f /tmp/backend_logs.txt
-
-      - name: Verify both accounts' email
-        env:
-          LIMITED_TOKEN: ${{ steps.tokens.outputs.limited_token }}
-          ADMIN_TOKEN: ${{ steps.tokens.outputs.admin_token }}
-        run: |
-          python3 - <<'PYEOF'
-          import os, requests
-          base = os.environ["FRONTEND_URL"].rstrip("/")
-          for var in ("LIMITED_TOKEN", "ADMIN_TOKEN"):
-              token = os.environ.get(var, "")
-              if not token:
-                  print(f"{var}: no token found in logs -- cannot verify, skipping")
-                  continue
-              r = requests.post(f"{base}/api/v1/auth/verify-email", json={"token": token}, timeout=30)
-              print(f"verify {var}: HTTP {r.status_code}")
-          PYEOF
-
-      - name: Promote the admin test account directly against the isolated staging database (no self-service endpoint exists by design)
-        run: |
-          railway variable list --service backend --json > /tmp/bv.json 2>/dev/null || echo '{}' > /tmp/bv.json
+          # Login requires is_email_verified=true (src/auth/user_service.py
+          # authenticate() raises EmailNotVerifiedError otherwise), and there
+          # is no self-service admin-promotion endpoint by design (POST
+          # /admin/users/{id}/staff-role requires an existing OWNER). Both
+          # are therefore set directly against the isolated staging database
+          # -- the same disposable, staging-only, torn-down-within-48h
+          # database referenced throughout this workflow.
+          #
+          # The backend's own DATABASE_URL resolves to postgres.railway.internal,
+          # which is only reachable from inside Railway's private network -- a
+          # GitHub Actions runner is outside it and cannot resolve that host
+          # (confirmed empirically: "could not translate host name
+          # postgres.railway.internal to address"). The Postgres service itself
+          # additionally exposes DATABASE_PUBLIC_URL (via Railway's TCP proxy),
+          # which is reachable from anywhere -- use that one here instead.
+          railway variable list --service Postgres --json > /tmp/pv.json 2>/dev/null || echo '{}' > /tmp/pv.json
+          python3 -c "import json; print('Available Postgres variable keys:', sorted(json.load(open('/tmp/pv.json')).keys()))"
           python3 - <<'PYEOF'
           import json, os
           import psycopg2
-          d = json.load(open('/tmp/bv.json'))
-          db_url = d.get('DATABASE_URL')
+          d = json.load(open('/tmp/pv.json'))
+          db_url = d.get('DATABASE_PUBLIC_URL') or d.get('DATABASE_URL')
           if not db_url:
-              raise SystemExit("DATABASE_URL not found on backend service -- cannot promote admin account.")
+              raise SystemExit("Neither DATABASE_PUBLIC_URL nor DATABASE_URL found on the Postgres service -- cannot proceed.")
           conn = psycopg2.connect(db_url)
           conn.autocommit = True
           with conn.cursor() as cur:
+              cur.execute(
+                  "UPDATE users SET is_email_verified = true WHERE email = ANY(%s) RETURNING id, email, is_email_verified",
+                  ([os.environ["LIMITED_USER_EMAIL"], os.environ["ADMIN_USER_EMAIL"]],),
+              )
+              rows = cur.fetchall()
+              print(f"Verified: {rows}" if rows else "No matching user rows found -- verification failed.")
+              if len(rows) != 2:
+                  raise SystemExit(f"Expected to verify 2 accounts, verified {len(rows)} -- refusing to continue.")
+
               cur.execute(
                   "UPDATE users SET is_staff = true, staff_role = 'OWNER' WHERE email = %s RETURNING id, email, is_staff, staff_role",
                   (os.environ["ADMIN_USER_EMAIL"],),
               )
               row = cur.fetchone()
               print(f"Promoted: {row}" if row else "No matching user row found -- promotion failed.")
+              if not row:
+                  raise SystemExit("Admin promotion failed -- refusing to continue.")
           conn.close()
           PYEOF
-          rm -f /tmp/bv.json
+          rm -f /tmp/pv.json
 
       - name: THE SHARED-QUOTA TEST -- does exhausting one account's login limit block a different valid account behind the same proxy?
         env:
