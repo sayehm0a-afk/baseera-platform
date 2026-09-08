@@ -199,9 +199,16 @@ def test_varying_email_on_register_no_longer_bypasses_the_shared_network_ceiling
         ).status_code
         for _ in range(6)
     ]
-    assert 429 in statuses, (
-        "6 /register attempts, each with a brand-new never-seen email, all succeeded -- "
-        "identity-cycling bypassed rate limiting entirely"
+    # Exact position, not just "429 shows up somewhere": the first 5
+    # (each a genuinely distinct, previously-unregistered account) must
+    # succeed on their own account-level merits, and only the 6th --
+    # exceeding the network ceiling's own 5/minute budget -- must be
+    # blocked. A weaker "429 in statuses" check would also pass for an
+    # accidentally-too-strict ceiling that blocks far earlier than
+    # intended, silently hiding that regression.
+    assert statuses == [201, 201, 201, 201, 201, 429], (
+        f"expected the first 5 (distinct accounts) to succeed and only the 6th to be network-ceiling-blocked, "
+        f"got {statuses}"
     )
 
 
@@ -217,9 +224,13 @@ def test_varying_invalid_token_on_verify_email_no_longer_bypasses_the_shared_net
         ).status_code
         for _ in range(11)
     ]
-    assert 429 in statuses, (
-        "11 /verify-email attempts, each with a brand-new fake token, all succeeded -- "
-        "token-cycling bypassed rate limiting entirely"
+    # Exact position: each fake token is rejected as invalid (400,
+    # InvalidOrExpiredTokenError) on its own account-level merits for
+    # the first 10, and only the 11th -- exceeding the network
+    # ceiling's 10/minute budget -- must be blocked with 429.
+    assert statuses == [400] * 10 + [429], (
+        f"expected the first 10 fake-token attempts to be rejected as invalid (400) and only the "
+        f"11th to be network-ceiling-blocked (429), got {statuses}"
     )
 
 
@@ -235,9 +246,13 @@ def test_varying_fake_refresh_cookie_no_longer_bypasses_the_shared_network_ceili
         statuses.append(
             client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": "test-csrf-token"}).status_code
         )
-    assert 429 in statuses, (
-        "31 /refresh attempts, each with a brand-new fake refresh_token cookie, all succeeded -- "
-        "cookie-cycling bypassed rate limiting entirely"
+    # Exact position: each fake refresh_token is rejected as unknown
+    # (400, InvalidOrExpiredTokenError) for the first 30, and only the
+    # 31st -- exceeding the network ceiling's 30/minute budget -- must
+    # be blocked with 429.
+    assert statuses == [400] * 30 + [429], (
+        f"expected the first 30 fake-cookie attempts to be rejected as invalid (400) and only the "
+        f"31st to be network-ceiling-blocked (429), got {statuses}"
     )
 
 
@@ -262,6 +277,43 @@ def test_network_ceiling_does_not_block_reasonable_traffic_from_two_real_sources
             ).status_code
             != 429
         )
+
+
+def test_network_ceiling_429_has_the_same_response_envelope_as_auth_target_key_429(client):
+    """A request blocked by `enforce_network_ceiling` must return the
+    exact same JSON error envelope as one blocked by `auth_target_key`
+    -- both flow through the same `RateLimitExceeded` handler in
+    main.py. This specifically guards `enforce_network_ceiling`'s own
+    `request.state.view_rate_limit = None` line: without it, that
+    handler's unconditional read of `request.state.view_rate_limit`
+    raises `AttributeError` (FastAPI resolves this dependency before
+    `auth_target_key`'s own decorator ever runs and sets that
+    attribute), turning an intended 429 into an unhandled 500 --
+    exactly the kind of regression a future "cleanup" of that
+    seemingly-redundant line could silently reintroduce, and a bare
+    `status_code == 429` assertion elsewhere in this file would not
+    catch."""
+    # Exhaust the network ceiling via identity-cycling on /register --
+    # each request has a brand-new email, so auth_target_key's own
+    # per-account check never fires; only enforce_network_ceiling can
+    # be responsible for the 6th request's block.
+    for _ in range(5):
+        response = client.post(
+            "/api/v1/auth/register",
+            json={"email": f"envelope-check-{secrets.token_hex(8)}@example.com", "password": "correct-horse-1"},
+        )
+        assert response.status_code == 201
+
+    blocked = client.post(
+        "/api/v1/auth/register",
+        json={"email": f"envelope-check-{secrets.token_hex(8)}@example.com", "password": "correct-horse-1"},
+    )
+    assert blocked.status_code == 429
+    body = blocked.json()
+    assert "error" in body and "Rate limit exceeded" in body["error"], (
+        f"expected the same {{'error': 'Rate limit exceeded: ...'}} envelope auth_target_key's own "
+        f"429s use, got {body}"
+    )
 
 
 # --- Email normalization must match the real authentication logic ----------
