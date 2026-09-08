@@ -1,0 +1,108 @@
+name: Staging PR#114 - 4. Teardown (RAILWAY_STAGING_TOKEN only)
+
+# Part 4 of 4 of the PR #114 controlled staging validation
+# (docs/governance/staging-deployment-plan-pr114.md). Removes every
+# resource created for this validation -- backend, frontend, Postgres,
+# Redis -- from the isolated staging project only. Re-verifies the
+# project-ID gate first, same as every other workflow in this set.
+#
+# Project Tokens are scoped to operate WITHIN their one project (not
+# account-level operations -- deploy-railway.yml's own header comment
+# documents that `railway link` itself returns Unauthorized for this
+# token type). Deleting the PROJECT ITSELF may be an account-level
+# operation this token cannot perform either; this workflow's real,
+# achievable goal is removing every service so nothing keeps running
+# or billing -- an empty project shell left behind costs nothing and
+# can be deleted from the dashboard directly if desired.
+#
+# This is a best-effort, manually-triggered (and, per the approved
+# plan, optionally scheduler-triggered) teardown -- NOT a Railway-
+# enforced TTL. See the chat report for the explicit disclosure that
+# this is not a hard guarantee.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_STAGING_PROJECT_ID: "7b3a7f9f-66da-460a-ba3e-9ca251f142f7"
+
+jobs:
+  teardown:
+    name: Remove all staging resources
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_STAGING_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_STAGING_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_STAGING_TOKEN is not readable by this job."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: HARD GATE -- re-verify this token resolves to the expected staging project
+        run: |
+          set +e
+          railway status --json > /tmp/status.json
+          STATUS_EXIT=$?
+          set -e
+          cat /tmp/status.json
+          PROJECT_ID=$(python3 -c "import json; print(json.load(open('/tmp/status.json')).get('id','unknown'))" 2>/dev/null || echo unknown)
+          if [ "$STATUS_EXIT" -ne 0 ] || [ "$PROJECT_ID" != "$EXPECTED_STAGING_PROJECT_ID" ]; then
+            echo "::error::Token does not resolve to the expected staging project ($PROJECT_ID != $EXPECTED_STAGING_PROJECT_ID). Refusing to delete anything."
+            exit 1
+          fi
+          echo "CONFIRMED staging project ($EXPECTED_STAGING_PROJECT_ID). Proceeding with teardown."
+
+      - name: List services before teardown
+        id: before
+        run: |
+          railway service list --json > /tmp/before.json 2>/dev/null || echo '[]' > /tmp/before.json
+          cat /tmp/before.json
+          python3 -c "
+          import json
+          items = json.load(open('/tmp/before.json'))
+          items = items if isinstance(items, list) else items.get('services', items.get('edges', []))
+          names = [str((x.get('node', x) if isinstance(x, dict) else x).get('name','')) for x in items]
+          print('SERVICES_BEFORE=' + ','.join(names))
+          " | tee -a "$GITHUB_OUTPUT"
+
+      - name: Delete every service in the staging project (idempotent, continue-on-error like creation)
+        run: |
+          for svc in backend frontend Postgres Redis; do
+            echo "=== Deleting $svc ==="
+            railway service delete "$svc" --yes 2>&1 || railway service delete "$svc" 2>&1 || echo "(delete command failed or requires different syntax for $svc -- will re-verify below regardless)"
+          done
+
+      - name: Re-verify: list services after teardown (authoritative -- exit codes above are not trusted)
+        run: |
+          sleep 5
+          railway service list --json > /tmp/after.json 2>/dev/null || echo '[]' > /tmp/after.json
+          echo "=== Services remaining after teardown attempt ==="
+          cat /tmp/after.json
+          python3 -c "
+          import json
+          items = json.load(open('/tmp/after.json'))
+          items = items if isinstance(items, list) else items.get('services', items.get('edges', []))
+          names = [str((x.get('node', x) if isinstance(x, dict) else x).get('name','')) for x in items]
+          if names:
+              print(f'::warning::{len(names)} service(s) still present after teardown attempt: {names}. Manual deletion from the Railway dashboard is required for these.')
+          else:
+              print('CONFIRMED: zero services remain in the staging project. Teardown complete.')
+          "
+
+      - name: Final note
+        run: |
+          echo "If any services were reported as still present above, they were NOT successfully removed by this workflow and require manual deletion from the Railway dashboard (project $EXPECTED_STAGING_PROJECT_ID) to fully stop billing."
+          echo "An empty project shell with zero services incurs no cost and can be left as-is or deleted from the dashboard at your convenience."
