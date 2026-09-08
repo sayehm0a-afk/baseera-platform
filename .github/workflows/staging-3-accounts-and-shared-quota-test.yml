@@ -107,42 +107,79 @@ jobs:
           # -- the same disposable, staging-only, torn-down-within-48h
           # database referenced throughout this workflow.
           #
-          # Confirmed empirically: the Postgres service has no public network
-          # exposure by default (only the private-network-only DATABASE_URL),
-          # and `railway ssh` -- which would reach it from inside the
-          # already-running backend container -- returns "Unauthorized" with
-          # this Project Token (SSH is account-scoped, the same class of
-          # operation `railway link`/project-creation was already found to
-          # reject for Project Tokens). So: create a TCP proxy for the
-          # Postgres service itself via `railway domain`, the same command
-          # already used successfully to create backend/frontend's public
-          # HTTP domains -- a project-scoped resource operation, not an
-          # account-scoped one.
-          echo "=== railway domain --help ==="
-          railway domain --help 2>&1 || true
-          echo "=== end help ==="
+          # Confirmed against Railway's own docs (docs.railway.com/cli/ssh):
+          # "SSH key management isn't supported with project tokens
+          # (RAILWAY_TOKEN); use a workspace API token or run railway login."
+          # -- railway ssh is permanently unavailable here without widening
+          # this token's scope, which is out of bounds for this fix. The
+          # previous attempt's mistake was using `railway domain` (creates an
+          # HTTP-style Railway domain -- confirmed by its own "Target port: -"
+          # output, unusable for Postgres's wire protocol) instead of the
+          # correct, documented, distinct command for exposing a non-HTTP
+          # port: `railway tcp-proxy create --port <port> --service <service>`
+          # (docs.railway.com/cli/tcp-proxy). Idempotent: lists existing
+          # proxies first and only creates one if none exists yet, mirroring
+          # this file's existing domain-creation idiom.
+          railway tcp-proxy list --service Postgres --json > /tmp/tcp.json 2>/dev/null || echo '[]' > /tmp/tcp.json
+          cat /tmp/tcp.json
+          PROXY_HOSTPORT=$(python3 -c "
+          import json
+          try:
+              items = json.load(open('/tmp/tcp.json'))
+          except Exception:
+              items = []
+          items = items if isinstance(items, list) else items.get('tcpProxies', items.get('edges', []))
+          for x in items:
+              node = x.get('node', x) if isinstance(x, dict) else {}
+              domain = node.get('domain') or node.get('proxyDomain')
+              port = node.get('proxyPort') or node.get('port')
+              if domain and port:
+                  print(f'{domain}:{port}')
+                  break
+          " 2>/dev/null || echo "")
+          echo "Existing TCP proxy (if any): ${PROXY_HOSTPORT:-<none>}"
 
-          set +e
-          DOMAIN_OUT=$(railway domain --service Postgres 2>&1)
-          DOMAIN_EXIT=$?
-          set -e
-          echo "$DOMAIN_OUT"
-          echo "(exit code: $DOMAIN_EXIT)"
-
-          if [ $DOMAIN_EXIT -ne 0 ]; then
-            echo "=== retrying with --port 5432 (Postgres has no HTTP port; a TCP proxy may need one specified explicitly) ==="
+          if [ -z "$PROXY_HOSTPORT" ]; then
+            echo "=== No existing TCP proxy -- creating one (documented command) ==="
             set +e
-            DOMAIN_OUT=$(railway domain --service Postgres --port 5432 2>&1)
-            DOMAIN_EXIT=$?
+            CREATE_OUT=$(railway tcp-proxy create --port 5432 --service Postgres 2>&1)
+            CREATE_EXIT=$?
             set -e
-            echo "$DOMAIN_OUT"
-            echo "(exit code: $DOMAIN_EXIT)"
+            echo "$CREATE_OUT"
+            echo "(exit code: $CREATE_EXIT)"
+            if [ $CREATE_EXIT -ne 0 ]; then
+              echo "::error::railway tcp-proxy create failed. See output above -- needs a follow-up fix, not a blind retry."
+              exit 1
+            fi
+
+            sleep 5
+            railway tcp-proxy list --service Postgres --json > /tmp/tcp.json 2>/dev/null || echo '[]' > /tmp/tcp.json
+            cat /tmp/tcp.json
+            PROXY_HOSTPORT=$(python3 -c "
+          import json
+          try:
+              items = json.load(open('/tmp/tcp.json'))
+          except Exception:
+              items = []
+          items = items if isinstance(items, list) else items.get('tcpProxies', items.get('edges', []))
+          for x in items:
+              node = x.get('node', x) if isinstance(x, dict) else {}
+              domain = node.get('domain') or node.get('proxyDomain')
+              port = node.get('proxyPort') or node.get('port')
+              if domain and port:
+                  print(f'{domain}:{port}')
+                  break
+          " 2>/dev/null || echo "")
+
+            if [ -z "$PROXY_HOSTPORT" ]; then
+              echo "=== JSON parse found nothing -- falling back to text-parsing the create command's own output ==="
+              PROXY_HOSTPORT=$(echo "$CREATE_OUT" | grep -Eo '[a-zA-Z0-9.-]+\.proxy\.rlwy\.net:[0-9]+' | head -1)
+            fi
           fi
 
-          PROXY_HOSTPORT=$(echo "$DOMAIN_OUT" | grep -Eo '[a-zA-Z0-9.-]+\.(proxy\.rlwy\.net|railway\.app):[0-9]+' | head -1)
-          echo "Extracted TCP proxy host:port: ${PROXY_HOSTPORT:-<none found>}"
+          echo "Resolved TCP proxy host:port: ${PROXY_HOSTPORT:-<none found>}"
           if [ -z "$PROXY_HOSTPORT" ]; then
-            echo "::error::Could not obtain a public TCP endpoint for Postgres. See the diagnostic output above -- this needs a follow-up fix, not a blind retry."
+            echo "::error::Could not obtain a public TCP endpoint for Postgres after both --json list and text-parsing fallback. See diagnostic output above -- this needs a follow-up fix, not a blind retry."
             exit 1
           fi
           PROXY_HOST=$(echo "$PROXY_HOSTPORT" | cut -d: -f1)
