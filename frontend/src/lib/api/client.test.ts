@@ -4,6 +4,7 @@ import { ApiError, apiFetch } from "./client";
 describe("apiFetch", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    document.cookie = "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
   });
 
   it("returns the parsed JSON body on success", async () => {
@@ -16,6 +17,18 @@ describe("apiFetch", () => {
 
     const result = await apiFetch<{ hello: string }>("/api/v1/whatever");
     expect(result).toEqual({ hello: "world" });
+  });
+
+  it("keeps authenticated browser requests on the frontend origin", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({}), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await apiFetch("/api/v1/auth/me");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/auth/me");
+    await apiFetch("/health/market-data");
+    expect(fetchMock.mock.calls[1][0]).toBe("/health/market-data");
   });
 
   it("throws a typed ApiError using the backend's error envelope", async () => {
@@ -67,8 +80,8 @@ describe("apiFetch", () => {
     document.cookie = "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
   });
 
-  it("captures X-CSRF-Token from the response and prefers it over the cookie on the next request (cross-origin: document.cookie can't see the API's own cookie)", async () => {
-    document.cookie = "csrf_token=stale-cookie-value";
+  it("uses the current cookie after another tab rotates it, even if an older response header was captured", async () => {
+    document.cookie = "csrf_token=token-from-response-header";
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -81,11 +94,38 @@ describe("apiFetch", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await apiFetch("/api/v1/auth/login", { method: "POST" });
+    // A different tab refreshes the shared session cookie. This tab's
+    // last response header is now stale, but document.cookie is current.
+    document.cookie = "csrf_token=rotated-in-another-tab";
     await apiFetch("/api/v1/portfolios");
 
     const [, secondInit] = fetchMock.mock.calls[1];
-    expect(secondInit.headers["X-CSRF-Token"]).toBe("token-from-response-header");
+    expect(secondInit.headers["X-CSRF-Token"]).toBe("rotated-in-another-tab");
 
+    document.cookie = "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  });
+
+  it("recovers an expired access token after a reload using the surviving CSRF cookie", async () => {
+    // Fresh module = no in-memory state, like returning to Safari tomorrow.
+    vi.resetModules();
+    const { apiFetch: freshFetch } = await import("./client");
+    document.cookie = "csrf_token=surviving-csrf";
+    const fetchMock = vi.fn().mockImplementation(async (path, init) => {
+      if (path.endsWith("/auth/refresh")) {
+        expect(init.headers["X-CSRF-Token"]).toBe("surviving-csrf");
+        document.cookie = "csrf_token=rotated-csrf";
+        return new Response(JSON.stringify({ message: "ok" }), { status: 200 });
+      }
+      if (fetchMock.mock.calls.length === 1) {
+        return new Response("expired", { status: 401 });
+      }
+      expect(init.headers["X-CSRF-Token"]).toBe("rotated-csrf");
+      return new Response(JSON.stringify({ id: 1 }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(freshFetch("/api/v1/auth/me")).resolves.toEqual({ id: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     document.cookie = "csrf_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
   });
 
