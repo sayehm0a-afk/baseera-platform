@@ -60,6 +60,17 @@ jobs:
 
       - run: pip install --quiet requests psycopg2-binary
 
+      - name: PRE-FLIGHT -- verify this Railway CLI version actually supports tcp-proxy commands
+        run: |
+          echo "=== railway --version ==="
+          railway --version
+          echo "=== railway tcp-proxy --help ==="
+          if ! railway tcp-proxy --help; then
+            echo "::error::This Railway CLI version does not support 'tcp-proxy' -- refusing to proceed. Upgrade the CLI or use a different approach; do not guess further."
+            exit 1
+          fi
+          echo "CONFIRMED: tcp-proxy subcommand is supported by the installed CLI."
+
       - name: HARD GATE -- re-verify this token resolves to the expected staging project
         run: |
           set +e
