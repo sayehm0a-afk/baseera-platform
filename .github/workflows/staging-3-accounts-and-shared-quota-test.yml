@@ -32,8 +32,19 @@ permissions:
 
 env:
   EXPECTED_STAGING_PROJECT_ID: "7b3a7f9f-66da-460a-ba3e-9ca251f142f7"
-  LIMITED_USER_EMAIL: "staging-pr114-limited-user@example.test"
-  ADMIN_USER_EMAIL: "staging-pr114-admin@example.test"
+  # example.test was rejected by the real registration endpoint: pydantic's
+  # EmailStr calls email_validator.validate_email(..., check_deliverability=False)
+  # (confirmed by reading pydantic.networks.validate_email's source against the
+  # exact installed version), and email_validator 2.3.0 flags the .test TLD as
+  # a reserved special-use domain -- verified locally with the same installed
+  # email_validator/pydantic versions this app uses. example.com/.org/.net are
+  # also RFC 2606-reserved (no real mailbox will ever receive anything sent to
+  # them -- IANA operates only minimal DNS for them, no mail acceptance) but
+  # are NOT flagged as special-use by email_validator, so they pass the exact
+  # same validation the live endpoint performs. Verified locally:
+  # validate_email("...@example.com", check_deliverability=False) succeeds.
+  LIMITED_USER_EMAIL: "staging-pr114-limited-user@example.com"
+  ADMIN_USER_EMAIL: "staging-pr114-admin@example.com"
 
 jobs:
   accounts_and_test:
@@ -90,13 +101,26 @@ jobs:
           echo "limited=Stg-$(python3 -c 'import secrets;print(secrets.token_urlsafe(12))')" >> "$GITHUB_OUTPUT"
           echo "admin=Stg-$(python3 -c 'import secrets;print(secrets.token_urlsafe(12))')" >> "$GITHUB_OUTPUT"
 
-      - name: Register both test accounts via the real /api/v1/auth/register flow
+      - name: CONFIRM outbound email is disabled on staging (SMTP_HOST must be unset -- never print its value)
+        run: |
+          railway variable list --service backend --json > /tmp/bv.json 2>/dev/null || echo '{}' > /tmp/bv.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/bv.json'))
+          if 'SMTP_HOST' in d:
+              print('::error::SMTP_HOST IS SET on the backend service -- outbound email would be real, not console-logged. Refusing to register test accounts.')
+              raise SystemExit(1)
+          print('CONFIRMED: SMTP_HOST is not set -- get_email_sender() falls back to ConsoleEmailSender (src/auth/email_sender.py), no real email will be sent.')
+          "
+          rm -f /tmp/bv.json
+
+      - name: Register both test accounts via the real /api/v1/auth/register flow -- hard-fail on any unexpected response
         env:
           LIMITED_PW: ${{ steps.passwords.outputs.limited }}
           ADMIN_PW: ${{ steps.passwords.outputs.admin }}
         run: |
           python3 - <<'PYEOF'
-          import os, requests
+          import os, sys, requests
           base = os.environ["FRONTEND_URL"].rstrip("/")
           for email, pw, label in [
               (os.environ["LIMITED_USER_EMAIL"], os.environ["LIMITED_PW"], "limited"),
@@ -104,8 +128,16 @@ jobs:
           ]:
               r = requests.post(f"{base}/api/v1/auth/register", json={"email": email, "password": pw, "full_name": f"Staging PR114 {label} test"}, timeout=30)
               print(f"register {label} ({email}): HTTP {r.status_code}")
-              if r.status_code not in (201, 409):
-                  print(r.text)
+              if r.status_code == 201:
+                  print(f"  -> freshly created.")
+              elif r.status_code == 409:
+                  print(f"  -> already exists from an earlier run. NOT treated as success yet -- this run's freshly-generated")
+                  print(f"     password will only be proven valid by an actual login attempt later in this workflow. If that")
+                  print(f"     login fails, the run will stop there with the real error, not silently assume this account is usable.")
+              else:
+                  print(f"::error::Unexpected registration response for {label} ({email}): HTTP {r.status_code}")
+                  print(r.text[:1000])
+                  sys.exit(1)
           PYEOF
 
       - name: Verify both test accounts' email and promote admin, directly against the isolated staging database
@@ -139,7 +171,7 @@ jobs:
               items = json.load(open('/tmp/tcp.json'))
           except Exception:
               items = []
-          items = items if isinstance(items, list) else items.get('tcpProxies', items.get('edges', []))
+          items = items if isinstance(items, list) else items.get('proxies', items.get('tcpProxies', items.get('edges', [])))
           for x in items:
               node = x.get('node', x) if isinstance(x, dict) else {}
               domain = node.get('domain') or node.get('proxyDomain')
@@ -172,7 +204,7 @@ jobs:
               items = json.load(open('/tmp/tcp.json'))
           except Exception:
               items = []
-          items = items if isinstance(items, list) else items.get('tcpProxies', items.get('edges', []))
+          items = items if isinstance(items, list) else items.get('proxies', items.get('tcpProxies', items.get('edges', [])))
           for x in items:
               node = x.get('node', x) if isinstance(x, dict) else {}
               domain = node.get('domain') or node.get('proxyDomain')
@@ -210,9 +242,19 @@ jobs:
           conn = psycopg2.connect(host="$PROXY_HOST", port=$PROXY_PORT, user=user, password=password, dbname=dbname)
           conn.autocommit = True
           cur = conn.cursor()
+
+          target_emails = ["$LIMITED_USER_EMAIL", "$ADMIN_USER_EMAIL"]
+          cur.execute("SELECT id, email FROM users WHERE email = ANY(%s)", (target_emails,))
+          existing = cur.fetchall()
+          print("Rows found for the two test emails before touching anything:", existing)
+          found_emails = {row[1] for row in existing}
+          missing = [e for e in target_emails if e not in found_emails]
+          if missing:
+              raise SystemExit(f"Registration reported success but these emails have NO row in the staging database: {missing} -- refusing to verify/promote anything.")
+
           cur.execute(
               "UPDATE users SET is_email_verified = true WHERE email = ANY(%s) RETURNING id, email, is_email_verified",
-              (["$LIMITED_USER_EMAIL", "$ADMIN_USER_EMAIL"],),
+              (target_emails,),
           )
           rows = cur.fetchall()
           print("Verified:", rows)
@@ -229,6 +271,29 @@ jobs:
           conn.close()
           PYEOF
           rm -f /tmp/pv.json
+
+      - name: PROVE both accounts actually exist and can log in with these exact credentials (before any adversarial traffic)
+        env:
+          LIMITED_PW: ${{ steps.passwords.outputs.limited }}
+          ADMIN_PW: ${{ steps.passwords.outputs.admin }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys, requests
+          base = os.environ["FRONTEND_URL"].rstrip("/")
+          for email, pw, label in [
+              (os.environ["LIMITED_USER_EMAIL"], os.environ["LIMITED_PW"], "limited"),
+              (os.environ["ADMIN_USER_EMAIL"], os.environ["ADMIN_PW"], "admin"),
+          ]:
+              r = requests.post(f"{base}/api/v1/auth/login", json={"email": email, "password": pw}, timeout=30)
+              print(f"login proof {label} ({email}): HTTP {r.status_code}")
+              if r.status_code != 200:
+                  print(f"::error::{label} account login did NOT succeed with its own freshly-registered password -- HTTP {r.status_code}. Refusing to run the shared-quota test against an account that isn't actually usable.")
+                  print(r.text[:500])
+                  sys.exit(1)
+          print("CONFIRMED: both accounts exist and their exact generated passwords log in successfully.")
+          print("NOTE: these two clean logins consume 2 units of the shared network-address rate-limit ceiling")
+          print("before the adversarial test below begins -- a realistic precondition, not an interference with the result.")
+          PYEOF
 
       - name: THE SHARED-QUOTA TEST -- does exhausting one account's login limit block a different valid account behind the same proxy?
         env:
