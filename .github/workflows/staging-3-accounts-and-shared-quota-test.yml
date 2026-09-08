@@ -107,45 +107,49 @@ jobs:
           # -- the same disposable, staging-only, torn-down-within-48h
           # database referenced throughout this workflow.
           #
-          # The backend's own DATABASE_URL resolves to postgres.railway.internal,
-          # which is only reachable from inside Railway's private network -- a
-          # GitHub Actions runner is outside it and cannot resolve that host
-          # (confirmed empirically: "could not translate host name
-          # postgres.railway.internal to address"). The Postgres service itself
-          # additionally exposes DATABASE_PUBLIC_URL (via Railway's TCP proxy),
-          # which is reachable from anywhere -- use that one here instead.
-          railway variable list --service Postgres --json > /tmp/pv.json 2>/dev/null || echo '{}' > /tmp/pv.json
-          python3 -c "import json; print('Available Postgres variable keys:', sorted(json.load(open('/tmp/pv.json')).keys()))"
-          python3 - <<'PYEOF'
-          import json, os
-          import psycopg2
-          d = json.load(open('/tmp/pv.json'))
-          db_url = d.get('DATABASE_PUBLIC_URL') or d.get('DATABASE_URL')
-          if not db_url:
-              raise SystemExit("Neither DATABASE_PUBLIC_URL nor DATABASE_URL found on the Postgres service -- cannot proceed.")
-          conn = psycopg2.connect(db_url)
-          conn.autocommit = True
-          with conn.cursor() as cur:
-              cur.execute(
-                  "UPDATE users SET is_email_verified = true WHERE email = ANY(%s) RETURNING id, email, is_email_verified",
-                  ([os.environ["LIMITED_USER_EMAIL"], os.environ["ADMIN_USER_EMAIL"]],),
-              )
-              rows = cur.fetchall()
-              print(f"Verified: {rows}" if rows else "No matching user rows found -- verification failed.")
-              if len(rows) != 2:
-                  raise SystemExit(f"Expected to verify 2 accounts, verified {len(rows)} -- refusing to continue.")
+          # Confirmed empirically (twice): the Postgres service here has no
+          # public network exposure -- only DATABASE_URL (postgres.railway.
+          # internal, private-network-only) is set, there is no
+          # DATABASE_PUBLIC_URL/TCP-proxy variable at all. A GitHub Actions
+          # runner is outside Railway's private network and cannot resolve
+          # that host. Rather than changing the isolated staging project's
+          # network topology (out of scope for this validation), run the SQL
+          # from INSIDE the already-running backend container via
+          # `railway ssh`, where DATABASE_URL is reachable and psycopg2 is
+          # already installed (requirements.txt: psycopg2-binary) -- the
+          # standard Railway pattern for one-off admin/migration commands
+          # against a private-network-only service.
+          echo "=== railway ssh --help (diagnostic, in case exact invocation syntax needs adjusting) ==="
+          railway ssh --help 2>&1 || true
+          echo "=== end help ==="
 
-              cur.execute(
-                  "UPDATE users SET is_staff = true, staff_role = 'OWNER' WHERE email = %s RETURNING id, email, is_staff, staff_role",
-                  (os.environ["ADMIN_USER_EMAIL"],),
-              )
-              row = cur.fetchone()
-              print(f"Promoted: {row}" if row else "No matching user row found -- promotion failed.")
-              if not row:
-                  raise SystemExit("Admin promotion failed -- refusing to continue.")
+          PY_SCRIPT=$(cat <<PYEOF
+          import os
+          import psycopg2
+          conn = psycopg2.connect(os.environ["DATABASE_URL"])
+          conn.autocommit = True
+          cur = conn.cursor()
+          cur.execute(
+              "UPDATE users SET is_email_verified = true WHERE email = ANY(%s) RETURNING id, email, is_email_verified",
+              (["$LIMITED_USER_EMAIL", "$ADMIN_USER_EMAIL"],),
+          )
+          rows = cur.fetchall()
+          print("Verified:", rows)
+          if len(rows) != 2:
+              raise SystemExit(f"Expected to verify 2 accounts, verified {len(rows)} -- refusing to continue.")
+          cur.execute(
+              "UPDATE users SET is_staff = true, staff_role = 'OWNER' WHERE email = %s RETURNING id, email, is_staff, staff_role",
+              ("$ADMIN_USER_EMAIL",),
+          )
+          row = cur.fetchone()
+          print("Promoted:", row)
+          if not row:
+              raise SystemExit("Admin promotion failed -- refusing to continue.")
           conn.close()
           PYEOF
-          rm -f /tmp/pv.json
+          )
+          B64=$(printf '%s' "$PY_SCRIPT" | base64 -w0)
+          timeout 60 railway ssh --service backend -- bash -c "echo $B64 | base64 -d | python3"
 
       - name: THE SHARED-QUOTA TEST -- does exhausting one account's login limit block a different valid account behind the same proxy?
         env:
