@@ -1,0 +1,341 @@
+name: Staging PR#114 - 2. Provision and deploy (RAILWAY_STAGING_TOKEN only)
+
+# Part 2 of 3 of the PR #114 controlled staging validation
+# (docs/governance/staging-deployment-plan-pr114.md). Provisions fresh
+# Postgres + Redis + backend + frontend inside the ISOLATED staging
+# project only, deploys PR #114's exact pinned commit, and configures
+# every safety flag (dev market-data provider, all schedulers off,
+# rate limiting on) before the app ever starts. Never reads
+# secrets.RAILWAY_TOKEN (production) or secrets.SAHMK_API_KEY -- only
+# secrets.RAILWAY_STAGING_TOKEN.
+#
+# Re-verifies the project-ID gate independently of staging-1-inspect
+# (never trust a prior run) -- refuses to touch anything if this token
+# does not resolve to the expected staging project.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr114_commit_sha:
+        description: "Exact commit SHA on claude/sahmk-api-key-verify-lpw25l to deploy"
+        required: true
+        default: "88374a438829b90f34d8da58a37ccdc9f6c6a2a3"
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_STAGING_PROJECT_ID: "7b3a7f9f-66da-460a-ba3e-9ca251f142f7"
+  RAILWAY_BACKEND_SERVICE: backend
+  RAILWAY_FRONTEND_SERVICE: frontend
+
+jobs:
+  deploy:
+    name: Provision + deploy PR114 to staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_STAGING_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_STAGING_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_STAGING_TOKEN is not readable by this job."
+            exit 1
+          fi
+
+      - name: Checkout the exact pinned PR #114 commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.pr114_commit_sha }}
+
+      - name: Confirm the checked-out commit matches the requested pin
+        run: |
+          ACTUAL=$(git rev-parse HEAD)
+          EXPECTED="${{ github.event.inputs.pr114_commit_sha }}"
+          echo "Checked out: $ACTUAL"
+          echo "Requested:   $EXPECTED"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Checked-out commit does not match the requested pin."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: HARD GATE -- re-verify this token resolves to the expected staging project
+        run: |
+          set +e
+          railway status --json > /tmp/status.json
+          STATUS_EXIT=$?
+          set -e
+          cat /tmp/status.json
+          if [ "$STATUS_EXIT" -ne 0 ]; then
+            echo "::error::RAILWAY_STAGING_TOKEN did not authenticate."
+            exit 1
+          fi
+          PROJECT_ID=$(python3 -c "import json; print(json.load(open('/tmp/status.json')).get('id','unknown'))")
+          if [ "$PROJECT_ID" != "$EXPECTED_STAGING_PROJECT_ID" ]; then
+            echo "::error::This token resolves to '$PROJECT_ID', not the expected staging project '$EXPECTED_STAGING_PROJECT_ID'. Refusing to provision or deploy anything."
+            exit 1
+          fi
+          echo "CONFIRMED staging project ($EXPECTED_STAGING_PROJECT_ID). Proceeding."
+
+      - name: List existing services (idempotency check)
+        id: services
+        run: |
+          railway service list --json > /tmp/services.json 2>/tmp/services_err.txt || true
+          cat /tmp/services.json 2>/dev/null || cat /tmp/services_err.txt
+          python3 -c "import json; items = json.load(open('/tmp/services.json')); items = items if isinstance(items, list) else items.get('services', items.get('edges', [])); names = [str((x.get('node', x) if isinstance(x, dict) else x).get('name','')) for x in items]; open('/tmp/service_names.txt','w').write(chr(10).join(names))" 2>/dev/null || touch /tmp/service_names.txt
+          HAS_POSTGRES=$(grep -qi postgres /tmp/service_names.txt && echo yes || echo no)
+          HAS_REDIS=$(grep -qi redis /tmp/service_names.txt && echo yes || echo no)
+          HAS_BACKEND=$(grep -qix backend /tmp/service_names.txt && echo yes || echo no)
+          HAS_FRONTEND=$(grep -qix frontend /tmp/service_names.txt && echo yes || echo no)
+          echo "has_postgres=$HAS_POSTGRES" >> "$GITHUB_OUTPUT"
+          echo "has_redis=$HAS_REDIS" >> "$GITHUB_OUTPUT"
+          echo "has_backend=$HAS_BACKEND" >> "$GITHUB_OUTPUT"
+          echo "has_frontend=$HAS_FRONTEND" >> "$GITHUB_OUTPUT"
+          echo "Postgres:$HAS_POSTGRES Redis:$HAS_REDIS backend:$HAS_BACKEND frontend:$HAS_FRONTEND"
+
+      - name: Ensure PostgreSQL exists (new, empty -- skip if already present)
+        if: steps.services.outputs.has_postgres == 'no'
+        continue-on-error: true
+        run: railway add --database postgres
+
+      - name: Ensure Redis exists (new, empty -- skip if already present)
+        if: steps.services.outputs.has_redis == 'no'
+        continue-on-error: true
+        run: railway add --database redis
+
+      - name: Ensure backend service exists (skip if already present)
+        if: steps.services.outputs.has_backend == 'no'
+        continue-on-error: true
+        run: railway add --service "$RAILWAY_BACKEND_SERVICE"
+
+      - name: Ensure frontend service exists (skip if already present)
+        if: steps.services.outputs.has_frontend == 'no'
+        continue-on-error: true
+        run: railway add --service "$RAILWAY_FRONTEND_SERVICE"
+
+      - name: Re-check services after creation attempts (authoritative)
+        id: services_after
+        run: |
+          railway service list --json > /tmp/services_after.json 2>/dev/null || echo '[]' > /tmp/services_after.json
+          cat /tmp/services_after.json
+          python3 -c "import json; items = json.load(open('/tmp/services_after.json')); items = items if isinstance(items, list) else items.get('services', items.get('edges', [])); names = [str((x.get('node', x) if isinstance(x, dict) else x).get('name','')) for x in items]; open('/tmp/service_names_after.txt','w').write(chr(10).join(names))" 2>/dev/null || touch /tmp/service_names_after.txt
+          FAIL=0
+          grep -qi postgres /tmp/service_names_after.txt || { echo "::error::PostgreSQL missing after creation attempt."; FAIL=1; }
+          grep -qi redis /tmp/service_names_after.txt || { echo "::error::Redis missing after creation attempt."; FAIL=1; }
+          grep -qix backend /tmp/service_names_after.txt || { echo "::error::backend missing after creation attempt."; FAIL=1; }
+          grep -qix frontend /tmp/service_names_after.txt || { echo "::error::frontend missing after creation attempt."; FAIL=1; }
+          [ "$FAIL" = "1" ] && exit 1
+          echo "All 4 services confirmed present."
+
+      - name: Capture resource identifiers as isolation evidence (project + service IDs, DB/Redis HOST only -- never credentials)
+        run: |
+          echo "=== Staging project ID ==="
+          echo "$EXPECTED_STAGING_PROJECT_ID"
+          echo "=== Service IDs ==="
+          railway service list --json 2>/dev/null | python3 -c "
+          import json, sys
+          items = json.load(sys.stdin)
+          items = items if isinstance(items, list) else items.get('services', items.get('edges', []))
+          for it in items:
+              n = it.get('node', it) if isinstance(it, dict) else it
+              print(f\"{n.get('name')}: id={n.get('id')}\")
+          "
+          echo "=== DATABASE_URL / REDIS_URL host only (never full value, never credentials) ==="
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/bv.json 2>/dev/null || echo '{}' > /tmp/bv.json
+          python3 -c "
+          import json
+          from urllib.parse import urlparse
+          d = json.load(open('/tmp/bv.json'))
+          for key in ('DATABASE_URL', 'REDIS_URL'):
+              val = d.get(key)
+              if val:
+                  host = urlparse(val).hostname
+                  print(f'{key} host: {host}')
+              else:
+                  print(f'{key}: not set yet')
+          "
+          rm -f /tmp/bv.json
+
+      - name: Ensure a public HTTPS domain exists for the backend
+        id: backend_domain
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json 2>/dev/null || echo '[]' > /tmp/backend_domains.json
+          URL=$(python3 -c "import json; items=json.load(open('/tmp/backend_domains.json')); hosts=[x.get('domain') or x.get('hostname') for x in items] if isinstance(items,list) else []; hosts=[h for h in hosts if h]; print('https://'+hosts[0] if hosts else '')" 2>/dev/null || echo "")
+          if [ -z "$URL" ]; then
+            DOMAIN_OUTPUT=$(railway domain --service "$RAILWAY_BACKEND_SERVICE")
+            echo "$DOMAIN_OUTPUT"
+            URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo 'https?://[a-zA-Z0-9.-]+' | head -1)
+            if [ -z "$URL" ]; then URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo '[a-zA-Z0-9.-]+\.up\.railway\.app' | head -1); URL="https://$URL"; fi
+          fi
+          echo "Backend URL: $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure a public HTTPS domain exists for the frontend
+        id: frontend_domain
+        run: |
+          railway domain list --service "$RAILWAY_FRONTEND_SERVICE" --json > /tmp/frontend_domains.json 2>/dev/null || echo '[]' > /tmp/frontend_domains.json
+          URL=$(python3 -c "import json; items=json.load(open('/tmp/frontend_domains.json')); hosts=[x.get('domain') or x.get('hostname') for x in items] if isinstance(items,list) else []; hosts=[h for h in hosts if h]; print('https://'+hosts[0] if hosts else '')" 2>/dev/null || echo "")
+          if [ -z "$URL" ]; then
+            DOMAIN_OUTPUT=$(railway domain --service "$RAILWAY_FRONTEND_SERVICE")
+            echo "$DOMAIN_OUTPUT"
+            URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo 'https?://[a-zA-Z0-9.-]+' | head -1)
+            if [ -z "$URL" ]; then URL=$(echo "$DOMAIN_OUTPUT" | grep -Eo '[a-zA-Z0-9.-]+\.up\.railway\.app' | head -1); URL="https://$URL"; fi
+          fi
+          echo "Frontend URL: $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure SECRET_KEY exists (staging-only value, independent of production's)
+        id: secret_key
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_vars.json 2>/dev/null || echo '{}' > /tmp/backend_vars.json
+          HAS_KEY=$(python3 -c "import json; d=json.load(open('/tmp/backend_vars.json')); print('yes' if 'SECRET_KEY' in d else 'no')" 2>/dev/null || echo no)
+          rm -f /tmp/backend_vars.json
+          if [ "$HAS_KEY" = "yes" ]; then
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+            echo "value=" >> "$GITHUB_OUTPUT"
+          else
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+            echo "value=$(python3 -c 'import secrets;print(secrets.token_urlsafe(64))')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure backend environment variables (staging safety flags -- no SAHMK, no schedulers)
+        env:
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
+          SECRET_KEY_GENERATED: ${{ steps.secret_key.outputs.generated }}
+          SECRET_KEY_VALUE: ${{ steps.secret_key.outputs.value }}
+        run: |
+          RAILWAY_REF_OPEN='$'"{{"
+          DATABASE_URL_REF="${RAILWAY_REF_OPEN}Postgres.DATABASE_URL}}"
+          REDIS_URL_REF="${RAILWAY_REF_OPEN}Redis.REDIS_URL}}"
+          SET_ARGS=(
+            --set "DATABASE_URL=$DATABASE_URL_REF"
+            --set "REDIS_URL=$REDIS_URL_REF"
+            # BASEERA_ENV=production is deliberate here: it is what
+            # controls cookie Secure/SameSite behavior
+            # (settings.is_production, src/core/config/settings.py),
+            # and this validation must exercise the EXACT cookie
+            # posture real production uses -- infrastructure isolation
+            # (separate project/DB/Redis/secrets) is what actually
+            # keeps this safe, not this string.
+            --set "BASEERA_ENV=production"
+            --set "MARKET_DATA_PROVIDER=dev"
+            --set "STRICT_REAL_DATA=false"
+            --set "ALLOW_SYNTHETIC_DATA=true"
+            --set "CORS_ALLOWED_ORIGINS=$FRONTEND_URL"
+            --set "FRONTEND_BASE_URL=$FRONTEND_URL"
+            --set "LIVE_MARKET_MODE_ENABLED=false"
+            --set "INGESTION_SCHEDULER_ENABLED=false"
+            --set "MARKET_INTELLIGENCE_SCHEDULER_ENABLED=false"
+            --set "LIVE_RECURRENT_SCAN_ENABLED=false"
+            --set "OUTCOME_EVALUATION_SCHEDULER_ENABLED=false"
+            --set "PATTERN_DISCOVERY_SCHEDULER_ENABLED=false"
+            --set "DAILY_REFLECTION_SCHEDULER_ENABLED=false"
+            --set "DAILY_INTELLIGENCE_AGGREGATION_SCHEDULER_ENABLED=false"
+            --set "DECISION_V2_OUTCOME_SCHEDULER_ENABLED=false"
+            --set "PAPER_TRADING_ENABLED=false"
+            --set "AGENT_PANEL_ENABLED=false"
+            --set "LOG_LEVEL=INFO"
+            --set "RATE_LIMIT_ENABLED=true"
+            --set "PORT=8000"
+            --set "DEPLOYMENT_COMMIT=${{ github.event.inputs.pr114_commit_sha }}"
+          )
+          if [ "$SECRET_KEY_GENERATED" = "true" ]; then
+            SET_ARGS+=(--set "SECRET_KEY=$SECRET_KEY_VALUE")
+          fi
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" "${SET_ARGS[@]}"
+          echo "Backend env configured. No SAHMK_API_KEY set (intentional -- forces DevMarketDataProvider). All scheduler flags explicitly false."
+
+      - name: Configure frontend environment variables (BEFORE building -- BACKEND_API_URL is baked in at build time)
+        env:
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
+        run: |
+          if [ "$BACKEND_URL" = "$FRONTEND_URL" ]; then
+            echo "::error::Backend and frontend resolved to the SAME URL -- this would create a self-referential proxy loop. Refusing to configure or deploy."
+            exit 1
+          fi
+          railway variables --service "$RAILWAY_FRONTEND_SERVICE" \
+            --set "BACKEND_API_URL=$BACKEND_URL" \
+            --set "NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL" \
+            --set "NEXT_PUBLIC_SITE_URL=$FRONTEND_URL" \
+            --set "NEXT_PUBLIC_DEPLOYMENT_COMMIT=${{ github.event.inputs.pr114_commit_sha }}"
+          echo "Frontend BACKEND_API_URL set to staging backend ($BACKEND_URL), confirmed different from frontend's own domain ($FRONTEND_URL)."
+
+      - name: Deploy backend (PR #114 commit) -- from repo root, picks up ./railway.toml
+        run: railway up --service "$RAILWAY_BACKEND_SERVICE" --detach
+
+      - name: Deploy frontend (PR #114 commit) -- from frontend/, picks up frontend/railway.toml
+        working-directory: frontend
+        run: railway up --service "$RAILWAY_FRONTEND_SERVICE" --detach
+
+      - name: Wait for backend to become healthy
+        env:
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+        run: |
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Backend did not become healthy within the timeout."
+          exit 1
+
+      - name: Dump backend logs (only if health wait above failed)
+        if: failure()
+        run: railway logs --service "$RAILWAY_BACKEND_SERVICE" --build 2>&1 | tail -200; railway logs --service "$RAILWAY_BACKEND_SERVICE" 2>&1 | tail -200
+
+      - name: Wait for frontend to become healthy
+        env:
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
+        run: |
+          for i in $(seq 1 32); do
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$FRONTEND_URL/login" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Frontend is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Frontend did not become healthy within the timeout."
+          exit 1
+
+      - name: Dump frontend logs (only if health wait above failed)
+        if: failure()
+        run: railway logs --service "$RAILWAY_FRONTEND_SERVICE" --build 2>&1 | tail -200; railway logs --service "$RAILWAY_FRONTEND_SERVICE" 2>&1 | tail -200
+
+      - name: Verify DB/Redis connectivity, dev provider (no SAHMK), and same-origin proxy end-to-end
+        env:
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
+        run: |
+          echo "=== /health/ready (real SELECT 1 / PING) ==="
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/ready"; echo
+          echo "=== /health/market-data via BACKEND directly (confirm dev/synthetic provider, zero SAHMK) ==="
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/market-data"; echo
+          echo "=== /health/market-data via FRONTEND proxy (proves the rewrite reaches the staging backend, not production, not itself) ==="
+          curl -sS --connect-timeout 10 --max-time 20 "$FRONTEND_URL/health/market-data"; echo
+          echo "=== /api/v1/admin/system/summary deployment_commit (unauthenticated fields only if any) ==="
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/api/v1/admin/system/summary"
+
+      - name: Deployment summary
+        env:
+          BACKEND_URL: ${{ steps.backend_domain.outputs.url }}
+          FRONTEND_URL: ${{ steps.frontend_domain.outputs.url }}
+        run: |
+          echo "======================================================"
+          echo " BASIRAH STAGING (PR #114) IS LIVE -- NOT PRODUCTION"
+          echo "======================================================"
+          echo "Project ID:  $EXPECTED_STAGING_PROJECT_ID"
+          echo "Commit:      ${{ github.event.inputs.pr114_commit_sha }}"
+          echo "App URL:     $FRONTEND_URL"
+          echo "Backend API: $BACKEND_URL"
+          echo "STAGING_FRONTEND_URL=$FRONTEND_URL"
+          echo "STAGING_BACKEND_URL=$BACKEND_URL"

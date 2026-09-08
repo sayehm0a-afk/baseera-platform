@@ -1,0 +1,206 @@
+name: Staging PR#114 - 3. Test accounts + shared-quota test (RAILWAY_STAGING_TOKEN only)
+
+# Part 3 of 3 of the PR #114 controlled staging validation
+# (docs/governance/staging-deployment-plan-pr114.md). Registers two
+# clearly-labeled, disposable staging-only test accounts (a limited
+# user and an admin), promotes the admin account directly against the
+# ISOLATED staging database only (there is no self-service promotion
+# endpoint in this codebase by design -- POST /admin/users/{id}/
+# staff-role requires an existing OWNER), then runs the test this
+# whole validation exists to answer: does one account exhausting its
+# login rate-limit budget also block a completely different, valid
+# account behind the SAME staging frontend proxy address?
+#
+# The two test-account passwords are intentionally-disposable,
+# staging-only, zero-real-world-value credentials (the staging
+# database is isolated and torn down within the approved 48-hour
+# window) -- they are surfaced in this workflow's output so they can
+# be relayed for manual Safari testing, which is the explicit purpose
+# of creating them. This is unrelated to and never touches
+# RAILWAY_STAGING_TOKEN, SECRET_KEY, DATABASE_URL, or REDIS_URL, none
+# of which are ever printed anywhere in this file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      frontend_url:
+        description: "Staging frontend URL (from staging-2's deployment summary)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_STAGING_PROJECT_ID: "7b3a7f9f-66da-460a-ba3e-9ca251f142f7"
+  LIMITED_USER_EMAIL: "staging-pr114-limited-user@example.test"
+  ADMIN_USER_EMAIL: "staging-pr114-admin@example.test"
+
+jobs:
+  accounts_and_test:
+    name: Create test accounts, promote admin, run shared-quota test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_STAGING_TOKEN }}
+      FRONTEND_URL: ${{ github.event.inputs.frontend_url }}
+    steps:
+      - name: Fail fast if RAILWAY_STAGING_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_STAGING_TOKEN is not readable by this job."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet requests psycopg2-binary
+
+      - name: HARD GATE -- re-verify this token resolves to the expected staging project
+        run: |
+          set +e
+          railway status --json > /tmp/status.json
+          STATUS_EXIT=$?
+          set -e
+          PROJECT_ID=$(python3 -c "import json; print(json.load(open('/tmp/status.json')).get('id','unknown'))" 2>/dev/null || echo unknown)
+          if [ "$STATUS_EXIT" -ne 0 ] || [ "$PROJECT_ID" != "$EXPECTED_STAGING_PROJECT_ID" ]; then
+            echo "::error::Token does not resolve to the expected staging project ($PROJECT_ID != $EXPECTED_STAGING_PROJECT_ID). Refusing to proceed."
+            exit 1
+          fi
+          echo "CONFIRMED staging project."
+
+      - name: Generate two disposable, staging-only test passwords
+        id: passwords
+        run: |
+          echo "limited=Stg-$(python3 -c 'import secrets;print(secrets.token_urlsafe(12))')" >> "$GITHUB_OUTPUT"
+          echo "admin=Stg-$(python3 -c 'import secrets;print(secrets.token_urlsafe(12))')" >> "$GITHUB_OUTPUT"
+
+      - name: Register both test accounts via the real /api/v1/auth/register flow
+        env:
+          LIMITED_PW: ${{ steps.passwords.outputs.limited }}
+          ADMIN_PW: ${{ steps.passwords.outputs.admin }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, requests
+          base = os.environ["FRONTEND_URL"].rstrip("/")
+          for email, pw, label in [
+              (os.environ["LIMITED_USER_EMAIL"], os.environ["LIMITED_PW"], "limited"),
+              (os.environ["ADMIN_USER_EMAIL"], os.environ["ADMIN_PW"], "admin"),
+          ]:
+              r = requests.post(f"{base}/api/v1/auth/register", json={"email": email, "password": pw, "full_name": f"Staging PR114 {label} test"}, timeout=30)
+              print(f"register {label} ({email}): HTTP {r.status_code}")
+              if r.status_code not in (201, 409):
+                  print(r.text)
+          PYEOF
+
+      - name: Fetch verification tokens from the real deployment logs (ConsoleEmailSender)
+        id: tokens
+        run: |
+          railway logs --service backend --lines 500 2>&1 > /tmp/backend_logs.txt || true
+          python3 - <<'PYEOF'
+          import os, re
+          log = open('/tmp/backend_logs.txt', errors='ignore').read()
+          out = {}
+          for var, email in [("limited_token", os.environ["LIMITED_USER_EMAIL"]), ("admin_token", os.environ["ADMIN_USER_EMAIL"])]:
+              pattern = re.escape(email) + r".*?Token:\s*(\S+)"
+              m = re.search(pattern, log)
+              out[var] = m.group(1) if m else ""
+              print(f"{var}: {'found' if m else 'NOT FOUND'}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              for k, v in out.items():
+                  f.write(f"{k}={v}\n")
+          PYEOF
+          rm -f /tmp/backend_logs.txt
+
+      - name: Verify both accounts' email
+        env:
+          LIMITED_TOKEN: ${{ steps.tokens.outputs.limited_token }}
+          ADMIN_TOKEN: ${{ steps.tokens.outputs.admin_token }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, requests
+          base = os.environ["FRONTEND_URL"].rstrip("/")
+          for var in ("LIMITED_TOKEN", "ADMIN_TOKEN"):
+              token = os.environ.get(var, "")
+              if not token:
+                  print(f"{var}: no token found in logs -- cannot verify, skipping")
+                  continue
+              r = requests.post(f"{base}/api/v1/auth/verify-email", json={"token": token}, timeout=30)
+              print(f"verify {var}: HTTP {r.status_code}")
+          PYEOF
+
+      - name: Promote the admin test account directly against the isolated staging database (no self-service endpoint exists by design)
+        run: |
+          railway variable list --service backend --json > /tmp/bv.json 2>/dev/null || echo '{}' > /tmp/bv.json
+          python3 - <<'PYEOF'
+          import json, os
+          import psycopg2
+          d = json.load(open('/tmp/bv.json'))
+          db_url = d.get('DATABASE_URL')
+          if not db_url:
+              raise SystemExit("DATABASE_URL not found on backend service -- cannot promote admin account.")
+          conn = psycopg2.connect(db_url)
+          conn.autocommit = True
+          with conn.cursor() as cur:
+              cur.execute(
+                  "UPDATE users SET is_staff = true, staff_role = 'OWNER' WHERE email = %s RETURNING id, email, is_staff, staff_role",
+                  (os.environ["ADMIN_USER_EMAIL"],),
+              )
+              row = cur.fetchone()
+              print(f"Promoted: {row}" if row else "No matching user row found -- promotion failed.")
+          conn.close()
+          PYEOF
+          rm -f /tmp/bv.json
+
+      - name: THE SHARED-QUOTA TEST -- does exhausting one account's login limit block a different valid account behind the same proxy?
+        env:
+          ADMIN_PW: ${{ steps.passwords.outputs.admin }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, time, requests
+          base = os.environ["FRONTEND_URL"].rstrip("/")
+          limited_email = os.environ["LIMITED_USER_EMAIL"]
+          admin_email = os.environ["ADMIN_USER_EMAIL"]
+          admin_pw = os.environ["ADMIN_PW"]
+
+          print("=== Step 1: 10 wrong-password login attempts for the LIMITED account, via the staging FRONTEND proxy ===")
+          limited_statuses = []
+          for i in range(10):
+              r = requests.post(f"{base}/api/v1/auth/login", json={"email": limited_email, "password": "deliberately-wrong"}, timeout=30)
+              limited_statuses.append(r.status_code)
+              print(f"  attempt {i+1}: HTTP {r.status_code}")
+          print(f"Limited-account attempt statuses: {limited_statuses}")
+
+          print("\n=== Step 2: IMMEDIATELY, one login attempt for the ADMIN account with its CORRECT password, same frontend proxy ===")
+          r = requests.post(f"{base}/api/v1/auth/login", json={"email": admin_email, "password": admin_pw}, timeout=30)
+          print(f"Admin login attempt (correct credentials): HTTP {r.status_code}")
+          print(r.text[:500])
+
+          print("\n=== RESULT ===")
+          if r.status_code == 429:
+              print("CONFIRMED: the admin account, with fully valid credentials, was blocked by the network-address ceiling")
+              print("exhausted by the UNRELATED limited-user account -- the shared-proxy rate-limit risk documented in the")
+              print("independent security review is REAL on actual Railway infrastructure, not just a theoretical concern.")
+          elif r.status_code == 200:
+              print("UNEXPECTED: the admin account logged in successfully despite the limited account's budget being exhausted.")
+              print("This means request.client.host was NOT actually shared between these two requests on Railway's real")
+              print("infrastructure as expected -- needs further investigation before relying on this in production capacity planning.")
+          else:
+              print(f"Neither a clean 429 nor a clean 200 -- HTTP {r.status_code} needs manual investigation (see body above).")
+          PYEOF
+
+      - name: Summary for the user (these are disposable staging-only test accounts, not production secrets -- isolated DB, torn down within 48h)
+        env:
+          LIMITED_PW: ${{ steps.passwords.outputs.limited }}
+          ADMIN_PW: ${{ steps.passwords.outputs.admin }}
+        run: |
+          echo "======================================================"
+          echo " STAGING TEST ACCOUNTS (PR #114 validation only -- NOT production)"
+          echo "======================================================"
+          echo "Limited user -- email: $LIMITED_USER_EMAIL  password: $LIMITED_PW"
+          echo "Admin        -- email: $ADMIN_USER_EMAIL  password: $ADMIN_PW"
+          echo "These exist only in the isolated staging database and will be deleted with the rest of the staging project within the approved 48-hour window."
