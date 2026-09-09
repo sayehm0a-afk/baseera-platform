@@ -20,6 +20,7 @@ admin/support action) populate `auth:revoked-access-jti:{jti}`, and only
 those specific code paths need to check it.
 """
 
+from math import ceil
 from typing import Optional
 
 import redis
@@ -69,7 +70,9 @@ def revoke_access_token(jti: str, ttl_seconds: int) -> None:
     (logout, admin suspend) -- never on the ordinary request path."""
     if ttl_seconds <= 0:
         return
-    get_redis_client().setex(_revoked_access_jti_key(jti), ttl_seconds, "1")
+    # NumericDate iat may include fractional seconds; Redis EX accepts
+    # integers only. Round up so revocation never ends before the JWT.
+    get_redis_client().setex(_revoked_access_jti_key(jti), ceil(ttl_seconds), "1")
 
 
 def is_access_token_revoked(jti: str) -> bool:

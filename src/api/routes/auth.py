@@ -369,14 +369,12 @@ def revoke_session(
     if user_session is None or user_session.user_id != current_user.id:
         raise SessionNotFoundError(f"No session {session_id} for the current user.")
 
-    _repository.revoke_user_session(session, user_session.id)
+    _repository.revoke_session_family(session, user_session.family_id)
     delete_refresh_session(user_session.refresh_token_jti)
 
-    # Revoking a *different* device's session can only stop its future
-    # refreshes (its already-issued access token has no per-token
-    # revocation path here -- see token_store.py). Revoking the calling
-    # device's own current session, though, is indistinguishable from
-    # a normal logout, so it gets the same instant access-token kill.
+    # Family-bound access tokens are also rejected by get_current_user.
+    # Explicitly revoke this device's presented access token as well,
+    # including legacy tokens that predate the sid claim.
     raw_refresh_token = request.cookies.get(_REFRESH_COOKIE)
     if raw_refresh_token and hash_token(raw_refresh_token) == user_session.refresh_token_jti:
         _revoke_current_access_token_if_present(request)
