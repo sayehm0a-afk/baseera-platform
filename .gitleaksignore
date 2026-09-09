@@ -59,3 +59,21 @@ d0c36ac715b4fdb7173092380d40f16ce9de2dee:.gitleaksignore:generic-api-key:19
 e6aabb5b78bfa4c262965eeb968c57391870a1b5:tests/integration/test_decision_v2_outcome_concurrency.py:generic-api-key:123
 99c1569b6802552375ce9ecb75c581e755ac2e12:tests/unit/ai_evolution/test_decision_v2_outcome.py:generic-api-key:537
 99c1569b6802552375ce9ecb75c581e755ac2e12:tests/unit/ai_evolution/test_decision_v2_outcome.py:generic-api-key:643
+
+# Same three findings as above, re-flagged under a DIFFERENT commit SHA
+# because this repository squash-merges PRs: PR #113's original commits
+# (e6aabb5, 99c1569, on the feature branch) never became part of main's
+# history -- only their squash-merge commit did, under a NEW SHA
+# (d6401c5). Gitleaks fingerprints are commit-specific, so the squash
+# commit needs its own allowlist entries even though the content is
+# byte-for-byte identical and was already reviewed above. Confirmed
+# again directly against the current source at this commit (PR #120
+# review) before adding -- same three independent_signal_key domain-
+# field accesses, still no credential of any kind. This squash-merge/
+# fingerprint interaction will recur for any future PR whose gitleaks
+# scan reaches this squash commit; a more durable fix (e.g. a path- and
+# rule-scoped exception instead of per-commit fingerprints) is out of
+# this PR's scope.
+d6401c5c67e45fc65d7aa3cd316edb33a5e7a782:tests/integration/test_decision_v2_outcome_concurrency.py:generic-api-key:123
+d6401c5c67e45fc65d7aa3cd316edb33a5e7a782:tests/unit/ai_evolution/test_decision_v2_outcome.py:generic-api-key:537
+d6401c5c67e45fc65d7aa3cd316edb33a5e7a782:tests/unit/ai_evolution/test_decision_v2_outcome.py:generic-api-key:643
