@@ -1,0 +1,3 @@
+Sanitized execution summary; payloads and tracebacks omitted.
+Owned local Redis version: 6.2.14
+319 passed, 63 warnings in 69.58s (0:01:09)

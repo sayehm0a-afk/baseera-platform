@@ -1,0 +1,6 @@
+Sanitized execution summary; payloads and tracebacks omitted.
+FAILED tests/integration/api/test_admin_routes.py::test_list_all_active_sessions_and_revoke
+FAILED tests/integration/api/test_admin_routes.py::test_revoke_all_sessions_for_user
+FAILED tests/integration/api/test_admin_routes.py::test_revoke_all_sessions_audit_logged
+FAILED tests/integration/api/test_portfolio_subscription_gating.py::TestAnalyzePortfolioRoute::test_a_real_trial_subscription_can_actually_analyze
+4 failed, 244 passed, 71 skipped, 15 warnings in 53.38s

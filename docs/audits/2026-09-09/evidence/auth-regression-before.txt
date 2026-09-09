@@ -1,0 +1,5 @@
+Sanitized execution summary; payloads and tracebacks omitted.
+FAILED tests/unit/auth/test_session_revocation_guards.py::test_revoking_remote_session_rejects_its_access_but_keeps_other_device
+FAILED tests/unit/auth/test_session_revocation_guards.py::test_rotation_preserves_access_validity_until_the_family_is_revoked
+FAILED tests/unit/auth/test_session_revocation_guards.py::test_new_login_within_revocation_second_is_valid_but_older_token_is_not
+3 failed, 4 warnings in 1.05s

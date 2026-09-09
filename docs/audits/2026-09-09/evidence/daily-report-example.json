@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "report_kind": "issuance_cohort_inventory_not_performance_proof",
+  "issuance_day_riyadh": "2026-09-09",
+  "timezone": "Asia/Riyadh",
+  "window_utc": {
+    "start_inclusive": "2026-09-08T21:00:00+00:00",
+    "end_exclusive": "2026-09-09T21:00:00+00:00"
+  },
+  "observed_at": "2026-09-09T17:20:20.092203+00:00",
+  "counts": {
+    "decision_snapshots": 2,
+    "actionable_snapshots": 2,
+    "actionable_without_outcome": 1,
+    "missing_quote_timestamp": 2,
+    "real_data_not_confirmed": 2,
+    "outcome_records": 1,
+    "entry_triggered": 1,
+    "independent_signals": 1,
+    "continuations": 0,
+    "unknown_independence": 0
+  },
+  "outcome_status_counts": {
+    "PARTIAL": 1
+  },
+  "cohorts": [
+    {
+      "engine_sha": "UNKNOWN",
+      "config_hash": "UNKNOWN",
+      "snapshots": 2
+    }
+  ],
+  "latest_outcome_check_at": null,
+  "performance": {
+    "win_rate": null,
+    "expected_return": null,
+    "net_return": null,
+    "portfolio_drawdown": null,
+    "longest_loss_streak": null
+  },
+  "limitations": [
+    "Counts reflect stored rows, not completeness of all recommendations shown.",
+    "PARTIAL means ambiguous ordering, never a proven win or loss.",
+    "A decision snapshot is not necessarily an independent trade.",
+    "No cost, execution, portfolio allocation, or live-provider proof is inferred.",
+    "Outcomes are current observations of this issuance cohort, not a historical as-of reconstruction.",
+    "This command does not schedule monitoring, ingest prices, evaluate outcomes, or issue recommendations."
+  ],
+  "fixture_only_not_market_results": true
+}

@@ -1,0 +1,26 @@
+{
+  "environment": "isolated staging; deployed baseline, not this worktree",
+  "browser": "Chrome cloud",
+  "date": "2026-09-09",
+  "login_url": "https://frontend-production-e0b2c.up.railway.app/login",
+  "observed": [
+    "email and password fields",
+    "sign-in button",
+    "registration link",
+    "forgot-password link"
+  ],
+  "interaction": "clicked forgot-password link; Arabic email recovery form rendered",
+  "layout": {
+    "lang": "ar",
+    "dir": "rtl",
+    "viewport_width": 1363,
+    "horizontal_overflow": false
+  },
+  "not_tested": [
+    "credential submission",
+    "real email delivery",
+    "authenticated journeys",
+    "Safari",
+    "modified UI in live browser"
+  ]
+}

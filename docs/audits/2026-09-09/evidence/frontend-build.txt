@@ -1,0 +1,67 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> frontend@0.1.0 build
+> next build
+
+▲ Next.js 16.2.11 (Turbopack)
+- Experiments (use with caution):
+  · proxyTimeout: 120000
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 26.4s
+  Running TypeScript ...
+  Finished TypeScript in 5.2s ...
+  Collecting page data using 8 workers ...
+  Generating static pages using 8 workers (0/41) ...
+  Generating static pages using 8 workers (10/41)
+  Generating static pages using 8 workers (20/41)
+  Generating static pages using 8 workers (30/41)
+✓ Generating static pages using 8 workers (41/41) in 388ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /ai
+├ ○ /apple-icon.png
+├ ○ /dashboard
+├ ○ /forgot-password
+├ ○ /icon.png
+├ ○ /login
+├ ○ /news
+├ ○ /opportunities
+├ ○ /owner
+├ ○ /owner/ai-usage
+├ ○ /owner/analytics
+├ ○ /owner/announcements
+├ ○ /owner/audit-log
+├ ○ /owner/decision-intelligence
+├ ○ /owner/feature-flags
+├ ○ /owner/investment-committee
+├ ○ /owner/live-test
+├ ○ /owner/market-coverage
+├ ○ /owner/personal-performance
+├ ○ /owner/radar-v2
+├ ○ /owner/recommendation-history
+├ ○ /owner/sessions
+├ ○ /owner/subscriptions
+├ ○ /owner/users
+├ ○ /portfolio
+├ ○ /radar
+├ ○ /register
+├ ○ /reports
+├ ○ /reset-password
+├ ○ /robots.txt
+├ ○ /scan
+├ ○ /settings
+├ ○ /sitemap.xml
+├ ○ /stocks
+├ ƒ /stocks/[symbol]
+├ ○ /strategies
+├ ○ /today
+├ ○ /verify-email
+└ ○ /watchlist
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
