@@ -22,6 +22,7 @@ export function formatArabicDateTime(iso: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) return "--";
   return date.toLocaleString(AR_SA_GREGORIAN, {
     calendar: "gregory",
+    timeZone: "Asia/Riyadh",
     year: "numeric",
     month: "long",
     day: "numeric",

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { StockDirectoryItem } from "@/lib/api/stocks-types";
+import { formatArabicDateTime } from "@/lib/format/freshness";
 
 function priceLabel(value: number | null): string {
   return value == null ? "--" : value.toFixed(2);
@@ -37,6 +38,10 @@ export function StockDirectoryRow({ item }: { item: StockDirectoryItem }) {
         <span className="bsr-numeric text-xs text-bsr-text-secondary">
           {item.symbol}
           {item.sector_ar ? ` · ${item.sector_ar}` : ""}
+        </span>
+        <span className="text-xs text-bsr-text-secondary">{item.freshness_label_ar}</span>
+        <span className="text-xs text-bsr-text-secondary">
+          {item.price_as_of ? `وقت السعر: ${formatArabicDateTime(item.price_as_of)} بتوقيت الرياض` : "توقيت السعر غير متاح"}
         </span>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-0.5">

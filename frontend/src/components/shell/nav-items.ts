@@ -23,7 +23,7 @@ export interface NavItem {
  * the four investment surfaces above.
  */
 export const PRIMARY_NAV_ITEMS: NavItem[] = [
-  { key: "radar", labelAr: "الرادار الذكي", href: "/radar" },
+  { key: "radar", labelAr: "فرص اليوم", href: "/radar" },
   { key: "stocks", labelAr: "جميع الأسهم", href: "/stocks" },
   { key: "portfolio", labelAr: "محفظتي", href: "/portfolio" },
   { key: "watchlist", labelAr: "المتابعة", href: "/watchlist" },
