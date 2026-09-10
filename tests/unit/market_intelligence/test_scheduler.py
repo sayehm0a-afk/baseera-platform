@@ -184,13 +184,21 @@ class _LowBackgroundQuotaRateLimiter:
     """Fake reporting quota that is not upstream-exhausted, but has
     dropped below MARKET_SCAN_MIN_BACKGROUND_QUOTA_REMAINING (default
     10) -- the circuit breaker must trip before that threshold is
-    reached, not only once SAHMK itself refuses requests."""
+    reached, not only once SAHMK itself refuses requests.
+
+    PROPOSED (2026-09-10, NOT YET APPLIED): includes
+    remaining_today_for_market_scan too -- the field
+    `_quota_allows_a_new_cycle` now actually reads, since this cycle
+    runs under priority_scope(MARKET_SCAN), not BACKGROUND. The older
+    fields are kept here only to document that this fake predates that
+    change; they are not read by the current code."""
 
     def get_status(self):
         return {
             "upstream_confirmed_exhausted": False,
             "remaining_today_for_background": 3,
             "remaining_today_for_background_after_live_scan_reserve": 3,
+            "remaining_today_for_market_scan": 3,
         }
 
 
@@ -408,6 +416,45 @@ async def test_run_one_cycle_stops_when_only_the_live_scan_reserve_is_protecting
     assert calls == []
 
 
+class _MarketScanReserveLowRateLimiter:
+    """PROPOSED (2026-09-10, NOT YET APPLIED): mirrors
+    _LiveScanReserveProtectedRateLimiter one tier down -- both legacy
+    fields look healthy, but the market-scan-aware field this cycle
+    actually runs under (priority_scope(MARKET_SCAN), not BACKGROUND)
+    is low. Proves _quota_allows_a_new_cycle reads
+    remaining_today_for_market_scan, not either older field, after the
+    proposed change."""
+
+    def get_status(self):
+        return {
+            "upstream_confirmed_exhausted": False,
+            "remaining_today_for_background": 40,  # legacy field: looks healthy
+            "remaining_today_for_background_after_live_scan_reserve": 40,  # also looks healthy
+            "remaining_today_for_market_scan": 3,  # true budget for this cycle: low
+        }
+
+
+@pytest.mark.asyncio
+async def test_run_one_cycle_stops_when_only_the_market_scan_reserve_field_is_low(factory, monkeypatch):
+    """PROPOSED (2026-09-10, NOT YET APPLIED)."""
+    calls = []
+
+    async def _fake_run_job(run_id, session_factory, market_provider, symbols=None, **kwargs):
+        calls.append((run_id, symbols))
+
+    monkeypatch.setattr(scheduler_module, "run_market_scan_job", _fake_run_job)
+
+    scheduler = IntervalMarketIntelligenceScheduler(
+        session_factory=factory,
+        market_provider_getter=_fake_market_provider_getter,
+        rate_limiter=_MarketScanReserveLowRateLimiter(),
+    )
+
+    await scheduler._run_one_cycle()
+
+    assert calls == []
+
+
 @pytest.mark.asyncio
 async def test_run_one_cycle_skips_when_a_scan_is_already_in_flight(factory, monkeypatch):
     """The overlap guard (`has_in_flight_run`) must prevent the
@@ -438,17 +485,24 @@ async def test_run_one_cycle_skips_when_a_scan_is_already_in_flight(factory, mon
 
 
 @pytest.mark.asyncio
-async def test_stage2_runner_runs_under_background_priority_and_radar_v2_operation(factory, monkeypatch):
+async def test_stage2_runner_runs_under_market_scan_priority_and_radar_v2_operation(factory, monkeypatch):
     """The 2026-08-13 incident's primary root cause: this call path
-    must be tagged BACKGROUND so it is subject to
-    `reserved_for_critical`'s reserve, unlike the unmarked (CRITICAL by
-    default) priority it ran under before that fix. Separately, the
-    2026-08-18 Radar V2 wiring must tag its SAHMK usage `RADAR_V2` (not
-    the old `MARKET_SCAN`) so it is attributable in
-    `GET .../radar-v2/sahmk-consumption` -- both observed directly from
-    `_stage2_runner`, the one piece of this module that still calls
-    `run_market_scan_job`."""
-    from src.market_data.sahmk.request_priority import BACKGROUND, get_current_priority
+    must be tagged (originally BACKGROUND, see git history) so it is
+    subject to `reserved_for_critical`'s reserve, unlike the unmarked
+    (CRITICAL by default) priority it ran under before that fix.
+    Separately, the 2026-08-18 Radar V2 wiring must tag its SAHMK usage
+    `RADAR_V2` (not the old `MARKET_SCAN` operation-scope constant) so
+    it is attributable in `GET .../radar-v2/sahmk-consumption` -- both
+    observed directly from `_stage2_runner`, the one piece of this
+    module that still calls `run_market_scan_job`.
+
+    PROPOSED (2026-09-10, NOT YET APPLIED): updated to assert the new
+    MARKET_SCAN *request-priority* tier (request_priority.py, distinct
+    from the same-named operation-scope constant this test also checks
+    for `observed["operation"]`) instead of BACKGROUND -- see
+    scheduler.py's `_stage2_runner` docstring and request_priority.py's
+    module docstring for the 2026-09-09 incident this closes."""
+    from src.market_data.sahmk.request_priority import MARKET_SCAN, get_current_priority
 
     monkeypatch.setenv("MARKET_SCAN_REQUIRE_PRICE_HISTORY", "false")
     observed = {}
@@ -469,7 +523,7 @@ async def test_stage2_runner_runs_under_background_priority_and_radar_v2_operati
     session.close()
 
     assert result.executed is True
-    assert observed["priority"] == BACKGROUND
+    assert observed["priority"] == MARKET_SCAN
     assert observed["operation"] == "radar_v2"
 
 
