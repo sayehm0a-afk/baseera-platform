@@ -85,7 +85,7 @@ jobs:
             railway service delete "$svc" --yes 2>&1 || railway service delete "$svc" 2>&1 || echo "(delete command failed or requires different syntax for $svc -- will re-verify below regardless)"
           done
 
-      - name: Re-verify: list services after teardown (authoritative -- exit codes above are not trusted)
+      - name: Re-verify -- list services after teardown (authoritative, exit codes above are not trusted)
         run: |
           sleep 5
           railway service list --json > /tmp/after.json 2>/dev/null || echo '[]' > /tmp/after.json
