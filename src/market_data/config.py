@@ -247,3 +247,55 @@ def get_sahmk_reserved_for_live_scan_requests_per_day() -> Optional[int]:
         return None
     value = int(raw)
     return value if value > 0 else None
+
+
+def get_sahmk_reserved_for_market_scan_requests_per_day() -> Optional[int]:
+    """PROPOSED (2026-09-10 production market-data audit finding, NOT
+    YET APPLIED). How many of get_sahmk_max_requests_per_day()'s
+    requests -- immediately outside the critical and live-scan reserves
+    -- are reserved for priority=MARKET_SCAN callers only (the regular,
+    always-on MarketIntelligenceScheduler recurring scan --
+    src.market_intelligence.scheduler) once background work (routine
+    symbols/historical_ohlcv/fundamentals/dividends ingestion, admin
+    diagnostics) has used up the rest.
+
+    Real production evidence (2026-09-09) this closes: the regular scan
+    runs at BACKGROUND priority (a deliberate 2026-08-13 fix, so it
+    would never again spend the OVERWHELMING majority of daily volume
+    at CRITICAL priority the way it once did -- see request_priority.py's
+    module docstring) sharing one undivided pool with routine ingestion.
+    Ingestion jobs run first each day (~00:05 UTC, well before Tadawul's
+    07:00 UTC open) and fully exhausted that shared pool before the
+    market ever opened; the scan's own quota-health circuit breaker
+    (MarketIntelligenceScheduler._quota_allows_a_new_cycle) then
+    correctly skipped every cycle for the rest of that day (by design --
+    it never wastes a partial scan), so zero new recommendations were
+    produced for a full trading day. This mirrors exactly the
+    2026-08-25 LIVE_SCAN gap this same architecture already closed for
+    a different caller.
+
+    None (the default when SAHMK_MAX_REQUESTS_PER_DAY is unset) or 0
+    disables the reservation -- the regular scan and background work
+    then draw from the same pool, exactly as before this mechanism
+    existed (today's actual behavior).
+
+    Default 15: real production evidence (scan run #140, 2026-09-08)
+    shows a genuine cycle costing 6 SAHMK calls (one live quote per
+    Stage-2-selected symbol); get_market_scan_symbols_per_cycle()'s own
+    default (20) is the theoretical per-cycle ceiling. 15 comfortably
+    covers one full cycle at either the observed or the configured-cap
+    size, while leaving the majority of the real ~100/day budget
+    (100 - 30 critical - 20 live-scan - 15 market-scan = 35) for
+    background ingestion -- down from today's 50, a real, disclosed
+    trade-off: routine ingestion (dividends/fundamentals refresh
+    specifically, already the lowest-urgency and already the first to
+    fail under quota pressure per the same 2026-09-09 evidence) would be
+    squeezed further. NOT tuned against a multi-day production
+    simulation the way LIVE_SCAN's 20 was (see that getter's own
+    PRODUCTION_SCALE_SIMULATION_DAYS reference) -- this default is a
+    starting point for human review, not a re-confirmed final number."""
+    raw = os.getenv("SAHMK_RESERVED_FOR_MARKET_SCAN_REQUESTS_PER_DAY", "15")
+    if not raw.strip():
+        return None
+    value = int(raw)
+    return value if value > 0 else None

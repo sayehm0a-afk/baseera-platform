@@ -81,7 +81,7 @@ from sqlalchemy.orm import Session
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.rate_limiter import SahmkRateLimiter, get_default_rate_limiter
 from src.market_data.sahmk.operation_scope import RADAR_V2, operation_scope
-from src.market_data.sahmk.request_priority import BACKGROUND, priority_scope
+from src.market_data.sahmk.request_priority import MARKET_SCAN, priority_scope
 from src.market_intelligence.config import (
     get_market_intelligence_scan_interval,
     get_max_scan_run_duration_hours,
@@ -239,18 +239,26 @@ class IntervalMarketIntelligenceScheduler:
         could otherwise let a cycle start that then hits
         SahmkQuotaReservedForLiveScanError partway through (caught and
         degraded gracefully per-symbol, but wastes a cycle it should
-        have skipped proactively)."""
+        have skipped proactively).
+
+        2026-09-09 incident remediation: reads
+        remaining_today_for_market_scan instead -- this cycle runs under
+        priority_scope(MARKET_SCAN) below, not BACKGROUND, so its own
+        ceiling is the market-scan tier's, not the deeper background-
+        after-market-scan-reserve one (that field is what plain
+        BACKGROUND callers, e.g. routine ingestion, now check instead --
+        see SahmkRateLimiter.can_run_background_request)."""
         status = self._rate_limiter.get_status()
         if status.get("upstream_confirmed_exhausted"):
             logger.warning(
                 "MarketIntelligenceScheduler: SAHMK upstream quota is confirmed exhausted -- skipping this cycle."
             )
             return False
-        remaining_bg = status.get("remaining_today_for_background_after_live_scan_reserve")
+        remaining_bg = status.get("remaining_today_for_market_scan")
         threshold = get_scan_min_background_quota_remaining()
         if remaining_bg is not None and remaining_bg < threshold:
             logger.warning(
-                "MarketIntelligenceScheduler: background-eligible SAHMK quota low (%s remaining, "
+                "MarketIntelligenceScheduler: market-scan-eligible SAHMK quota low (%s remaining, "
                 "threshold %s) -- skipping this cycle to protect the reserve.",
                 remaining_bg, threshold,
             )
@@ -268,10 +276,22 @@ class IntervalMarketIntelligenceScheduler:
         the `MarketScanRun` row and hand off to `run_market_scan_job`,
         under `operation_scope(RADAR_V2)` instead of `MARKET_SCAN` so
         this cycle's SAHMK usage is separately attributable (see
-        `GET .../radar-v2/sahmk-consumption`). `caller` is accepted only
-        to satisfy `StageTwoRunner`'s shape (unused -- nothing here logs
-        it; `run_one_bounded_background_cycle` is the caller that
-        actually uses it, for its own manually-triggered routes)."""
+        `GET .../radar-v2/sahmk-consumption` -- an unrelated, pre-existing
+        `MARKET_SCAN` operation-scope constant, not to be confused with
+        the same-named request-priority tier below). `caller` is
+        accepted only to satisfy `StageTwoRunner`'s shape (unused --
+        nothing here logs it; `run_one_bounded_background_cycle` is the
+        caller that actually uses it, for its own manually-triggered
+        routes).
+
+        Runs under priority_scope(MARKET_SCAN) (the request_priority.py
+        tier imported above -- distinct from operation_scope.py's
+        same-named, unrelated MARKET_SCAN attribution constant, which
+        this module does not import) instead of priority_scope
+        (BACKGROUND). See request_priority.py's module docstring and
+        this module's own docstring update for the 2026-09-09 incident
+        this closes (routine ingestion exhausting the shared BACKGROUND
+        pool before this scan ever got a turn)."""
         symbols = resolve_symbols()
         if not symbols:
             return _SchedulerStage2Result(executed=False, stop_reason="no_candidates")
@@ -279,7 +299,7 @@ class IntervalMarketIntelligenceScheduler:
         run = self._repository.create_scan_run(session, symbols_requested=len(symbols))
         run_id = run.id
 
-        with priority_scope(BACKGROUND), operation_scope(RADAR_V2):
+        with priority_scope(MARKET_SCAN), operation_scope(RADAR_V2):
             provider = await self._get_market_provider()
             await run_market_scan_job(run_id, self._session_factory, provider, symbols=symbols)
 

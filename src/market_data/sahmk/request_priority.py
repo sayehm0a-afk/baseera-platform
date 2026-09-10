@@ -32,6 +32,26 @@ callers are already protected from spending CRITICAL's reserve -- see
 rate_limiter.py's three-cutoff acquire() logic. LIVE_SCAN itself
 cannot dip into the CRITICAL reserve either: active-signal/pending-
 outcome tracking always outranks a live-scan cycle.
+
+PROPOSED (2026-09-10 production market-data audit finding, NOT YET
+APPLIED -- see the branch this change ships on): a fourth level,
+MARKET_SCAN, sits strictly between LIVE_SCAN and BACKGROUND, for
+exactly the same reason LIVE_SCAN was added: `MarketIntelligenceScheduler
+._run_one_cycle` (the regular, always-on recurring scan that actually
+produces the RadarOpportunity rows real users see) was deliberately
+demoted to BACKGROUND priority on 2026-08-13, sharing one
+undifferentiated pool with routine ingestion (symbols/historical_ohlcv/
+fundamentals/dividends). Real production evidence (2026-09-09) shows
+that pool fully exhausted by ~00:07 UTC ingestion jobs, hours before
+Tadawul's 07:00 UTC open -- the regular scan's own quota-health circuit
+breaker then correctly refused to run for the entire remaining day
+(zero SAHMK calls, by design), producing no new recommendations at all
+that day. MARKET_SCAN gives the regular scan the same kind of
+protected, ingestion-proof reserve LIVE_SCAN already gives the
+(currently-disabled) recurrent live-scan feature -- ingestion can never
+spend it, and MARKET_SCAN itself cannot dip into LIVE_SCAN's or
+CRITICAL's reserves either, preserving the exact nesting discipline
+established above.
 """
 
 import contextlib
@@ -40,6 +60,7 @@ from typing import Iterator
 
 CRITICAL = "critical"
 LIVE_SCAN = "live_scan"
+MARKET_SCAN = "market_scan"
 BACKGROUND = "background"
 
 _priority_var: "contextvars.ContextVar[str]" = contextvars.ContextVar(
@@ -54,12 +75,12 @@ def get_current_priority() -> str:
 @contextlib.contextmanager
 def priority_scope(priority: str) -> Iterator[None]:
     """Marks every SAHMK request made while this context is active with
-    `priority` (CRITICAL, LIVE_SCAN, or BACKGROUND). Nestable: a scope's
-    own value is restored on exit, not reset to CRITICAL, so nesting
-    background-inside-background (or a background job calling into a
-    critical-priority helper) behaves as the innermost scope intends
-    without clobbering an outer one."""
-    if priority not in (CRITICAL, LIVE_SCAN, BACKGROUND):
+    `priority` (CRITICAL, LIVE_SCAN, MARKET_SCAN, or BACKGROUND).
+    Nestable: a scope's own value is restored on exit, not reset to
+    CRITICAL, so nesting background-inside-background (or a background
+    job calling into a critical-priority helper) behaves as the
+    innermost scope intends without clobbering an outer one."""
+    if priority not in (CRITICAL, LIVE_SCAN, MARKET_SCAN, BACKGROUND):
         raise ValueError(f"Unknown SAHMK request priority: {priority!r}")
     token = _priority_var.set(priority)
     try:
