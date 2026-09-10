@@ -137,6 +137,38 @@ def _make_opportunity(
     return opportunity
 
 
+# `/summary`'s freshness filter (`is_decision_fresh(o.emitted_at)` in
+# src/api/routes/radar.py) resolves "now" via `get_market_status()` with
+# no argument -- real wall-clock time -- inside
+# `src.analysis.decision_v2.decision_freshness`'s own module namespace.
+# An opportunity emitted "right now" is only classified fresh once
+# today's Tadawul session has actually started (LIVE) or finished
+# (LAST_SESSION); before that (PRE_MARKET), "right now" is compared
+# against *yesterday's* last completed session and correctly reads as
+# STALE. This is exactly what a real CI run hit (2026-09-10, ~07:23
+# Riyadh, genuinely pre-market) -- proven by reproducing all three
+# regimes with `get_market_status(now=...)` at fixed instants:
+# PRE_MARKET -> STALE, OPEN -> LIVE, POST_CLOSE -> LAST_SESSION, exactly
+# matching this module's own documented contract. The freshness logic is
+# correct and untouched; only these tests' dependency on the real wall
+# clock is the bug. Pins the check to a fixed, known-OPEN session
+# instead, via the same `now` parameter `get_market_status` already
+# exposes for exactly this purpose.
+_FIXED_TRADING_NOW = datetime(2026, 1, 4, 12, 0, tzinfo=timezone(timedelta(hours=3)))  # Sunday, mid-session (OPEN)
+
+
+@pytest.fixture
+def frozen_open_market(monkeypatch):
+    from src.market_intelligence.market_status import get_market_status
+
+    fixed_status = get_market_status(now=_FIXED_TRADING_NOW)
+    assert fixed_status.status.value == "OPEN"  # guards the fixture's own premise if the calendar ever changes
+    monkeypatch.setattr(
+        "src.analysis.decision_v2.decision_freshness.get_market_status", lambda: fixed_status
+    )
+    return _FIXED_TRADING_NOW
+
+
 # --- authorization ----------------------------------------------------
 
 
@@ -375,10 +407,10 @@ def test_opportunities_list_calibrated_confidence_is_honestly_none_without_an_ac
     assert row["calibration_version"] is None
 
 
-def test_summary_reflects_a_real_live_opportunity(client, db_session, authenticated_as_staff):
+def test_summary_reflects_a_real_live_opportunity(client, db_session, authenticated_as_staff, frozen_open_market):
     stock = _make_stock(db_session, "2222")
     snapshot = _make_snapshot(db_session, stock, confidence=90.0)
-    _make_opportunity(db_session, stock, snapshot)
+    _make_opportunity(db_session, stock, snapshot, emitted_at=frozen_open_market)
 
     response = client.get(_SUMMARY_ROUTE)
     assert response.status_code == 200
@@ -390,7 +422,9 @@ def test_summary_reflects_a_real_live_opportunity(client, db_session, authentica
     assert body["top_opportunities"][0]["symbol"] == "2222"
 
 
-def test_summary_excludes_a_stale_decision_from_live_count_and_preview(client, db_session, authenticated_as_staff):
+def test_summary_excludes_a_stale_decision_from_live_count_and_preview(
+    client, db_session, authenticated_as_staff, frozen_open_market
+):
     """Production truthfulness fix (2026-08-23) regression fixture: a
     real production case, symbol 6060, was emitted 3 days ago (STALE)
     yet still rendered as an actionable "شراء" inside "الفرص الحية"
@@ -404,12 +438,12 @@ def test_summary_excludes_a_stale_decision_from_live_count_and_preview(client, d
     stale_snapshot = _make_snapshot(db_session, stale_stock, confidence=60.0)
     _make_opportunity(
         db_session, stale_stock, stale_snapshot,
-        emitted_at=datetime.now(timezone.utc) - timedelta(days=5),
+        emitted_at=frozen_open_market - timedelta(days=5),
     )
 
     fresh_stock = _make_stock(db_session, "2222")
     fresh_snapshot = _make_snapshot(db_session, fresh_stock, confidence=90.0)
-    _make_opportunity(db_session, fresh_stock, fresh_snapshot)
+    _make_opportunity(db_session, fresh_stock, fresh_snapshot, emitted_at=frozen_open_market)
 
     response = client.get(_SUMMARY_ROUTE)
     assert response.status_code == 200
@@ -481,7 +515,7 @@ def test_summary_ignores_an_ordinary_market_scan_run_with_no_stage1_metrics(
 
 
 def test_summary_funnel_is_honestly_null_for_a_real_radar_v2_run_that_predates_the_fix(
-    client, db_session, authenticated_as_staff
+    client, db_session, authenticated_as_staff, frozen_open_market
 ):
     """Reproduces the exact production failure mode found during the
     BASIRAH Final Pre-Live Fix investigation (2026-08-19): a real Radar
@@ -508,7 +542,7 @@ def test_summary_funnel_is_honestly_null_for_a_real_radar_v2_run_that_predates_t
 
     stock = _make_stock(db_session, "2222")
     snapshot = _make_snapshot(db_session, stock, scan_run_id=pre_fix_run.id)
-    _make_opportunity(db_session, stock, snapshot)
+    _make_opportunity(db_session, stock, snapshot, emitted_at=frozen_open_market)
 
     response = client.get(_SUMMARY_ROUTE)
     assert response.status_code == 200
@@ -539,16 +573,22 @@ def test_stale_data_freshness_is_disclosed_not_hidden(client, db_session, authen
     assert response.json()[0]["data_freshness_status"] == "STALE"
 
 
-def test_superseded_opportunities_are_excluded_from_list_and_summary(client, db_session, authenticated_as_staff):
+def test_superseded_opportunities_are_excluded_from_list_and_summary(
+    client, db_session, authenticated_as_staff, frozen_open_market
+):
     """Anti-flapping dedup (superseded_by_id) is a real structural
     guarantee -- a symbol that was re-emitted must appear once, as its
     newest live row, never alongside the stale one it replaced."""
     stock = _make_stock(db_session, "2222")
     old_snapshot = _make_snapshot(db_session, stock, confidence=60.0)
-    old_opportunity = _make_opportunity(db_session, stock, old_snapshot, stage1_rank=3)
+    old_opportunity = _make_opportunity(
+        db_session, stock, old_snapshot, stage1_rank=3, emitted_at=frozen_open_market
+    )
 
     new_snapshot = _make_snapshot(db_session, stock, confidence=85.0)
-    new_opportunity = _make_opportunity(db_session, stock, new_snapshot, stage1_rank=1)
+    new_opportunity = _make_opportunity(
+        db_session, stock, new_snapshot, stage1_rank=1, emitted_at=frozen_open_market
+    )
 
     old_opportunity.superseded_by_id = new_opportunity.id
     db_session.add(old_opportunity)
