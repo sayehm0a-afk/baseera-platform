@@ -85,6 +85,13 @@ jobs:
             railway service delete "$svc" --yes 2>&1 || railway service delete "$svc" 2>&1 || echo "(delete command failed or requires different syntax for $svc -- will re-verify below regardless)"
           done
 
+      - name: Check the stray Postgres service-domain object (read-only listing, no mutation)
+        run: |
+          echo "Listing existing domains for the Postgres service (list-only -- never creates or removes anything)."
+          railway domain list --service Postgres --json > /tmp/postgres_domains.json 2>&1 || true
+          cat /tmp/postgres_domains.json
+          rm -f /tmp/postgres_domains.json
+
       - name: Re-verify -- list services after teardown (authoritative, exit codes above are not trusted)
         run: |
           sleep 5
