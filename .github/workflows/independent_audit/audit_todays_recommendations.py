@@ -155,3 +155,37 @@ out["price_history_from_own_signal_date_for_non_today_opportunities"] = price_hi
 print("===AUDIT_JSON_START===")
 print(json.dumps(out, indent=2, default=str))
 print("===AUDIT_JSON_END===")
+
+# Concise, human-reviewable report -- printed LAST (after the full JSON
+# dump above) so a tail-of-log fetch can retrieve it even when the full
+# JSON is too large for that. One row per live opportunity: entry/target/
+# stop, and its real outcome-tracking status so far -- never a fabricated
+# success rate, just what is actually persisted.
+print("\n===CONCISE_REPORT_START===")
+all_details = details + non_today_details
+print(f"Total live opportunities reported below: {len(all_details)} ({len(details)} from {AUDIT_DATE}, {len(non_today_details)} from earlier still-live)")
+print("")
+unresolved_no_outcome_yet = []
+for d in sorted(all_details, key=lambda x: x.get("emitted_at", "")):
+    if "ERROR" in d:
+        print(f"[{d.get('id')}] {d.get('symbol')}: ERROR fetching detail -- {d['ERROR']}")
+        continue
+    outcome_status = d.get("outcome_status")
+    outcome_return = d.get("outcome_return_pct")
+    outcome_evaluated_at = d.get("outcome_evaluated_at")
+    if outcome_status is None:
+        unresolved_no_outcome_yet.append(d.get("symbol"))
+    print(
+        f"[{d.get('id')}] {d.get('symbol')} ({d.get('company_name_ar', '')}) "
+        f"classification={d.get('classification')} emitted_at={d.get('emitted_at')}\n"
+        f"    entry_zone=[{d.get('entry_zone_low')}, {d.get('entry_zone_high')}] "
+        f"stop_loss={d.get('stop_loss')} "
+        f"targets=[{d.get('target_1')}, {d.get('target_2')}, {d.get('target_3')}]\n"
+        f"    entry_status={d.get('entry_status')} "
+        f"outcome_status={outcome_status!r} "
+        f"outcome_return_pct={outcome_return} "
+        f"outcome_evaluated_at={outcome_evaluated_at}"
+    )
+
+print(f"\nSymbols with NO outcome_status yet (not fabricated as a result -- genuinely un-evaluated/pending): {unresolved_no_outcome_yet}")
+print("===CONCISE_REPORT_END===")
