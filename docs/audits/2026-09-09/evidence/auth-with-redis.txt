@@ -1,0 +1,7 @@
+Sanitized execution summary; payloads and tracebacks omitted.
+Owned local Redis version: 6.2.14
+FAILED tests/integration/api/test_auth_routes.py::test_logout_clears_session_and_revokes_it
+FAILED tests/integration/api/test_auth_routes.py::test_logout_deletes_cookies_with_matching_attributes_in_production
+FAILED tests/integration/api/test_auth_routes.py::test_revoke_own_current_session_logs_it_out_immediately
+FAILED tests/integration/api/test_auth_routes.py::test_revoke_a_different_devices_session_kills_its_refresh_not_its_live_access_token
+4 failed, 315 passed, 64 warnings in 67.64s (0:01:07)

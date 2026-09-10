@@ -189,6 +189,7 @@ class AuthRepository:
         expires_at: datetime,
         device_label: Optional[str] = None,
         ip_address: Optional[str] = None,
+        commit: bool = True,
     ) -> UserSession:
         user_session = UserSession(
             user_id=user_id,
@@ -199,7 +200,10 @@ class AuthRepository:
             ip_address=ip_address,
         )
         session.add(user_session)
-        session.commit()
+        if commit:
+            session.commit()
+        else:
+            session.flush()
         return user_session
 
     def get_user_session_by_jti(self, session: Session, refresh_token_jti: str) -> Optional[UserSession]:
@@ -208,9 +212,30 @@ class AuthRepository:
     def get_user_session_by_id(self, session: Session, session_id: int) -> Optional[UserSession]:
         return session.query(UserSession).filter_by(id=session_id).one_or_none()
 
+    def has_active_session_family(self, session: Session, user_id: int, family_id: str) -> bool:
+        """Rotation keeps the family alive; logout/replay/remote revocation
+        makes its access tokens unusable without logging out other devices."""
+        return session.query(UserSession.id).filter(
+            UserSession.user_id == user_id,
+            UserSession.family_id == family_id,
+            UserSession.revoked_at.is_(None),
+            UserSession.expires_at > datetime.now(timezone.utc),
+        ).first() is not None
+
     def revoke_user_session(self, session: Session, session_id: int) -> None:
         session.query(UserSession).filter_by(id=session_id).update({"revoked_at": datetime.now(timezone.utc)})
         session.commit()
+
+    def consume_refresh_session(self, session: Session, session_id: int) -> bool:
+        """Single-use claim within the caller's transaction. A conditional
+        UPDATE prevents two workers from accepting the same refresh token.
+        Commit together with its replacement, never between the two rows."""
+        count = session.query(UserSession).filter(
+            UserSession.id == session_id,
+            UserSession.revoked_at.is_(None),
+            UserSession.expires_at > datetime.now(timezone.utc),
+        ).update({"revoked_at": datetime.now(timezone.utc)}, synchronize_session=False)
+        return count == 1
 
     def revoke_session_family(self, session: Session, family_id: str) -> None:
         """The stolen-refresh-token defense: revokes every session

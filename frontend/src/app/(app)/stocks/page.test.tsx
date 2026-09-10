@@ -76,7 +76,7 @@ describe("StocksDirectoryPage", () => {
     render(<StocksDirectoryPage />);
     await flushDebounce();
 
-    expect(screen.getByText("لا توجد نتائج")).toBeInTheDocument();
+    expect(screen.getByText("قائمة الشركات غير متاحة حاليًا")).toBeInTheDocument();
   });
 
   it("debounces the search query before calling the API again", async () => {
@@ -122,5 +122,51 @@ describe("StocksDirectoryPage", () => {
     await flushDebounce();
 
     expect(screen.getByText("تعذّر تحميل قائمة الأسهم")).toBeInTheDocument();
+  });
+
+  it.each(["resolve", "reject"])("ignores an older search that %s after the new one", async (completion) => {
+    let oldResolve!: (value: StockDirectory) => void;
+    let oldReject!: (reason: Error) => void;
+    vi.mocked(getStockDirectory).mockReturnValueOnce(new Promise((resolve, reject) => {
+      oldResolve = resolve; oldReject = reject;
+    }));
+    render(<StocksDirectoryPage />);
+    await flushDebounce();
+    vi.mocked(getStockDirectory).mockResolvedValueOnce(directory({ results: [item({ symbol: "1120", name_ar: "الراجحي" })] }));
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "الراجحي" } });
+    await flushDebounce();
+    await act(async () => {
+      if (completion === "resolve") oldResolve(directory());
+      else oldReject(new Error("older request failed"));
+    });
+    expect(screen.getByText("الراجحي")).toBeInTheDocument();
+    expect(screen.queryByText("أرامكو السعودية")).not.toBeInTheDocument();
+    expect(screen.queryByText("تعذّر تحميل قائمة الأسهم")).not.toBeInTheDocument();
+  });
+
+  it("ignores pagination for an old query and prevents duplicate page requests", async () => {
+    vi.mocked(getStockDirectory).mockResolvedValueOnce(directory({ total: 2 }));
+    render(<StocksDirectoryPage />);
+    await flushDebounce();
+    let resolvePage!: (value: StockDirectory) => void;
+    vi.mocked(getStockDirectory).mockReturnValueOnce(new Promise((resolve) => { resolvePage = resolve; }));
+    const button = screen.getByRole("button", { name: "تحميل المزيد" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(getStockDirectory).toHaveBeenCalledTimes(2);
+    vi.mocked(getStockDirectory).mockResolvedValueOnce(directory({ results: [item({ symbol: "1120", name_ar: "الراجحي" })] }));
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "1120" } });
+    await flushDebounce();
+    await act(async () => resolvePage(directory({ offset: 1, results: [item({ symbol: "2010", name_ar: "سابك" })] })));
+    expect(screen.getByText("الراجحي")).toBeInTheDocument();
+    expect(screen.queryByText("سابك")).not.toBeInTheDocument();
+  });
+
+  it("shows the price time and data state supplied with each result", async () => {
+    vi.mocked(getStockDirectory).mockResolvedValue(directory());
+    render(<StocksDirectoryPage />);
+    await flushDebounce();
+    expect(screen.getByText(/آخر جلسة/)).toBeInTheDocument();
+    expect(screen.getByText(/وقت السعر.*الرياض/)).toBeInTheDocument();
   });
 });

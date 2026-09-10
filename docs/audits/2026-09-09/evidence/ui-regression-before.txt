@@ -1,0 +1,14 @@
+Sanitized execution summary; payloads and tracebacks omitted.
+⎯⎯⎯⎯⎯⎯ Failed Tests 10 ⎯⎯⎯⎯⎯⎯⎯
+ FAIL  src/app/(app)/radar/page.test.tsx > RadarPage > distinguishes absent scan data from a completed scan with no opportunities
+ FAIL  src/app/(app)/radar/page.test.tsx > RadarPage > labels response time separately from the saved scan time
+ FAIL  src/app/(app)/radar/page.test.tsx > RadarPage > does not invent live validation successes from the candidate cap (0)
+ FAIL  src/app/(app)/radar/page.test.tsx > RadarPage > does not invent live validation successes from the candidate cap (3)
+ FAIL  src/app/(app)/radar/page.test.tsx > RadarPage > does not invent live validation successes from the candidate cap (null)
+ FAIL  src/app/(app)/stocks/page.test.tsx > StocksDirectoryPage > shows the honest empty state for no results, never a fabricated row
+ FAIL  src/app/(app)/stocks/page.test.tsx > StocksDirectoryPage > ignores an older search that resolve after the new one
+ FAIL  src/app/(app)/stocks/page.test.tsx > StocksDirectoryPage > ignores an older search that reject after the new one
+ FAIL  src/app/(app)/stocks/page.test.tsx > StocksDirectoryPage > ignores pagination for an old query and prevents duplicate page requests
+ FAIL  src/app/(app)/stocks/page.test.tsx > StocksDirectoryPage > shows the price time and data state supplied with each result
+ Test Files  2 failed (2)
+      Tests  10 failed | 11 passed (21)

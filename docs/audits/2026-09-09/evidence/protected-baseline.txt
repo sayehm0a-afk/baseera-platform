@@ -1,0 +1,4 @@
+Sanitized execution summary; payloads and tracebacks omitted.
+FAILED tests/unit/ai/basirah_brain/test_providers.py::TestF4MaxProviderCallCount::test_max_call_count_is_exactly_one_by_default
+FAILED tests/unit/ai/basirah_brain/test_providers.py::TestF4MaxProviderCallCount::test_default_client_construction_passes_the_bounded_config
+2 failed, 505 passed in 7.64s

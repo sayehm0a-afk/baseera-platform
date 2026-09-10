@@ -62,7 +62,7 @@ function MarketRiskBanner({ summary }: { summary: RadarHomeSummary }) {
         <span className={`text-sm font-semibold ${colorClass}`}>{summary.market_risk_label_ar}</span>
       </div>
       <p className="mt-bsr-2 text-xs text-bsr-text-secondary">{summary.market_risk_basis_ar}</p>
-      {!summary.market_risk_is_live ? (
+      {!summary.market_risk_is_live && summary.last_full_scan_at ? (
         <p className="mt-bsr-1 text-xs text-bsr-text-muted">هذا التقييم مبني على آخر جلسة تداول مكتملة، وليس بيانات حية.</p>
       ) : null}
     </div>
@@ -80,7 +80,6 @@ function ScanFunnelBanner({ summary }: { summary: RadarHomeSummary }) {
   if (summary.stage1_universe_size == null || summary.stage1_candidate_count == null) {
     return null;
   }
-  const validated = Math.min(summary.stage1_candidate_count, summary.stage2_candidate_cap);
   return (
     <div className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 space-y-1">
       <p className="text-xs text-bsr-text-secondary">
@@ -94,10 +93,13 @@ function ScanFunnelBanner({ summary }: { summary: RadarHomeSummary }) {
             للتحليل حاليًا)
           </>
         ) : null}
-        {" "}محليًا بدون تكلفة، ورشّح منها{" "}
-        <span className="bsr-numeric font-semibold text-bsr-text-primary">{summary.stage1_candidate_count}</span> مرشحًا، ثم تحقّق
-        حيًا من أفضل{" "}
-        <span className="bsr-numeric font-semibold text-bsr-text-primary">{validated}</span> لحماية رصيد الاستعلامات الحية.
+        {" "}من البيانات المحفوظة، ورشّح منها{" "}
+        <span className="bsr-numeric font-semibold text-bsr-text-primary">{summary.stage1_candidate_count}</span> مرشحًا.
+      </p>
+      <p className="text-xs text-bsr-text-secondary">
+        {summary.stage2_validated_count == null ? "عدد عمليات التحقق الناجحة غير متاح." : (
+          <>نجح التحقق من <span className="bsr-numeric font-semibold text-bsr-text-primary">{summary.stage2_validated_count}</span> سهمًا في المرحلة التالية.</>
+        )}
       </p>
       {summary.final_opportunities_count != null ? (
         <p className="text-xs text-bsr-text-secondary">
@@ -118,7 +120,7 @@ export default function RadarPage() {
       <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 text-center md:p-bsr-6">
         <div className="mb-bsr-2 flex items-center justify-center gap-bsr-2">
           <AiStar />
-          <h1 className="text-lg font-semibold text-bsr-text-primary">الرادار الذكي</h1>
+          <h1 className="text-lg font-semibold text-bsr-text-primary">فرص اليوم</h1>
         </div>
         <p className="mb-bsr-4 text-sm text-bsr-text-secondary">
           الفرص التي رصدها بصيرة حاليًا في السوق السعودي، مرتبة بحسب قوة الأدلة الفنية
@@ -129,7 +131,7 @@ export default function RadarPage() {
           disabled={data.status === "loading"}
           className="rounded-bsr-md bg-bsr-gold-500 px-bsr-6 py-bsr-2 font-semibold text-bsr-navy-950 transition-colors hover:bg-bsr-gold-400 disabled:opacity-60"
         >
-          {data.status === "loading" ? "جارٍ التحديث..." : "تحديث الرادار"}
+          {data.status === "loading" ? "جارٍ التحديث..." : "تحديث العرض"}
         </button>
       </section>
 
@@ -137,7 +139,7 @@ export default function RadarPage() {
 
       {data.status === "error" ? (
         <EmptyState
-          title="تعذّر تحميل الرادار الذكي"
+          title="تعذّر تحميل فرص اليوم"
           description="تأكد من اتصال الخادم وحاول مرة أخرى."
           action={
             <button
@@ -153,7 +155,7 @@ export default function RadarPage() {
 
       {data.status === "ready" ? (
         <p className="text-center text-xs text-bsr-text-secondary">
-          آخر تحديث للرادار: <span className="bsr-numeric">{formatArabicDateTime(data.summary.generated_at)}</span> (
+          آخر تحميل للعرض: <span className="bsr-numeric">{formatArabicDateTime(data.summary.generated_at)}</span> (بتوقيت الرياض؛
           {formatRelativeAgeAr(data.summary.generated_at)})
           {data.summary.most_recent_emitted_at ? (
             <>
@@ -164,13 +166,22 @@ export default function RadarPage() {
         </p>
       ) : null}
 
+      {data.status === "ready" && data.summary.last_full_scan_at ? (
+        <p className="text-center text-xs text-bsr-text-secondary">
+          آخر مسح مكتمل محفوظ: {formatArabicDateTime(data.summary.last_full_scan_at)} بتوقيت الرياض.
+          تحميل العرض لا يشغّل مسحًا جديدًا ولا يؤكد حداثة الأسعار.
+        </p>
+      ) : null}
+
       {data.status === "ready" ? <MarketRiskBanner summary={data.summary} /> : null}
       {data.status === "ready" ? <ScanFunnelBanner summary={data.summary} /> : null}
 
       {data.status === "ready" && data.summary.live_opportunity_count === 0 ? (
         <EmptyState
-          title="لا توجد فرص مرصودة حاليًا"
-          description="لم يرصد الرادار الذكي أي فرصة حقيقية تستوفي معايير الجودة في آخر مسح للسوق."
+          title={data.summary.last_full_scan_at ? "لا توجد فرص مرصودة حاليًا" : "لا تتوفر بيانات مسح مكتمل"}
+          description={data.summary.last_full_scan_at
+            ? "لا توجد فرص نشطة معروضة من البيانات المحفوظة. راجع وقت آخر مسح؛ لا تثبت هذه النتيجة خلو السوق من الفرص الآن."
+            : "لا يمكن تقييم وجود فرص دون بيانات مسح صالحة. غياب البيانات لا يعني عدم وجود فرصة."}
         />
       ) : null}
 
@@ -204,13 +215,14 @@ export default function RadarPage() {
                     </h2>
                     {data.summary.average_confidence != null ? (
                       <span className="text-sm text-bsr-text-secondary">
-                        متوسط الثقة:{" "}
+                        متوسط درجة الأدلة:{" "}
                         <span className="bsr-numeric font-semibold text-bsr-teal-500">
                           {Math.round(data.summary.average_confidence)}%
                         </span>
                       </span>
                     ) : null}
                   </div>
+                  <p className="text-xs text-bsr-text-secondary">درجة الأدلة مؤشر داخلي، وليست احتمال نجاح الصفقة.</p>
                   {currentOpportunities.length === 0 ? (
                     <EmptyState
                       title="لا توجد فرصة دخول حالية"

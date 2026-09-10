@@ -62,7 +62,7 @@ def revoke_session(
     if user_session is None:
         raise SessionNotFoundError(f"No session {session_id}.")
 
-    _repository.revoke_user_session(session, user_session.id)
+    _repository.revoke_session_family(session, user_session.family_id)
     delete_refresh_session(user_session.refresh_token_jti)
     record_admin_action(
         session,

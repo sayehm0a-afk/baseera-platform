@@ -1,0 +1,3 @@
+Sanitized execution summary; payloads and tracebacks omitted.
+ Test Files  3 passed (3)
+      Tests  29 passed (29)

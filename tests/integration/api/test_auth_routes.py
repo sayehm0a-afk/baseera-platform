@@ -487,14 +487,11 @@ def test_revoke_own_current_session_logs_it_out_immediately(client: TestClient, 
     assert me_response.status_code == 401
 
 
-def test_revoke_a_different_devices_session_kills_its_refresh_not_its_live_access_token(
+def test_revoke_a_different_devices_session_kills_its_refresh_and_live_access_token(
     client: TestClient, db_session
 ):
-    # Access tokens are stateless JWTs, not checked against Redis on
-    # the ordinary request path (see src/auth/token_store.py) -- there
-    # is no way to instantly kill a *different* device's still-live
-    # access token from here, only its ability to refresh going
-    # forward. This is a deliberate, documented tradeoff, not a bug.
+    # A new token is tied to its login family. Remote revocation must
+    # reject its access token as well as its next refresh.
     _register_verify_and_login(client, "otherdevice@example.com")
     other_device_refresh_token = client.cookies.get("refresh_token")
     csrf_headers = _csrf_headers(client)  # csrf_token cookie is unaffected by the refresh_token deletion below
@@ -506,9 +503,9 @@ def test_revoke_a_different_devices_session_kills_its_refresh_not_its_live_acces
     response = client.delete(f"/api/v1/auth/sessions/{session_id}", headers=csrf_headers)
     assert response.status_code == 200
 
-    # The current (still-live, unexpired) access token keeps working.
+    # Removing the refresh cookie cannot preserve a revoked login.
     me_response = client.get("/api/v1/auth/me")
-    assert me_response.status_code == 200
+    assert me_response.status_code == 401
 
     # But the revoked session's refresh token is dead.
     client.cookies.set("refresh_token", other_device_refresh_token)

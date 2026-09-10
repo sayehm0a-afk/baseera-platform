@@ -209,3 +209,110 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  refresh-rotation-concurrency-proof:
+    name: Refresh-rotation concurrency proof (real Postgres+Redis, must not skip)
+    runs-on: ubuntu-latest
+    # tests/integration/test_refresh_rotation_concurrency.py proves two
+    # properties of consume_refresh_session's row-level locking (exactly-
+    # one-winner under a real race, and family-scoped revocation
+    # isolation) against genuine PostgreSQL + Redis, and skips cleanly
+    # (pytest.mark.skipif) rather than silently passing when either is
+    # unreachable. The build-and-test job above's "Run test suite" step
+    # runs the whole tree with no DATABASE_URL override, so
+    # settings.database_url falls back to its own default --
+    # postgresql://postgres:postgres@localhost:5432/basirah -- which
+    # points at a database that is never created there (that job only
+    # creates "basirah_ci_migration_check", and only for its later,
+    # separate migration-only steps). The connection attempt fails
+    # ("database \"basirah\" does not exist"), _postgres_reachable()
+    # returns False, and all 5 tests in this file skip in that job --
+    # confirmed by reading the raw job log for run 34394362022, where
+    # all 5 show SKIPPED rather than PASSED. A skip does not fail a CI
+    # job, so this went unnoticed until manually inspected.
+    #
+    # This job exists solely to close that gap: its own Postgres+Redis
+    # service containers, a database created specifically for this
+    # proof, migrations applied to it, then the file run in isolation
+    # with an explicit hard-fail if pytest reports anything other than
+    # exactly 5 passed and 0 skipped -- so an unreachable service (or
+    # any future regression that makes this skip again) fails the build
+    # instead of silently contributing zero evidence.
+    services:
+      redis:
+        image: redis:6-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: basirah_refresh_concurrency_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/basirah_refresh_concurrency_ci
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install dependencies (clean environment)
+        run: pip install -r requirements.txt
+
+      - name: Install package in editable mode
+        run: pip install -e . --no-deps
+
+      - name: Apply migrations to the dedicated proof database
+        run: python -m alembic upgrade head
+
+      - name: Run refresh-rotation concurrency + family-isolation proof (fails on any skip)
+        run: |
+          set -euo pipefail
+          LOGFILE=$(mktemp)
+          python -m pytest tests/integration/test_refresh_rotation_concurrency.py -v -rA 2>&1 | tee "$LOGFILE"
+
+          if grep -q "SKIPPED" "$LOGFILE"; then
+            echo ""
+            echo "FAIL: at least one test in test_refresh_rotation_concurrency.py was SKIPPED."
+            echo "This job exists specifically to prove these tests run for real against"
+            echo "reachable Postgres + Redis, not to collect them or rely on the general"
+            echo "suite's pass/fail. A skip here means the services this job provisions"
+            echo "were not actually reachable from the test process -- fix that, do not"
+            echo "relax this check."
+            exit 1
+          fi
+
+          # pytest's final summary line looks like
+          # "============ 5 passed in 12.34s =============" -- padded
+          # with "=" on both sides, so match "N passed" anywhere in the
+          # line rather than anchoring at line start.
+          SUMMARY_LINE=$(grep -E "[0-9]+ (passed|failed|error)" "$LOGFILE" | tail -1 || true)
+          PASSED_COUNT=$(echo "$SUMMARY_LINE" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+" || echo 0)
+          echo ""
+          echo "Summary line: $SUMMARY_LINE"
+          if [ "$PASSED_COUNT" != "5" ]; then
+            echo "FAIL: expected exactly 5 passed tests in test_refresh_rotation_concurrency.py, got '$PASSED_COUNT'."
+            exit 1
+          fi
+          echo "All 5 refresh-rotation concurrency + family-isolation tests genuinely PASSED against real Postgres + Redis (0 skipped)."

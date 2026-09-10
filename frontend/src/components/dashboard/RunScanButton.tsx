@@ -13,7 +13,7 @@ const MAX_POLLS = 40;
  * this only calls the existing backend job and waits for it. */
 export function RunScanButton({ label }: { label?: string } = {}) {
   const router = useRouter();
-  const [status, setStatus] = useState<"idle" | "running" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "running" | "error" | "failed" | "timeout">("idle");
 
   async function handleClick() {
     setStatus("running");
@@ -22,12 +22,17 @@ export function RunScanButton({ label }: { label?: string } = {}) {
       for (let i = 0; i < MAX_POLLS; i++) {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
         const polled = await getScanRun(run.id);
-        if (polled.status === "SUCCESS" || polled.status === "FAILED") {
-          break;
+        if (polled.status === "SUCCESS") {
+          setStatus("idle");
+          router.refresh();
+          return;
+        }
+        if (polled.status === "FAILED") {
+          setStatus("failed");
+          return;
         }
       }
-      setStatus("idle");
-      router.refresh();
+      setStatus("timeout");
     } catch {
       setStatus("error");
     }
@@ -43,6 +48,16 @@ export function RunScanButton({ label }: { label?: string } = {}) {
       >
         {status === "running" ? "جارٍ المسح..." : (label ?? "تشغيل مسح السوق الآن")}
       </button>
+      {status === "failed" ? (
+        <p role="alert" className="text-sm text-bsr-market-down">
+          لم ينجح المسح. لا توجد نتيجة جديدة مؤكدة من هذه المحاولة.
+        </p>
+      ) : null}
+      {status === "timeout" ? (
+        <p role="status" className="text-sm text-bsr-text-secondary">
+          لم يصل تأكيد اكتمال المسح خلال دقيقة. قد يكون مستمرًا؛ راجع حالته قبل إعادة تشغيله.
+        </p>
+      ) : null}
       {status === "error" ? (
         <p className="text-sm text-bsr-market-down">
           تعذّر تشغيل المسح -- قد يكون هناك مسح آخر قيد التنفيذ بالفعل، أو تعذّر الاتصال بالخادم. حاول

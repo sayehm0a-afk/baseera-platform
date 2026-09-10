@@ -1,0 +1,16 @@
+{
+  "repository": "sayehm0a-afk/baseera-platform",
+  "branch": "codex/basirah-audit-20260909",
+  "user_authorized_upload": true,
+  "git_push": "failed: could not read Username for https://github.com; no credential available",
+  "connector_create_branch": {
+    "http_status": 403,
+    "message": "Resource not accessible by integration"
+  },
+  "plugin_directory": {
+    "installed": true,
+    "status": "ENABLED"
+  },
+  "pull_request_created": false,
+  "production_deployed": false
+}

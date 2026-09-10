@@ -1,0 +1,4 @@
+TypeScript: exit 0.
+ESLint: exit 0.
+Targeted RunScanButton tests: 4 passed.
+Full frontend suite/build not rerun after this incremental presentation-only change.

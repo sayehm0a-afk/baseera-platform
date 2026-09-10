@@ -39,7 +39,8 @@ def _refresh_ttl_seconds() -> int:
 
 
 def _issue_refresh_token(
-    session: Session, user: User, family_id: str, device_label: Optional[str], ip_address: Optional[str]
+    session: Session, user: User, family_id: str, device_label: Optional[str], ip_address: Optional[str],
+    commit: bool = True,
 ) -> str:
     raw_token = generate_token()
     jti = hash_token(raw_token)
@@ -53,6 +54,7 @@ def _issue_refresh_token(
         expires_at=expires_at,
         device_label=device_label,
         ip_address=ip_address,
+        commit=commit,
     )
     token_store.store_refresh_session(jti, user.id, _refresh_ttl_seconds())
     return raw_token
@@ -64,7 +66,7 @@ def create_session(
     family_id = uuid.uuid4().hex
     raw_refresh = _issue_refresh_token(session, user, family_id, device_label, ip_address)
     access_token = jwt_service.encode_access_token(
-        user.id, user.is_staff, user.staff_role.value if user.staff_role else None
+        user.id, user.is_staff, user.staff_role.value if user.staff_role else None, session_family_id=family_id
     )
     return SessionPair(access_token=access_token, refresh_token=raw_refresh)
 
@@ -95,16 +97,26 @@ def refresh_session(session: Session, raw_refresh_token: str) -> SessionPair:
     if user is None or not user.is_active:
         raise InvalidOrExpiredTokenError("Account is no longer active.")
 
-    # Rotate: revoke the presented token, issue a new one in the same family.
-    _repository.revoke_user_session(session, user_session.id)
-    token_store.delete_refresh_session(jti)
-
-    raw_refresh = _issue_refresh_token(
-        session, user, user_session.family_id, user_session.device_label, user_session.ip_address
-    )
-    access_token = jwt_service.encode_access_token(
-        user.id, user.is_staff, user.staff_role.value if user.staff_role else None
-    )
+    # Commit revocation and replacement together. A concurrent request
+    # cannot consume this row twice or observe an empty family mid-rotation.
+    family_id = user_session.family_id
+    if not _repository.consume_refresh_session(session, user_session.id):
+        session.rollback()
+        _repository.revoke_session_family(session, family_id)
+        raise InvalidOrExpiredTokenError("Refresh token was already consumed or expired.")
+    try:
+        raw_refresh = _issue_refresh_token(
+            session, user, family_id, user_session.device_label, user_session.ip_address, commit=False
+        )
+        access_token = jwt_service.encode_access_token(
+            user.id, user.is_staff, user.staff_role.value if user.staff_role else None,
+            session_family_id=family_id,
+        )
+        token_store.delete_refresh_session(jti)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     return SessionPair(access_token=access_token, refresh_token=raw_refresh)
 
 
@@ -113,7 +125,7 @@ def revoke_session(session: Session, raw_refresh_token: str) -> None:
     jti = hash_token(raw_refresh_token)
     user_session = _repository.get_user_session_by_jti(session, jti)
     if user_session is not None:
-        _repository.revoke_user_session(session, user_session.id)
+        _repository.revoke_session_family(session, user_session.family_id)
         token_store.delete_refresh_session(jti)
 
 

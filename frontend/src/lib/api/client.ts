@@ -47,21 +47,56 @@ function csrfHeaders(): Record<string, string> {
   return token ? { "X-CSRF-Token": token } : {};
 }
 
-// Single-flight refresh: concurrent 401s (e.g. a screen firing several
-// requests at once right as the access token expires) must trigger
-// exactly one /auth/refresh call, not one per failed request.
+// Single-flight refresh, within this tab: concurrent 401s (e.g. a
+// screen firing several requests at once right as the access token
+// expires) must trigger exactly one /auth/refresh call from THIS page,
+// not one per failed request.
 let refreshInFlight: Promise<boolean> | null = null;
 
 function refreshSession(): Promise<boolean> {
   if (!refreshInFlight) {
-    refreshInFlight = apiFetch("/api/v1/auth/refresh", { method: "POST" })
-      .then(() => true)
-      .catch(() => false)
-      .finally(() => {
-        refreshInFlight = null;
-      });
+    refreshInFlight = performRefresh().finally(() => {
+      refreshInFlight = null;
+    });
   }
   return refreshInFlight;
+}
+
+/** Cross-tab serialization for the actual /auth/refresh network call.
+ * `refreshInFlight` above only dedupes within one page/module instance
+ * -- a second browser tab of the SAME login has its own separate copy
+ * of that variable, so two tabs whose access tokens expire close
+ * together would otherwise each fire their own /auth/refresh at
+ * nearly the same moment, both presenting the SAME (not yet rotated)
+ * refresh cookie. The backend correctly treats that as reuse of an
+ * already-consumed token and revokes the whole session family --
+ * logging every tab out, even though nothing was actually stolen (see
+ * tests/integration/test_refresh_rotation_concurrency.py for the
+ * server-side proof of that exact race).
+ *
+ * The Web Locks API (`navigator.locks`, supported since Safari 15.4)
+ * serializes the underlying fetch across every tab of this origin, not
+ * just this page. Access/refresh tokens are httpOnly cookies the
+ * browser already shares across all tabs -- so once one tab's response
+ * lands and rotates them, a second tab's call (which only runs after
+ * the lock is released) naturally presents the NEW, still-valid
+ * cookie instead of racing on the one that was just consumed. This
+ * closes the false-positive at its source, on the frontend, without
+ * touching the backend's reuse-detection (a genuine stolen-token
+ * replay is still caught and still revokes the family exactly as
+ * before). Falls back to the plain per-tab request on the rare browser
+ * without Web Locks support -- a known, accepted limitation there. */
+async function performRefresh(): Promise<boolean> {
+  if (typeof navigator !== "undefined" && "locks" in navigator) {
+    return await navigator.locks.request("basirah-auth-refresh", async () => doRefreshRequest());
+  }
+  return doRefreshRequest();
+}
+
+function doRefreshRequest(): Promise<boolean> {
+  return apiFetch("/api/v1/auth/refresh", { method: "POST" })
+    .then(() => true)
+    .catch(() => false);
 }
 
 /** Thin, typed fetch wrapper over the existing FastAPI backend -- never

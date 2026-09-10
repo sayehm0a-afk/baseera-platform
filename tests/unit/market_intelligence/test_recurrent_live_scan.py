@@ -92,6 +92,38 @@ def factory():
     Base.metadata.drop_all(bind=engine)
 
 
+# `is_shadow_signal_stale` (via `is_decision_fresh`) resolves "now" by
+# calling `get_market_status()` with no argument -- real wall-clock time
+# -- from within `src.analysis.decision_v2.decision_freshness`'s own
+# module namespace. A signal timestamped "right now" is only classified
+# fresh once today's Tadawul session has actually started (LIVE) or
+# finished (LAST_SESSION); before that (PRE_MARKET), "today" has no
+# completed session yet and "right now" is compared against *yesterday's*
+# `last_completed_session_date`, correctly reading as a session-old gap
+# and classifying STALE. This is exactly what a real CI run hit
+# (2026-09-10, ~07:23 Riyadh, genuinely pre-market) -- proven by
+# reproducing all three regimes with `get_market_status(now=...)` at
+# fixed instants: PRE_MARKET -> STALE, OPEN -> LIVE, POST_CLOSE ->
+# LAST_SESSION, exactly matching this module's own documented contract.
+# The freshness logic is correct and untouched; only the test's
+# dependency on the real wall clock is the bug. Pins the check to a
+# fixed, known-OPEN session instead, via the same `now` parameter
+# `get_market_status` already exposes for exactly this purpose.
+_FIXED_TRADING_NOW = datetime(2026, 1, 4, 12, 0, tzinfo=timezone(timedelta(hours=3)))  # Sunday, mid-session (OPEN)
+
+
+@pytest.fixture
+def frozen_open_market(monkeypatch):
+    from src.market_intelligence.market_status import get_market_status
+
+    fixed_status = get_market_status(now=_FIXED_TRADING_NOW)
+    assert fixed_status.status.value == "OPEN"  # guards the fixture's own premise if the calendar ever changes
+    monkeypatch.setattr(
+        "src.analysis.decision_v2.decision_freshness.get_market_status", lambda: fixed_status
+    )
+    return _FIXED_TRADING_NOW
+
+
 def _stock(session, symbol="4050") -> Stock:
     row = Stock(symbol=symbol, name_en=f"Stock {symbol}", is_active=True)
     session.add(row)
@@ -685,12 +717,12 @@ class TestClassifyLifecycle:
 
 
 class TestIsShadowSignalStale:
-    def test_a_signal_from_the_operative_session_is_not_stale(self, session):
+    def test_a_signal_from_the_operative_session_is_not_stale(self, session, frozen_open_market):
         stock = _stock(session)
-        snapshot = _snapshot(session, stock, scan_run_id=1, decision_timestamp=datetime.now(timezone.utc))
+        snapshot = _snapshot(session, stock, scan_run_id=1, decision_timestamp=frozen_open_market)
         signal = _shadow_signal(
             session, "4050", stock.id, snapshot.id, ShadowLifecycleResult.NEW_INTRADAY_OPPORTUNITY,
-            decision_timestamp=datetime.now(timezone.utc),
+            decision_timestamp=frozen_open_market,
         )
         assert is_shadow_signal_stale(signal) is False
 

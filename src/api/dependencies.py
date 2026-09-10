@@ -81,6 +81,18 @@ def get_current_user(
     if user is None or not user.is_active:
         raise UnauthenticatedError("Account no longer exists or is inactive.")
 
+    # sid names the login family, not one refresh-token row: rotating
+    # the refresh token must not invalidate in-flight access requests.
+    # Legacy tokens lack sid and retain their original expiry/cutoff
+    # checks until refresh/login issues a family-bound token.
+    family_id = claims.get("sid")
+    if family_id is not None and (
+        not isinstance(family_id, str)
+        or not family_id
+        or not _auth_repository.has_active_session_family(session, user.id, family_id)
+    ):
+        raise UnauthenticatedError("Login session has expired or been revoked.")
+
     if user.tokens_invalid_before is not None:
         invalid_before = user.tokens_invalid_before
         if invalid_before.tzinfo is None:

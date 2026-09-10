@@ -78,7 +78,7 @@ function summary(overrides: Partial<RadarHomeSummary> = {}): RadarHomeSummary {
     stage2_candidate_cap: 20,
     stage2_validated_count: null,
     final_opportunities_count: null,
-    last_full_scan_at: null,
+    last_full_scan_at: "2026-08-17T08:45:00Z",
     ...overrides,
   };
 }
@@ -86,6 +86,32 @@ function summary(overrides: Partial<RadarHomeSummary> = {}): RadarHomeSummary {
 describe("RadarPage", () => {
   beforeEach(() => {
     vi.mocked(getRadarSummary).mockReset();
+  });
+
+  it("distinguishes absent scan data from a completed scan with no opportunities", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(summary({ last_full_scan_at: null, market_risk_is_live: false }));
+    render(<RadarPage />);
+    expect(await screen.findByText("لا تتوفر بيانات مسح مكتمل")).toBeInTheDocument();
+    expect(screen.queryByText("لا توجد فرص مرصودة حاليًا")).not.toBeInTheDocument();
+    expect(screen.queryByText("هذا التقييم مبني على آخر جلسة تداول مكتملة، وليس بيانات حية.")).not.toBeInTheDocument();
+  });
+
+  it("labels response time separately from the saved scan time", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(summary());
+    render(<RadarPage />);
+    expect(await screen.findByText(/آخر تحميل للعرض:/)).toBeInTheDocument();
+    expect(screen.getByText(/آخر مسح مكتمل محفوظ:/)).toBeInTheDocument();
+    expect(screen.queryByText(/آخر تحديث للرادار:/)).not.toBeInTheDocument();
+  });
+
+  it.each([0, 3, null])("does not invent live validation successes from the candidate cap (%s)", async (count) => {
+    vi.mocked(getRadarSummary).mockResolvedValue(summary({
+      stage1_universe_size: 250, stage1_evaluated_count: 100,
+      stage1_candidate_count: 15, stage2_candidate_cap: 20, stage2_validated_count: count,
+    }));
+    render(<RadarPage />);
+    expect(await screen.findByText(count == null ? /عدد عمليات التحقق الناجحة غير متاح/ : /نجح التحقق من/)).toBeInTheDocument();
+    expect(screen.queryByText(/تحقّق حيًا من أفضل/)).not.toBeInTheDocument();
   });
 
   it("shows the honest empty state when the radar has no live opportunities, never a fabricated one", async () => {
@@ -132,7 +158,7 @@ describe("RadarPage", () => {
 
     render(<RadarPage />);
 
-    expect(await screen.findByText("تعذّر تحميل الرادار الذكي")).toBeInTheDocument();
+    expect(await screen.findByText("تعذّر تحميل فرص اليوم")).toBeInTheDocument();
 
     vi.mocked(getRadarSummary).mockResolvedValueOnce(summary());
     fireEvent.click(screen.getByRole("button", { name: "إعادة المحاولة" }));
@@ -202,7 +228,7 @@ describe("RadarPage", () => {
     render(<RadarPage />);
     await screen.findByText("لا توجد فرص مرصودة حاليًا");
 
-    fireEvent.click(screen.getByRole("button", { name: "تحديث الرادار" }));
+    fireEvent.click(screen.getByRole("button", { name: "تحديث العرض" }));
 
     expect(await screen.findByText("لا توجد فرص مرصودة حاليًا")).toBeInTheDocument();
     expect(getRadarSummary).toHaveBeenCalledTimes(2);
