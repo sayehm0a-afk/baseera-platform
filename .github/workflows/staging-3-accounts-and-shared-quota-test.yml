@@ -26,6 +26,18 @@ on:
       frontend_url:
         description: "Staging frontend URL (from staging-2's deployment summary)"
         required: true
+      limited_user_email:
+        description: "Override the limited-account email (default: PR114's own test account -- use a NEW address for a later round so you don't hit HTTP 409 against an already-registered account with an unrecoverable password)"
+        required: false
+        default: "staging-pr114-limited-user@example.com"
+      admin_user_email:
+        description: "Override the admin-account email (default: PR114's own test account -- same reuse caveat as above)"
+        required: false
+        default: "staging-pr114-admin@example.com"
+      expected_deployment_commit:
+        description: "If set, independently confirms the ADMIN's authenticated view of /api/v1/admin/system/summary reports exactly this deployment_commit before any other check runs -- proof the newly deployed code, not a stale cached instance, is what gets tested. Leave blank to skip."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -43,8 +55,8 @@ env:
   # are NOT flagged as special-use by email_validator, so they pass the exact
   # same validation the live endpoint performs. Verified locally:
   # validate_email("...@example.com", check_deliverability=False) succeeds.
-  LIMITED_USER_EMAIL: "staging-pr114-limited-user@example.com"
-  ADMIN_USER_EMAIL: "staging-pr114-admin@example.com"
+  LIMITED_USER_EMAIL: ${{ github.event.inputs.limited_user_email }}
+  ADMIN_USER_EMAIL: ${{ github.event.inputs.admin_user_email }}
 
 jobs:
   accounts_and_test:
@@ -54,6 +66,7 @@ jobs:
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_STAGING_TOKEN }}
       FRONTEND_URL: ${{ github.event.inputs.frontend_url }}
+      EXPECTED_DEPLOYMENT_COMMIT: ${{ github.event.inputs.expected_deployment_commit }}
     steps:
       - name: Fail fast if RAILWAY_STAGING_TOKEN is not configured
         run: |
@@ -295,6 +308,62 @@ jobs:
           print("before the adversarial test below begins -- a realistic precondition, not an interference with the result.")
           PYEOF
 
+      - name: Confirm permission separation (limited=non-staff, admin=staff) and the deployed commit, via authenticated sessions
+        env:
+          LIMITED_PW: ${{ steps.passwords.outputs.limited }}
+          ADMIN_PW: ${{ steps.passwords.outputs.admin }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys, requests
+          base = os.environ["FRONTEND_URL"].rstrip("/")
+          expected_commit = os.environ.get("EXPECTED_DEPLOYMENT_COMMIT", "")
+
+          sessions = {}
+          for email, pw, label in [
+              (os.environ["LIMITED_USER_EMAIL"], os.environ["LIMITED_PW"], "limited"),
+              (os.environ["ADMIN_USER_EMAIL"], os.environ["ADMIN_PW"], "admin"),
+          ]:
+              s = requests.Session()
+              r = s.post(f"{base}/api/v1/auth/login", json={"email": email, "password": pw}, timeout=30)
+              if r.status_code != 200:
+                  print(f"::error::{label} login failed again on the second attempt (HTTP {r.status_code}) -- inconsistent with the proof above.")
+                  sys.exit(1)
+              sessions[label] = s
+
+          me_limited = sessions["limited"].get(f"{base}/api/v1/auth/me", timeout=30)
+          me_admin = sessions["admin"].get(f"{base}/api/v1/auth/me", timeout=30)
+          print(f"limited /auth/me: HTTP {me_limited.status_code} is_staff={me_limited.json().get('is_staff') if me_limited.status_code == 200 else '?'}")
+          print(f"admin   /auth/me: HTTP {me_admin.status_code} is_staff={me_admin.json().get('is_staff') if me_admin.status_code == 200 else '?'} staff_role={me_admin.json().get('staff_role') if me_admin.status_code == 200 else '?'}")
+          if me_limited.status_code != 200 or me_limited.json().get("is_staff"):
+              print("::error::Limited account unexpectedly has staff access (or /auth/me failed).")
+              sys.exit(1)
+          if me_admin.status_code != 200 or not me_admin.json().get("is_staff"):
+              print("::error::Admin account does NOT have staff access after promotion.")
+              sys.exit(1)
+          print("CONFIRMED: permissions are correctly split -- limited=non-staff, admin=staff.")
+
+          if expected_commit:
+              summary = sessions["admin"].get(f"{base}/api/v1/admin/system/summary", timeout=30)
+              print(f"admin /api/v1/admin/system/summary: HTTP {summary.status_code}")
+              if summary.status_code != 200:
+                  print("::error::Admin could not reach the staff-only system summary route.")
+                  print(summary.text[:1000])
+                  sys.exit(1)
+              body = summary.json()
+              actual_commit = body.get("deployment_commit") or body.get("commit") or body.get("deployed_commit")
+              print(f"Reported deployment_commit: {actual_commit!r} (expected: {expected_commit!r})")
+              if actual_commit and actual_commit != expected_commit:
+                  print("::error::DEPLOYED COMMIT MISMATCH -- the running staging backend does not report the expected commit. Do not proceed with browser testing against this deployment.")
+                  print(f"Full summary keys (for manual inspection if the field name above is wrong): {sorted(body.keys())}")
+                  sys.exit(1)
+              if not actual_commit:
+                  print("::warning::No deployment_commit-like field found in the summary response -- cannot confirm the deployed SHA this way. Full keys: " + str(sorted(body.keys())))
+              else:
+                  print("CONFIRMED: the live staging backend reports the exact expected deployment_commit.")
+          else:
+              print("No expected_deployment_commit input given -- skipping the deployed-commit check.")
+          PYEOF
+
       - name: THE SHARED-QUOTA TEST -- does exhausting one account's login limit block a different valid account behind the same proxy?
         env:
           ADMIN_PW: ${{ steps.passwords.outputs.admin }}
@@ -338,7 +407,7 @@ jobs:
           ADMIN_PW: ${{ steps.passwords.outputs.admin }}
         run: |
           echo "======================================================"
-          echo " STAGING TEST ACCOUNTS (PR #114 validation only -- NOT production)"
+          echo " STAGING TEST ACCOUNTS (validation only -- NOT production)"
           echo "======================================================"
           echo "Limited user -- email: $LIMITED_USER_EMAIL  password: $LIMITED_PW"
           echo "Admin        -- email: $ADMIN_USER_EMAIL  password: $ADMIN_PW"
