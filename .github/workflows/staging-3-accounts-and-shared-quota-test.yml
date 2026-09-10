@@ -360,6 +360,15 @@ jobs:
                   print("::warning::No deployment_commit-like field found in the summary response -- cannot confirm the deployed SHA this way. Full keys: " + str(sorted(body.keys())))
               else:
                   print("CONFIRMED: the live staging backend reports the exact expected deployment_commit.")
+
+              owner_page = sessions["admin"].get(f"{base}/owner", timeout=30)
+              print(f"admin GET /owner (frontend, server-rendered): HTTP {owner_page.status_code}")
+              if owner_page.status_code == 200 and expected_commit in owner_page.text:
+                  print(f"CONFIRMED: the FRONTEND's own rendered page embeds the exact expected commit ({expected_commit}) baked in at build time via NEXT_PUBLIC_DEPLOYMENT_COMMIT.")
+              elif owner_page.status_code == 200:
+                  print(f"::warning::Expected commit {expected_commit!r} was NOT found in the /owner page's rendered HTML -- it may be a client-rendered value not present in the initial SSR payload (check manually), or NEXT_PUBLIC_DEPLOYMENT_COMMIT may not have been set before this build.")
+              else:
+                  print(f"::warning::Could not fetch /owner to independently check the frontend's own build-time commit (HTTP {owner_page.status_code}).")
           else:
               print("No expected_deployment_commit input given -- skipping the deployed-commit check.")
           PYEOF
