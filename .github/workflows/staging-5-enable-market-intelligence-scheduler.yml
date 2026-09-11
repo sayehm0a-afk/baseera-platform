@@ -1,0 +1,121 @@
+name: Staging PR#114 - 5. Enable MarketIntelligenceScheduler (RAILWAY_STAGING_TOKEN only, verify before production)
+
+# Requested 2026-09-11: before touching MARKET_INTELLIGENCE_SCHEDULER_ENABLED
+# on PRODUCTION (see docs/governance/تدقيق_المسح_الطبيعي_ونتائج_التوصيات_2026-09-10.md
+# -- the scheduler was found NOT running there at all, flag unset/false),
+# verify the activation itself is safe and actually starts the scheduler,
+# on the ISOLATED staging project only.
+#
+# Sets MARKET_INTELLIGENCE_SCHEDULER_ENABLED=true and
+# MARKET_INTELLIGENCE_SCAN_INTERVAL=EVERY_MINUTE (60s, not the 86400s/daily
+# production default) so a cycle attempt can be observed within this same
+# workflow run instead of waiting up to a day. Zero real SAHMK cost either
+# way: staging's backend already runs with MARKET_DATA_PROVIDER=dev and no
+# SAHMK_API_KEY (staging-2-provision-and-deploy.yml), so every cycle here
+# exercises only the scheduler's own start/loop/quota-gate/DB-write
+# plumbing against the dev market-data provider -- never a real SAHMK call,
+# and never touches RADAR_V2 opportunities a real user could see (staging
+# has its own isolated database).
+#
+# This does NOT modify src.market_intelligence.scheduler or any engine
+# code -- only a Railway env var on the isolated staging backend service.
+# No production access (secrets.RAILWAY_TOKEN is never read here -- only
+# secrets.RAILWAY_STAGING_TOKEN). See staging-6-disable-market-intelligence-
+# scheduler.yml to reverse this.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_STAGING_PROJECT_ID: "7b3a7f9f-66da-460a-ba3e-9ca251f142f7"
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_STAGING_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_STAGING_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_STAGING_TOKEN is not readable by this job."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: HARD GATE -- re-verify this token resolves to the expected staging project
+        run: |
+          set +e
+          railway status --json > /tmp/status.json
+          STATUS_EXIT=$?
+          set -e
+          PROJECT_ID=$(python3 -c "import json; print(json.load(open('/tmp/status.json')).get('id','unknown'))" 2>/dev/null || echo unknown)
+          if [ "$STATUS_EXIT" -ne 0 ] || [ "$PROJECT_ID" != "$EXPECTED_STAGING_PROJECT_ID" ]; then
+            echo "::error::Token does not resolve to the expected staging project ($PROJECT_ID != $EXPECTED_STAGING_PROJECT_ID). Refusing to change any variable."
+            exit 1
+          fi
+          echo "CONFIRMED staging project ($EXPECTED_STAGING_PROJECT_ID). Proceeding."
+
+      - name: Confirm current state (before)
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -iE "MARKET_INTELLIGENCE_SCHEDULER_ENABLED|MARKET_INTELLIGENCE_SCAN_INTERVAL|MARKET_DATA_PROVIDER" \
+            || echo "None of these currently set (scheduler defaults to disabled, interval to DAILY)."
+
+      - name: Set MARKET_INTELLIGENCE_SCHEDULER_ENABLED=true and MARKET_INTELLIGENCE_SCAN_INTERVAL=EVERY_MINUTE (triggers a redeploy)
+        run: |
+          railway variables --service "$RAILWAY_BACKEND_SERVICE" \
+            --set "MARKET_INTELLIGENCE_SCHEDULER_ENABLED=true" \
+            --set "MARKET_INTELLIGENCE_SCAN_INTERVAL=EVERY_MINUTE"
+
+      - name: Confirm the variables are now set
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -iE "MARKET_INTELLIGENCE_SCHEDULER_ENABLED|MARKET_INTELLIGENCE_SCAN_INTERVAL"
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Wait for backend to become healthy again after the redeploy
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          echo "Polling $BACKEND_URL/health/live ..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Backend did not become healthy within the timeout after setting the variables."
+          exit 1
+
+      - name: Wait past one scan interval (60s) so at least one cycle attempt has a chance to run
+        run: sleep 90
+
+      - name: Real evidence the scheduler actually started AND attempted a cycle (grep the live deployment's own stdout)
+        run: |
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" --deployment --lines 1000 2>&1 > /tmp/logs.txt || true
+          echo "=== MarketIntelligenceScheduler log lines ==="
+          grep -i "MarketIntelligenceScheduler" /tmp/logs.txt || echo "No MarketIntelligenceScheduler log line found yet in the last 1000 lines -- may need a later re-check if the deployment just rolled over or the interval hasn't elapsed."
+          rm -f /tmp/logs.txt
+
+      - name: Confirm application health (DB/Redis, deployed commit) after the restart
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/ready" -w "\nHTTP %{http_code}\n"
+          echo "=== deployment_commit ==="
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/live" -w "\nHTTP %{http_code}\n"
