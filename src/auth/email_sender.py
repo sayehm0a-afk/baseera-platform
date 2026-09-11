@@ -1,19 +1,35 @@
 """EmailSender: the same "clean interface now, no real gateway yet"
 posture the billing layer (src/billing/) uses for payment providers.
 
-`SmtpEmailSender` is a real implementation -- opt-in via the SMTP_HOST
-env var (matching this codebase's existing auto-detect-from-env-vars
-convention, e.g. src/market_data/provider_factory.py choosing SAHMK vs
-Dev by whether SAHMK_API_KEY is set). Until SMTP_HOST is set,
-`get_email_sender()` keeps returning `ConsoleEmailSender`, which logs
-the would-be email (including the verification/reset link) rather than
-silently dropping it or, worse, pretending an email was actually
-delivered.
+Two real implementations exist, both opt-in via env vars (matching this
+codebase's existing auto-detect-from-env-vars convention, e.g.
+src/market_data/provider_factory.py choosing SAHMK vs Dev by whether
+SAHMK_API_KEY is set):
+
+- `ResendEmailSender` (RESEND_API_KEY) -- sends over Resend's HTTPS API.
+  Added after production evidence (2026-09-11 backend logs) showed
+  `SmtpEmailSender` failing every real send with
+  `[Errno 101] Network is unreachable` -- a network-level failure, not
+  a credential problem, consistent with Railway (like most PaaS hosts)
+  blocking outbound SMTP ports entirely regardless of how the SMTP
+  credentials themselves are configured. HTTPS (443) is never blocked
+  the same way, so this is the recommended path going forward.
+- `SmtpEmailSender` (SMTP_HOST) -- kept for any environment where raw
+  SMTP egress actually works (e.g. running outside a PaaS that blocks
+  it), or another SMTP-speaking provider.
+
+Until either is configured, `get_email_sender()` keeps returning
+`ConsoleEmailSender`, which logs the would-be email (including the
+verification/reset link) rather than silently dropping it or, worse,
+pretending an email was actually delivered.
 """
 
+import json
 import logging
 import os
 import smtplib
+import urllib.error
+import urllib.request
 from abc import ABC, abstractmethod
 from email.message import EmailMessage
 
@@ -77,28 +93,19 @@ class ConsoleEmailSender(EmailSender):
         )
 
 
-class SmtpEmailSender(EmailSender):
-    """A real implementation -- sends over SMTP (works with any
-    provider that speaks it: Gmail app passwords, SendGrid, Postmark,
-    Resend's SMTP relay, AWS SES's SMTP interface, etc.), building the
-    same `<frontend>/verify-email?token=...` /
-    `<frontend>/reset-password?token=...` links the frontend's
-    VerifyEmailClient/ResetPasswordClient already read (see
-    frontend/src/app/verify-email/VerifyEmailClient.tsx,
-    frontend/src/app/reset-password/ResetPasswordClient.tsx).
-    Connection failures are logged, never raised -- a real mail outage
-    must not turn into a 500 on registration/password-reset, matching
-    this module's "never silently pretend, never crash the caller"
-    posture."""
+class _TemplatedEmailSender(EmailSender):
+    """Shared brand template + the four message bodies, for any
+    transport. Subclasses implement only `_send` (the actual wire
+    call) -- keeps SmtpEmailSender and ResendEmailSender from
+    duplicating the HTML/plain-text content they both need to send
+    byte-for-byte identical messages."""
 
-    def __init__(self, host: str, port: int, username: str, password: str, from_email: str, frontend_base_url: str, use_tls: bool):
-        self._host = host
-        self._port = port
-        self._username = username
-        self._password = password
-        self._from_email = from_email
+    def __init__(self, frontend_base_url: str):
         self._frontend_base_url = frontend_base_url.rstrip("/")
-        self._use_tls = use_tls
+
+    @abstractmethod
+    def _send(self, to_email: str, subject: str, plain_body: str, html_body: "str | None" = None) -> None:
+        ...
 
     def _html(self, heading: str, body_html: str, cta_label: "str | None" = None, cta_link: "str | None" = None) -> str:
         """Basirah's brand shell (gold #d4af37 on navy #0a0e14, matching
@@ -136,24 +143,6 @@ class SmtpEmailSender(EmailSender):
   </table>
 </body>
 </html>"""
-
-    def _send(self, to_email: str, subject: str, plain_body: str, html_body: "str | None" = None) -> None:
-        message = EmailMessage()
-        message["Subject"] = subject
-        message["From"] = self._from_email
-        message["To"] = to_email
-        message.set_content(plain_body)
-        if html_body:
-            message.add_alternative(html_body, subtype="html")
-        try:
-            with smtplib.SMTP(self._host, self._port, timeout=10) as smtp:
-                if self._use_tls:
-                    smtp.starttls()
-                if self._username:
-                    smtp.login(self._username, self._password)
-                smtp.send_message(message)
-        except (smtplib.SMTPException, OSError) as exc:
-            logger.error("[SmtpEmailSender] Failed to send email to %s: %s", to_email, exc)
 
     def send_verification_email(self, to_email: str, raw_token: str) -> None:
         link = f"{self._frontend_base_url}/verify-email?token={raw_token}"
@@ -208,23 +197,126 @@ class SmtpEmailSender(EmailSender):
         )
 
 
+class SmtpEmailSender(_TemplatedEmailSender):
+    """A real implementation -- sends over SMTP (works with any
+    provider that speaks it: Gmail app passwords, SendGrid, Postmark,
+    Resend's SMTP relay, AWS SES's SMTP interface, etc.), building the
+    same `<frontend>/verify-email?token=...` /
+    `<frontend>/reset-password?token=...` links the frontend's
+    VerifyEmailClient/ResetPasswordClient already read (see
+    frontend/src/app/verify-email/VerifyEmailClient.tsx,
+    frontend/src/app/reset-password/ResetPasswordClient.tsx).
+    Connection failures are logged, never raised -- a real mail outage
+    must not turn into a 500 on registration/password-reset, matching
+    this module's "never silently pretend, never crash the caller"
+    posture."""
+
+    def __init__(self, host: str, port: int, username: str, password: str, from_email: str, frontend_base_url: str, use_tls: bool):
+        super().__init__(frontend_base_url)
+        self._host = host
+        self._port = port
+        self._username = username
+        self._password = password
+        self._from_email = from_email
+        self._use_tls = use_tls
+
+    def _send(self, to_email: str, subject: str, plain_body: str, html_body: "str | None" = None) -> None:
+        message = EmailMessage()
+        message["Subject"] = subject
+        message["From"] = self._from_email
+        message["To"] = to_email
+        message.set_content(plain_body)
+        if html_body:
+            message.add_alternative(html_body, subtype="html")
+        try:
+            with smtplib.SMTP(self._host, self._port, timeout=10) as smtp:
+                if self._use_tls:
+                    smtp.starttls()
+                if self._username:
+                    smtp.login(self._username, self._password)
+                smtp.send_message(message)
+        except (smtplib.SMTPException, OSError) as exc:
+            logger.error("[SmtpEmailSender] Failed to send email to %s: %s", to_email, exc)
+
+
+class ResendEmailSender(_TemplatedEmailSender):
+    """Sends via Resend's HTTPS API (https://api.resend.com/emails)
+    instead of raw SMTP. Added specifically because outbound SMTP from
+    Railway was proven (real production logs, 2026-09-11) to fail with
+    `[Errno 101] Network is unreachable` regardless of credentials --
+    an egress-port block, not an auth problem. HTTPS on port 443 is
+    not subject to that block, so this is the path that actually
+    works on this host. Uses the stdlib (urllib) rather than adding a
+    new HTTP-client dependency for one outbound call."""
+
+    _API_URL = "https://api.resend.com/emails"
+
+    def __init__(self, api_key: str, from_email: str, frontend_base_url: str):
+        super().__init__(frontend_base_url)
+        self._api_key = api_key
+        self._from_email = from_email
+
+    def _send(self, to_email: str, subject: str, plain_body: str, html_body: "str | None" = None) -> None:
+        payload: "dict[str, object]" = {
+            "from": self._from_email,
+            "to": [to_email],
+            "subject": subject,
+            "text": plain_body,
+        }
+        if html_body:
+            payload["html"] = html_body
+        request = urllib.request.Request(
+            self._API_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10):
+                pass
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            logger.error(
+                "[ResendEmailSender] Failed to send email to %s: HTTP %s %s",
+                to_email, exc.code, body,
+            )
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            logger.error("[ResendEmailSender] Failed to send email to %s: %s", to_email, exc)
+
+
 def get_email_sender() -> EmailSender:
     """Auto-selects like src/market_data/provider_factory.py does for
-    SAHMK vs Dev: SMTP_HOST set -> real SmtpEmailSender; unset -> the
-    honest ConsoleEmailSender fallback. FRONTEND_BASE_URL is required
-    alongside SMTP_HOST (there's no safe default frontend origin to
-    guess), so a misconfiguration falls back to Console rather than
-    emailing a broken link."""
-    host = os.getenv("SMTP_HOST", "").strip()
+    SAHMK vs Dev, checked in priority order: RESEND_API_KEY (real,
+    HTTPS-based, recommended -- see ResendEmailSender's docstring) ->
+    SMTP_HOST (real, SMTP-based, kept for hosts where raw SMTP egress
+    actually works) -> ConsoleEmailSender (honest no-op fallback).
+    FRONTEND_BASE_URL is required alongside either real provider
+    (there's no safe default frontend origin to guess), so a
+    misconfiguration falls back to Console rather than emailing a
+    broken link."""
     frontend_base_url = os.getenv("FRONTEND_BASE_URL", "").strip()
-    if not host or not frontend_base_url:
-        return ConsoleEmailSender()
-    return SmtpEmailSender(
-        host=host,
-        port=int(os.getenv("SMTP_PORT", "587")),
-        username=os.getenv("SMTP_USERNAME", ""),
-        password=os.getenv("SMTP_PASSWORD", ""),
-        from_email=os.getenv("SMTP_FROM_EMAIL", "no-reply@basirah.ai"),
-        frontend_base_url=frontend_base_url,
-        use_tls=os.getenv("SMTP_USE_TLS", "true").strip().lower() in ("true", "1", "yes"),
-    )
+
+    resend_api_key = os.getenv("RESEND_API_KEY", "").strip()
+    if resend_api_key and frontend_base_url:
+        return ResendEmailSender(
+            api_key=resend_api_key,
+            from_email=os.getenv("RESEND_FROM_EMAIL", "no-reply@basirah.ai"),
+            frontend_base_url=frontend_base_url,
+        )
+
+    host = os.getenv("SMTP_HOST", "").strip()
+    if host and frontend_base_url:
+        return SmtpEmailSender(
+            host=host,
+            port=int(os.getenv("SMTP_PORT", "587")),
+            username=os.getenv("SMTP_USERNAME", ""),
+            password=os.getenv("SMTP_PASSWORD", ""),
+            from_email=os.getenv("SMTP_FROM_EMAIL", "no-reply@basirah.ai"),
+            frontend_base_url=frontend_base_url,
+            use_tls=os.getenv("SMTP_USE_TLS", "true").strip().lower() in ("true", "1", "yes"),
+        )
+
+    return ConsoleEmailSender()
