@@ -11,6 +11,10 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_credentials: "البريد الإلكتروني أو كلمة المرور غير صحيحة.",
   email_not_verified: "يرجى تأكيد بريدك الإلكتروني قبل تسجيل الدخول.",
   account_suspended: "تم تعليق هذا الحساب. يرجى التواصل مع الدعم.",
+  // AccountLockedError (src/auth/exceptions.py) -- محاولات فاشلة
+  // متكررة على هذا الحساب تحديدًا؛ كانت تظهر سابقًا كرسالة الفشل
+  // العامة غير المفيدة لأن هذا الرمز لم يكن مُدرجًا هنا.
+  account_locked: "تم قفل هذا الحساب مؤقتًا بسبب محاولات دخول فاشلة متكررة. حاول مرة أخرى لاحقًا أو أعد تعيين كلمة المرور.",
 };
 
 export default function LoginPage() {
