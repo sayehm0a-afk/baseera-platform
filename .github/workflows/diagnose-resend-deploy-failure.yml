@@ -1,13 +1,13 @@
 name: Diagnose Production Backend Deploy Failure (temporary, read-only, RAILWAY_TOKEN only)
 
-# Three consecutive real redeploys (two for Resend, one a plain no-op
-# redeploy of already-live code) all ended up FAILED within ~15-20s of
-# entering BUILDING -- proven unrelated to any code/variable change.
-# I have no browser to open the Railway dashboard myself, so this
-# checks everything account/billing/limit-related that IS reachable
-# through the Railway CLI + its underlying GraphQL API with the same
-# RAILWAY_TOKEN already used for every other ops workflow this
-# session. Read-only: no deploys, no variable changes.
+# Three consecutive real redeploys all ended up FAILED within ~15-20s
+# of BUILDING, proven unrelated to any code/variable change (a plain
+# no-op redeploy of already-live code failed identically). No browser
+# access here to open the Railway dashboard directly. `railway --help`
+# revealed a native `usage` subcommand ("Show workspace usage and
+# manage usage limits") -- checking that directly, since a usage/plan
+# limit is the most likely explanation for every build instantly
+# failing regardless of what's being deployed.
 
 on:
   workflow_dispatch: {}
@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 jobs:
-  diagnose-account:
+  diagnose-usage:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -32,49 +32,11 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: railway whoami
-        run: railway whoami 2>&1 || true
+      - name: railway usage --help
+        run: railway usage --help 2>&1 || true
 
-      - name: railway status --json (current project/environment)
-        run: railway status --json 2>&1 || true
+      - name: railway usage
+        run: railway usage 2>&1 || true
 
-      - name: railway --help (top-level, to find any account/billing/usage subcommand)
-        run: railway --help 2>&1 || true
-
-      - name: Raw GraphQL query against Railway's own API for account/subscription/usage/limit fields
-        run: |
-          cat > /tmp/query.json <<'EOF'
-          {"query":"query { me { id email subscriptionType subscriptionPlanLimit workspaces { id name plan } } }"}
-          EOF
-          echo "=== attempt 1: me { subscriptionType, subscriptionPlanLimit, workspaces } ==="
-          curl -sS -X POST https://backboard.railway.com/graphql/v2 \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d @/tmp/query.json \
-            -w "\nHTTP:%{http_code}\n" || true
-
-      - name: Raw GraphQL query -- project/environment resource usage and any active limit/restriction
-        run: |
-          PROJECT_ID=$(railway status --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
-          echo "Resolved project id: $PROJECT_ID"
-          cat > /tmp/query2.json <<EOF
-          {"query":"query(\$id: String!) { project(id: \$id) { id name deletedAt } }","variables":{"id":"$PROJECT_ID"}}
-          EOF
-          echo "=== attempt 2: project deletedAt/basic status ==="
-          curl -sS -X POST https://backboard.railway.com/graphql/v2 \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d @/tmp/query2.json \
-            -w "\nHTTP:%{http_code}\n" || true
-
-      - name: Full detail on the most recent FAILED deployment via GraphQL (deployment + logs)
-        run: |
-          cat > /tmp/query3.json <<'EOF'
-          {"query":"query { deployment(id: \"993d136a-729c-45f1-9650-2671bb3df892\") { id status staticUrl suggestAddServiceDomain deploymentStopped canRedeploy meta } }"}
-          EOF
-          echo "=== attempt 3: deployment detail for the last plain-redeploy failure ==="
-          curl -sS -X POST https://backboard.railway.com/graphql/v2 \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d @/tmp/query3.json \
-            -w "\nHTTP:%{http_code}\n" || true
+      - name: railway usage --json (if supported)
+        run: railway usage --json 2>&1 || true
