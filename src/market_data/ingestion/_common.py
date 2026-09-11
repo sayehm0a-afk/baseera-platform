@@ -211,6 +211,63 @@ def get_or_create_stock(session: Session, symbol: str, trusted: bool = False) ->
     return stock
 
 
+class InvalidPriceBarError(ValueError):
+    """Raised by upsert_price_bar() when a provider-returned bar fails
+    basic OHLCV structural sanity -- see _validate_price_bar_data().
+    Deliberately a plain ValueError subclass, not a new taxonomy: every
+    existing ingestion job already treats any exception from this
+    function as a per-symbol failure (caught, recorded in
+    result.errors, does not abort the run or other symbols -- see
+    ingest_ohlcv.py/ingest_historical_ohlcv.py's own except blocks),
+    so this integrates with zero changes to either caller."""
+
+
+def _validate_price_bar_data(symbol: str, data: Dict) -> None:
+    """2026-09 audit finding: no OHLCV bar returned by a market-data
+    provider was ever checked for basic structural validity before
+    being persisted (and, from there, fed directly into technical
+    analysis) -- a provider glitch or transient bad response (e.g.
+    high < low, a negative volume, or a close outside the [low, high]
+    range) would silently become real, analyzed price history with no
+    trace of the anomaly. This is a pure data-integrity gate at the
+    storage boundary -- it never touches Decision Engine V2/Brain/
+    Shadow/Recurrent Scan logic, only whether a bar is trustworthy
+    enough to store at all. Deliberately conservative (only rejects
+    combinations that are structurally impossible for a real OHLC bar,
+    never a plausible-but-unusual real price move), so it cannot reject
+    real market data.
+    """
+    open_ = Decimal(str(data["open"]))
+    high = Decimal(str(data["high"]))
+    low = Decimal(str(data["low"]))
+    close = Decimal(str(data["close"]))
+    volume = int(data["volume"])
+
+    if open_ <= 0 or high <= 0 or low <= 0 or close <= 0:
+        raise InvalidPriceBarError(
+            f"Invalid OHLCV bar for '{symbol}' at {data.get('timestamp')}: "
+            f"non-positive price (open={open_}, high={high}, low={low}, close={close})."
+        )
+    if high < low:
+        raise InvalidPriceBarError(
+            f"Invalid OHLCV bar for '{symbol}' at {data.get('timestamp')}: high ({high}) < low ({low})."
+        )
+    if not (low <= open_ <= high):
+        raise InvalidPriceBarError(
+            f"Invalid OHLCV bar for '{symbol}' at {data.get('timestamp')}: "
+            f"open ({open_}) outside [low={low}, high={high}]."
+        )
+    if not (low <= close <= high):
+        raise InvalidPriceBarError(
+            f"Invalid OHLCV bar for '{symbol}' at {data.get('timestamp')}: "
+            f"close ({close}) outside [low={low}, high={high}]."
+        )
+    if volume < 0:
+        raise InvalidPriceBarError(
+            f"Invalid OHLCV bar for '{symbol}' at {data.get('timestamp')}: negative volume ({volume})."
+        )
+
+
 def upsert_price_bar(session: Session, stock: Stock, data: Dict) -> bool:
     """Upserts one OHLCV bar (the shape IMarketDataProvider.get_stock_data()/
     get_historical_ohlcv() both return) keyed by (stock_id, timeframe,
@@ -220,7 +277,12 @@ def upsert_price_bar(session: Session, stock: Stock, data: Dict) -> bool:
     constraint is the actual backstop, this is the common-case fast
     path). Returns True if a new row was inserted, False if an existing
     one was updated -- callers use this to count rows_upserted without
-    caring which case it was."""
+    caring which case it was.
+
+    Raises InvalidPriceBarError (before touching the session) if the
+    bar fails basic OHLCV structural sanity -- see
+    _validate_price_bar_data()."""
+    _validate_price_bar_data(stock.symbol, data)
     timestamp = datetime.fromisoformat(data["timestamp"])
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=timezone.utc)
