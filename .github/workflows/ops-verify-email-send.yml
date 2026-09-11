@@ -1,0 +1,89 @@
+name: Ops - Verify a real SMTP send after confirming the real deployment rolled out (RAILWAY_TOKEN only)
+
+# Follow-up to ops-configure-and-verify-email.yml's first run: that
+# run's own health-check got HTTP 200 about 1 second after `railway up
+# --detach` returned -- the same known false-positive pattern already
+# documented in ops-verify-safari-fix-rollout.yml's own header (the
+# OLD container keeps serving during Railway's healthcheck-gated
+# rollout). Its forgot-password test genuinely hit the OLD process --
+# proven by the backend's own logs showing "[ConsoleEmailSender] No
+# real email provider configured" for that exact request, meaning the
+# new SMTP_HOST env var had not taken effect yet. This workflow first
+# polls Railway's own deployment record for the specific ID that run's
+# `railway up` created, THEN triggers the real test -- so the result
+# actually reflects the new configuration, not the stale one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend_deployment_id:
+        description: "Deployment ID to confirm is live before testing (from the Build Logs URL)"
+        required: true
+      test_email:
+        description: "Real address to send a test forgot-password email to"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      EXPECTED_BACKEND_DEPLOYMENT: ${{ github.event.inputs.backend_deployment_id }}
+      TEST_EMAIL: ${{ github.event.inputs.test_email }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Poll backend service's latestDeployment until it matches the expected ID
+        run: |
+          for i in $(seq 1 20); do
+            railway service list --json > /tmp/services.json 2>/tmp/services_err.txt || true
+            CURRENT=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.id // empty' /tmp/services.json 2>/dev/null || echo "")
+            STATUS=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.status // empty' /tmp/services.json 2>/dev/null || echo "")
+            echo "attempt $i: backend latestDeployment.id=$CURRENT status=$STATUS"
+            if [ "$CURRENT" = "$EXPECTED_BACKEND_DEPLOYMENT" ] && [ "$STATUS" = "SUCCESS" ]; then
+              echo "Backend's latestDeployment now matches and is SUCCESS."
+              break
+            fi
+            sleep 15
+          done
+
+      - name: Extra margin for the new process to finish booting after the deployment record flips
+        run: sleep 20
+
+      - name: Trigger one real forgot-password request against the confirmed-new deployment
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/resp.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/forgot-password" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$TEST_EMAIL\"}")
+          echo "HTTP $STATUS"
+          cat /tmp/resp.json
+
+      - name: Check the backend's own logs for the real send outcome
+        run: |
+          sleep 8
+          echo "=== lines mentioning EmailSender/smtp for this test ==="
+          railway logs --service backend 2>&1 | tail -80 | grep -i "EmailSender\|smtplib\|SMTP" || echo "(no matching lines in the tail -- see full tail below)"
+          echo "=== full tail ==="
+          railway logs --service backend 2>&1 | tail -80
