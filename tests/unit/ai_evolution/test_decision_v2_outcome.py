@@ -402,6 +402,70 @@ class TestEntryTriggeredGating:
         assert row.stop_loss_hit is None  # stop/target tracking never even ran
         assert row.status in NON_RESOLVING_STATUSES
 
+    def test_regression_gap_through_stop_then_later_recovery_into_zone_is_invalidated(self, session, stock):
+        """A second, subtler variant of the same class of bug: the stop
+        breach and the later entry-zone touch are on DIFFERENT bars,
+        so the original fix's "no entry found anywhere" check never
+        even ran (`entered_at` WAS found -- just too late). Day 2 gaps
+        straight through both the zone (95-100) and the stop (90)
+        without its own low/high range ever overlapping the zone
+        itself; day 3 recovers and genuinely trades within the zone.
+        Before this fix, `entered_mask` found day 3's touch and
+        happily marked the row entry_triggered from there, silently
+        ignoring that the setup had already died on day 2 -- corrupting
+        the row into a trackable (and potentially winning) trade that
+        should never have existed."""
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=95.0, entry_zone_high=100.0, stop_loss=90.0,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, datetime(2026, 1, 2), high=92.0, low=85.0, close=86.0)
+        _add_bar(session, stock, datetime(2026, 1, 3), high=99.0, low=96.0, close=98.0)
+        session.commit()
+
+        now = datetime(2026, 1, 4, tzinfo=timezone.utc)
+        evaluate_pending_outcomes(session, now=now)
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.status == DecisionV2OutcomeStatus.INVALIDATED
+        assert row.invalidated is True
+        # SQLite does not round-trip a timezone-aware DateTime (see
+        # _as_utc's own docstring) -- compare naive, matching this
+        # file's existing convention for exact-timestamp assertions.
+        assert row.invalidated_at == datetime(2026, 1, 2, 16, 0)
+        assert row.entry_triggered is False
+        assert row.entry_triggered_at is None
+        assert row.status in NON_RESOLVING_STATUSES
+
+    def test_stop_breach_on_or_after_the_entry_bar_is_ordinary_post_entry_tracking(self, session, stock):
+        """Guards the fix above from over-firing: once price has
+        genuinely entered the zone, a LATER stop breach is a normal
+        losing trade (STOP_LOSS_HIT), not a pre-entry invalidation --
+        the new pre-entry-only window must not swallow legitimate
+        post-entry stop hits."""
+        snapshot = _make_snapshot(
+            session, stock, decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_zone_low=95.0, entry_zone_high=100.0, stop_loss=90.0,
+        )
+        create_pending_decision_v2_outcome(session, snapshot)
+        session.commit()
+
+        _add_bar(session, stock, datetime(2026, 1, 2), high=99.0, low=96.0, close=98.0)
+        _add_bar(session, stock, datetime(2026, 1, 3), high=91.0, low=88.0, close=89.0)
+        session.commit()
+
+        now = datetime(2026, 1, 4, tzinfo=timezone.utc)
+        evaluate_pending_outcomes(session, now=now)
+
+        row = session.query(DecisionV2Outcome).filter_by(decision_v2_snapshot_id=snapshot.id).one()
+        assert row.entry_triggered is True
+        assert row.entry_triggered_at == datetime(2026, 1, 2, 16, 0)
+        assert row.status == DecisionV2OutcomeStatus.STOP_LOSS_HIT
+        assert row.invalidated is False
+
     def test_entry_never_triggered_when_horizon_elapses_untouched(self, session, stock):
         """Price stays entirely above the entry zone for the whole
         horizon -- never a real position, never a loss, never a win."""
