@@ -68,6 +68,10 @@ from src.domain.models.decision_v2_outcome import (
     DecisionV2OutcomeStatus,
     NON_RESOLVING_STATUSES,
 )
+from src.domain.models.decision_v2_outcome_scheduler_run_log import (
+    DecisionV2OutcomeSchedulerRunLog,
+    DecisionV2OutcomeSchedulerRunStatus,
+)
 from src.domain.models.radar_opportunity import RadarOpportunity
 from src.domain.models.recurrent_scan_cycle import RecurrentScanCycle, RecurrentScanCycleStatus
 from src.domain.models.shadow_live_signal import (
@@ -167,6 +171,8 @@ __all__ = [
     "DecisionV2Outcome",
     "DecisionV2OutcomeStatus",
     "NON_RESOLVING_STATUSES",
+    "DecisionV2OutcomeSchedulerRunLog",
+    "DecisionV2OutcomeSchedulerRunStatus",
     "RadarOpportunity",
     "RecurrentScanCycle",
     "RecurrentScanCycleStatus",

@@ -15,6 +15,7 @@ already uses.
 import asyncio
 import contextlib
 import logging
+from datetime import datetime, timezone
 from typing import Callable, Optional, Protocol, runtime_checkable
 
 from sqlalchemy.orm import Session
@@ -33,6 +34,7 @@ from src.ai_evolution.daily_reflection import generate_daily_reflection
 from src.ai_evolution.decision_v2_outcome_evaluation import evaluate_pending_outcomes
 from src.ai_evolution.outcome_evaluation import evaluate_due_outcomes
 from src.ai_evolution.pattern_discovery import discover_patterns
+from src.domain.models import DecisionV2OutcomeSchedulerRunLog, DecisionV2OutcomeSchedulerRunStatus
 from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
 
 logger = logging.getLogger(__name__)
@@ -470,7 +472,19 @@ class DecisionV2OutcomeScheduler:
             await asyncio.sleep(self._interval_seconds)
 
     async def _run_one_cycle(self) -> None:
+        # AUDIT 2026-09-11 (item #6): a durable row per cycle, in
+        # addition to the log line below -- see
+        # DecisionV2OutcomeSchedulerRunLog's own docstring for why. The
+        # row is inserted RUNNING and updated in place on completion (or
+        # FAILED, with the exception recorded) so a process crash mid-
+        # cycle is visible as a stale RUNNING row, never silently absent.
         session = self._session_factory()
+        started_at = datetime.now(timezone.utc)
+        run_log = DecisionV2OutcomeSchedulerRunLog(
+            started_at=started_at, status=DecisionV2OutcomeSchedulerRunStatus.RUNNING
+        )
+        session.add(run_log)
+        session.commit()
         try:
             summary = await asyncio.to_thread(evaluate_pending_outcomes, session)
             logger.info(
@@ -481,5 +495,22 @@ class DecisionV2OutcomeScheduler:
                 summary.cancelled,
                 summary.still_pending,
             )
+            finished_at = datetime.now(timezone.utc)
+            run_log.finished_at = finished_at
+            run_log.duration_seconds = (finished_at - started_at).total_seconds()
+            run_log.evaluated_terminal = summary.evaluated_terminal
+            run_log.data_unavailable = summary.data_unavailable
+            run_log.cancelled = summary.cancelled
+            run_log.still_pending = summary.still_pending
+            run_log.status = DecisionV2OutcomeSchedulerRunStatus.SUCCESS
+            session.commit()
+        except Exception as exc:
+            finished_at = datetime.now(timezone.utc)
+            run_log.finished_at = finished_at
+            run_log.duration_seconds = (finished_at - started_at).total_seconds()
+            run_log.status = DecisionV2OutcomeSchedulerRunStatus.FAILED
+            run_log.error_summary = str(exc)[:2000]
+            session.commit()
+            raise
         finally:
             session.close()

@@ -184,6 +184,7 @@ async def get_dashboard_summary(
 
     from src.analysis.decision_v2.engine import DECISION_V2_ENGINE_VERSION
     from src.domain.models import (
+        DecisionV2OutcomeSchedulerRunLog,
         IngestionJobStatus,
         IngestionRunLog,
         MarketScanProgress,
@@ -243,6 +244,16 @@ async def get_dashboard_summary(
     )
     market_info = get_market_status()
 
+    # AUDIT 2026-09-11 (item #6): the last DecisionV2OutcomeScheduler
+    # cycle, from its own durable run-log row -- previously only ever
+    # visible via logger.info, so an admin could not distinguish "the
+    # scheduler is genuinely idle" from "it crashed and nobody noticed."
+    last_decision_v2_outcome_run = (
+        session.query(DecisionV2OutcomeSchedulerRunLog)
+        .order_by(DecisionV2OutcomeSchedulerRunLog.started_at.desc())
+        .first()
+    )
+
     return AdminDashboardSummaryOut(
         app_version=main.app.version,
         deployment_commit=settings.deployment_commit,
@@ -264,6 +275,29 @@ async def get_dashboard_summary(
         ),
         market_intelligence_scheduler_running=(
             main.market_intelligence_scheduler is not None and main.market_intelligence_scheduler.is_running
+        ),
+        decision_v2_outcome_scheduler_running=(
+            main.decision_v2_outcome_scheduler is not None and main.decision_v2_outcome_scheduler.is_running
+        ),
+        decision_v2_outcome_scheduler_is_leader=(
+            main.decision_v2_outcome_scheduler is not None and main.decision_v2_outcome_scheduler.is_leader
+        ),
+        decision_v2_outcome_scheduler_skipped_due_to_not_leader_count=(
+            main.decision_v2_outcome_scheduler.skipped_due_to_not_leader_count
+            if main.decision_v2_outcome_scheduler is not None
+            else 0
+        ),
+        decision_v2_outcome_last_run_status=(
+            last_decision_v2_outcome_run.status.value if last_decision_v2_outcome_run else None
+        ),
+        decision_v2_outcome_last_run_started_at=(
+            last_decision_v2_outcome_run.started_at if last_decision_v2_outcome_run else None
+        ),
+        decision_v2_outcome_last_run_finished_at=(
+            last_decision_v2_outcome_run.finished_at if last_decision_v2_outcome_run else None
+        ),
+        decision_v2_outcome_last_run_evaluated_terminal=(
+            last_decision_v2_outcome_run.evaluated_terminal if last_decision_v2_outcome_run else None
         ),
         live_market_mode_enabled=main.live_market_mode_scheduler is not None,
         live_market_mode_running=(

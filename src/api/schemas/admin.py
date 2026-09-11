@@ -252,6 +252,22 @@ class AdminDashboardSummaryOut(BaseModel):
     ingestion_next_retry_at: Optional[str] = None
     market_intelligence_scheduler_running: bool
 
+    # AUDIT 2026-09-11 (item #6): DecisionV2OutcomeScheduler had zero
+    # admin-panel visibility before this -- not even the is_leader/
+    # skipped-count pair IngestionScheduler already exposes above, let
+    # alone what its last cycle actually produced. Same real-state-only
+    # discipline: these mirror main.decision_v2_outcome_scheduler and
+    # its DecisionV2OutcomeSchedulerRunLog table exactly, never inferred.
+    decision_v2_outcome_scheduler_running: bool = False
+    decision_v2_outcome_scheduler_is_leader: bool = False
+    decision_v2_outcome_scheduler_skipped_due_to_not_leader_count: int = 0
+    # "running"/"success"/"failed", or None if no cycle has ever run yet
+    # (distinct from the scheduler being off -- see *_running above).
+    decision_v2_outcome_last_run_status: Optional[str] = None
+    decision_v2_outcome_last_run_started_at: Optional[datetime] = None
+    decision_v2_outcome_last_run_finished_at: Optional[datetime] = None
+    decision_v2_outcome_last_run_evaluated_terminal: Optional[int] = None
+
     # Live Market Mode owns its own internal ingestion/scan scheduler
     # instances instead of the two standalone globals above (see
     # main.py's startup wiring) -- without these fields, the two flags

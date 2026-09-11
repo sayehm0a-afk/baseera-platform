@@ -398,3 +398,69 @@ async def test_decision_v2_outcome_scheduler_non_leader_never_runs_a_cycle(facto
 
     assert calls["n"] == 0
     assert scheduler.skipped_due_to_not_leader_count == 1
+
+
+@pytest.mark.asyncio
+async def test_decision_v2_outcome_scheduler_run_one_cycle_writes_a_run_log_row(factory, monkeypatch):
+    """AUDIT 2026-09-11 (item #6): a successful cycle must leave a
+    durable, queryable row behind -- not just a log line -- so an admin
+    surface can answer "did the last cycle actually run, and what did
+    it produce" without grepping logs."""
+    from src.ai_evolution.decision_v2_outcome_evaluation import DecisionV2OutcomeEvaluationSummary
+    from src.domain.models import DecisionV2OutcomeSchedulerRunLog, DecisionV2OutcomeSchedulerRunStatus
+
+    def _fake_evaluate(session, **kwargs):
+        return DecisionV2OutcomeEvaluationSummary(
+            evaluated_terminal=3, still_pending=1, data_unavailable=2, cancelled=0
+        )
+
+    monkeypatch.setattr(scheduler_module, "evaluate_pending_outcomes", _fake_evaluate)
+
+    scheduler = DecisionV2OutcomeScheduler(session_factory=factory, interval_seconds=60)
+    await scheduler._run_one_cycle()
+
+    session = factory()
+    try:
+        rows = session.query(DecisionV2OutcomeSchedulerRunLog).all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.status == DecisionV2OutcomeSchedulerRunStatus.SUCCESS
+        assert row.evaluated_terminal == 3
+        assert row.still_pending == 1
+        assert row.data_unavailable == 2
+        assert row.cancelled == 0
+        assert row.finished_at is not None
+        assert row.duration_seconds is not None
+        assert row.error_summary is None
+    finally:
+        session.close()
+
+
+@pytest.mark.asyncio
+async def test_decision_v2_outcome_scheduler_run_one_cycle_records_failure_and_reraises(factory, monkeypatch):
+    """A cycle that raises must still leave a FAILED row with the real
+    error recorded (never silently swallowed into an absent row) and
+    must still propagate the exception -- the caller (_loop) is the one
+    that decides an evaluation failure must not crash the process, not
+    this method."""
+    from src.domain.models import DecisionV2OutcomeSchedulerRunLog, DecisionV2OutcomeSchedulerRunStatus
+
+    def _raising_evaluate(session, **kwargs):
+        raise RuntimeError("simulated evaluation failure")
+
+    monkeypatch.setattr(scheduler_module, "evaluate_pending_outcomes", _raising_evaluate)
+
+    scheduler = DecisionV2OutcomeScheduler(session_factory=factory, interval_seconds=60)
+    with pytest.raises(RuntimeError, match="simulated evaluation failure"):
+        await scheduler._run_one_cycle()
+
+    session = factory()
+    try:
+        rows = session.query(DecisionV2OutcomeSchedulerRunLog).all()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.status == DecisionV2OutcomeSchedulerRunStatus.FAILED
+        assert row.error_summary == "simulated evaluation failure"
+        assert row.finished_at is not None
+    finally:
+        session.close()

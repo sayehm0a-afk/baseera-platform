@@ -21,6 +21,8 @@ from src.core.db.database import Base, get_db
 from src.domain.models import (
     AIRequest,
     AIRequestStatus,
+    DecisionV2OutcomeSchedulerRunLog,
+    DecisionV2OutcomeSchedulerRunStatus,
     IngestionJobStatus,
     IngestionRunLog,
     Invoice,
@@ -754,6 +756,73 @@ def test_dashboard_summary_last_scan_fields_are_none_before_any_scan(client, adm
     assert body["last_scan_insufficient_data_count"] is None
     assert body["last_scan_latest_error"] is None
     assert body["scan_lock_active"] is False
+
+
+def test_dashboard_summary_decision_v2_outcome_scheduler_fields_default_before_any_run(client, admin):
+    """AUDIT 2026-09-11 (item #6): before this fix,
+    DecisionV2OutcomeScheduler had zero admin-panel visibility. No
+    cycle has ever run in this test's DB -- must report False/None,
+    not error, distinct from decision_v2_outcome_scheduler_running
+    (whether the scheduler *process* is alive right now)."""
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["decision_v2_outcome_scheduler_running"], bool)
+    assert body["decision_v2_outcome_scheduler_is_leader"] is False
+    assert body["decision_v2_outcome_scheduler_skipped_due_to_not_leader_count"] == 0
+    assert body["decision_v2_outcome_last_run_status"] is None
+    assert body["decision_v2_outcome_last_run_started_at"] is None
+    assert body["decision_v2_outcome_last_run_finished_at"] is None
+    assert body["decision_v2_outcome_last_run_evaluated_terminal"] is None
+
+
+def test_dashboard_summary_reflects_a_real_decision_v2_outcome_run(client, admin, session):
+    """A real completed cycle's own run-log row must surface here --
+    the exact gap this fix closes: previously this information existed
+    only in transient application logs."""
+    older = DecisionV2OutcomeSchedulerRunLog(
+        started_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        finished_at=datetime.now(timezone.utc) - timedelta(hours=2) + timedelta(seconds=5),
+        status=DecisionV2OutcomeSchedulerRunStatus.SUCCESS,
+        evaluated_terminal=1,
+    )
+    newer = DecisionV2OutcomeSchedulerRunLog(
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc) + timedelta(seconds=3),
+        status=DecisionV2OutcomeSchedulerRunStatus.SUCCESS,
+        evaluated_terminal=5,
+        data_unavailable=1,
+        still_pending=2,
+    )
+    session.add_all([older, newer])
+    session.commit()
+
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    body = response.json()
+    # The most recent run wins, not the first one found.
+    assert body["decision_v2_outcome_last_run_status"] == "success"
+    assert body["decision_v2_outcome_last_run_evaluated_terminal"] == 5
+    assert body["decision_v2_outcome_last_run_finished_at"] is not None
+
+
+def test_dashboard_summary_reflects_a_failed_decision_v2_outcome_run(client, admin, session):
+    session.add(
+        DecisionV2OutcomeSchedulerRunLog(
+            started_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc),
+            status=DecisionV2OutcomeSchedulerRunStatus.FAILED,
+            error_summary="simulated failure",
+        )
+    )
+    session.commit()
+
+    _as(admin)
+    response = client.get("/api/v1/admin/system/summary")
+    assert response.status_code == 200
+    assert response.json()["decision_v2_outcome_last_run_status"] == "failed"
 
 
 def test_dashboard_summary_phase1_decision_v2_fields(client, admin):
