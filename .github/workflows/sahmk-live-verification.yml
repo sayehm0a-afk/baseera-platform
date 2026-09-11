@@ -52,7 +52,7 @@ jobs:
           echo "SAHMK_API_KEY secret is present (value not shown)."
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
