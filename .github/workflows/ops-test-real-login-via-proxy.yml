@@ -1,0 +1,80 @@
+name: Ops - Test a real login through the frontend proxy (read-only except one login call)
+
+# The user reports "تعذّر تسجيل الدخول" (generic failure) in Safari
+# AFTER the Safari-fix deployment was verified live (ops-verify-safari-
+# fix-rollout.yml, run 34605149864, confirmed both services on the new
+# deployment IDs and the /api/v1 rewrite proxy responding with real
+# JSON from the backend). The frontend's login page
+# (src/app/login/page.tsx) only shows this exact generic string when
+# either (a) the request throws before ever becoming an ApiError (e.g.
+# a non-JSON response, a network-level failure) or (b) the backend
+# returns an error `code` this frontend doesn't recognize -- NOT for
+# invalid_credentials/email_not_verified/account_suspended/
+# account_locked, which all have specific messages already.
+#
+# This performs one real POST /api/v1/auth/login through the FRONTEND's
+# own origin (exactly the path Safari's browser takes: browser ->
+# frontend -> Next.js rewrite -> backend), using the real account
+# created earlier this session, and prints the raw HTTP status,
+# response headers, and response body. Diagnostic only -- a login
+# attempt is not a destructive action, and this is the same account the
+# user is already trying to log into.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Account email to test login with"
+        required: true
+      password:
+        description: "Account password to test login with"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FRONTEND_URL: https://frontend-production-c3de.up.railway.app
+      BACKEND_URL: https://backend-production-7cca.up.railway.app
+      TEST_EMAIL: ${{ github.event.inputs.email }}
+      TEST_PASSWORD: ${{ github.event.inputs.password }}
+    steps:
+      - name: Login through the FRONTEND origin (same path Safari takes)
+        run: |
+          BODY=$(mktemp)
+          HEADERS=$(mktemp)
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 \
+            -o "$BODY" -D "$HEADERS" -w "%{http_code}" \
+            -X POST "$FRONTEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c 'import json,os,sys; print(json.dumps(os.environ["TEST_EMAIL"]))'), \"password\": $(python3 -c 'import json,os,sys; print(json.dumps(os.environ["TEST_PASSWORD"]))')}" \
+            || echo "000")
+          echo "=== HTTP status: $HTTP_CODE ==="
+          echo "=== Response headers ==="
+          cat "$HEADERS"
+          echo "=== Response body ==="
+          cat "$BODY"
+          echo
+          echo "=== Content-Type check ==="
+          grep -i "^content-type:" "$HEADERS" || echo "(no content-type header found)"
+
+      - name: Same login call directly against the BACKEND origin (isolates proxy vs backend)
+        run: |
+          BODY=$(mktemp)
+          HEADERS=$(mktemp)
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 30 \
+            -o "$BODY" -D "$HEADERS" -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -H "Origin: $FRONTEND_URL" \
+            -d "{\"email\": $(python3 -c 'import json,os,sys; print(json.dumps(os.environ["TEST_EMAIL"]))'), \"password\": $(python3 -c 'import json,os,sys; print(json.dumps(os.environ["TEST_PASSWORD"]))')}" \
+            || echo "000")
+          echo "=== HTTP status: $HTTP_CODE ==="
+          echo "=== Response headers ==="
+          cat "$HEADERS"
+          echo "=== Response body ==="
+          cat "$BODY"
