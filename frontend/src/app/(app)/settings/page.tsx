@@ -3,6 +3,7 @@
 import { useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { AiStar } from "@/components/ai/AiStar";
+import { SubscriptionSection } from "@/components/settings/SubscriptionSection";
 import {
   getSessionServerSnapshot,
   getSessionSnapshot,
@@ -118,6 +119,10 @@ export default function SettingsPage() {
             تسجيل الخروج من جميع الأجهزة
           </button>
         </div>
+      </SettingsSection>
+
+      <SettingsSection title="الباقة">
+        <SubscriptionSection />
       </SettingsSection>
 
       <SettingsSection title="المظهر">

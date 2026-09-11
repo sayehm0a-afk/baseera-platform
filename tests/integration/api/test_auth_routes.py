@@ -80,7 +80,7 @@ def test_register_returns_unverified_user(client: TestClient, db_session):
 
 def test_register_rejects_duplicate_email(client: TestClient, db_session):
     client.post("/api/v1/auth/register", json={"email": "dup@example.com", "password": "s3cret-password"})
-    response = client.post("/api/v1/auth/register", json={"email": "dup@example.com", "password": "another-pass"})
+    response = client.post("/api/v1/auth/register", json={"email": "dup@example.com", "password": "another-pass1"})
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "email_already_registered"
 
@@ -530,7 +530,7 @@ def test_forgot_password_for_unknown_email_returns_generic_message(client: TestC
 
 
 def test_forgot_password_and_reset_changes_password_and_revokes_sessions(client: TestClient, db_session):
-    _register_verify_and_login(client, "reset@example.com", password="old-password")
+    _register_verify_and_login(client, "reset@example.com", password="old-password1")
 
     with patch("src.auth.password_reset_service.get_email_sender") as mock_sender:
         forgot_response = client.post(
@@ -541,7 +541,7 @@ def test_forgot_password_and_reset_changes_password_and_revokes_sessions(client:
 
     reset_response = client.post(
         "/api/v1/auth/reset-password",
-        json={"token": raw_token, "new_password": "brand-new-password"},
+        json={"token": raw_token, "new_password": "brand-new-password1"},
         headers=_csrf_headers(client),
     )
     assert reset_response.status_code == 200
@@ -553,14 +553,14 @@ def test_forgot_password_and_reset_changes_password_and_revokes_sessions(client:
     # New password works; old password no longer does.
     old_login = client.post(
         "/api/v1/auth/login",
-        json={"email": "reset@example.com", "password": "old-password"},
+        json={"email": "reset@example.com", "password": "old-password1"},
         headers=_csrf_headers(client),
     )
     assert old_login.status_code == 401
 
     new_login = client.post(
         "/api/v1/auth/login",
-        json={"email": "reset@example.com", "password": "brand-new-password"},
+        json={"email": "reset@example.com", "password": "brand-new-password1"},
         headers=_csrf_headers(client),
     )
     assert new_login.status_code == 200

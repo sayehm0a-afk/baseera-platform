@@ -80,7 +80,10 @@ def _make_snapshot(
     return snapshot
 
 
-def _make_outcome(session, snapshot, validation_session_id, status, return_pct=None, time_to_target_days=None, time_to_stop_days=None):
+def _make_outcome(
+    session, snapshot, validation_session_id, status, return_pct=None, time_to_target_days=None,
+    time_to_stop_days=None, evaluated_at=None,
+):
     outcome = DecisionV2Outcome(
         decision_v2_snapshot_id=snapshot.id,
         validation_session_id=validation_session_id,
@@ -91,6 +94,7 @@ def _make_outcome(session, snapshot, validation_session_id, status, return_pct=N
         return_pct=return_pct,
         time_to_target_days=time_to_target_days,
         time_to_stop_days=time_to_stop_days,
+        evaluated_at=evaluated_at,
     )
     session.add(outcome)
     session.flush()
@@ -284,3 +288,72 @@ class TestComputeValidationSessionMetrics:
         assert result.total_signals_issued == 1
         assert result.actionable_signals == 0
         assert result.stop_loss_rate is None
+
+    def test_max_drawdown_and_longest_losing_streak_over_sequential_equity_curve(self, session, validation_session_id):
+        """AUDIT 2026-09-11 item #13: +10%, -5%, -5%, +3% resolved in
+        that chronological order (inserted out of order below, to prove
+        the computation sorts by evaluated_at and not insertion order).
+        equity: 100 -> 110 -> 104.5 -> 99.275 -> 102.25325; peak stays
+        110 throughout, so max drawdown is (110-99.275)/110 = 9.75% at
+        its trough, and the two consecutive negative trades in the
+        middle give a longest losing streak of 2 (broken by the final
+        +3%)."""
+        stocks = [_make_stock(session, s) for s in ("1111", "2222", "3333", "4444")]
+        snaps = [_make_snapshot(session, st, validation_session_id) for st in stocks]
+
+        _make_outcome(
+            session, snaps[3], validation_session_id, DecisionV2OutcomeStatus.TARGET_1_HIT,
+            return_pct=3.0, evaluated_at=datetime(2026, 1, 4, tzinfo=timezone.utc),
+        )
+        _make_outcome(
+            session, snaps[1], validation_session_id, DecisionV2OutcomeStatus.STOP_LOSS_HIT,
+            return_pct=-5.0, evaluated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        _make_outcome(
+            session, snaps[0], validation_session_id, DecisionV2OutcomeStatus.TARGET_1_HIT,
+            return_pct=10.0, evaluated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        _make_outcome(
+            session, snaps[2], validation_session_id, DecisionV2OutcomeStatus.STOP_LOSS_HIT,
+            return_pct=-5.0, evaluated_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+        )
+        session.commit()
+
+        result = compute_validation_session_metrics(session, validation_session_id)
+
+        assert result.max_drawdown_pct == pytest.approx(9.75, abs=0.01)
+        assert result.longest_losing_streak == 2
+
+    def test_drawdown_and_streak_none_with_fewer_than_two_resolved_outcomes(self, session, validation_session_id):
+        stock1 = _make_stock(session, "1111")
+        s1 = _make_snapshot(session, stock1, validation_session_id)
+        _make_outcome(
+            session, s1, validation_session_id, DecisionV2OutcomeStatus.TARGET_1_HIT,
+            return_pct=5.0, evaluated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        session.commit()
+
+        result = compute_validation_session_metrics(session, validation_session_id)
+
+        assert result.max_drawdown_pct is None
+        assert result.longest_losing_streak == 0
+
+    def test_negative_return_expired_counts_toward_losing_streak(self, session, validation_session_id):
+        stock1 = _make_stock(session, "1111")
+        stock2 = _make_stock(session, "2222")
+        s1 = _make_snapshot(session, stock1, validation_session_id)
+        s2 = _make_snapshot(session, stock2, validation_session_id)
+
+        _make_outcome(
+            session, s1, validation_session_id, DecisionV2OutcomeStatus.EXPIRED,
+            return_pct=-2.0, evaluated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        _make_outcome(
+            session, s2, validation_session_id, DecisionV2OutcomeStatus.EXPIRED,
+            return_pct=-1.0, evaluated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        session.commit()
+
+        result = compute_validation_session_metrics(session, validation_session_id)
+
+        assert result.longest_losing_streak == 2
