@@ -69,7 +69,7 @@ email-validator>=2.3.0
 # ===========================
 # Observability
 # ===========================
-prometheus-client>=0.25.0
+prometheus-client>=0.26.0
 sentry-sdk[fastapi]>=2.0.0
 
 # ===========================
