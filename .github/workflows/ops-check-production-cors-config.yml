@@ -1,0 +1,39 @@
+name: Ops - Check production CORS/TrustedHosts config (read-only, RAILWAY_TOKEN only)
+
+# Read-only diagnostic: prints whether CORS_ALLOWED_ORIGINS and
+# TRUSTED_HOSTS are set on the production backend service, and their
+# values if so, plus the frontend's own actual public domain -- to
+# confirm or rule out a cross-origin CORS misconfiguration as the
+# cause of a real production login failure. Never modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check-cors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve frontend public domain
+        run: |
+          railway domain list --service frontend --json > /tmp/frontend_domains.json
+          cat /tmp/frontend_domains.json
+
+      - name: Print backend CORS_ALLOWED_ORIGINS / TRUSTED_HOSTS (read-only)
+        run: |
+          railway variable list --service backend --kv 2>&1 | grep -E "^(CORS_ALLOWED_ORIGINS|TRUSTED_HOSTS)=" || echo "NEITHER VARIABLE IS SET on the backend service."
