@@ -206,7 +206,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
     return (
       <EmptyState
         title="لم يتم العثور على هذا الرمز"
-        description={`لا يوجد سهم مسجّل بالرمز "${symbol}". تحقق من الرمز وحاول مرة أخرى.`}
+        description={`لا يوجد سهم مسجّل بالرمز "${symbol}" ضمن تغطية بصيرة الحالية للسوق السعودي. تحقق من الرمز، أو قد يكون هذا السهم خارج نطاق التغطية حاليًا.`}
       />
     );
   }
