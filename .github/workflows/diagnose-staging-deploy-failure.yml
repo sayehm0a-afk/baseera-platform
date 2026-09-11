@@ -60,8 +60,14 @@ jobs:
 
       - name: railway logs for the specific failed deployment (build + runtime)
         run: |
-          echo "=== railway logs --deployment $DEPLOYMENT_ID (if supported) ==="
-          railway logs --service "$RAILWAY_BACKEND_SERVICE" --deployment "$DEPLOYMENT_ID" 2>&1 | tail -n 300 || true
+          # Per `railway logs --help`: usage is
+          # `railway logs [OPTIONS] [DEPLOYMENT_ID]` -- the deployment ID is
+          # a bare POSITIONAL argument, and -d/--deployment, -b/--build are
+          # boolean category flags (not value-taking options). The prior
+          # run of this workflow passed the ID as `--deployment <id>`,
+          # which is why it returned nothing -- fixed here.
+          echo "=== railway logs -d (deployment/runtime) $DEPLOYMENT_ID ==="
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" -d --lines 500 "$DEPLOYMENT_ID" 2>&1 | tail -n 400 || true
           echo ""
-          echo "=== railway logs --build (fallback, if the above flag/positional form is wrong) ==="
-          railway logs --service "$RAILWAY_BACKEND_SERVICE" --build 2>&1 | tail -n 300 || true
+          echo "=== railway logs -b (build) $DEPLOYMENT_ID (for comparison) ==="
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" -b --lines 500 "$DEPLOYMENT_ID" 2>&1 | tail -n 100 || true
