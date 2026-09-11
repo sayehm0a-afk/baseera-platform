@@ -1,30 +1,24 @@
-name: Verify a real Resend send after a manual dashboard restart (RAILWAY_TOKEN only)
+name: Introspect Railway GraphQL API for a service-update/builder mutation (RAILWAY_TOKEN only)
 
-# The user manually restarted the backend service from the Railway
-# dashboard (targeting the specific already-successful deployment,
-# unlike the CLI's `railway restart` which only ever targets "latest"
-# and kept failing with "Deployment is not restartable" because the
-# latest deployment RECORD is one of several failed `railway up`
-# attempts). This just tests the real outcome, no restart attempt.
+# Checking exactly what a broader Railway token could unlock before
+# asking the user for one -- specifically whether a serviceInstance
+# update mutation (to fix the Builder=Railpack-instead-of-Dockerfile
+# drift programmatically) exists and whether it's reachable at all
+# with the current project-scoped token vs needing an account/team
+# token. Read-only: GraphQL introspection only, no mutations executed.
 
 on:
-  workflow_dispatch:
-    inputs:
-      test_email:
-        description: "Real address to send a test forgot-password email to"
-        required: true
-        default: "sayehm0a@gmail.com"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
 jobs:
-  verify:
+  introspect:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      TEST_EMAIL: ${{ github.event.inputs.test_email }}
     steps:
       - name: Fail fast if RAILWAY_TOKEN is not configured
         run: |
@@ -33,30 +27,37 @@ jobs:
             exit 1
           fi
 
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Resolve backend public URL
-        id: urls
+      - name: List mutation names containing 'service' or 'builder' or 'instance'
         run: |
-          railway domain list --service backend --json > /tmp/backend_domains.json
-          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
-          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
-
-      - name: Trigger one real forgot-password request
-        run: |
-          STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/resp.json -w "%{http_code}" \
-            -X POST "${{ steps.urls.outputs.backend_url }}/api/v1/auth/forgot-password" \
+          cat > /tmp/introspect.json <<'EOF'
+          {"query":"query { __schema { mutationType { fields { name } } } }"}
+          EOF
+          curl -sS -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"email\": \"$TEST_EMAIL\"}")
-          echo "HTTP $STATUS"
-          cat /tmp/resp.json
+            -d @/tmp/introspect.json -o /tmp/introspect_result.json \
+            -w "\nHTTP:%{http_code}\n"
+          echo "=== mutation names matching service/builder/instance/deploy ==="
+          python3 -c "
+import json
+d = json.load(open('/tmp/introspect_result.json'))
+if 'errors' in d:
+    print('ERRORS:', json.dumps(d['errors'], indent=2))
+fields = d.get('data', {}).get('__schema', {}).get('mutationType', {}).get('fields', [])
+names = [f['name'] for f in fields]
+print(f'total mutations visible: {len(names)}')
+matches = [n for n in names if any(k in n.lower() for k in ['service', 'builder', 'instance', 'deploy'])]
+for m in sorted(matches):
+    print(m)
+"
 
-      - name: Check the backend's own logs for the real send outcome
+      - name: Try serviceInstanceUpdate mutation shape (dry check via introspection, not executed)
         run: |
-          sleep 8
-          railway logs --service backend 2>&1 > /tmp/full_logs.txt || true
-          echo "=== lines mentioning EmailSender/Resend for this test ==="
-          grep -i "EmailSender\|resend" /tmp/full_logs.txt || echo "(no matching lines -- see full tail below)"
-          echo "=== full tail (last 60 lines) ==="
-          tail -60 /tmp/full_logs.txt
+          cat > /tmp/introspect2.json <<'EOF'
+          {"query":"query { __type(name: \"ServiceInstanceUpdateInput\") { name inputFields { name type { name kind ofType { name kind } } } } }"}
+          EOF
+          curl -sS -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/introspect2.json \
+            -w "\nHTTP:%{http_code}\n"
