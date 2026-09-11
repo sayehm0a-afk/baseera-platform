@@ -95,6 +95,16 @@ class ValidationSessionMetrics:
     cancelled_count: int
     partial_count: int
 
+    # AUDIT 2026-09-11 (item #13): the mandate's own minimum-metrics list
+    # requires "max drawdown under a stated portfolio/capital-allocation
+    # model" and "longest losing streak" -- neither existed anywhere in
+    # this module before. See `_equity_curve_drawdown_and_streak`'s own
+    # docstring for the exact, disclosed model used; both are None when
+    # there are fewer than 2 resolved, return-bearing outcomes (a single
+    # data point has no drawdown to speak of).
+    max_drawdown_pct: Optional[float]
+    longest_losing_streak: int
+
 
 def _status_counts(outcomes: List[DecisionV2Outcome]) -> Dict[str, int]:
     counts: Dict[str, int] = {status.value: 0 for status in DecisionV2OutcomeStatus}
@@ -165,6 +175,57 @@ def _duplicate_signals(snapshots: List[DecisionV2Snapshot]) -> List[DuplicateSig
     return duplicates
 
 
+def _equity_curve_drawdown_and_streak(outcomes: List[DecisionV2Outcome]) -> Tuple[Optional[float], int]:
+    """AUDIT 2026-09-11 (item #13): max drawdown and longest losing
+    streak over this session's resolved, return-bearing outcomes
+    (target/stop/expired -- the same `_RETURN_BEARING_STATUSES` set
+    `average_return_pct` already uses; `PARTIAL`/`DATA_UNAVAILABLE`/
+    `PENDING`/`CANCELLED` carry no meaningful return and are excluded,
+    same discipline as the rest of this module).
+
+    STATED CAPITAL-ALLOCATION MODEL (disclosed per the mandate's own
+    requirement to name one, not left implicit): a single equal-weight,
+    fully-sequential equity curve -- one notional position at a time,
+    entered and exited in the exact chronological order each trade's
+    outcome actually resolved (`evaluated_at`), each trade's full
+    percentage return compounding onto the running total. This is a
+    deliberately simple reference model for comparing sessions, NOT a
+    claim about how any real trader sizes or overlaps positions -- a
+    real portfolio holding several concurrent positions would show a
+    different (usually smaller per-position) drawdown. Longest losing
+    streak counts consecutive trades with `return_pct < 0` in the same
+    chronological order (a negative-return EXPIRED counts as a loss
+    here, matching `false_positive_rate`'s existing treatment above).
+
+    Returns (None, 0) when fewer than 2 such outcomes exist -- a single
+    data point has no meaningful drawdown or streak."""
+    resolved = sorted(
+        (o for o in outcomes if o.status in _RETURN_BEARING_STATUSES and o.return_pct is not None and o.evaluated_at is not None),
+        key=lambda o: o.evaluated_at,
+    )
+    if len(resolved) < 2:
+        return None, 0
+
+    equity = 100.0
+    peak = equity
+    max_drawdown_pct = 0.0
+    longest_streak = 0
+    current_streak = 0
+    for outcome in resolved:
+        equity *= 1.0 + float(outcome.return_pct) / 100.0
+        peak = max(peak, equity)
+        drawdown = (peak - equity) / peak * 100.0 if peak > 0 else 0.0
+        max_drawdown_pct = max(max_drawdown_pct, drawdown)
+
+        if float(outcome.return_pct) < 0:
+            current_streak += 1
+            longest_streak = max(longest_streak, current_streak)
+        else:
+            current_streak = 0
+
+    return max_drawdown_pct, longest_streak
+
+
 def compute_validation_session_metrics(session: Session, validation_session_id: int) -> ValidationSessionMetrics:
     """Pure query + aggregation -- never writes to the DB, safe to call
     as often as an operator refreshes the dashboard."""
@@ -215,6 +276,8 @@ def compute_validation_session_metrics(session: Session, validation_session_id: 
 
     data_unavailable_count = status_counts[DecisionV2OutcomeStatus.DATA_UNAVAILABLE.value]
 
+    max_drawdown_pct, longest_losing_streak = _equity_curve_drawdown_and_streak(outcomes)
+
     return ValidationSessionMetrics(
         validation_session_id=validation_session_id,
         total_signals_issued=total_signals_issued,
@@ -239,4 +302,6 @@ def compute_validation_session_metrics(session: Session, validation_session_id: 
         pending_count=status_counts[DecisionV2OutcomeStatus.PENDING.value],
         cancelled_count=status_counts[DecisionV2OutcomeStatus.CANCELLED.value],
         partial_count=status_counts[DecisionV2OutcomeStatus.PARTIAL.value],
+        max_drawdown_pct=max_drawdown_pct,
+        longest_losing_streak=longest_losing_streak,
     )

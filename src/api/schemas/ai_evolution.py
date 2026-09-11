@@ -238,6 +238,14 @@ class ValidationSessionMetricsOut(BaseModel):
     cancelled_count: int
     partial_count: int
 
+    # AUDIT 2026-09-11 (item #13): see
+    # src.ai_evolution.validation_metrics._equity_curve_drawdown_and_streak
+    # for the exact, disclosed equal-weight sequential capital model
+    # these two are computed under -- not a claim about real concurrent
+    # position sizing.
+    max_drawdown_pct: Optional[float] = None
+    longest_losing_streak: int = 0
+
 
 class ValidationLedgerEntryOut(BaseModel):
     """M10: one row of the complete, immutable recommendation ledger for

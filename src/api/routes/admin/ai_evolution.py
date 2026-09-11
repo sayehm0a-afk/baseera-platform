@@ -313,6 +313,8 @@ def get_validation_session_metrics(
         pending_count=result.pending_count,
         cancelled_count=result.cancelled_count,
         partial_count=result.partial_count,
+        max_drawdown_pct=result.max_drawdown_pct,
+        longest_losing_streak=result.longest_losing_streak,
     )
 
 
