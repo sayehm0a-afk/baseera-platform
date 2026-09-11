@@ -41,10 +41,22 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: railway logs for the specific failed deployment (build + runtime)
+      - name: railway logs --help (find the right invocation for a specific deployment)
+        run: railway logs --help 2>&1 || true
+
+      - name: railway logs for the specific failed deployment (build + runtime, several invocation forms)
         run: |
           echo "=== railway logs --service backend --deployment $DEPLOYMENT_ID ==="
           railway logs --service backend --deployment "$DEPLOYMENT_ID" 2>&1 | tail -n 300 || true
+          echo ""
+          echo "=== railway logs --service backend --deployment-id $DEPLOYMENT_ID ==="
+          railway logs --service backend --deployment-id "$DEPLOYMENT_ID" 2>&1 | tail -n 300 || true
+          echo ""
+          echo "=== railway logs $DEPLOYMENT_ID (positional) ==="
+          railway logs "$DEPLOYMENT_ID" 2>&1 | tail -n 300 || true
+          echo ""
+          echo "=== railway logs --service backend (current/live, no deployment scoping) ==="
+          railway logs --service backend 2>&1 | tail -n 200 || true
           echo ""
           echo "=== railway logs --service backend --build (fallback) ==="
           railway logs --service backend --build 2>&1 | tail -n 300 || true
