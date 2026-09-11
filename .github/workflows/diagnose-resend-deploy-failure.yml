@@ -1,20 +1,11 @@
-name: Restart backend without rebuilding to pick up RESEND_* vars (RAILWAY_TOKEN only)
+name: Verify a real Resend send after a manual dashboard restart (RAILWAY_TOKEN only)
 
-# Every `railway up` (fresh build) attempt has failed at the build
-# step -- confirmed via the dashboard: the failing builds used
-# Railpack ("prepare railpack-v0.39.0", detected only Staticfile/Shell
-# providers) even though railway.toml and the service's own shown
-# config both say builder=DOCKERFILE, and the last genuinely
-# successful deployment (still the one actively serving traffic) also
-# used Dockerfile. Something is intermittently routing fresh builds
-# through Railpack instead of the Dockerfile.
-#
-# Workaround: RESEND_API_KEY/RESEND_FROM_EMAIL are already set on the
-# service (env vars are injected at container start, not baked into
-# the image) -- `railway restart` restarts the service's latest
-# already-successful image WITHOUT triggering a new build at all, so
-# it should completely sidestep the broken build path and pick up the
-# new variables immediately.
+# The user manually restarted the backend service from the Railway
+# dashboard (targeting the specific already-successful deployment,
+# unlike the CLI's `railway restart` which only ever targets "latest"
+# and kept failing with "Deployment is not restartable" because the
+# latest deployment RECORD is one of several failed `railway up`
+# attempts). This just tests the real outcome, no restart attempt.
 
 on:
   workflow_dispatch:
@@ -28,9 +19,9 @@ permissions:
   contents: read
 
 jobs:
-  restart-and-verify:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       TEST_EMAIL: ${{ github.event.inputs.test_email }}
@@ -51,15 +42,6 @@ jobs:
           railway domain list --service backend --json > /tmp/backend_domains.json
           BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
           echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
-
-      - name: railway restart --help (confirm exact syntax before using it on production)
-        run: railway restart --help 2>&1 || true
-
-      - name: railway restart --service backend (no rebuild)
-        run: railway restart --service backend --yes 2>&1
-
-      - name: Wait for the restarted process to finish booting
-        run: sleep 30
 
       - name: Trigger one real forgot-password request
         run: |
