@@ -128,7 +128,7 @@ jobs:
         run: echo "LOG_DIR=${RUNNER_TEMP}/basirah-logs" >> "$GITHUB_ENV"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 

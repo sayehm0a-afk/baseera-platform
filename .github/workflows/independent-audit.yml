@@ -40,7 +40,7 @@ jobs:
         run: npm install -g @railway/cli
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -86,7 +86,7 @@ jobs:
           rm -f /tmp/frontend_domains.json
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
