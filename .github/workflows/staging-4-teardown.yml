@@ -80,12 +80,22 @@ jobs:
 
       - name: Delete every service in the staging project (idempotent, continue-on-error like creation)
         run: |
+          # `railway service delete` takes NO positional argument -- the
+          # CLI's own --help confirms `Usage: railway service delete
+          # [OPTIONS]`, service selection is `-s/--service <SERVICE>`
+          # only (verified against @railway/cli 5.52.1, the same
+          # unpinned version `npm install -g @railway/cli` above
+          # installs). The prior `railway service delete "$svc" --yes`
+          # invocation failed with "unexpected argument '$svc' found"
+          # for every service, every run, since this workflow's first
+          # commit -- this was a real, root-caused CLI-syntax bug, not
+          # a transient failure or a missing service.
           for svc in backend frontend Postgres Redis; do
             echo "=== Deleting $svc ==="
-            railway service delete "$svc" --yes 2>&1 || railway service delete "$svc" 2>&1 || echo "(delete command failed or requires different syntax for $svc -- will re-verify below regardless)"
+            railway service delete --service "$svc" --yes 2>&1 || echo "(delete failed for $svc -- may not exist, or needs manual deletion -- will re-verify below regardless)"
           done
 
-      - name: Re-verify: list services after teardown (authoritative -- exit codes above are not trusted)
+      - name: Re-verify -- list services after teardown (authoritative -- exit codes above are not trusted)
         run: |
           sleep 5
           railway service list --json > /tmp/after.json 2>/dev/null || echo '[]' > /tmp/after.json
