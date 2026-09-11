@@ -1,0 +1,45 @@
+name: Ops - Check recent backend logs for an email-send outcome (RAILWAY_TOKEN only)
+
+# Standalone log check, no deploy/trigger -- the previous verify run's
+# `tail -80` window was too shallow to reach the actual test request's
+# log line (a lot of routine traffic/scheduler logging happened
+# between the new process's startup and the test a few minutes later).
+# This just re-reads a much larger window and greps case-insensitively
+# for EmailSender/SMTP lines plus the target email address itself.
+
+on:
+  workflow_dispatch:
+    inputs:
+      grep_for:
+        description: "Email address or string to search backend logs for"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-logs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      GREP_FOR: ${{ github.event.inputs.grep_for }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Dump a large log window and grep for the target string / EmailSender / SMTP
+        run: |
+          railway logs --service backend 2>&1 > /tmp/full_logs.txt || true
+          wc -l /tmp/full_logs.txt
+          echo "=== lines mentioning the target string ==="
+          grep -i "$GREP_FOR" /tmp/full_logs.txt || echo "(no lines mention it)"
+          echo "=== lines mentioning EmailSender/SMTP anywhere in the fetched window ==="
+          grep -i "EmailSender\|smtplib\|SMTPAuthenticationError\|SMTPException" /tmp/full_logs.txt || echo "(no such lines)"
