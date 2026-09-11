@@ -690,9 +690,9 @@ def test_dashboard_summary_ingestion_deferred_count_picks_the_earliest_retry_acr
 
 def test_dashboard_summary_live_market_mode_fields_default_false(client, admin):
     """Without Live Market Mode enabled (main.live_market_mode_scheduler
-    stays None), the three new status fields must report False, not
-    error or omit themselves -- the same "real state, never inferred"
-    contract as the two pre-existing scheduler flags."""
+    stays None), all four status fields must report False, not error or
+    omit themselves -- the same "real state, never inferred" contract
+    as the two pre-existing scheduler flags."""
     _as(admin)
     response = client.get("/api/v1/admin/system/summary")
     assert response.status_code == 200
@@ -700,6 +700,7 @@ def test_dashboard_summary_live_market_mode_fields_default_false(client, admin):
     assert body["live_market_mode_enabled"] is False
     assert body["live_market_mode_running"] is False
     assert body["live_market_mode_market_currently_open"] is False
+    assert body["live_market_mode_inner_scan_scheduler_running"] is False
 
 
 def test_dashboard_summary_live_market_mode_fields_reflect_a_running_instance(client, admin, monkeypatch):
@@ -707,13 +708,14 @@ def test_dashboard_summary_live_market_mode_fields_reflect_a_running_instance(cl
     ingestion/scan scheduler instances instead of the two standalone
     globals (see main.py's startup wiring) -- so ingestion_scheduler_
     running/market_intelligence_scheduler_running alone would silently
-    stay False forever. These three fields are what actually reflect
+    stay False forever. These four fields are what actually reflect
     real Live Market Mode state."""
     import main as main_module
 
     class _FakeLiveMarketModeScheduler:
         is_running = True
         is_market_currently_open = True
+        inner_scan_scheduler_is_running = True
 
     monkeypatch.setattr(main_module, "live_market_mode_scheduler", _FakeLiveMarketModeScheduler())
     try:
@@ -724,6 +726,39 @@ def test_dashboard_summary_live_market_mode_fields_reflect_a_running_instance(cl
         assert body["live_market_mode_enabled"] is True
         assert body["live_market_mode_running"] is True
         assert body["live_market_mode_market_currently_open"] is True
+        assert body["live_market_mode_inner_scan_scheduler_running"] is True
+    finally:
+        monkeypatch.setattr(main_module, "live_market_mode_scheduler", None)
+
+
+def test_dashboard_summary_distinguishes_supervisor_alive_from_inner_scheduler_stalled(
+    client, admin, monkeypatch
+):
+    """AUDIT 2026-09-11 regression: a 2026-09-10 production audit
+    misdiagnosed "no scan since #140" as "the scheduler is disabled"
+    because market_intelligence_scheduler_running reads main.market_
+    intelligence_scheduler, which Live Market Mode intentionally leaves
+    None. This proves the new field can show the supervisor alive and
+    the market open while the inner scan scheduler is genuinely
+    stalled -- the one combination that would have caught the real
+    2026-09-09 incident (SAHMK quota exhausted before the scan's own
+    turn) instead of being indistinguishable from "disabled"."""
+    import main as main_module
+
+    class _FakeLiveMarketModeScheduler:
+        is_running = True
+        is_market_currently_open = True
+        inner_scan_scheduler_is_running = False  # market open, but the inner scheduler never actually started
+
+    monkeypatch.setattr(main_module, "live_market_mode_scheduler", _FakeLiveMarketModeScheduler())
+    try:
+        _as(admin)
+        response = client.get("/api/v1/admin/system/summary")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["live_market_mode_running"] is True
+        assert body["live_market_mode_market_currently_open"] is True
+        assert body["live_market_mode_inner_scan_scheduler_running"] is False
     finally:
         monkeypatch.setattr(main_module, "live_market_mode_scheduler", None)
 

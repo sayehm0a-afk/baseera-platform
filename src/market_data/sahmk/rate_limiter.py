@@ -50,7 +50,7 @@ import redis as redis_lib
 from src.core.config import settings
 from src.market_data import config as market_data_config
 from src.market_data.sahmk.operation_scope import UNCLASSIFIED
-from src.market_data.sahmk.request_priority import BACKGROUND, CRITICAL, LIVE_SCAN
+from src.market_data.sahmk.request_priority import BACKGROUND, CRITICAL, LIVE_SCAN, MARKET_SCAN
 
 logger = logging.getLogger(__name__)
 
@@ -103,23 +103,29 @@ local total = tonumber(redis.call('HGET', KEYS[1], 'total') or '0')
 local max_per_day = tonumber(ARGV[1])
 local reserved_critical = tonumber(ARGV[2])
 local reserved_live_scan = tonumber(ARGV[3])
-local priority = ARGV[4]
-local priority_field = ARGV[5]
-local ttl = tonumber(ARGV[6])
-local operation_field = ARGV[7]
+local reserved_market_scan = tonumber(ARGV[4])
+local priority = ARGV[5]
+local priority_field = ARGV[6]
+local ttl = tonumber(ARGV[7])
+local operation_field = ARGV[8]
 
 if total >= max_per_day then
     return {0, 'daily_cap', total}
 end
 
 local critical_cutoff = max_per_day - reserved_critical
-if (priority == 'background' or priority == 'live_scan') and reserved_critical > 0 and total >= critical_cutoff then
+if (priority == 'background' or priority == 'live_scan' or priority == 'market_scan') and reserved_critical > 0 and total >= critical_cutoff then
     return {0, 'critical_reserve', total}
 end
 
 local live_scan_cutoff = critical_cutoff - reserved_live_scan
-if priority == 'background' and reserved_live_scan > 0 and total >= live_scan_cutoff then
+if (priority == 'background' or priority == 'market_scan') and reserved_live_scan > 0 and total >= live_scan_cutoff then
     return {0, 'live_scan_reserve', total}
+end
+
+local market_scan_cutoff = live_scan_cutoff - reserved_market_scan
+if priority == 'background' and reserved_market_scan > 0 and total >= market_scan_cutoff then
+    return {0, 'market_scan_reserve', total}
 end
 
 redis.call('HINCRBY', KEYS[1], 'total', 1)
@@ -177,6 +183,24 @@ class SahmkQuotaReservedForLiveScanError(SahmkRateLimitExceededError):
     SahmkQuotaReservedForCriticalError does -- every existing `except
     SahmkRateLimitExceededError` handler (is_quota_exhausted_for_today,
     sleep_if_rate_limited) keeps working unchanged."""
+
+
+class SahmkQuotaReservedForMarketScanError(SahmkRateLimitExceededError):
+    """PROPOSED (2026-09-10, NOT YET APPLIED). Raised instead of
+    SahmkRateLimitExceededError when a priority=BACKGROUND caller's
+    request would dip into the portion of today's daily quota reserved
+    for priority=MARKET_SCAN callers (MarketIntelligenceScheduler's
+    regular recurring scan -- see src.market_intelligence.scheduler).
+    Sits strictly between SahmkQuotaReservedForLiveScanError's reserve
+    and ordinary background capacity: routine ingestion (symbols/
+    historical_ohlcv/fundamentals/dividends) and any other
+    BACKGROUND-priority caller may never spend the requests set aside
+    for the regular scan, even on a day ingestion would otherwise have
+    plenty of quota left -- closing the exact 2026-09-09 incident
+    documented in request_priority.py's module docstring. Subclasses
+    SahmkRateLimitExceededError for the same reason the other reserve
+    errors do -- every existing `except SahmkRateLimitExceededError`
+    handler keeps working unchanged."""
 
 
 class SahmkUpstreamQuotaExhaustedError(SahmkRateLimitExceededError):
@@ -258,6 +282,21 @@ class SahmkRateLimiter:
     slice; live-scan sits just outside it), so
     `reserved_for_critical + reserved_for_live_scan` must not exceed
     `max_per_day`.
+
+    PROPOSED (2026-09-10, NOT YET APPLIED): `reserved_for_market_scan`
+    carves out a further reserve immediately below the live-scan
+    reserve, for priority=MARKET_SCAN (and priority=CRITICAL/LIVE_SCAN)
+    callers only: once `day_count >= max_per_day - reserved_for_critical
+    - reserved_for_live_scan - reserved_for_market_scan`, a
+    priority=BACKGROUND acquire() raises
+    SahmkQuotaReservedForMarketScanError instead of proceeding. This
+    protects MarketIntelligenceScheduler's regular scan (see
+    request_priority.py's module docstring for the 2026-09-09 incident
+    this closes) the same way reserved_for_live_scan protects the
+    recurrent live-scan feature. The three reserves stack innermost-out
+    (critical, then live-scan, then market-scan), so
+    `reserved_for_critical + reserved_for_live_scan +
+    reserved_for_market_scan` must not exceed `max_per_day`.
     """
 
     def __init__(
@@ -266,6 +305,7 @@ class SahmkRateLimiter:
         max_per_day: Optional[int] = None,
         reserved_for_critical: Optional[int] = None,
         reserved_for_live_scan: Optional[int] = None,
+        reserved_for_market_scan: Optional[int] = None,
         redis_client: "Optional[redis_lib.Redis]" = None,
     ):
         if max_per_minute <= 0:
@@ -287,6 +327,11 @@ class SahmkRateLimiter:
                 raise ValueError("reserved_for_live_scan requires max_per_day to be set")
             if reserved_for_live_scan < 0:
                 raise ValueError("reserved_for_live_scan must not be negative")
+        if reserved_for_market_scan is not None:
+            if max_per_day is None:
+                raise ValueError("reserved_for_market_scan requires max_per_day to be set")
+            if reserved_for_market_scan < 0:
+                raise ValueError("reserved_for_market_scan must not be negative")
 
         # P0 remediation (independent PR #99 audit, P1 finding #1):
         # reserved_for_critical + reserved_for_live_scan exceeding
@@ -310,6 +355,7 @@ class SahmkRateLimiter:
         # never silent.
         clamped_critical = reserved_for_critical or 0
         clamped_live_scan = reserved_for_live_scan or 0
+        clamped_market_scan = reserved_for_market_scan or 0
         if max_per_day is not None:
             if clamped_critical > max_per_day:
                 logger.warning(
@@ -332,16 +378,33 @@ class SahmkRateLimiter:
                     max_per_day, safe_live_scan,
                 )
                 clamped_live_scan = safe_live_scan
+            if clamped_critical + clamped_live_scan + clamped_market_scan > max_per_day:
+                safe_market_scan = max(0, max_per_day - clamped_critical - clamped_live_scan)
+                logger.warning(
+                    "SahmkRateLimiter: configured reserved_for_critical + "
+                    "reserved_for_live_scan + reserved_for_market_scan (%d + %d + %d = %d) "
+                    "exceeds max_per_day (%d) -- clamping reserved_for_market_scan to %d "
+                    "(critical and live-scan capacity preserved first) to fail safe instead "
+                    "of refusing to construct. Fix "
+                    "SAHMK_RESERVED_FOR_MARKET_SCAN_REQUESTS_PER_DAY and/or "
+                    "SAHMK_MAX_REQUESTS_PER_DAY.",
+                    clamped_critical, clamped_live_scan, clamped_market_scan,
+                    clamped_critical + clamped_live_scan + clamped_market_scan,
+                    max_per_day, safe_market_scan,
+                )
+                clamped_market_scan = safe_market_scan
 
         self._max_per_minute = max_per_minute
         self._max_per_day = max_per_day
         self._reserved_for_critical = clamped_critical
         self._reserved_for_live_scan = clamped_live_scan
+        self._reserved_for_market_scan = clamped_market_scan
         self._minute_window: Deque[float] = deque()
         self._day_key: Optional[str] = None
         self._day_count = 0
         self._background_count = 0
         self._live_scan_count = 0
+        self._market_scan_count = 0
         self._critical_count = 0
         # Per-operation breakdown (see _operation_key) for the SAME day
         # window as the counters above -- reset together in
@@ -371,7 +434,8 @@ class SahmkRateLimiter:
         for the race this closes). Returns (admitted, reason) when the
         check was actually performed against real Redis -- `reason` is
         'admitted' on success, or one of 'daily_cap'/'critical_reserve'/
-        'live_scan_reserve' on refusal. Returns None (never raises) when
+        'live_scan_reserve'/'market_scan_reserve' (proposed, not yet
+        applied) on refusal. Returns None (never raises) when
         Redis is unavailable or the script itself fails for any reason
         -- callers must treat None as "fall back to the existing
         local-only check-then-act logic," exactly the same degradation
@@ -379,7 +443,12 @@ class SahmkRateLimiter:
         client = self._redis()
         if client is None:
             return None
-        priority_field = "background" if priority == BACKGROUND else ("live_scan" if priority == LIVE_SCAN else "critical")
+        priority_field = (
+            "background" if priority == BACKGROUND
+            else "live_scan" if priority == LIVE_SCAN
+            else "market_scan" if priority == MARKET_SCAN
+            else "critical"
+        )
         try:
             result = client.eval(
                 _ATOMIC_ADMIT_LUA_SCRIPT,
@@ -389,6 +458,7 @@ class SahmkRateLimiter:
                 str(self._max_per_day),
                 str(self._reserved_for_critical),
                 str(self._reserved_for_live_scan),
+                str(self._reserved_for_market_scan),
                 priority,
                 priority_field,
                 str(_DAY_COUNT_TTL_SECONDS),
@@ -474,6 +544,13 @@ class SahmkRateLimiter:
                             "requests remain, reserved for the recurrent live-scan scheduler -- "
                             "refusing this background request."
                         )
+                    if reason == "market_scan_reserve":
+                        raise SahmkQuotaReservedForMarketScanError(
+                            f"SAHMK daily quota: only the last {self._reserved_for_market_scan} of "
+                            f"{self._max_per_day - self._reserved_for_critical - self._reserved_for_live_scan} "
+                            "background-eligible requests remain, reserved for the regular market-scan "
+                            "scheduler -- refusing this background request."
+                        )
                     raise SahmkRateLimitExceededError(
                         f"SAHMK daily request quota ({self._max_per_day}) already reached for today (UTC)."
                     )
@@ -487,6 +564,8 @@ class SahmkRateLimiter:
                     self._background_count += 1
                 elif priority == LIVE_SCAN:
                     self._live_scan_count += 1
+                elif priority == MARKET_SCAN:
+                    self._market_scan_count += 1
                 else:
                     self._critical_count += 1
                 self._operation_counts[operation_key] = self._operation_counts.get(operation_key, 0) + 1
@@ -501,15 +580,18 @@ class SahmkRateLimiter:
                     raise SahmkRateLimitExceededError(
                         f"SAHMK daily request quota ({self._max_per_day}) already reached for today (UTC)."
                     )
-                # Two nested cutoffs, most-protected first: the critical
-                # cutoff blocks BACKGROUND and LIVE_SCAN alike; the
-                # live-scan cutoff (strictly inside the critical one)
+                # Three nested cutoffs, most-protected first: the critical
+                # cutoff blocks BACKGROUND, MARKET_SCAN, and LIVE_SCAN
+                # alike; the live-scan cutoff (strictly inside the
+                # critical one) blocks BACKGROUND and MARKET_SCAN; the
+                # market-scan cutoff (strictly inside the live-scan one)
                 # blocks only BACKGROUND. CRITICAL is never blocked by
-                # either -- only by the absolute max_per_day check above.
+                # any of them -- only by the absolute max_per_day check
+                # above.
                 if self._max_per_day is not None:
                     critical_cutoff = self._max_per_day - self._reserved_for_critical
                     if (
-                        priority in (BACKGROUND, LIVE_SCAN)
+                        priority in (BACKGROUND, MARKET_SCAN, LIVE_SCAN)
                         and self._reserved_for_critical > 0
                         and self._day_count >= critical_cutoff
                     ):
@@ -520,7 +602,7 @@ class SahmkRateLimiter:
                         )
                     live_scan_cutoff = critical_cutoff - self._reserved_for_live_scan
                     if (
-                        priority == BACKGROUND
+                        priority in (BACKGROUND, MARKET_SCAN)
                         and self._reserved_for_live_scan > 0
                         and self._day_count >= live_scan_cutoff
                     ):
@@ -528,7 +610,19 @@ class SahmkRateLimiter:
                             f"SAHMK daily quota: only the last {self._reserved_for_live_scan} of "
                             f"{self._max_per_day - self._reserved_for_critical} background-eligible "
                             "requests remain, reserved for the recurrent live-scan scheduler -- "
-                            "refusing this background request."
+                            f"refusing this {priority} request."
+                        )
+                    market_scan_cutoff = live_scan_cutoff - self._reserved_for_market_scan
+                    if (
+                        priority == BACKGROUND
+                        and self._reserved_for_market_scan > 0
+                        and self._day_count >= market_scan_cutoff
+                    ):
+                        raise SahmkQuotaReservedForMarketScanError(
+                            f"SAHMK daily quota: only the last {self._reserved_for_market_scan} of "
+                            f"{self._max_per_day - self._reserved_for_critical - self._reserved_for_live_scan} "
+                            "live-scan-eligible requests remain, reserved for the regular recurrent "
+                            "market scan -- refusing this background request."
                         )
 
             while True:
@@ -558,6 +652,8 @@ class SahmkRateLimiter:
                     self._background_count += 1
                 elif priority == LIVE_SCAN:
                     self._live_scan_count += 1
+                elif priority == MARKET_SCAN:
+                    self._market_scan_count += 1
                 else:
                     self._critical_count += 1
                 self._operation_counts[operation_key] = self._operation_counts.get(operation_key, 0) + 1
@@ -750,13 +846,29 @@ class SahmkRateLimiter:
             if critical_cutoff is not None
             else None
         )
+        # PROPOSED (2026-09-10, NOT YET APPLIED): market_scan_cutoff sits
+        # strictly inside live_scan_cutoff, the same way live_scan_cutoff
+        # sits strictly inside critical_cutoff.
+        market_scan_cutoff = (
+            max(0, live_scan_cutoff - self._reserved_for_market_scan)
+            if live_scan_cutoff is not None
+            else None
+        )
         # "background" (unqualified, existing key -- kept for backward
         # compatibility with every caller reading it today) is the cap
         # BACKGROUND callers see: everything up to the critical reserve,
-        # i.e. it still includes the live-scan reserve as far as this
-        # single number goes. `remaining_today_for_live_scan` and
-        # `remaining_today_for_background_after_live_scan_reserve` below
-        # are the new, more precise breakdown P0 needs.
+        # i.e. it still includes the live-scan (and, proposed, market-scan)
+        # reserves as far as this single number goes.
+        # `remaining_today_for_live_scan` and
+        # `remaining_today_for_background_after_live_scan_reserve` are the
+        # existing, more precise P0 breakdown -- kept with their original
+        # meaning and formulas, unchanged, for backward compatibility.
+        # `remaining_today_for_market_scan` (MARKET_SCAN's own ceiling,
+        # numerically identical to remaining_today_for_background_after_
+        # live_scan_reserve today since both tiers currently share that
+        # same cutoff) and `remaining_today_for_background_after_market_
+        # scan_reserve` (the new, deeper true-BACKGROUND ceiling) are the
+        # PROPOSED additions.
         remaining_background = (
             max(0, critical_cutoff - self._day_count) if critical_cutoff is not None else None
         )
@@ -765,6 +877,12 @@ class SahmkRateLimiter:
         )
         remaining_background_after_live_scan_reserve = (
             max(0, live_scan_cutoff - self._day_count) if live_scan_cutoff is not None else None
+        )
+        remaining_market_scan = (
+            max(0, live_scan_cutoff - self._day_count) if live_scan_cutoff is not None else None
+        )
+        remaining_background_after_market_scan_reserve = (
+            max(0, market_scan_cutoff - self._day_count) if market_scan_cutoff is not None else None
         )
         if exhaustion is not None and self._max_per_day is not None:
             # Only overrides an actual configured cap -- "no daily cap
@@ -775,6 +893,8 @@ class SahmkRateLimiter:
             remaining_background = 0
             remaining_live_scan = 0
             remaining_background_after_live_scan_reserve = 0
+            remaining_market_scan = 0
+            remaining_background_after_market_scan_reserve = 0
         tomorrow_utc_midnight = (
             datetime.now(timezone.utc) + timedelta(days=1)
         ).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -783,9 +903,11 @@ class SahmkRateLimiter:
             "max_per_day": self._max_per_day,
             "reserved_for_critical": self._reserved_for_critical,
             "reserved_for_live_scan": self._reserved_for_live_scan,
+            "reserved_for_market_scan": self._reserved_for_market_scan,
             "requests_used_today": self._day_count,
             "critical_requests_used_today": self._critical_count,
             "live_scan_requests_used_today": self._live_scan_count,
+            "market_scan_requests_used_today": self._market_scan_count,
             "background_requests_used_today": self._background_count,
             # Real, measured provider calls today broken down by
             # "subsystem:endpoint" (e.g. "market_scan:quote",
@@ -803,6 +925,11 @@ class SahmkRateLimiter:
             "remaining_today_for_live_scan": remaining_live_scan,
             "remaining_today_for_background_after_live_scan_reserve": (
                 remaining_background_after_live_scan_reserve
+            ),
+            # PROPOSED (2026-09-10, NOT YET APPLIED) additions.
+            "remaining_today_for_market_scan": remaining_market_scan,
+            "remaining_today_for_background_after_market_scan_reserve": (
+                remaining_background_after_market_scan_reserve
             ),
             "requests_in_last_minute": len(self._minute_window),
             "day_window_key_utc": self._day_key,
@@ -846,18 +973,35 @@ class SahmkRateLimiter:
         remaining = status["remaining_today_for_live_scan"]
         return remaining is None or remaining >= estimated_cost
 
-    def can_run_background_request(self) -> bool:
-        """True iff a priority=BACKGROUND acquire() would not
-        immediately raise for quota reasons right now -- accounts for
-        BOTH the critical reserve and the live-scan reserve (the
-        smaller, more precise
-        remaining_today_for_background_after_live_scan_reserve), unlike
-        the legacy `remaining_today_for_background` status field kept
-        for backward compatibility."""
+    def can_run_market_scan_cycle(self, estimated_cost: int) -> bool:
+        """PROPOSED (2026-09-10, NOT YET APPLIED): mirrors
+        can_run_live_scan_cycle exactly, one tier down -- True iff
+        `estimated_cost` more priority=MARKET_SCAN requests would all be
+        accepted right now, i.e. the market-scan reserve (not just a
+        single request) can cover a whole regular-scan cycle. The
+        regular recurrent scan scheduler should check this once, before
+        starting a cycle, not per-request."""
+        if estimated_cost < 0:
+            raise ValueError("estimated_cost must not be negative")
         status = self.get_status()
         if status["upstream_confirmed_exhausted"]:
             return False
-        remaining = status["remaining_today_for_background_after_live_scan_reserve"]
+        remaining = status["remaining_today_for_market_scan"]
+        return remaining is None or remaining >= estimated_cost
+
+    def can_run_background_request(self) -> bool:
+        """True iff a priority=BACKGROUND acquire() would not
+        immediately raise for quota reasons right now -- accounts for
+        the critical reserve, the live-scan reserve, and (PROPOSED,
+        2026-09-10, NOT YET APPLIED) the market-scan reserve, i.e. the
+        smaller, more precise
+        remaining_today_for_background_after_market_scan_reserve),
+        unlike the legacy `remaining_today_for_background` status field
+        kept for backward compatibility."""
+        status = self.get_status()
+        if status["upstream_confirmed_exhausted"]:
+            return False
+        remaining = status["remaining_today_for_background_after_market_scan_reserve"]
         return remaining is None or remaining > 0
 
     def can_run_backfill_request(self) -> bool:
@@ -900,6 +1044,7 @@ def get_default_rate_limiter() -> SahmkRateLimiter:
             max_per_day=market_data_config.get_sahmk_max_requests_per_day(),
             reserved_for_critical=market_data_config.get_sahmk_reserved_for_critical_requests_per_day(),
             reserved_for_live_scan=market_data_config.get_sahmk_reserved_for_live_scan_requests_per_day(),
+            reserved_for_market_scan=market_data_config.get_sahmk_reserved_for_market_scan_requests_per_day(),
         )
     return _default_rate_limiter
 

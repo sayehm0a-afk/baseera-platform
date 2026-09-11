@@ -111,6 +111,28 @@ class LiveMarketModeScheduler:
         health/status endpoint to read without side effects."""
         return self._market_was_open
 
+    @property
+    def inner_scan_scheduler_is_running(self) -> bool:
+        """Whether the actual scan scheduler this supervisor owns
+        (`self._market_intelligence_scheduler`) is running right now --
+        distinct from `LiveMarketModeScheduler.is_running` above, which
+        only says the market-hours-polling supervisor task itself is
+        alive, true the entire time this mode is enabled regardless of
+        whether the market is open or the inner scheduler ever actually
+        started. A 2026-09-10 production audit misdiagnosed "no scan
+        since #140" as "the scheduler is disabled" from
+        `/admin/system/summary`'s `market_intelligence_scheduler_running`
+        field alone -- that field reads `main.market_intelligence_
+        scheduler`, which is intentionally left `None` whenever Live
+        Market Mode owns scanning (see main.py's startup wiring), so it
+        reads False here by construction and proves nothing either way.
+        This property is the one that actually answers "is the real
+        inner scan scheduler running," so a genuine future stall (the
+        supervisor alive and the market open, but this still False) is
+        distinguishable from Live Market Mode simply not owning
+        scanning yet, or the market being closed."""
+        return self._market_intelligence_scheduler.is_running
+
     def start(self) -> None:
         if self._task is not None:
             logger.warning("LiveMarketModeScheduler.start() called while already running -- ignoring.")
