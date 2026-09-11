@@ -277,6 +277,15 @@ class AdminDashboardSummaryOut(BaseModel):
     live_market_mode_enabled: bool = False
     live_market_mode_running: bool = False
     live_market_mode_market_currently_open: bool = False
+    # AUDIT 2026-09-11: live_market_mode_running above only says the
+    # market-hours-polling supervisor task is alive -- true the entire
+    # time Live Market Mode is enabled, even while the market is closed
+    # or its inner scan scheduler never started. A 2026-09-10 audit
+    # misread market_intelligence_scheduler_running (always False here
+    # by construction -- see that field's own comment) as proof the
+    # scan scheduler was disabled. This is the field that actually
+    # answers "is the real inner scan scheduler running right now."
+    live_market_mode_inner_scan_scheduler_running: bool = False
 
     market_data_provider: Optional[str] = None
     market_data_health: Optional[str] = None

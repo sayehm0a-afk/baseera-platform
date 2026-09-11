@@ -96,6 +96,37 @@ async def test_tick_starts_inner_scheduler_when_market_opens():
     assert scheduler.is_market_currently_open is True
 
 
+def test_inner_scan_scheduler_is_running_reflects_the_real_inner_instance_before_any_tick():
+    """AUDIT 2026-09-11: distinct from `is_running` (the supervisor
+    task) and `is_market_currently_open` (the supervisor's last-seen
+    market state) -- this must reflect the actual inner scheduler's own
+    state, not just "Live Market Mode is enabled." Before any tick,
+    the inner scheduler was never started, so this must be False even
+    though the mode itself is fully configured."""
+    scheduler, scan = _make_scheduler(_open_moment())
+    assert scheduler.inner_scan_scheduler_is_running is False
+    assert scan.start_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_inner_scan_scheduler_is_running_turns_true_after_the_market_opens():
+    scheduler, scan = _make_scheduler(_open_moment())
+    await scheduler._tick()
+    assert scheduler.inner_scan_scheduler_is_running is True
+    assert scan.is_running is True
+
+
+@pytest.mark.asyncio
+async def test_inner_scan_scheduler_is_running_turns_false_after_the_market_closes():
+    scheduler, scan = _make_scheduler(_open_moment())
+    await scheduler._tick()
+    assert scheduler.inner_scan_scheduler_is_running is True
+
+    scheduler._clock = lambda: _closed_moment()
+    await scheduler._tick()
+    assert scheduler.inner_scan_scheduler_is_running is False
+
+
 @pytest.mark.asyncio
 async def test_tick_does_not_restart_already_running_scheduler():
     scheduler, scan = _make_scheduler(_open_moment())
