@@ -1,0 +1,107 @@
+name: Ops - Verify Safari-fix deployment actually rolled out (read-only, RAILWAY_TOKEN only)
+
+# deploy-railway.yml's own health-check step only polls the public URL
+# for a bare HTTP 200 -- Railway's healthcheck-gated rollout keeps the
+# PREVIOUS deployment serving traffic while the new one builds, so a
+# 200 on attempt 1 (as happened on run 34604318979, ~0.3s after `railway
+# up --detach` returned) does not prove the NEW code is live; it may
+# just be the old container still up. This workflow independently
+# confirms two things without assuming either:
+#   1. Railway's own deployment record shows the specific deployment ID
+#      created by `railway up` (captured from that run's Build Logs
+#      URLs) is the service's current latestDeployment.
+#   2. A behavioral fingerprint only the NEW frontend build has: hitting
+#      a nonexistent path under /api/v1/ on the frontend's own origin.
+#      Pre-fix code has no Next.js rewrite for /api/v1/*, so Next's own
+#      404 page (HTML) answers. Post-fix code (next.config.ts rewrites)
+#      proxies it to the FastAPI backend, which answers with a JSON 404
+#      body instead. This distinguishes old-vs-new code even if Railway
+#      metadata is ambiguous.
+# Never modifies anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend_deployment_id:
+        description: "Deployment ID from the backend's 'railway up' Build Logs URL"
+        required: true
+      frontend_deployment_id:
+        description: "Deployment ID from the frontend's 'railway up' Build Logs URL"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-rollout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      FRONTEND_URL: https://frontend-production-c3de.up.railway.app
+      BACKEND_URL: https://backend-production-7cca.up.railway.app
+      EXPECTED_BACKEND_DEPLOYMENT: ${{ github.event.inputs.backend_deployment_id }}
+      EXPECTED_FRONTEND_DEPLOYMENT: ${{ github.event.inputs.frontend_deployment_id }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Poll backend service's latestDeployment until it matches the expected ID
+        run: |
+          for i in $(seq 1 20); do
+            railway service list --json > /tmp/services.json 2>/tmp/services_err.txt || true
+            CURRENT=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.id // empty' /tmp/services.json 2>/dev/null || echo "")
+            STATUS=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.status // empty' /tmp/services.json 2>/dev/null || echo "")
+            echo "attempt $i: backend latestDeployment.id=$CURRENT status=$STATUS"
+            if [ "$CURRENT" = "$EXPECTED_BACKEND_DEPLOYMENT" ]; then
+              echo "Backend's latestDeployment now matches the deployment triggered by this fix."
+              break
+            fi
+            sleep 15
+          done
+
+      - name: Poll frontend service's latestDeployment until it matches the expected ID
+        run: |
+          for i in $(seq 1 20); do
+            railway service list --json > /tmp/services_fe.json 2>/tmp/services_fe_err.txt || true
+            CURRENT=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="frontend") | .latestDeployment.id // empty' /tmp/services_fe.json 2>/dev/null || echo "")
+            STATUS=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="frontend") | .latestDeployment.status // empty' /tmp/services_fe.json 2>/dev/null || echo "")
+            echo "attempt $i: frontend latestDeployment.id=$CURRENT status=$STATUS"
+            if [ "$CURRENT" = "$EXPECTED_FRONTEND_DEPLOYMENT" ]; then
+              echo "Frontend's latestDeployment now matches the deployment triggered by this fix."
+              break
+            fi
+            sleep 15
+          done
+
+      - name: Behavioral fingerprint -- confirm the same-origin /api/v1 proxy is actually live
+        run: |
+          for i in $(seq 1 20); do
+            CT=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/fp_body.txt -D /tmp/fp_headers.txt -w "%{http_code}" "$FRONTEND_URL/api/v1/__ops_rollout_fingerprint_check__" || echo "000")
+            CONTENT_TYPE=$(grep -i "^content-type:" /tmp/fp_headers.txt | tr -d '\r' || echo "")
+            echo "attempt $i: HTTP $CT, $CONTENT_TYPE"
+            if echo "$CONTENT_TYPE" | grep -qi "application/json"; then
+              echo "JSON response -- request reached the FastAPI backend through the rewrite proxy. NEW frontend code (with the Safari fix) is live."
+              cat /tmp/fp_body.txt
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::warning::After all retries, /api/v1/* on the frontend origin never returned a JSON (backend) response -- it may still be served by Next.js itself (text/html), meaning the OLD frontend build (without the same-origin proxy fix) could still be live."
+          echo "Last observed content-type: $CONTENT_TYPE"
+          cat /tmp/fp_headers.txt
+          cat /tmp/fp_body.txt
+
+      - name: Final direct health snapshot
+        run: |
+          echo "=== backend /health/live ==="
+          curl -sS --connect-timeout 10 --max-time 20 -w "\nHTTP %{http_code}\n" "$BACKEND_URL/health/live"
+          echo "=== frontend /login ==="
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "HTTP %{http_code}\n" "$FRONTEND_URL/login"
