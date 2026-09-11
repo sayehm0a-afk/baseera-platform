@@ -27,7 +27,7 @@ jobs:
             exit 1
           fi
 
-      - name: List mutation names containing 'service' or 'builder' or 'instance'
+      - name: List mutation names containing service/builder/instance/deploy
         run: |
           cat > /tmp/introspect.json <<'EOF'
           {"query":"query { __schema { mutationType { fields { name } } } }"}
@@ -37,21 +37,22 @@ jobs:
             -H "Content-Type: application/json" \
             -d @/tmp/introspect.json -o /tmp/introspect_result.json \
             -w "\nHTTP:%{http_code}\n"
+          cat > /tmp/parse_mutations.py <<'PYEOF'
+          import json
+          d = json.load(open('/tmp/introspect_result.json'))
+          if 'errors' in d:
+              print('ERRORS:', json.dumps(d['errors'], indent=2))
+          fields = d.get('data', {}).get('__schema', {}).get('mutationType', {}).get('fields', [])
+          names = [f['name'] for f in fields]
+          print(f'total mutations visible: {len(names)}')
+          matches = [n for n in names if any(k in n.lower() for k in ['service', 'builder', 'instance', 'deploy'])]
+          for m in sorted(matches):
+              print(m)
+          PYEOF
           echo "=== mutation names matching service/builder/instance/deploy ==="
-          python3 -c "
-import json
-d = json.load(open('/tmp/introspect_result.json'))
-if 'errors' in d:
-    print('ERRORS:', json.dumps(d['errors'], indent=2))
-fields = d.get('data', {}).get('__schema', {}).get('mutationType', {}).get('fields', [])
-names = [f['name'] for f in fields]
-print(f'total mutations visible: {len(names)}')
-matches = [n for n in names if any(k in n.lower() for k in ['service', 'builder', 'instance', 'deploy'])]
-for m in sorted(matches):
-    print(m)
-"
+          python3 /tmp/parse_mutations.py
 
-      - name: Try serviceInstanceUpdate mutation shape (dry check via introspection, not executed)
+      - name: Check ServiceInstanceUpdateInput shape (introspection only, not executed)
         run: |
           cat > /tmp/introspect2.json <<'EOF'
           {"query":"query { __type(name: \"ServiceInstanceUpdateInput\") { name inputFields { name type { name kind ofType { name kind } } } } }"}
