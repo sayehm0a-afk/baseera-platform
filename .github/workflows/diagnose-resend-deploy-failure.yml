@@ -48,3 +48,9 @@ jobs:
           echo ""
           echo "=== railway logs --service backend --build (fallback) ==="
           railway logs --service backend --build 2>&1 | tail -n 300 || true
+
+      - name: Current backend service's actual latestDeployment (id/status right now)
+        run: |
+          railway service list --json > /tmp/services.json 2>/tmp/services_err.txt || true
+          echo "=== backend latestDeployment ==="
+          jq 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment' /tmp/services.json 2>/dev/null || cat /tmp/services.json
