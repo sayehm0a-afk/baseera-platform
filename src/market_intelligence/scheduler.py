@@ -270,7 +270,7 @@ class IntervalMarketIntelligenceScheduler:
         this cycle's SAHMK usage is separately attributable (see
         `GET .../radar-v2/sahmk-consumption`). `caller` is accepted only
         to satisfy `StageTwoRunner`'s shape (unused -- nothing here logs
-        it; `_run_one_bounded_background_cycle` is the caller that
+        it; `run_one_bounded_background_cycle` is the caller that
         actually uses it, for its own manually-triggered routes)."""
         symbols = resolve_symbols()
         if not symbols:
@@ -288,7 +288,7 @@ class IntervalMarketIntelligenceScheduler:
         # this scheduler's own outer `session` must see them fresh
         # before `run_radar_v2_cycle`'s emit step queries by scan_run_id
         # right after this returns -- the same reasoning
-        # `_run_one_bounded_background_cycle` documents for its own
+        # `run_one_bounded_background_cycle` documents for its own
         # `session.expire_all()` call.
         session.expire_all()
         return _SchedulerStage2Result(executed=True, run_id=run_id)

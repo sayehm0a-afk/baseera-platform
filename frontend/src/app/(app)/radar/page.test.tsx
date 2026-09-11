@@ -9,9 +9,10 @@ import type { RadarHomeSummary } from "@/lib/api/radar-types";
 
 vi.mock("@/lib/api/radar", () => ({
   getRadarSummary: vi.fn(),
+  triggerRadarScanNow: vi.fn(),
 }));
 
-import { getRadarSummary } from "@/lib/api/radar";
+import { getRadarSummary, triggerRadarScanNow } from "@/lib/api/radar";
 
 function opportunity(
   symbol: string,
@@ -208,13 +209,83 @@ describe("RadarPage", () => {
     expect(getRadarSummary).toHaveBeenCalledTimes(2);
   });
 
-  it("discloses honestly that the button only refreshes the view, never a fresh scan on demand", async () => {
+  it("discloses honestly which button only refreshes the view and which one runs a real new scan", async () => {
     vi.mocked(getRadarSummary).mockResolvedValue(summary());
 
     render(<RadarPage />);
 
     expect(
-      await screen.findByText(/هذا الزر يُحدّث العرض ليطابق آخر فحص مكتمل فقط، ولا يُشغّل فحصًا جديدًا فوريًا/)
+      await screen.findByText(/زر "تحديث العرض" يُطابق آخر فحص مكتمل فقط، وزر "فحص فوري" يطلب فحصًا حيًا جديدًا الآن/)
+    ).toBeInTheDocument();
+  });
+
+  it("renders a distinct on-demand scan button alongside the view-refresh button", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(summary());
+
+    render(<RadarPage />);
+    await screen.findByText("لا توجد فرص مرصودة حاليًا");
+
+    expect(screen.getByRole("button", { name: "تحديث العرض" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "فحص فوري" })).toBeInTheDocument();
+  });
+
+  it("on a successful on-demand scan, shows the real emitted count and refreshes the view", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(summary());
+    vi.mocked(triggerRadarScanNow).mockResolvedValue({
+      triggered_at: new Date().toISOString(),
+      executed: true,
+      stop_reason: null,
+      retry_after_seconds: null,
+      opportunities_emitted_count: 3,
+    });
+
+    render(<RadarPage />);
+    await screen.findByText("لا توجد فرص مرصودة حاليًا");
+
+    fireEvent.click(screen.getByRole("button", { name: "فحص فوري" }));
+
+    expect(await screen.findByText(/اكتمل الفحص الفوري -- تم رصد 3 فرصة جديدة\/محدّثة\./)).toBeInTheDocument();
+    // The view is refreshed after a real executed scan.
+    expect(getRadarSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("on a cooldown refusal, shows the real reason honestly without refreshing the view", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(summary());
+    vi.mocked(triggerRadarScanNow).mockResolvedValue({
+      triggered_at: new Date().toISOString(),
+      executed: false,
+      stop_reason: "cooldown_active",
+      retry_after_seconds: 300,
+      opportunities_emitted_count: 0,
+    });
+
+    render(<RadarPage />);
+    await screen.findByText("لا توجد فرص مرصودة حاليًا");
+
+    fireEvent.click(screen.getByRole("button", { name: "فحص فوري" }));
+
+    expect(await screen.findByText(/يمكنك طلب فحص فوري جديد بعد 5 دقائق تقريبًا\./)).toBeInTheDocument();
+    // A refused scan never re-fetches the summary -- nothing changed.
+    expect(getRadarSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("on a quota-related refusal, shows the real backend reason, not a generic failure", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(summary());
+    vi.mocked(triggerRadarScanNow).mockResolvedValue({
+      triggered_at: new Date().toISOString(),
+      executed: false,
+      stop_reason: "background_quota_low",
+      retry_after_seconds: null,
+      opportunities_emitted_count: 0,
+    });
+
+    render(<RadarPage />);
+    await screen.findByText("لا توجد فرص مرصودة حاليًا");
+
+    fireEvent.click(screen.getByRole("button", { name: "فحص فوري" }));
+
+    expect(
+      await screen.findByText(/رصيد بيانات السوق الحي منخفض حاليًا، فتم تأجيل هذا الفحص لحماية الفحوصات المجدولة\./)
     ).toBeInTheDocument();
   });
 });

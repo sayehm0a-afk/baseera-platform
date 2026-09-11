@@ -1,10 +1,10 @@
-"""GET /api/v1/radar/* -- consumer-facing Smart Radar read layer.
+"""GET/POST /api/v1/radar/* -- consumer-facing Smart Radar layer.
 
 Basirah Radar V2 mandate (Phase B/D, 2026-08-17): expose the same real
 `RadarOpportunity`/Decision V2 intelligence the staff-only routes in
 `src.api.routes.admin.market_intelligence` already serve, to ordinary
 authenticated subscribers -- without creating a second scoring engine,
-a second query, or a second formatter. Every route here:
+a second query, or a second formatter. Every GET route here:
 
   * reads only already-persisted Postgres rows (`RadarOpportunity`,
     `DecisionV2Snapshot`, the most recent completed `MarketScanRun`'s
@@ -34,8 +34,21 @@ provider-health probe) so the "is the market receptive to new entries
 right now" read stays honest without adding a live provider call of its
 own -- this route deliberately does not replicate `/market/status`'s
 `health_check()` probe.
+
+`POST /scan-now` (2026-09-11, on-demand consumer scan mandate) is the
+one route here that is NOT zero-SAHMK-cost by design: it lets an
+authenticated subscriber claim one turn of the exact same bounded,
+quota-gated, leader-locked cycle the staff `/admin/market-intelligence/
+radar-v2/scan` route and the recurring scheduler already run, via the
+shared `run_one_bounded_background_cycle`/`run_radar_v2_cycle` --
+tagged `CONSUMER_SCAN_NOW` for separate SAHMK attribution, and gated by
+an additional per-user cooldown (`get_radar_scan_now_cooldown_seconds`)
+on top of every quota/leader-lock/health guard that helper already
+enforces. No new scan logic, ranking, or scoring exists here -- only a
+new caller of an already-tested pipeline.
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -45,18 +58,28 @@ from sqlalchemy.orm import Session
 from src.analysis.decision_v2.decision_freshness import is_decision_fresh
 from src.analysis.decision_v2.market_risk import classify_market_risk
 from src.api.middleware.rate_limiting import limiter
-from src.api.routes.admin.market_intelligence import radar_detail_out, radar_summary_out
+from src.api.routes.admin.market_intelligence import (
+    radar_detail_out,
+    radar_summary_out,
+    run_one_bounded_background_cycle,
+)
 from src.api.schemas.market_intelligence import RadarOpportunityDetailOut, RadarOpportunitySummaryOut
-from src.api.schemas.radar import RadarHomeSummaryOut
+from src.api.schemas.radar import RadarHomeSummaryOut, RadarScanNowOut
 from src.auth.rbac import require_active_subscription
+from src.auth.token_store import get_redis_client
 from src.core.db.database import get_db
 from src.domain.models import DecisionV2Outcome, RadarOpportunity, User
-from src.market_intelligence.config import get_radar_stage2_candidate_cap
+from src.market_data.sahmk.operation_scope import CONSUMER_SCAN_NOW
+from src.market_intelligence.config import get_radar_scan_now_cooldown_seconds, get_radar_stage2_candidate_cap
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status, market_status_label_ar
-from src.market_intelligence.radar_v2 import list_live_opportunities
+from src.market_intelligence.radar_v2 import list_live_opportunities, run_radar_v2_cycle
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 
 router = APIRouter(prefix="/api/v1/radar", tags=["radar"])
+
+logger = logging.getLogger(__name__)
+
+_SCAN_NOW_COOLDOWN_KEY_PREFIX = "basirah:radar:scan_now_cooldown"
 
 _repository = MarketIntelligenceRepository()
 
@@ -194,3 +217,65 @@ def get_radar_opportunity(
         .first()
     )
     return radar_detail_out(opportunity, outcome)
+
+
+@router.post("/scan-now", response_model=RadarScanNowOut)
+@limiter.limit("10/minute")
+async def trigger_radar_scan_now(
+    request: Request,
+    session: Session = Depends(get_db),
+    current_user: User = Depends(require_active_subscription()),
+) -> RadarScanNowOut:
+    """Consumer-triggered on-demand Radar V2 pass. Claims a per-user
+    cooldown slot in Redis (NX+EX, so concurrent double-clicks from the
+    same user race safely) BEFORE attempting the cycle; a claimed slot
+    is spent regardless of whether the cycle actually executes (e.g. it
+    may still refuse with `background_quota_low`/`scan_in_progress`/
+    `not_leader`) -- those attempts still cost a real leader-lock
+    compare-and-swap plus DB/Redis health probes, so charging the
+    cooldown for them too, not only for a successful run, is what
+    actually bounds one user's worst-case load on those shared
+    resources. `@limiter.limit("10/minute")` (per network address, this
+    router's existing convention) is a coarse anti-hammering backstop
+    only -- the per-user Redis cooldown above is the real usage cap.
+
+    Fails closed on a Redis error (`stop_reason="redis_unavailable"`):
+    refusing to run an unbounded on-demand scan is the safe default,
+    the same posture `SchedulerLeaderLock` already takes for the
+    identical reason (see that module's own docstring)."""
+    triggered_at = datetime.now(timezone.utc)
+    cooldown_seconds = get_radar_scan_now_cooldown_seconds()
+    cooldown_key = f"{_SCAN_NOW_COOLDOWN_KEY_PREFIX}:{current_user.id}"
+    redis_client = get_redis_client()
+
+    try:
+        claimed = bool(redis_client.set(cooldown_key, "1", nx=True, ex=cooldown_seconds))
+    except Exception:
+        logger.error("scan-now: Redis cooldown check failed -- refusing (fail closed).", exc_info=True)
+        return RadarScanNowOut(triggered_at=triggered_at, executed=False, stop_reason="redis_unavailable")
+
+    if not claimed:
+        try:
+            ttl = redis_client.ttl(cooldown_key)
+        except Exception:
+            ttl = cooldown_seconds
+        retry_after = ttl if ttl and ttl > 0 else cooldown_seconds
+        return RadarScanNowOut(
+            triggered_at=triggered_at,
+            executed=False,
+            stop_reason="cooldown_active",
+            retry_after_seconds=retry_after,
+        )
+
+    result = await run_radar_v2_cycle(
+        session,
+        lambda s, caller, resolve_symbols: run_one_bounded_background_cycle(
+            s, caller, resolve_symbols, operation=CONSUMER_SCAN_NOW
+        ),
+    )
+    return RadarScanNowOut(
+        triggered_at=triggered_at,
+        executed=result.stage2_executed,
+        stop_reason=result.stage2_stop_reason,
+        opportunities_emitted_count=len(result.opportunities_emitted),
+    )

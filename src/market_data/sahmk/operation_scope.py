@@ -36,7 +36,7 @@ INGESTION = "ingestion"
 ADMIN_DIAGNOSTICS = "admin_diagnostics"
 
 # Basirah Radar V2 (2026-08-16): Radar V2's Stage 2 calls reuse the
-# exact same _run_one_bounded_background_cycle helper continue-scan-
+# exact same run_one_bounded_background_cycle helper continue-scan-
 # cycle/stage2-validate-candidates already use, but tagged with this
 # operation instead of MARKET_SCAN -- Phase D's "SAHMK consumption
 # attributable specifically to Radar V2" requirement is answered
@@ -50,6 +50,15 @@ RADAR_V2 = "radar_v2"
 # request cost is independently visible from the opening scan's --
 # see src.market_intelligence.recurrent_live_scan.
 LIVE_RECURRENT_SCAN = "live_recurrent_scan"
+
+# On-demand consumer scan mandate (2026-09-11): the Radar screen's
+# "فحص فوري" button reuses run_one_bounded_background_cycle exactly like
+# RADAR_V2 does, tagged separately so its cost -- gated to at most one
+# call per user per get_radar_scan_now_cooldown_seconds(), on top of
+# every existing quota/leader-lock/health guard -- stays independently
+# visible from the opening scan's and from staff-triggered Radar V2
+# runs. See src.api.routes.radar's own POST /scan-now.
+CONSUMER_SCAN_NOW = "consumer_scan_now"
 
 UNCLASSIFIED = "unclassified"
 

@@ -162,3 +162,17 @@ export interface RadarHomeSummary {
   final_opportunities_count: number | null;
   last_full_scan_at: string | null;
 }
+
+/** Matches RadarScanNowOut (src/api/schemas/radar.py) -- the response
+ * to POST /api/v1/radar/scan-now. `executed=false` always means no
+ * scan ran and no SAHMK quota was spent; `stop_reason` says why
+ * honestly (a real safety gate, e.g. "background_quota_low"/
+ * "scan_in_progress"/"not_leader", or this route's own per-user
+ * "cooldown_active"/"redis_unavailable"). Never a fabricated success. */
+export interface RadarScanNowResult {
+  triggered_at: string;
+  executed: boolean;
+  stop_reason: string | null;
+  retry_after_seconds: number | null;
+  opportunities_emitted_count: number;
+}

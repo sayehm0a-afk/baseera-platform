@@ -2,7 +2,7 @@
 (/api/v1/admin/market-intelligence/radar-v2/*). Mirrors the fixtures
 and fakes test_admin_market_intelligence_route.py already established
 for /continue-scan-cycle -- Radar V2's POST .../radar-v2/scan reuses
-the identical _run_one_bounded_background_cycle safety machinery, so
+the identical run_one_bounded_background_cycle safety machinery, so
 the same leader-lock/SAHMK-health doubles apply here.
 """
 
@@ -448,7 +448,7 @@ def test_radar_v2_scan_never_touches_the_critical_reserve(client, session_factor
     """Phase E's explicit requirement: protected/critical SAHMK quota
     must never be spent by background radar work. Radar V2's Stage 2
     call always runs under priority_scope(BACKGROUND) (inherited,
-    unmodified, from _run_one_bounded_background_cycle) -- proven here
+    unmodified, from run_one_bounded_background_cycle) -- proven here
     directly by reading the real rate limiter's critical counter before
     and after a real scan that DID execute and DID spend background
     quota."""

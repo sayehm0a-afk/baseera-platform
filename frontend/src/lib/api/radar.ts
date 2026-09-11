@@ -3,13 +3,14 @@ import type {
   RadarHomeSummary,
   RadarOpportunityDetail,
   RadarOpportunitySummary,
+  RadarScanNowResult,
 } from "./radar-types";
 
 /** Every function here calls one of the consumer-facing
- * /api/v1/radar/* routes (src/api/routes/radar.py) -- a read-only,
- * zero-SAHMK-cost view over already-persisted RadarOpportunity/
- * DecisionV2Snapshot rows. Never the staff-only /admin/
- * market-intelligence/radar-v2/* routes. */
+ * /api/v1/radar/* routes (src/api/routes/radar.py). Every one except
+ * `triggerRadarScanNow` is a read-only, zero-SAHMK-cost view over
+ * already-persisted RadarOpportunity/DecisionV2Snapshot rows. Never
+ * the staff-only /admin/market-intelligence/radar-v2/* routes. */
 
 export function getRadarSummary(): Promise<RadarHomeSummary> {
   return apiFetch<RadarHomeSummary>("/api/v1/radar/summary");
@@ -42,4 +43,13 @@ export async function getRadarOpportunityBySymbol(
 ): Promise<RadarOpportunitySummary | null> {
   const opportunities = await getRadarOpportunities({ limit: 200 });
   return opportunities.find((o) => o.symbol === symbol) ?? null;
+}
+
+/** On-demand consumer scan mandate (2026-09-11): claims one turn of
+ * the same bounded, quota-gated, leader-locked Radar V2 cycle the
+ * scheduler and staff routes already run, subject to a per-user
+ * cooldown enforced server-side. NOT zero-SAHMK-cost -- see this
+ * module's own docstring. */
+export function triggerRadarScanNow(): Promise<RadarScanNowResult> {
+  return apiFetch<RadarScanNowResult>("/api/v1/radar/scan-now", { method: "POST" });
 }
