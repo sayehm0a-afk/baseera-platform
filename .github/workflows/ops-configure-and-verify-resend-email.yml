@@ -1,0 +1,119 @@
+name: Ops - Configure Resend email sending and verify a real send (RAILWAY_TOKEN only)
+
+# Switches the backend to ResendEmailSender (src/auth/email_sender.py --
+# sends over Resend's HTTPS API instead of raw SMTP). Added after real
+# production evidence (2026-09-11) that a fully-configured
+# SmtpEmailSender still failed every send with "[Errno 101] Network is
+# unreachable" -- Railway blocks outbound SMTP ports regardless of
+# credentials, but never blocks outbound HTTPS.
+#
+# Sets RESEND_API_KEY/RESEND_FROM_EMAIL, redeploys, waits for the
+# specific new deployment (not just an HTTP 200 healthcheck, which can
+# false-positive against the still-running old container -- the same
+# lesson as ops-verify-email-send.yml/ops-verify-safari-fix-rollout.yml),
+# then triggers one real /forgot-password and checks the backend's own
+# logs for the outcome. FRONTEND_BASE_URL is already set on every
+# deploy by deploy-railway.yml -- not touched here.
+#
+# workflow_dispatch inputs are visible in this run's own logs (GitHub
+# Actions does not mask dispatch inputs the way it masks secrets) --
+# disclosed here since resend_api_key is one of them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      resend_api_key:
+        description: "Resend API key (from resend.com dashboard, starts with re_)"
+        required: true
+      resend_from_email:
+        description: "From address (must be on a domain verified in Resend, or Resend's own onboarding sender for testing)"
+        required: true
+        default: "onboarding@resend.dev"
+      test_email:
+        description: "Real address to send a test forgot-password email to"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  configure-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RESEND_API_KEY: ${{ github.event.inputs.resend_api_key }}
+      RESEND_FROM_EMAIL: ${{ github.event.inputs.resend_from_email }}
+      TEST_EMAIL: ${{ github.event.inputs.test_email }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Set RESEND_* variables on the backend service (never echoed)
+        run: |
+          railway variables --service backend \
+            --set "RESEND_API_KEY=$RESEND_API_KEY" \
+            --set "RESEND_FROM_EMAIL=$RESEND_FROM_EMAIL"
+
+      - name: Redeploy backend so the running process picks up the new env vars
+        id: deploy
+        run: |
+          railway up --service backend --detach 2>&1 | tee /tmp/deploy_output.txt
+          sleep 5
+          railway service list --json > /tmp/services_after_deploy.json
+          NEW_DEPLOYMENT=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.id // empty' /tmp/services_after_deploy.json)
+          echo "new_deployment=$NEW_DEPLOYMENT" >> "$GITHUB_OUTPUT"
+          echo "Triggered deployment: $NEW_DEPLOYMENT"
+
+      - name: Poll backend service's latestDeployment until it matches the new one and is SUCCESS
+        env:
+          EXPECTED_BACKEND_DEPLOYMENT: ${{ steps.deploy.outputs.new_deployment }}
+        run: |
+          for i in $(seq 1 30); do
+            railway service list --json > /tmp/services.json 2>/tmp/services_err.txt || true
+            CURRENT=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.id // empty' /tmp/services.json 2>/dev/null || echo "")
+            STATUS=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.status // empty' /tmp/services.json 2>/dev/null || echo "")
+            echo "attempt $i: backend latestDeployment.id=$CURRENT status=$STATUS"
+            if [ "$CURRENT" = "$EXPECTED_BACKEND_DEPLOYMENT" ] && [ "$STATUS" = "SUCCESS" ]; then
+              echo "Backend's latestDeployment now matches and is SUCCESS."
+              break
+            fi
+            sleep 15
+          done
+
+      - name: Extra margin for the new process to finish booting after the deployment record flips
+        run: sleep 20
+
+      - name: Trigger one real forgot-password request against the confirmed-new deployment
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/resp.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/forgot-password" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$TEST_EMAIL\"}")
+          echo "HTTP $STATUS"
+          cat /tmp/resp.json
+
+      - name: Check the backend's own logs for the real send outcome
+        run: |
+          sleep 8
+          railway logs --service backend 2>&1 > /tmp/full_logs.txt || true
+          echo "=== lines mentioning EmailSender/Resend for this test ==="
+          grep -i "EmailSender\|resend" /tmp/full_logs.txt || echo "(no matching lines -- see full tail below)"
+          echo "=== full tail (last 100 lines) ==="
+          tail -100 /tmp/full_logs.txt
