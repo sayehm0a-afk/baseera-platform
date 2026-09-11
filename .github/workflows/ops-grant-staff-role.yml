@@ -1,0 +1,126 @@
+name: Ops - Grant a staff role to a real account (RAILWAY_TOKEN + STAFF creds only)
+
+# Elevates a real account to a staff role (OWNER/ADMIN/SUPPORT) via the
+# existing admin-only POST /api/v1/admin/users/{id}/staff-role route --
+# requires an existing OWNER account to call it (STAFF_EMAIL/
+# STAFF_PASSWORD secrets, already used by this repo's other ops
+# workflows for admin operations). Every call is recorded by the
+# route's own admin-audit-log write (record_admin_action) -- this
+# workflow adds no separate logging of its own. Never touches
+# anything else.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Email of the account to grant a staff role to"
+        required: true
+      staff_role:
+        description: "OWNER, ADMIN, or SUPPORT"
+        required: true
+        default: "OWNER"
+
+permissions:
+  contents: read
+
+jobs:
+  grant-role:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      TARGET_EMAIL: ${{ github.event.inputs.email }}
+      TARGET_STAFF_ROLE: ${{ github.event.inputs.staff_role }}
+    steps:
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+          if [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::STAFF_EMAIL/STAFF_PASSWORD are not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as OWNER staff, find the target account, and grant the role
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          BACKEND = os.environ["BACKEND_URL"]
+          TARGET_EMAIL = os.environ["TARGET_EMAIL"]
+          TARGET_STAFF_ROLE = os.environ["TARGET_STAFF_ROLE"]
+          STAFF_EMAIL = os.environ["STAFF_EMAIL"]
+          STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
+
+          def post(url, body, cookies=None, csrf_token=None):
+              data = json.dumps(body).encode()
+              req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+              if cookies:
+                  req.add_header("Cookie", cookies)
+              if csrf_token:
+                  req.add_header("X-CSRF-Token", csrf_token)
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode(), resp.headers
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(), e.headers
+
+          def get(url, cookies):
+              req = urllib.request.Request(url, method="GET", headers={"Cookie": cookies})
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode()
+
+          status, body, headers = post(f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
+          if status != 200:
+              print(f"::error::Staff login failed: HTTP {status} -- {body}")
+              sys.exit(1)
+          cookie_pairs = [c.split(";")[0] for c in (headers.get_all("Set-Cookie") or [])]
+          cookie_header = "; ".join(cookie_pairs)
+          csrf_token = next((c.split("=", 1)[1] for c in cookie_pairs if c.startswith("csrf_token=")), None)
+
+          status, body = get(f"{BACKEND}/api/v1/admin/users?q={TARGET_EMAIL}", cookie_header)
+          if status != 200:
+              print(f"::error::Admin user search failed: HTTP {status} -- {body}")
+              sys.exit(1)
+          users = json.loads(body).get("users", [])
+          matching = [u for u in users if u["email"].lower() == TARGET_EMAIL.lower()]
+          if not matching:
+              print(f"::error::No user found for {TARGET_EMAIL}")
+              sys.exit(1)
+          target = matching[0]
+          print(f"Found target user id={target['id']} email={target['email']} is_staff={target.get('is_staff')}")
+
+          status, body, _ = post(
+              f"{BACKEND}/api/v1/admin/users/{target['id']}/staff-role",
+              {"is_staff": True, "staff_role": TARGET_STAFF_ROLE},
+              cookies=cookie_header,
+              csrf_token=csrf_token,
+          )
+          if status != 200:
+              print(f"::error::Granting staff role failed: HTTP {status} -- {body}")
+              sys.exit(1)
+          print(json.dumps(json.loads(body), indent=2))
+          PYEOF
