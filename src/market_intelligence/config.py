@@ -125,6 +125,20 @@ def get_scan_leader_lease_seconds() -> float:
     return float(os.getenv("MARKET_SCAN_LEADER_LEASE_SECONDS", "180"))
 
 
+def get_radar_scan_now_cooldown_seconds() -> int:
+    """Minimum spacing between one authenticated user's own
+    POST /api/v1/radar/scan-now calls (see src.api.routes.radar) --
+    the per-user usage cap requested alongside the on-demand scan
+    feature itself. This is on top of, not instead of, every existing
+    quota/leader-lock/health guard `run_one_bounded_background_cycle`
+    already applies -- those already bound total system-wide SAHMK
+    spend regardless of caller; this bounds how often any single user
+    can even attempt to claim a turn, so one impatient user cannot
+    monopolize the shared leader lock or hammer the DB/Redis health
+    probes every few seconds."""
+    return int(os.getenv("MARKET_RADAR_SCAN_NOW_COOLDOWN_SECONDS", "900"))
+
+
 # --- rankings / watchlists ----------------------------------------------
 
 

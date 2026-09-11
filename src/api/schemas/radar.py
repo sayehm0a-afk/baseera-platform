@@ -66,3 +66,21 @@ class RadarHomeSummaryOut(BaseModel):
     stage2_validated_count: Optional[int] = None
     final_opportunities_count: Optional[int] = None
     last_full_scan_at: Optional[datetime] = None
+
+
+class RadarScanNowOut(BaseModel):
+    """POST /api/v1/radar/scan-now -- one on-demand Radar V2 pass,
+    subject to a per-user cooldown (see `get_radar_scan_now_cooldown_
+    seconds`) on top of every existing quota/leader-lock/health guard
+    `run_one_bounded_background_cycle` already applies. `executed=False`
+    always means no scan ran and no SAHMK quota was spent this call --
+    `stop_reason` says why honestly (the same real reasons the
+    staff-only `/admin/market-intelligence/radar-v2/scan` route can
+    return, plus `cooldown_active` for this route's own per-user
+    limit). Never a fabricated success."""
+
+    triggered_at: datetime
+    executed: bool
+    stop_reason: Optional[str] = None
+    retry_after_seconds: Optional[int] = None
+    opportunities_emitted_count: int = 0

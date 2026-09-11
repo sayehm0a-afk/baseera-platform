@@ -1,6 +1,6 @@
 """Unit tests for the Basirah Radar V2 orchestrator
 (src.market_intelligence.radar_v2). Stage 2 is always a fake, injected
-runner here -- never the real `_run_one_bounded_background_cycle` (no
+runner here -- never the real `run_one_bounded_background_cycle` (no
 FastAPI/Redis/SAHMK involved) -- so every test is deterministic and
 proves the orchestration/dedup logic on its own, independent of the
 already-tested Stage 2 safety machinery it composes with.

@@ -2,7 +2,7 @@
 
 Wires Stage 1 (zero-cost local ranking, `stage1_local_scan.py`) to
 Stage 2 (bounded live SAHMK validation, the exact same
-`_run_one_bounded_background_cycle` helper `POST .../continue-scan-
+`run_one_bounded_background_cycle` helper `POST .../continue-scan-
 cycle` and `POST .../stage2-validate-candidates` already use) and
 persists one `RadarOpportunity` row per resulting `DecisionV2Snapshot`
 -- applying anti-flapping/dedup against each symbol's current live
@@ -10,7 +10,7 @@ opportunity along the way.
 
 Deliberately depends on Stage 2 only through an injected async
 callable (`run_bounded_stage2_cycle`) matching
-`_run_one_bounded_background_cycle`'s own `(session, caller,
+`run_one_bounded_background_cycle`'s own `(session, caller,
 resolve_symbols) -> result` shape, rather than importing that function
 directly from `src.api.routes.admin.market_intelligence` -- a route
 module is the wrong thing for a domain-layer orchestrator to depend on,
@@ -29,7 +29,7 @@ safety logic but by composition:
     slots in one Radar V2 pass, regardless of how large Stage 1's own
     `candidate_count` is that day.
   * "Degrade gracefully rather than consume protected quota" -- Stage 2
-    here IS `_run_one_bounded_background_cycle`, which already refuses
+    here IS `run_one_bounded_background_cycle`, which already refuses
     to start (at zero SAHMK cost) when upstream is confirmed exhausted
     or remaining background quota is too low. This module adds no
     second, separately-maintained quota check; a `stage2_executed=False`
@@ -65,7 +65,7 @@ from src.market_intelligence.config import (
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.stage1_local_scan import Stage1SymbolResult, run_stage1_local_scan
 
-# Matches _run_one_bounded_background_cycle(session, caller, resolve_symbols)
+# Matches run_one_bounded_background_cycle(session, caller, resolve_symbols)
 # -> an object with at least .executed, .stop_reason, .run_id.
 StageTwoRunner = Callable[[Session, str, Callable[[], List[str]]], Awaitable[Any]]
 

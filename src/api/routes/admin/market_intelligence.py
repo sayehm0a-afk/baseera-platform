@@ -391,15 +391,19 @@ async def trigger_diagnostic_scan(
     )
 
 
-async def _run_one_bounded_background_cycle(
+async def run_one_bounded_background_cycle(
     session: Session, caller: str, resolve_symbols, *, operation: str = MARKET_SCAN,
 ) -> ContinueScanCycleOut:
     """Shared implementation behind every manually triggered scan
-    cycle -- `/continue-scan-cycle` (stale-first rotation) and
+    cycle -- `/continue-scan-cycle` (stale-first rotation),
     `/stage2-validate-candidates` (an explicit, Stage-1-narrowed
-    symbol list). Every safety guard a manually triggered cycle needs
-    lives here exactly once, so a new symbol-resolution strategy never
-    has to duplicate any of them:
+    symbol list), this module's own `/radar-v2/scan` (staff-only), and
+    (no leading underscore, deliberately importable -- same convention
+    as this module's `radar_summary_out`/`radar_detail_out`) the
+    consumer-facing `POST /api/v1/radar/scan-now` in `src.api.routes.
+    radar`. Every safety guard a manually triggered cycle needs lives
+    here exactly once, so a new symbol-resolution strategy never has
+    to duplicate any of them:
 
       * upstream_confirmed_exhausted / background_quota_low checks --
         a cycle costs at most MARKET_SCAN_SYMBOLS_PER_CYCLE real
@@ -580,7 +584,7 @@ async def continue_scan_cycle(
     offers a cheaper way to know which symbols are actually worth a
     live cycle -- see `POST .../stage2-validate-candidates` for the
     candidate-list-driven equivalent of this route."""
-    return await _run_one_bounded_background_cycle(
+    return await run_one_bounded_background_cycle(
         session,
         "continue_scan_cycle",
         lambda: SymbolSelector().select(session, limit=get_market_scan_symbols_per_cycle(), prioritize_stale=True),
@@ -600,7 +604,7 @@ async def stage2_validate_candidates(
     universe down to -- the caller supplies that list in the request
     body. Runs through the identical bounded, BACKGROUND-priority,
     leader-locked, quota-gated cycle `/continue-scan-cycle` uses (see
-    `_run_one_bounded_background_cycle`'s own docstring for every
+    `run_one_bounded_background_cycle`'s own docstring for every
     guard), just symbol-list-driven instead of stale-first-rotation-
     driven.
 
@@ -609,7 +613,7 @@ async def stage2_validate_candidates(
     remaining slice of a larger candidate list to validate all of it,
     exactly like `/continue-scan-cycle`'s own repeated-call contract."""
     symbols = request.symbols[: get_market_scan_symbols_per_cycle()]
-    return await _run_one_bounded_background_cycle(session, "stage2_validate_candidates", lambda: symbols)
+    return await run_one_bounded_background_cycle(session, "stage2_validate_candidates", lambda: symbols)
 
 
 # ============================================================================
@@ -737,7 +741,7 @@ async def run_radar_v2_scan(
     `run_radar_v2_cycle`'s own docstring for the complete guarantee."""
     result = await run_radar_v2_cycle(
         session,
-        lambda s, caller, resolve_symbols: _run_one_bounded_background_cycle(
+        lambda s, caller, resolve_symbols: run_one_bounded_background_cycle(
             s, caller, resolve_symbols, operation=RADAR_V2
         ),
     )
