@@ -1,0 +1,50 @@
+name: Diagnose Production Backend Deploy Failure (temporary, read-only, RAILWAY_TOKEN only)
+
+# One-off diagnostic: ops-configure-and-verify-resend-email.yml's
+# RESEND_API_KEY/RESEND_FROM_EMAIL variable set triggered a redeploy
+# that came back FAILED (deployment
+# 12f01fa5-bf05-4888-a9c0-f5edc7f0b0b6, polled FAILED for the last 5
+# of 30 attempts, run 34634759846) -- the backend service kept serving
+# its previous, still-healthy deployment, so the subsequent
+# forgot-password test hit the OLD SmtpEmailSender code path, not the
+# new ResendEmailSender one. Matches the exact pattern already
+# documented in diagnose-staging-deploy-failure.yml for the staging
+# project; this is the same diagnostic against production. Read-only,
+# no config/variable changes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_id:
+        description: "Failed deployment ID to inspect"
+        required: true
+        default: "12f01fa5-bf05-4888-a9c0-f5edc7f0b0b6"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: railway logs for the specific failed deployment (build + runtime)
+        run: |
+          echo "=== railway logs --service backend --deployment $DEPLOYMENT_ID ==="
+          railway logs --service backend --deployment "$DEPLOYMENT_ID" 2>&1 | tail -n 300 || true
+          echo ""
+          echo "=== railway logs --service backend --build (fallback) ==="
+          railway logs --service backend --build 2>&1 | tail -n 300 || true
