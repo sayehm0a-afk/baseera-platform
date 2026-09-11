@@ -1,0 +1,67 @@
+name: Diagnose Staging Backend Deploy Failure (temporary, read-only, RAILWAY_STAGING_TOKEN only)
+
+# One-off diagnostic: staging-5-enable-market-intelligence-scheduler.yml's
+# variable set triggered a redeploy that came back FAILED (deployment
+# dca9c3f7-54a1-4ccf-9146-9307eca2f393, createdAt 2026-09-11T08:33:58Z) --
+# the backend service is still serving its PREVIOUS, still-healthy
+# deployment, so /health/live returning 200 did not mean the new
+# MARKET_INTELLIGENCE_SCHEDULER_ENABLED=true config was ever actually
+# live. This prints `railway logs --help` and the failed deployment's own
+# build/runtime logs (read-only) to find the real cause before touching
+# anything else.
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_id:
+        description: "Failed deployment ID to inspect"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  EXPECTED_STAGING_PROJECT_ID: "7b3a7f9f-66da-460a-ba3e-9ca251f142f7"
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_STAGING_TOKEN }}
+      DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+    steps:
+      - name: Fail fast if RAILWAY_STAGING_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_STAGING_TOKEN is not readable by this job."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: HARD GATE -- re-verify this token resolves to the expected staging project
+        run: |
+          set +e
+          railway status --json > /tmp/status.json
+          STATUS_EXIT=$?
+          set -e
+          PROJECT_ID=$(python3 -c "import json; print(json.load(open('/tmp/status.json')).get('id','unknown'))" 2>/dev/null || echo unknown)
+          if [ "$STATUS_EXIT" -ne 0 ] || [ "$PROJECT_ID" != "$EXPECTED_STAGING_PROJECT_ID" ]; then
+            echo "::error::Token does not resolve to the expected staging project ($PROJECT_ID != $EXPECTED_STAGING_PROJECT_ID). Refusing to proceed."
+            exit 1
+          fi
+          echo "CONFIRMED staging project ($EXPECTED_STAGING_PROJECT_ID)."
+
+      - name: railway logs --help (read-only, to find the right invocation for a specific deployment)
+        run: railway logs --help 2>&1 || true
+
+      - name: railway logs for the specific failed deployment (build + runtime)
+        run: |
+          echo "=== railway logs --deployment $DEPLOYMENT_ID (if supported) ==="
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" --deployment "$DEPLOYMENT_ID" 2>&1 | tail -n 300 || true
+          echo ""
+          echo "=== railway logs --build (fallback, if the above flag/positional form is wrong) ==="
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" --build 2>&1 | tail -n 300 || true
