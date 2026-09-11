@@ -160,8 +160,24 @@ _RULES: Dict[WatchlistCategory, _WatchlistRule] = {
         _high_risk_predicate, lambda o: f"مستوى المخاطرة المقيّم: {RISK_LEVEL_LABELS_AR.get(o.risk_level, o.risk_level.value)}.",
         lambda o: o.confidence, True,
     ),
+    # AUDIT 2026-09-11: o.dividend_yield is computed from the single
+    # MOST RECENT dividend payment (SahmkService.get_latest_dividend_
+    # per_share) divided by price -- never annualized/trailing-12-
+    # months summed. A company paying semi-annually/quarterly, or one
+    # that recently made a large one-off special distribution, would
+    # show a number here far above its real recurring annual yield.
+    # Standard financial usage of "dividend yield" is always an
+    # annualized figure, so presenting this unqualified would risk
+    # misleading a real investment decision -- this disclosure is a
+    # text-only fix (see this dict's own header comment: presentation-
+    # only, no classification/decision logic); the underlying
+    # dividend_yield value and threshold gate above are unchanged.
     WatchlistCategory.DIVIDEND: _WatchlistRule(
-        _dividend_predicate, lambda o: f"عائد التوزيعات عند {o.dividend_yield * 100:.2f}%.",
+        _dividend_predicate,
+        lambda o: (
+            f"عائد التوزيعات عند {o.dividend_yield * 100:.2f}% بناءً على آخر توزيعة منفردة فقط -- "
+            "وليس بالضرورة عائدًا سنويًا متكررًا، خاصة إن كانت توزيعة استثنائية أو نصف سنوية/ربع سنوية."
+        ),
         lambda o: o.dividend_yield, True,
     ),
     WatchlistCategory.RECOVERY: _WatchlistRule(
