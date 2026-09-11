@@ -357,7 +357,41 @@ def evaluate_pending_outcomes(
                 if len(entered_idx) > 0:
                     entered_at = _as_utc(pd.Timestamp(entered_idx[0]).to_pydatetime())
 
-            if entered_at is not None:
+            # A stop breach strictly BEFORE the entry zone was ever
+            # reached means the setup died before it was ever
+            # tradeable -- must be INVALIDATED even if price later
+            # recovers back into the zone (e.g. a single-day gap-down
+            # whose own low/high range crosses both the zone and the
+            # stop without overlapping the zone itself, followed by a
+            # later bar that does overlap it: `entered_mask` above
+            # would otherwise find that later bar and wrongly treat it
+            # as a clean entry, silently ignoring that the setup was
+            # already dead by then). Only bars strictly before the
+            # entry bar count as "pre-entry" here -- a stop breach
+            # on/after the entry bar is ordinary post-entry tracking,
+            # handled further below instead.
+            pre_entry_window = (
+                full_horizon_df[
+                    full_horizon_df.index.map(lambda ts: _as_utc(pd.Timestamp(ts).to_pydatetime()) < entered_at)
+                ]
+                if entered_at is not None
+                else full_horizon_df
+            )
+            pre_entry_stop_at: Optional[datetime] = None
+            if stop_loss is not None and not pre_entry_window.empty:
+                broken_mask = pre_entry_window["low"] <= stop_loss
+                broken_idx = pre_entry_window.index[broken_mask]
+                if len(broken_idx) > 0:
+                    pre_entry_stop_at = _as_utc(pd.Timestamp(broken_idx[0]).to_pydatetime())
+
+            if pre_entry_stop_at is not None:
+                row.invalidated = True
+                row.invalidated_at = pre_entry_stop_at
+                row.status = DecisionV2OutcomeStatus.INVALIDATED
+                row.evaluated_at = now
+                evaluated_terminal += 1
+                continue
+            elif entered_at is not None:
                 row.entry_triggered = True
                 row.entry_triggered_at = entered_at
                 # Conservative, disclosed assumption: daily OHLC cannot
@@ -366,21 +400,13 @@ def evaluate_pending_outcomes(
                 # zone (its top edge, for a long entry) is used rather
                 # than guessing a better one.
                 row.entry_price = entry_high
+            elif now >= _as_utc(row.due_at):
+                row.status = DecisionV2OutcomeStatus.ENTRY_NEVER_TRIGGERED
+                row.evaluated_at = now
+                evaluated_terminal += 1
+                continue
             else:
-                pre_entry_stop_hit = stop_loss is not None and (full_horizon_df["low"] <= stop_loss).any()
-                if pre_entry_stop_hit:
-                    broken_idx = full_horizon_df.index[full_horizon_df["low"] <= stop_loss]
-                    row.invalidated = True
-                    row.invalidated_at = _as_utc(pd.Timestamp(broken_idx[0]).to_pydatetime())
-                    row.status = DecisionV2OutcomeStatus.INVALIDATED
-                    row.evaluated_at = now
-                    evaluated_terminal += 1
-                elif now >= _as_utc(row.due_at):
-                    row.status = DecisionV2OutcomeStatus.ENTRY_NEVER_TRIGGERED
-                    row.evaluated_at = now
-                    evaluated_terminal += 1
-                else:
-                    still_pending += 1
+                still_pending += 1
                 continue
 
         # From here on row.entry_triggered is True (just now, or from a
