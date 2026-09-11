@@ -1,0 +1,159 @@
+name: Ops - Create and verify a real account (RAILWAY_TOKEN + STAFF creds only)
+
+# One-off operational utility: registers a new account through the
+# real, public /api/v1/auth/register endpoint (the exact same code
+# path any real signup uses -- never a direct DB write), then uses the
+# already-configured STAFF_EMAIL/STAFF_PASSWORD account to mark it
+# email-verified via the admin support-rescue endpoint
+# (POST /admin/users/{id}/verify-email), since SMTP_HOST is not
+# configured in production and a real signup has no way to receive its
+# verification email otherwise (see src/api/routes/admin/users.py's
+# own docstring on this exact gap).
+#
+# Idempotent and safe: if the target email is already registered, this
+# workflow does NOT touch its existing password or verification state
+# -- it stops and reports that fact instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Email address to register"
+        required: true
+      password:
+        description: "Password to register with (must contain a letter and a digit)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  create-account:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      TARGET_EMAIL: ${{ github.event.inputs.email }}
+      TARGET_PASSWORD: ${{ github.event.inputs.password }}
+    steps:
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+          if [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::STAFF_EMAIL/STAFF_PASSWORD are not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Backend: $BACKEND_URL"
+
+      - name: Register, then verify via staff rescue endpoint
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          BACKEND = os.environ["BACKEND_URL"]
+          TARGET_EMAIL = os.environ["TARGET_EMAIL"]
+          TARGET_PASSWORD = os.environ["TARGET_PASSWORD"]
+          STAFF_EMAIL = os.environ["STAFF_EMAIL"]
+          STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
+
+          def post(url, body, cookies=None, csrf_token=None):
+              data = json.dumps(body).encode()
+              req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+              if cookies:
+                  req.add_header("Cookie", cookies)
+              # CSRFMiddleware (src/api/middleware/csrf.py) requires this
+              # header, matching the csrf_token cookie, on every mutating
+              # /api/v1/* request once a session cookie is present --
+              # /register and /login themselves are exempt (no session
+              # cookie exists yet), but verify-email below is not.
+              if csrf_token:
+                  req.add_header("X-CSRF-Token", csrf_token)
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode(), resp.headers
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(), e.headers
+
+          def get(url, cookies):
+              req = urllib.request.Request(url, method="GET", headers={"Cookie": cookies})
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode()
+
+          # 1. Register the target account through the real public endpoint.
+          status, body, _ = post(f"{BACKEND}/api/v1/auth/register", {"email": TARGET_EMAIL, "password": TARGET_PASSWORD})
+          if status == 201:
+              print(f"REGISTERED: {TARGET_EMAIL}")
+          elif status == 409 or (status == 400 and "already" in body.lower()):
+              print(f"ALREADY_EXISTS: {TARGET_EMAIL} -- not touching its existing password or verification state.")
+              print("::notice::Account already existed; nothing was changed. Use the existing password.")
+              sys.exit(0)
+          else:
+              print(f"::error::Registration failed: HTTP {status} -- {body}")
+              sys.exit(1)
+
+          # 2. Log in as staff to get a session for the admin rescue endpoint.
+          status, body, headers = post(f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
+          if status != 200:
+              print(f"::error::Staff login failed: HTTP {status} -- {body}")
+              print("::error::Account was REGISTERED but NOT verified -- it cannot log in yet.")
+              sys.exit(1)
+          set_cookie_headers = headers.get_all("Set-Cookie") or []
+          cookie_pairs = [c.split(";")[0] for c in set_cookie_headers]
+          cookie_header = "; ".join(cookie_pairs)
+          csrf_token = None
+          for pair in cookie_pairs:
+              name, _, value = pair.partition("=")
+              if name.strip() == "csrf_token":
+                  csrf_token = value
+          if not csrf_token:
+              print("::error::Staff login did not return a csrf_token cookie -- cannot proceed safely.")
+              sys.exit(1)
+
+          # 3. Find the new user's ID via the admin user search.
+          status, body = get(f"{BACKEND}/api/v1/admin/users?q={TARGET_EMAIL}", cookie_header)
+          if status != 200:
+              print(f"::error::Admin user search failed: HTTP {status} -- {body}")
+              print("::error::Account was REGISTERED but NOT verified -- the STAFF account may lack ADMIN+ privileges.")
+              sys.exit(1)
+          users = json.loads(body).get("users", [])
+          matching = [u for u in users if u["email"].lower() == TARGET_EMAIL.lower()]
+          if not matching:
+              print(f"::error::Could not find the newly registered user via admin search.")
+              sys.exit(1)
+          user_id = matching[0]["id"]
+
+          # 4. Mark it verified via the support-rescue endpoint.
+          status, body, _ = post(
+              f"{BACKEND}/api/v1/admin/users/{user_id}/verify-email", {}, cookies=cookie_header, csrf_token=csrf_token
+          )
+          if status != 200:
+              print(f"::error::Verify-email rescue call failed: HTTP {status} -- {body}")
+              print("::error::Account was REGISTERED but NOT verified.")
+              sys.exit(1)
+
+          print(f"VERIFIED: {TARGET_EMAIL} (user_id={user_id}) -- can now log in.")
+          PYEOF
