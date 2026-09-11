@@ -1,24 +1,13 @@
-name: Diagnose Production Backend Deploy Failure (temporary, read-only-ish, RAILWAY_TOKEN only)
+name: Diagnose Production Backend Deploy Failure (temporary, read-only, RAILWAY_TOKEN only)
 
-# Two consecutive real redeploys triggered specifically to activate
-# ResendEmailSender (RESEND_API_KEY/RESEND_FROM_EMAIL) both ended up
-# `status: FAILED, deploymentStopped: true` -- deployments
-# 12f01fa5-bf05-4888-a9c0-f5edc7f0b0b6 and
-# 883d3de3-a4e4-4532-8223-12851511747f, both 100% of the ~7.5-minute
-# poll window, both while the backend service kept serving its old,
-# unrelated 16:16 process the whole time (confirmed via
-# ops-configure-and-verify-resend-email.yml's own log-check step
-# showing the exact same startup timestamp before and after both
-# attempts). `railway logs --deployment <id>`/`--build` do not surface
-# a deployment-specific runtime crash trace for either -- `--build`
-# appears to just return the latest cached generic builder trace
-# regardless of which deployment ID is passed (proven by byte-
-# identical output across two different failed deployment IDs).
-#
-# This isolating step triggers a THIRD redeploy of the exact same
-# already-live code (no variable changes at all) to determine whether
-# deploys are broken at the platform level right now in general, or
-# specifically correlated with the Resend variables/code path.
+# Three consecutive real redeploys (two for Resend, one a plain no-op
+# redeploy of already-live code) all ended up FAILED within ~15-20s of
+# entering BUILDING -- proven unrelated to any code/variable change.
+# I have no browser to open the Railway dashboard myself, so this
+# checks everything account/billing/limit-related that IS reachable
+# through the Railway CLI + its underlying GraphQL API with the same
+# RAILWAY_TOKEN already used for every other ops workflow this
+# session. Read-only: no deploys, no variable changes.
 
 on:
   workflow_dispatch: {}
@@ -27,9 +16,9 @@ permissions:
   contents: read
 
 jobs:
-  isolate:
+  diagnose-account:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
@@ -43,34 +32,49 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Redeploy backend with NO variable changes (isolating test)
-        id: deploy
-        run: |
-          railway up --service backend --detach 2>&1 | tee /tmp/deploy_output.txt
-          sleep 5
-          railway service list --json > /tmp/services_after_deploy.json
-          NEW_DEPLOYMENT=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.id // empty' /tmp/services_after_deploy.json)
-          echo "new_deployment=$NEW_DEPLOYMENT" >> "$GITHUB_OUTPUT"
-          echo "Triggered deployment: $NEW_DEPLOYMENT"
+      - name: railway whoami
+        run: railway whoami 2>&1 || true
 
-      - name: Poll for up to 5 minutes and print every status transition
-        env:
-          EXPECTED_BACKEND_DEPLOYMENT: ${{ steps.deploy.outputs.new_deployment }}
+      - name: railway status --json (current project/environment)
+        run: railway status --json 2>&1 || true
+
+      - name: railway --help (top-level, to find any account/billing/usage subcommand)
+        run: railway --help 2>&1 || true
+
+      - name: Raw GraphQL query against Railway's own API for account/subscription/usage/limit fields
         run: |
-          LAST_STATUS=""
-          for i in $(seq 1 20); do
-            railway service list --json > /tmp/services.json 2>/tmp/services_err.txt || true
-            CURRENT=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.id // empty' /tmp/services.json 2>/dev/null || echo "")
-            STATUS=$(jq -r 'if type=="array" then . else .services end | .[] | select(.name=="backend") | .latestDeployment.status // empty' /tmp/services.json 2>/dev/null || echo "")
-            if [ "$STATUS" != "$LAST_STATUS" ]; then
-              echo "attempt $i: backend latestDeployment.id=$CURRENT status=$STATUS (transition)"
-              LAST_STATUS="$STATUS"
-            fi
-            if [ "$CURRENT" = "$EXPECTED_BACKEND_DEPLOYMENT" ] && [ "$STATUS" = "SUCCESS" ]; then
-              echo "RESULT: SUCCESS -- a plain redeploy with no variable changes works fine."
-              exit 0
-            fi
-            sleep 15
-          done
-          echo "RESULT: TIMED OUT WITHOUT SUCCESS -- final status=$STATUS. Deploys are broken at the platform level right now, unrelated to any specific env var."
-          exit 1
+          cat > /tmp/query.json <<'EOF'
+          {"query":"query { me { id email subscriptionType subscriptionPlanLimit workspaces { id name plan } } }"}
+          EOF
+          echo "=== attempt 1: me { subscriptionType, subscriptionPlanLimit, workspaces } ==="
+          curl -sS -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/query.json \
+            -w "\nHTTP:%{http_code}\n" || true
+
+      - name: Raw GraphQL query -- project/environment resource usage and any active limit/restriction
+        run: |
+          PROJECT_ID=$(railway status --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+          echo "Resolved project id: $PROJECT_ID"
+          cat > /tmp/query2.json <<EOF
+          {"query":"query(\$id: String!) { project(id: \$id) { id name deletedAt } }","variables":{"id":"$PROJECT_ID"}}
+          EOF
+          echo "=== attempt 2: project deletedAt/basic status ==="
+          curl -sS -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/query2.json \
+            -w "\nHTTP:%{http_code}\n" || true
+
+      - name: Full detail on the most recent FAILED deployment via GraphQL (deployment + logs)
+        run: |
+          cat > /tmp/query3.json <<'EOF'
+          {"query":"query { deployment(id: \"993d136a-729c-45f1-9650-2671bb3df892\") { id status staticUrl suggestAddServiceDomain deploymentStopped canRedeploy meta } }"}
+          EOF
+          echo "=== attempt 3: deployment detail for the last plain-redeploy failure ==="
+          curl -sS -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/query3.json \
+            -w "\nHTTP:%{http_code}\n" || true
