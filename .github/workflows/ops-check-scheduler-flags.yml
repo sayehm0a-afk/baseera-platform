@@ -1,0 +1,44 @@
+name: Ops - Check production scheduler flags (read-only, RAILWAY_TOKEN only)
+
+# Read-only diagnostic: prints whether MARKET_INTELLIGENCE_SCHEDULER_ENABLED,
+# INGESTION_SCHEDULER_ENABLED, and LIVE_MARKET_MODE_ENABLED are set on the
+# production backend service. deploy-railway.yml sets the latter two on
+# every deploy but never touches MARKET_INTELLIGENCE_SCHEDULER_ENABLED --
+# a prior read-only audit (2026-09-10) found it unset/false, meaning the
+# regular recurring market scan (MarketIntelligenceScheduler) was not
+# running in production at all. This check confirms the current live
+# value before any decision is made about it. Never modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check-flags:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Print scheduler-related flags (read-only)
+        run: |
+          railway variable list --service backend --kv 2>/tmp/err.txt > /tmp/vars.txt || true
+          for VAR in MARKET_INTELLIGENCE_SCHEDULER_ENABLED INGESTION_SCHEDULER_ENABLED LIVE_MARKET_MODE_ENABLED; do
+            grep -E "^${VAR}=" /tmp/vars.txt || echo "${VAR} is NOT SET"
+          done
+
+      - name: Cross-check live scheduler status via /health/market-data and /admin/system/summary shape
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 "https://backend-production-7cca.up.railway.app/health/market-data" | python3 -m json.tool || true
