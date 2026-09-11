@@ -1,8 +1,5 @@
 import type { ApiErrorBody } from "./types";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-
 // Auth bootstrap endpoints never have a prior session to refresh, and
 // /auth/refresh itself must never trigger its own retry (that would
 // recurse forever the moment a refresh legitimately fails) -- a 401
@@ -39,26 +36,14 @@ function readCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-// The API runs on a different origin than this app (see API_BASE_URL) --
-// document.cookie can only ever see cookies belonging to the current
-// page's own origin, so it never sees the (non-httpOnly) csrf_token
-// cookie the backend sets on itself. The backend echoes that same
-// value back as an X-CSRF-Token *response* header on /login, /refresh,
-// and /me (src/api/routes/auth.py) specifically so this in-memory copy
-// can be captured instead; readCookie("csrf_token") is kept as a
-// fallback purely for same-origin setups (e.g. NEXT_PUBLIC_API_BASE_URL
-// pointed at the same host during local development), where it still
-// works and this never gets populated in the first place.
-let csrfTokenFromHeader: string | null = null;
-
-/** Double-submit CSRF header (src/api/middleware/csrf.py): prefers the
- * value captured from a prior response's X-CSRF-Token header (see
- * csrfTokenFromHeader above), falling back to the cookie for same-origin
- * setups. Reading it on every request (not just mutating ones) is
- * harmless -- the backend middleware only ever checks it on non-GET
- * /api/v1/* calls. */
+/** The same-origin rewrite in next.config.ts makes the non-httpOnly
+ * CSRF cookie readable here, including after a reload with an expired
+ * access token. Read the current cookie for EVERY request: another tab
+ * may have rotated it since this tab's last response. Never cache the
+ * response-header value, which can be stale or lost on navigation.
+ * Access/refresh cookies remain httpOnly and are never read by JS. */
 function csrfHeaders(): Record<string, string> {
-  const token = csrfTokenFromHeader ?? readCookie("csrf_token");
+  const token = readCookie("csrf_token");
   return token ? { "X-CSRF-Token": token } : {};
 }
 
@@ -85,8 +70,9 @@ function refreshSession(): Promise<boolean> {
  * failure (see tests/integration/api/*), which this maps to `ApiError`
  * so callers can branch on `.code` instead of parsing prose.
  *
- * `credentials: "include"` sends the httpOnly access/refresh cookies
- * (and the CSRF cookie) on every request, same-origin or not. A 401
+ * Browser requests use relative URLs through Next's same-origin API
+ * rewrite, so Safari need not accept third-party cookies. Credentials
+ * sends the httpOnly access/refresh cookies (and the CSRF cookie). A 401
  * from anything other than an auth-bootstrap endpoint is treated as "the
  * access token probably just expired": one silent refresh-and-retry is
  * attempted before giving up and surfacing the original error. */
@@ -96,7 +82,7 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const { _isRetry, ...rest } = init ?? {};
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(path, {
     ...rest,
     credentials: "include",
     headers: {
@@ -106,11 +92,6 @@ export async function apiFetch<T>(
     },
     cache: "no-store",
   });
-
-  const csrfHeader = response.headers.get("x-csrf-token");
-  if (csrfHeader) {
-    csrfTokenFromHeader = csrfHeader;
-  }
 
   if (
     response.status === 401 &&
