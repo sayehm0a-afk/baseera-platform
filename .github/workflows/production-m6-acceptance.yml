@@ -46,7 +46,7 @@ jobs:
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Fail fast if required secrets are not configured
         run: |
