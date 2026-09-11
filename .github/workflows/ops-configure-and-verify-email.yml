@@ -1,0 +1,113 @@
+name: Ops - Configure real SMTP sending and verify a real send (RAILWAY_TOKEN only)
+
+# Configures the backend's real email sender (src/auth/email_sender.py
+# -- get_email_sender() auto-selects SmtpEmailSender once SMTP_HOST is
+# set, instead of the current ConsoleEmailSender fallback that only
+# logs the would-be email and never actually sends it). Redeploys so
+# the running process picks up the new env vars, then triggers one
+# real POST /api/v1/auth/forgot-password and checks the backend's own
+# logs for SmtpEmailSender's send outcome. FRONTEND_BASE_URL is already
+# set on every deploy by deploy-railway.yml -- not touched here.
+#
+# workflow_dispatch inputs are visible in this run's own logs (GitHub
+# Actions does not mask dispatch inputs the way it masks secrets) --
+# disclosed here since smtp_password is one of them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      smtp_host:
+        description: "SMTP host (e.g. smtp.gmail.com)"
+        required: true
+        default: "smtp.gmail.com"
+      smtp_port:
+        description: "SMTP port"
+        required: true
+        default: "587"
+      smtp_username:
+        description: "SMTP username / from-email"
+        required: true
+      smtp_password:
+        description: "SMTP password / app password"
+        required: true
+      test_email:
+        description: "Real address to send a test forgot-password email to"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  configure-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      SMTP_HOST: ${{ github.event.inputs.smtp_host }}
+      SMTP_PORT: ${{ github.event.inputs.smtp_port }}
+      SMTP_USERNAME: ${{ github.event.inputs.smtp_username }}
+      SMTP_PASSWORD: ${{ github.event.inputs.smtp_password }}
+      TEST_EMAIL: ${{ github.event.inputs.test_email }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend/frontend public URLs
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          railway domain list --service frontend --json > /tmp/frontend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Set SMTP_* variables on the backend service (never echoed)
+        run: |
+          railway variables --service backend \
+            --set "SMTP_HOST=$SMTP_HOST" \
+            --set "SMTP_PORT=$SMTP_PORT" \
+            --set "SMTP_USERNAME=$SMTP_USERNAME" \
+            --set "SMTP_PASSWORD=$SMTP_PASSWORD" \
+            --set "SMTP_FROM_EMAIL=$SMTP_USERNAME" \
+            --set "SMTP_USE_TLS=true"
+
+      - name: Redeploy backend so the running process picks up the new env vars
+        run: railway up --service backend --detach
+
+      - name: Wait for backend to become healthy
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          for i in $(seq 1 12); do
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; break; fi
+            sleep 15
+          done
+
+      - name: Trigger one real forgot-password request
+        id: trigger
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/resp.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/forgot-password" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$TEST_EMAIL\"}")
+          echo "HTTP $STATUS"
+          cat /tmp/resp.json
+          echo "triggered_at=$(date -u +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_OUTPUT"
+
+      - name: Give the backend a moment to process, then check its own logs for the real send outcome
+        run: |
+          sleep 8
+          echo "=== last 150 lines of backend logs (looking for SmtpEmailSender/ConsoleEmailSender lines) ==="
+          railway logs --service backend 2>&1 | tail -150 | grep -i "EmailSender\|smtp\|password reset" || echo "(no matching lines found in the tail -- log retention/timing may not have captured it; see full tail below)"
+          echo "=== full tail, for manual inspection if the grep above found nothing ==="
+          railway logs --service backend 2>&1 | tail -150
