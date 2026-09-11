@@ -68,13 +68,13 @@ jobs:
             -H "Content-Type: application/json" \
             -d @/tmp/current_query.json -w "\nHTTP:%{http_code}\n"
 
-      - name: Force builder=DOCKERFILE via serviceInstanceUpdate mutation
+      - name: Force Dockerfile mode via serviceInstanceUpdate mutation (builder left null -- DOCKERFILE is not in the Builder enum, only HEROKU/NIXPACKS/PAKETO/RAILPACK are)
         env:
           SERVICE_ID: ${{ steps.ids.outputs.service_id }}
           ENV_ID: ${{ steps.ids.outputs.env_id }}
         run: |
           cat > /tmp/mutation.json <<EOF
-          {"query":"mutation(\$serviceId: String!, \$environmentId: String!, \$input: ServiceInstanceUpdateInput!) { serviceInstanceUpdate(serviceId: \$serviceId, environmentId: \$environmentId, input: \$input) }","variables":{"serviceId":"$SERVICE_ID","environmentId":"$ENV_ID","input":{"builder":"DOCKERFILE","dockerfilePath":"Dockerfile"}}}
+          {"query":"mutation(\$serviceId: String!, \$environmentId: String!, \$input: ServiceInstanceUpdateInput!) { serviceInstanceUpdate(serviceId: \$serviceId, environmentId: \$environmentId, input: \$input) }","variables":{"serviceId":"$SERVICE_ID","environmentId":"$ENV_ID","input":{"builder":null,"dockerfilePath":"Dockerfile"}}}
           EOF
           curl -sS -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
