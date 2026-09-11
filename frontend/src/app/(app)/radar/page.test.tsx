@@ -202,9 +202,19 @@ describe("RadarPage", () => {
     render(<RadarPage />);
     await screen.findByText("لا توجد فرص مرصودة حاليًا");
 
-    fireEvent.click(screen.getByRole("button", { name: "تحديث الرادار" }));
+    fireEvent.click(screen.getByRole("button", { name: "تحديث العرض" }));
 
     expect(await screen.findByText("لا توجد فرص مرصودة حاليًا")).toBeInTheDocument();
     expect(getRadarSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("discloses honestly that the button only refreshes the view, never a fresh scan on demand", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(summary());
+
+    render(<RadarPage />);
+
+    expect(
+      await screen.findByText(/هذا الزر يُحدّث العرض ليطابق آخر فحص مكتمل فقط، ولا يُشغّل فحصًا جديدًا فوريًا/)
+    ).toBeInTheDocument();
   });
 });

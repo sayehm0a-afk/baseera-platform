@@ -129,8 +129,18 @@ export default function RadarPage() {
           disabled={data.status === "loading"}
           className="rounded-bsr-md bg-bsr-gold-500 px-bsr-6 py-bsr-2 font-semibold text-bsr-navy-950 transition-colors hover:bg-bsr-gold-400 disabled:opacity-60"
         >
-          {data.status === "loading" ? "جارٍ التحديث..." : "تحديث الرادار"}
+          {data.status === "loading" ? "جارٍ التحديث..." : "تحديث العرض"}
         </button>
+        {/* Honesty fix: "تحديث العرض" (not "تحديث الرادار") because this
+         * button only re-reads the same already-persisted scan results
+         * (fetchRadarData/getRadarSummary above) -- it never triggers a
+         * new market scan. Without this line, a user could reasonably
+         * expect a fresh scan on every press, which would be false: new
+         * opportunities only ever appear on the scheduler's own
+         * schedule (see "آخر تحديث للرادار" timestamp below). */}
+        <p className="mt-bsr-2 text-xs text-bsr-text-muted">
+          بصيرة يفحص السوق تلقائيًا على فترات مجدولة — هذا الزر يُحدّث العرض ليطابق آخر فحص مكتمل فقط، ولا يُشغّل فحصًا جديدًا فوريًا.
+        </p>
       </section>
 
       {data.status === "loading" ? <LoadingScreen /> : null}
