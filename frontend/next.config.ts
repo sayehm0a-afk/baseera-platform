@@ -37,6 +37,22 @@ const nextConfig: NextConfig = {
       { source: "/health/market-data", destination: `${backend}/health/market-data` },
     ];
   },
+  async headers() {
+    // Auth pages must never be served stale. A production report after
+    // the same-origin proxy fix shipped (ADR-safari-session-recovery.md)
+    // showed a real, working login (verified end to end, real 200 with
+    // cookies set) followed minutes later by a generic failure report on
+    // the same device -- with no server-side reproduction, the leading
+    // explanation is a cached pre-fix page/bundle still active in the
+    // browser tab. These five routes carry no per-user data and are safe
+    // to mark uncacheable outright, closing off that whole class of
+    // "works only after clearing site data" reports on any future deploy.
+    const noStoreRoutes = ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email"];
+    return noStoreRoutes.map((source) => ({
+      source,
+      headers: [{ key: "Cache-Control", value: "no-store, must-revalidate" }],
+    }));
+  },
 };
 
 export default nextConfig;
