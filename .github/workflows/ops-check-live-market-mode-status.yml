@@ -114,6 +114,7 @@ jobs:
               "live_market_mode_enabled",
               "live_market_mode_running",
               "live_market_mode_market_currently_open",
+              "live_market_mode_inner_scan_scheduler_running",
               "market_intelligence_scheduler_running",
               "market_data_provider",
               "market_data_last_connectivity_status",
