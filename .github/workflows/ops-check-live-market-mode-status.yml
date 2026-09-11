@@ -1,0 +1,130 @@
+name: Ops - Check Live Market Mode / scan-scheduler real status (read-only, RAILWAY_TOKEN + STAFF creds only)
+
+# Read-only diagnostic. Before touching MARKET_INTELLIGENCE_SCHEDULER_ENABLED
+# in production, main.py's own startup wiring was read carefully: that
+# flag only controls a STANDALONE IntervalMarketIntelligenceScheduler,
+# and is explicitly skipped whenever LIVE_MARKET_MODE_ENABLED=true (as
+# it already is in production, set by deploy-railway.yml) --
+# live_market_mode.py's own docstring: "Deliberately NOT combined with
+# the standalone MARKET_INTELLIGENCE_SCHEDULER_ENABLED flag... Live
+# Market Mode is meant to REPLACE that always-on scan scheduler, not
+# run alongside it." Setting that flag in production right now would
+# therefore be a silent no-op, not a real fix.
+#
+# Live Market Mode owns its OWN internal scan scheduler instance,
+# gated to run only while Tadawul is open. This checks its REAL live
+# state via GET /api/v1/admin/system/summary (staff-only) -- whether
+# the supervisor is running, whether it currently considers the market
+# open, and when the last real MarketScanRun actually started/finished
+# -- to find out whether the scheduled scan is genuinely working or
+# genuinely stuck, before deciding what (if anything) actually needs
+# changing. Never modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check-status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+          if [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::STAFF_EMAIL/STAFF_PASSWORD are not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Print relevant flags (read-only)
+        run: |
+          railway variable list --service backend --kv 2>/tmp/err.txt > /tmp/vars.txt || true
+          for VAR in LIVE_MARKET_MODE_ENABLED MARKET_INTELLIGENCE_SCHEDULER_ENABLED LIVE_RECURRENT_SCAN_ENABLED; do
+            grep -E "^${VAR}=" /tmp/vars.txt || echo "${VAR} is NOT SET"
+          done
+
+      - name: Log in as staff and print the real scheduler/scan status
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          BACKEND = os.environ["BACKEND_URL"]
+          STAFF_EMAIL = os.environ["STAFF_EMAIL"]
+          STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
+
+          def post(url, body, cookies=None):
+              data = json.dumps(body).encode()
+              req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+              if cookies:
+                  req.add_header("Cookie", cookies)
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode(), resp.headers
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(), e.headers
+
+          def get(url, cookies):
+              req = urllib.request.Request(url, method="GET", headers={"Cookie": cookies})
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode()
+
+          status, body, headers = post(f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
+          if status != 200:
+              print(f"::error::Staff login failed: HTTP {status} -- {body}")
+              sys.exit(1)
+          cookie_pairs = [c.split(";")[0] for c in (headers.get_all("Set-Cookie") or [])]
+          cookie_header = "; ".join(cookie_pairs)
+
+          status, body = get(f"{BACKEND}/api/v1/admin/system/summary", cookie_header)
+          if status != 200:
+              print(f"::error::/admin/system/summary failed: HTTP {status} -- {body}")
+              sys.exit(1)
+
+          summary = json.loads(body)
+          relevant_keys = [
+              "live_market_mode_enabled",
+              "live_market_mode_running",
+              "live_market_mode_market_currently_open",
+              "market_intelligence_scheduler_running",
+              "market_data_provider",
+              "market_data_last_connectivity_status",
+              "market_data_last_connectivity_at",
+              "market_data_last_real_data_at",
+              "last_scan_id",
+              "last_scan_status",
+              "last_scan_started_at",
+              "last_scan_finished_at",
+              "last_scan_symbols_requested",
+          ]
+          for k in relevant_keys:
+              print(f"{k}: {summary.get(k)}")
+          PYEOF
