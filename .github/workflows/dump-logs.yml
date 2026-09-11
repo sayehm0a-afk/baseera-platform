@@ -13,6 +13,6 @@ jobs:
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: npm install -g @railway/cli
       - run: python3 .github/workflows/independent_audit/dump_logs.py

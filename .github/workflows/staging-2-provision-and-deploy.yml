@@ -45,7 +45,7 @@ jobs:
           fi
 
       - name: Checkout the exact pinned PR #114 commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.pr114_commit_sha }}
 

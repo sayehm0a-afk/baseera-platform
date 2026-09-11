@@ -15,7 +15,7 @@ jobs:
       STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - run: npm install -g @railway/cli
 
