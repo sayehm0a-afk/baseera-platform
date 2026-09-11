@@ -297,7 +297,7 @@ jobs:
 
       - name: Upload screenshots + results as evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-verification-evidence
           path: /tmp/screenshots/

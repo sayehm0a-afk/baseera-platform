@@ -103,7 +103,7 @@ jobs:
 
       - name: Upload screenshots as evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-audit-screenshots
           path: /tmp/screenshots
