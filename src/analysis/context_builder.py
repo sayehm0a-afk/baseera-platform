@@ -84,6 +84,62 @@ def _news_sentiment_extra(session: Session, symbol: str, news_service: NewsIntel
     }
 
 
+async def _sector_rotation_extra(stock: Stock, market_provider: IMarketDataProvider, symbol: str) -> Dict[str, Any]:
+    """Feeds `SectorRotationScoreContributor`
+    (src.analysis.decision.contributors.external_factor_contributors),
+    which has read `context.extra["sector_rotation"]` since it was
+    built but has never once received real data -- no vendor was ever
+    contracted for it (that module's own docstring). `Stock.sector` is
+    real (populated by ingest_symbols.py's per-symbol enrichment, see
+    that module's `_needs_sector_enrichment` docstring for its current,
+    sparse real coverage), and `get_sector_performance()` -- a real
+    SAHMK endpoint confirmed live 2026-09-12, see
+    SahmkClient.get_sector_performance's docstring -- gives every
+    sector's real change_percent for the same trading session in one
+    call.
+
+    Deliberately RANK-based, not a raw-percentage-point ratio against
+    some invented divisor: with every sector's change_percent already
+    in hand, this stock's sector is placed at its actual percentile
+    among all of them that day (worst = -1.0, best = +1.0, tied
+    sectors share the average rank of their tie) -- reusing only
+    numbers SAHMK itself returned, exactly the same "no new arbitrary
+    threshold" discipline gates.py's Phase 3 gates already follow.
+
+    Omits the whole leg (exactly like every other leg in this module)
+    whenever real data to compute it from is missing: no known sector
+    for this stock, the provider doesn't expose sector performance
+    (e.g. DevMarketDataProvider), the call fails, or -- an edge case
+    those two sources alone can't guarantee never happens -- this
+    stock's sector isn't among the names SAHMK returned that day."""
+    if not stock.sector:
+        return {}
+    sector_performance_fn = getattr(market_provider, "get_sector_performance", None)
+    if sector_performance_fn is None:
+        return {}
+    try:
+        sectors = await sector_performance_fn()
+    except Exception as exc:  # noqa: BLE001 -- an optional leg must never break the whole context
+        logger.info("Sector rotation leg unavailable for '%s': %s", symbol, exc)
+        return {}
+    if not sectors:
+        return {}
+
+    ordered = sorted(sectors, key=lambda s: s["change_percent"])
+    matches = [i for i, s in enumerate(ordered) if s["sector_name"] == stock.sector]
+    if not matches:
+        return {}
+    # Average rank across every entry sharing this sector's name (SAHMK
+    # has returned exactly one row per sector in every real response
+    # observed so far, but averaging any duplicates is a cheap, correct
+    # safeguard rather than an assumption this can never happen).
+    average_rank = sum(matches) / len(matches)
+    denominator = len(ordered) - 1
+    percentile = average_rank / denominator if denominator > 0 else 0.5
+    strength = round(2.0 * percentile - 1.0, 4)
+    return {"sector_rotation": {"sector_relative_strength": strength}}
+
+
 def _breakout_confirmation_extra(df, technical_result, price: Optional[float], symbol: str) -> Dict[str, Any]:
     """Real breakout/false-breakout confirmation -- see
     breakout_confirmation.py. The reference level a breakout is judged
@@ -260,6 +316,7 @@ async def build_analysis_context(
     extra = {
         **quote_extra,
         **_news_sentiment_extra(session, symbol, news_service),
+        **await _sector_rotation_extra(stock, market_provider, symbol),
         **_breakout_confirmation_extra(df, technical_result, market_price, symbol),
         "bars_used": len(df),
         "likely_suspended": _detect_likely_suspended(df),

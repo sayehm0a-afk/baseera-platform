@@ -238,6 +238,24 @@ class SahmkMarketDataProvider(IMarketDataProvider):
             "is_synthetic": False,
         }
 
+    async def get_sector_performance(self, index: str = "TASI") -> List[Dict[str, Any]]:
+        """Per-sector performance vs. `index`. Not part of
+        IMarketDataProvider -- exposed opportunistically (same pattern
+        as get_company_profile above), for context_builder.py's
+        sector-rotation leg."""
+        sectors = await self._service.get_sector_performance(index=index)
+        return [
+            {
+                "sector_name": s.sector_name,
+                "sector_name_ar": s.sector_name_ar,
+                "change_percent": s.change_percent,
+                "avg_change_percent": s.avg_change_percent,
+                "volume": s.volume,
+                "num_stocks": s.num_stocks,
+            }
+            for s in sectors
+        ]
+
     async def get_index_data(self, index_name: str) -> Dict[str, Any]:
         summary = await self._service.get_index_snapshot(index_name)
         return {
