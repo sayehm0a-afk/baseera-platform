@@ -62,18 +62,15 @@ jobs:
             -H "Content-Type: application/json" \
             -d @/tmp/current_query.json -w "\nHTTP:%{http_code}\n"
 
-      - name: Force Dockerfile mode via serviceInstanceUpdate (builder key omitted entirely, not just null)
-        env:
-          SERVICE_ID: ${{ steps.ids.outputs.service_id }}
-          ENV_ID: ${{ steps.ids.outputs.env_id }}
+      - name: Both attempts (null and omitted) left builder=RAILPACK unchanged -- inspect serviceUpdate mutation instead
         run: |
-          cat > /tmp/mutation.json <<EOF
-          {"query":"mutation(\$serviceId: String!, \$environmentId: String!, \$input: ServiceInstanceUpdateInput!) { serviceInstanceUpdate(serviceId: \$serviceId, environmentId: \$environmentId, input: \$input) }","variables":{"serviceId":"$SERVICE_ID","environmentId":"$ENV_ID","input":{"dockerfilePath":"Dockerfile"}}}
+          cat > /tmp/su_input.json <<'EOF'
+          {"query":"query { __type(name: \"ServiceUpdateInput\") { name inputFields { name type { name kind ofType { name kind } } } } }"}
           EOF
           curl -sS -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -H "Content-Type: application/json" \
-            -d @/tmp/mutation.json -w "\nHTTP:%{http_code}\n"
+            -d @/tmp/su_input.json -w "\nHTTP:%{http_code}\n"
 
       - name: Re-read serviceInstance config to confirm the change stuck
         env:
