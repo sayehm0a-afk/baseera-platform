@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f3d078"/>
+      <stop offset="50%" stop-color="#d4af37"/>
+      <stop offset="100%" stop-color="#b8891f"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2fd3a8"/>
+      <stop offset="100%" stop-color="#00806a"/>
+    </linearGradient>
+    <radialGradient id="sparkleGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="512" height="512" rx="96" fill="#0a0e14"/>
+
+  <!-- eye shape (flat almond/lens), a single smooth arc top and bottom
+       meeting at sharp points on the far left/right -->
+  <path d="M 62 268
+           C 150 176, 210 158, 256 158
+           C 302 158, 362 176, 450 268
+           C 362 360, 302 378, 256 378
+           C 210 378, 150 360, 62 268 Z"
+        fill="none" stroke="url(#gold)" stroke-width="16" stroke-linejoin="round"/>
+
+  <!-- sparkle above the eye -->
+  <circle cx="256" cy="104" r="26" fill="url(#sparkleGlow)"/>
+  <path d="M256 76 L261 100 L285 105 L261 110 L256 134 L251 110 L227 105 L251 100 Z" fill="#ffffff"/>
+
+  <!-- connector from sparkle down into the tallest candle -->
+  <line x1="256" y1="134" x2="256" y2="196" stroke="url(#gold)" stroke-width="6"/>
+
+  <!-- candlestick 1 (short, gold, left) -->
+  <line x1="186" y1="222" x2="186" y2="286" stroke="url(#gold)" stroke-width="6"/>
+  <rect x="172" y="238" width="28" height="42" rx="4" fill="url(#gold)"/>
+
+  <!-- candlestick 2 (tall, gold, center) -->
+  <line x1="256" y1="176" x2="256" y2="316" stroke="url(#gold)" stroke-width="7"/>
+  <rect x="236" y="196" width="40" height="96" rx="5" fill="url(#gold)"/>
+
+  <!-- candlestick 3 (teal, right, with pointed base like an upward flag) -->
+  <line x1="326" y1="214" x2="326" y2="248" stroke="url(#teal)" stroke-width="6"/>
+  <path d="M 306 248 L 346 248 L 346 296 L 326 328 L 306 296 Z" fill="url(#teal)"/>
+
+  <!-- trend dots + connecting line, rising left to right -->
+  <polyline points="182,300 254,300 322,262 366,236"
+            fill="none" stroke="url(#teal)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="182" cy="300" r="9" fill="url(#gold)"/>
+  <circle cx="254" cy="300" r="9" fill="url(#gold)"/>
+  <circle cx="322" cy="262" r="9" fill="url(#teal)"/>
+  <circle cx="366" cy="236" r="9" fill="url(#teal)"/>
+</svg>

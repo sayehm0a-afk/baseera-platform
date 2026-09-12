@@ -41,7 +41,7 @@ export const metadata: Metadata = {
     siteName: "Basirah",
     locale: "ar_SA",
     type: "website",
-    images: [{ url: "/icon.png", width: 335, height: 335, alt: "Basirah" }],
+    images: [{ url: "/icon.png", width: 512, height: 512, alt: "Basirah" }],
   },
   twitter: {
     card: "summary",

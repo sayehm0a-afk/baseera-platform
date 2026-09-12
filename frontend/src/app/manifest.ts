@@ -9,12 +9,13 @@ import type { MetadataRoute } from "next";
 // accounts and cannot be done from here, but this manifest is real,
 // deployable, unblocked groundwork that does not wait on it.
 //
-// Reuses the existing icon.png (335x335, see src/app/icon.png) rather
-// than fabricating icon files at sizes that don't exist on disk --
-// standard PWA tooling (Lighthouse) prefers a 192x192/512x512 pair,
-// which can be added once real square exports at those sizes exist;
-// declaring sizes that don't match a real file would be worse than
-// declaring the one real size honestly.
+// Real 192x192/512x512 exports now exist (public/icons/), generated
+// from a hand-built vector source (frontend/branding/basirah-icon.svg,
+// the official logo confirmed 2026-09-12) rather than upscaling the
+// old single 335x335 raster -- standard PWA tooling (Lighthouse)
+// expects exactly this pair. src/app/icon.png/apple-icon.png were
+// also replaced with real exports from the same source, at their own
+// standard sizes (512x512, 180x180).
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "بصيرة AI — Basirah",
@@ -28,8 +29,14 @@ export default function manifest(): MetadataRoute.Manifest {
     dir: "rtl",
     icons: [
       {
-        src: "/icon.png",
-        sizes: "335x335",
+        src: "/icons/icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: "/icons/icon-512.png",
+        sizes: "512x512",
         type: "image/png",
         purpose: "any",
       },
