@@ -95,7 +95,8 @@ class Settings(BaseSettings):
     token_retention_days: int = Field(default=7, alias="TOKEN_RETENTION_DAYS")
 
     # --- Subscriptions ----------------------------------------------------
-    trial_length_days: int = Field(default=14, alias="TRIAL_LENGTH_DAYS")
+    # 30 days (~one month), per explicit product decision 2026-09-12.
+    trial_length_days: int = Field(default=30, alias="TRIAL_LENGTH_DAYS")
 
     # --- Billing (no real gateway wired -- see src/billing/) -----------------
     billing_noop_auto_approve: bool = Field(default=True, alias="BILLING_NOOP_AUTO_APPROVE")
