@@ -272,6 +272,13 @@ class ResendEmailSender(_TemplatedEmailSender):
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
+                # urllib's default "Python-urllib/x.y" User-Agent gets
+                # blocked by Resend's Cloudflare front door (HTTP 403,
+                # "error code: 1010" -- Cloudflare's bot-signature
+                # block, confirmed against real production traffic
+                # 2026-09-12) before the request ever reaches Resend's
+                # own API logic.
+                "User-Agent": "Basirah-Backend/1.0",
             },
         )
         try:

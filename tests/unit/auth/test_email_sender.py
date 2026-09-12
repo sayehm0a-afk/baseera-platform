@@ -183,6 +183,10 @@ def test_resend_sender_builds_the_real_verify_email_link_and_sends(mock_urlopen)
     assert sent_request.get_method() == "POST"
     assert sent_request.get_header("Authorization") == "Bearer re_test_key"
     assert sent_request.get_header("Content-type") == "application/json"
+    # Resend's Cloudflare front door 403s (error code 1010) requests
+    # carrying urllib's default "Python-urllib/x.y" User-Agent -- must
+    # not regress back to relying on that default.
+    assert sent_request.get_header("User-agent") == "Basirah-Backend/1.0"
 
     payload = json.loads(sent_request.data.decode("utf-8"))
     assert payload["from"] == "no-reply@basirah.ai"
