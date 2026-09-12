@@ -1,86 +1,101 @@
-name: Force Dockerfile mode on backend via Railway GraphQL (account token, one-off)
+name: Diagnose why the confirmed-Dockerfile backend deploy still fails (RAILWAY_TOKEN only)
 
-# The project-scoped RAILWAY_TOKEN secret genuinely lacks permission
-# to read/write serviceInstance (confirmed: "Not Authorized" on both
-# the query and the serviceInstanceUpdate mutation). This uses a
-# broader Account Token, passed as a one-off dispatch input (not
-# stored as a secret -- no channel available in this session to
-# create an encrypted repo secret), to perform the same fix and
-# nothing else. DOCKERFILE is not a valid Builder enum value (only
-# HEROKU/NIXPACKS/PAKETO/RAILPACK are) -- Dockerfile mode is signaled
-# by builder=null with dockerfilePath set.
+# The user confirmed via the Railway dashboard (Settings -> Build) that
+# the backend service's Builder is already set to "Dockerfile" with
+# Dockerfile Path "Dockerfile" -- yet a fresh `railway up` deploy
+# (deployment a6a6edef-ea31-4865-bef6-3b3c544ae7d2, triggered by
+# ops-configure-and-verify-resend-email.yml at 2026-09-12T04:14) still
+# ended FAILED across the full 30-attempt/7.5-minute poll window, and
+# the backend kept serving its old process (booted 2026-09-11 21:13)
+# with SmtpEmailSender the whole time -- proving the Railpack-routing
+# theory was not (or no longer) the actual failure cause, or a second,
+# different failure now exists behind a correctly-configured builder.
 #
-# workflow_dispatch inputs are NOT masked in this run's own logs
-# (GitHub Actions limitation, already disclosed in this session's
-# other ops workflows) -- the user should revoke this token from
-# Railway's Account Settings -> Tokens once this is done.
+# `railway logs --build`/`--deployment` were established in an earlier
+# diagnostic session to return a generic cached trace, not deployment-
+# specific detail. This queries Railway's GraphQL `deploymentLogs`
+# query directly for the specific failed deployment ID, which is
+# deployment-scoped (not account-scoped) and so should be reachable
+# with the existing project-scoped RAILWAY_TOKEN.
 
 on:
   workflow_dispatch:
     inputs:
-      railway_account_token:
-        description: "Railway Account Token (one-off use, revoke after)"
+      deployment_id:
+        description: "Deployment ID to fetch logs for"
         required: true
+        default: "a6a6edef-ea31-4865-bef6-3b3c544ae7d2"
 
 permissions:
   contents: read
 
 jobs:
-  fix-builder:
+  diagnose:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      RAILWAY_TOKEN: ${{ github.event.inputs.railway_account_token }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      DEPLOYMENT_ID: ${{ github.event.inputs.deployment_id }}
     steps:
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Resolve project/environment/service IDs (using the project-scoped token's own linked context)
-        id: ids
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - name: Fail fast if RAILWAY_TOKEN is not configured
         run: |
-          railway status --json > /tmp/status.json
-          PROJECT_ID=$(python3 -c "import json; print(json.load(open('/tmp/status.json'))['id'])")
-          ENV_ID=$(python3 -c "import json; d=json.load(open('/tmp/status.json')); [print(e['node']['id']) for e in d['environments']['edges'] if e['node']['name']=='production']")
-          SERVICE_ID=$(python3 -c "import json; d=json.load(open('/tmp/status.json')); [print(s['node']['id']) for s in d['services']['edges'] if s['node']['name']=='backend']")
-          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
-          echo "env_id=$ENV_ID" >> "$GITHUB_OUTPUT"
-          echo "service_id=$SERVICE_ID" >> "$GITHUB_OUTPUT"
-          echo "Project: $PROJECT_ID / Env: $ENV_ID / Service: $SERVICE_ID"
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
 
-      - name: Read the CURRENT serviceInstance config (with the account token)
-        env:
-          SERVICE_ID: ${{ steps.ids.outputs.service_id }}
-          ENV_ID: ${{ steps.ids.outputs.env_id }}
+      - name: Query deployment status/meta for this deployment ID
         run: |
-          cat > /tmp/current_query.json <<EOF
-          {"query":"query(\$serviceId: String!, \$environmentId: String!) { serviceInstance(serviceId: \$serviceId, environmentId: \$environmentId) { builder dockerfilePath rootDirectory } }","variables":{"serviceId":"$SERVICE_ID","environmentId":"$ENV_ID"}}
+          cat > /tmp/deploy_query.json <<EOF
+          {"query":"query(\$id: String!) { deployment(id: \$id) { id status staticUrl createdAt deploymentStopped suggestAddServiceDomain } }","variables":{"id":"$DEPLOYMENT_ID"}}
           EOF
           curl -sS -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -H "Content-Type: application/json" \
-            -d @/tmp/current_query.json -w "\nHTTP:%{http_code}\n"
+            -d @/tmp/deploy_query.json -w "\nHTTP:%{http_code}\n"
 
-      - name: Both attempts (null and omitted) left builder=RAILPACK unchanged -- inspect serviceUpdate mutation instead
+      - name: Fetch build logs for this deployment via GraphQL deploymentLogs
         run: |
-          cat > /tmp/su_input.json <<'EOF'
-          {"query":"query { __type(name: \"ServiceUpdateInput\") { name inputFields { name type { name kind ofType { name kind } } } } }"}
+          cat > /tmp/build_logs_query.json <<EOF
+          {"query":"query(\$id: String!) { deploymentLogs(deploymentId: \$id, limit: 500) { message severity timestamp } }","variables":{"id":"$DEPLOYMENT_ID"}}
           EOF
           curl -sS -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -H "Content-Type: application/json" \
-            -d @/tmp/su_input.json -w "\nHTTP:%{http_code}\n"
+            -d @/tmp/build_logs_query.json -o /tmp/build_logs.json \
+            -w "\nHTTP:%{http_code}\n"
+          echo "=== formatted ==="
+          cat > /tmp/format_deployment_logs.py <<'PYEOF'
+          import json
+          d = json.load(open('/tmp/build_logs.json'))
+          if 'errors' in d:
+              print('ERRORS:', json.dumps(d['errors'], indent=2))
+          logs = (d.get('data') or {}).get('deploymentLogs') or []
+          print(f'{len(logs)} log lines')
+          for l in logs:
+              print(f"[{l.get('severity')}] {l.get('timestamp')} {l.get('message')}")
+          PYEOF
+          python3 /tmp/format_deployment_logs.py
 
-      - name: Re-read serviceInstance config to confirm the change stuck
-        env:
-          SERVICE_ID: ${{ steps.ids.outputs.service_id }}
-          ENV_ID: ${{ steps.ids.outputs.env_id }}
+      - name: Fetch build-specific logs (buildLogs, if distinct from deploymentLogs)
         run: |
-          cat > /tmp/verify_query.json <<EOF
-          {"query":"query(\$serviceId: String!, \$environmentId: String!) { serviceInstance(serviceId: \$serviceId, environmentId: \$environmentId) { builder dockerfilePath rootDirectory } }","variables":{"serviceId":"$SERVICE_ID","environmentId":"$ENV_ID"}}
+          cat > /tmp/build_only_query.json <<EOF
+          {"query":"query(\$id: String!) { buildLogs(deploymentId: \$id, limit: 500) { message severity timestamp } }","variables":{"id":"$DEPLOYMENT_ID"}}
           EOF
           curl -sS -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -H "Content-Type: application/json" \
-            -d @/tmp/verify_query.json -w "\nHTTP:%{http_code}\n"
+            -d @/tmp/build_only_query.json -o /tmp/build_only.json \
+            -w "\nHTTP:%{http_code}\n"
+          echo "=== formatted ==="
+          cat > /tmp/format_build_logs.py <<'PYEOF'
+          import json
+          d = json.load(open('/tmp/build_only.json'))
+          if 'errors' in d:
+              print('ERRORS:', json.dumps(d['errors'], indent=2))
+          logs = (d.get('data') or {}).get('buildLogs') or []
+          print(f'{len(logs)} log lines')
+          for l in logs:
+              print(f"[{l.get('severity')}] {l.get('timestamp')} {l.get('message')}")
+          PYEOF
+          python3 /tmp/format_build_logs.py
