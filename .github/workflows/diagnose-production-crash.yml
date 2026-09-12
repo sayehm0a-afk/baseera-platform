@@ -1,0 +1,61 @@
+name: Diagnose production deployment crash (RAILWAY_TOKEN only, read-only)
+
+# Real Railway crash notification received 2026-09-12 (~11:38 local):
+# "Deployment crashed for baseera-platform in meticulous-kindness!
+# ... production environment." Checks current service status, recent
+# logs (crash reason), and whether the health endpoint actually
+# responds right now. Read-only -- no restart/redeploy performed here.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Current backend service/deployment status
+        run: |
+          railway service list --json > /tmp/services.json
+          cat > /tmp/show_status.py <<'PYEOF'
+          import json
+          d = json.load(open('/tmp/services.json'))
+          services = d if isinstance(d, list) else d.get('services', [])
+          for s in services:
+              if s.get('name') == 'backend':
+                  print(json.dumps(s.get('latestDeployment', {}), indent=2))
+          PYEOF
+          python3 /tmp/show_status.py
+
+      - name: Resolve backend URL and check /health/live right now
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          echo "Checking $BACKEND_URL/health/live ..."
+          curl -sS --connect-timeout 10 --max-time 20 -o /tmp/health_resp.txt -w "\nHTTP:%{http_code}\n" "$BACKEND_URL/health/live" || true
+          cat /tmp/health_resp.txt
+
+      - name: Recent backend logs (last 150 lines, error/crash-focused)
+        run: |
+          railway logs --service backend 2>&1 > /tmp/full_logs.txt || true
+          echo "=== lines mentioning ERROR/CRITICAL/Traceback/Exception ==="
+          grep -iE "error|critical|traceback|exception|fatal|killed|OOM" /tmp/full_logs.txt | tail -100 || echo "(no matching lines)"
+          echo "=== full tail (last 150 lines) ==="
+          tail -150 /tmp/full_logs.txt
