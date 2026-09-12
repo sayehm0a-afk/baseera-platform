@@ -53,6 +53,9 @@ jobs:
             exit 1
           fi
 
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
