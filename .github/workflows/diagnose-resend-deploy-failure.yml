@@ -44,6 +44,16 @@ jobs:
             exit 1
           fi
 
+      - name: Install Railway CLI and try its own build-log commands for this deployment
+        run: |
+          npm install -g @railway/cli
+          echo "=== railway logs --help ==="
+          railway logs --help || true
+          echo "=== railway logs --service backend --build ==="
+          railway logs --service backend --build 2>&1 | tail -150 || true
+          echo "=== railway logs --service backend --deployment $DEPLOYMENT_ID ==="
+          railway logs --service backend --deployment "$DEPLOYMENT_ID" 2>&1 | tail -150 || true
+
       - name: Query deployment status/meta for this deployment ID
         run: |
           cat > /tmp/deploy_query.json <<EOF
