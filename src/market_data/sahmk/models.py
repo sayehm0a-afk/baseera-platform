@@ -123,6 +123,23 @@ class SahmkFinancials:
 
 
 @dataclass(frozen=True)
+class SahmkSectorPerformance:
+    """One sector's performance vs. the index, from GET /market/sectors/.
+
+    Field names CONFIRMED live (2026-09-12, direct probe of production
+    credentials) -- not a guessed/defensive multi-key parse like the
+    other models in this module, since this response shape was
+    observed directly rather than inferred from documentation."""
+
+    sector_name: str
+    sector_name_ar: Optional[str]
+    change_percent: float
+    avg_change_percent: Optional[float]
+    volume: Optional[int]
+    num_stocks: Optional[int]
+
+
+@dataclass(frozen=True)
 class SahmkDividend:
     """One dividend record from GET /dividends/{symbol}/."""
 

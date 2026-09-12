@@ -141,6 +141,15 @@ async def test_get_market_summary_defaults_to_tasi():
 
 
 @pytest.mark.asyncio
+async def test_get_sector_performance_defaults_to_tasi():
+    client, session = _client([FakeResponse(200, {"sectors": []})])
+    result = await client.get_sector_performance()
+    assert result == {"sectors": []}
+    assert session.calls[0]["url"] == "https://sahmk.example.invalid/market/sectors/"
+    assert session.calls[0]["params"] == {"index": "TASI"}
+
+
+@pytest.mark.asyncio
 async def test_get_events_sends_limit_param():
     client, session = _client([FakeResponse(200, {"events": []})])
     await client.get_events(limit=5)

@@ -14,6 +14,7 @@ from src.market_data.sahmk.models import (
     SahmkHistoricalBar,
     SahmkMarketSummary,
     SahmkQuote,
+    SahmkSectorPerformance,
 )
 from src.market_data.sahmk.service import SahmkMarketDataService
 
@@ -193,6 +194,87 @@ async def test_get_index_snapshot_raises_when_index_value_missing():
     service = _service(client)
     with pytest.raises(SahmkResponseValidationError):
         await service.get_index_snapshot("TASI")
+
+
+# --- get_sector_performance ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_sector_performance_parses_real_response_shape():
+    """Real response shape confirmed live 2026-09-12 -- see
+    src.market_data.sahmk.client.SahmkClient.get_sector_performance's
+    docstring."""
+    client = AsyncMock()
+    client.get_sector_performance.return_value = {
+        "index": "TASI",
+        "sectors": [
+            {
+                "sector_name": "Insurance",
+                "change_percent": 3.28,
+                "avg_change_percent": 1.75,
+                "volume": 22984132,
+                "num_stocks": 26,
+                "sector_name_ar": "التأمين",
+            },
+            {
+                "sector_name": "Banks",
+                "change_percent": -0.26,
+                "avg_change_percent": -0.3,
+                "volume": 26165535,
+                "num_stocks": 10,
+                "sector_name_ar": "البنوك",
+            },
+        ],
+        "count": 2,
+        "is_delayed": True,
+    }
+    service = _service(client)
+    sectors = await service.get_sector_performance()
+    assert sectors == [
+        SahmkSectorPerformance(
+            sector_name="Insurance", sector_name_ar="التأمين",
+            change_percent=3.28, avg_change_percent=1.75, volume=22984132, num_stocks=26,
+        ),
+        SahmkSectorPerformance(
+            sector_name="Banks", sector_name_ar="البنوك",
+            change_percent=-0.26, avg_change_percent=-0.3, volume=26165535, num_stocks=10,
+        ),
+    ]
+    client.get_sector_performance.assert_awaited_once_with(index="TASI")
+
+
+@pytest.mark.asyncio
+async def test_get_sector_performance_tolerates_missing_optional_fields():
+    client = AsyncMock()
+    client.get_sector_performance.return_value = {
+        "sectors": [{"sector_name": "Energy", "change_percent": 0.4}],
+    }
+    service = _service(client)
+    sectors = await service.get_sector_performance()
+    assert sectors == [
+        SahmkSectorPerformance(
+            sector_name="Energy", sector_name_ar=None,
+            change_percent=0.4, avg_change_percent=None, volume=None, num_stocks=None,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_sector_performance_raises_on_missing_sectors_key():
+    client = AsyncMock()
+    client.get_sector_performance.return_value = {"index": "TASI"}
+    service = _service(client)
+    with pytest.raises(SahmkResponseValidationError):
+        await service.get_sector_performance()
+
+
+@pytest.mark.asyncio
+async def test_get_sector_performance_raises_on_entry_missing_required_field():
+    client = AsyncMock()
+    client.get_sector_performance.return_value = {"sectors": [{"sector_name": "Energy"}]}
+    service = _service(client)
+    with pytest.raises(SahmkResponseValidationError):
+        await service.get_sector_performance()
 
 
 # --- get_recent_events --------------------------------------------------

@@ -440,6 +440,18 @@ class SahmkClient:
         """GET /events/ -- AI-generated stock events (Pro+)."""
         return await self._request("/events/", params={"limit": limit})
 
+    async def get_sector_performance(self, index: str = "TASI") -> Dict[str, Any]:
+        """GET /market/sectors/?index=... -- per-sector performance vs
+        the index (Free tier). Documented in docs/SAHMK_INTEGRATION.md
+        as never implemented; CONFIRMED live (2026-09-12, direct probe
+        of production credentials): returns
+        {"index": ..., "sectors": [{"sector_name", "sector_name_ar",
+        "change_percent", "avg_change_percent", "volume", "num_stocks"}, ...],
+        "count": ..., "is_delayed": ...}. This is sector-level
+        aggregate performance, not a per-symbol sector assignment --
+        see SahmkCompanyProfile.sector for that."""
+        return await self._request("/market/sectors/", params={"index": index})
+
     async def get_company_profile(self, symbol: str) -> Dict[str, Any]:
         """GET /company/{symbol}/ -- company profile (Free+)."""
         validate_symbol_format(symbol)

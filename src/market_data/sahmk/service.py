@@ -28,6 +28,7 @@ from src.market_data.sahmk.models import (
     SahmkHistoricalBar,
     SahmkMarketSummary,
     SahmkQuote,
+    SahmkSectorPerformance,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ QUOTE_CACHE_TTL_SECONDS = 15.0
 MARKET_SUMMARY_CACHE_TTL_SECONDS = 15.0
 HISTORICAL_CACHE_TTL_SECONDS = 3600.0
 EVENTS_CACHE_TTL_SECONDS = 300.0
+SECTOR_PERFORMANCE_CACHE_TTL_SECONDS = 300.0  # sector aggregates move roughly as fast as the index itself
 COMPANY_PROFILE_CACHE_TTL_SECONDS = 86400.0  # a company's profile rarely changes
 COMPANY_DIRECTORY_CACHE_TTL_SECONDS = 86400.0  # the symbol universe rarely changes
 FINANCIALS_CACHE_TTL_SECONDS = 3600.0
@@ -335,6 +337,42 @@ class SahmkMarketDataService:
 
         return await self._cache.get_or_compute(
             ("summary", index), _compute, ttl_seconds=MARKET_SUMMARY_CACHE_TTL_SECONDS, model=SahmkMarketSummary
+        )
+
+    async def get_sector_performance(self, index: str = "TASI") -> List[SahmkSectorPerformance]:
+        """Per-sector performance vs. `index`, from GET /market/sectors/
+        -- CONFIRMED live (2026-09-12, direct probe of production
+        credentials), previously documented in
+        docs/SAHMK_INTEGRATION.md as never implemented. This is
+        sector-LEVEL aggregate data (one row per sector, not per
+        symbol) -- pairing a specific symbol with its sector still
+        requires SahmkCompanyProfile.sector. Not yet consumed by any
+        analysis path; added as a standalone, tested data-access
+        capability only."""
+
+        async def _compute() -> List[SahmkSectorPerformance]:
+            data = await self._client.get_sector_performance(index=index)
+            _require_fields(data, ["sectors"], "sector performance")
+            result: List[SahmkSectorPerformance] = []
+            for item in data["sectors"]:
+                _require_fields(item, ["sector_name", "change_percent"], "sector performance entry")
+                result.append(
+                    SahmkSectorPerformance(
+                        sector_name=item["sector_name"],
+                        sector_name_ar=item.get("sector_name_ar"),
+                        change_percent=float(item["change_percent"]),
+                        avg_change_percent=_optional_float(item.get("avg_change_percent")),
+                        volume=_optional_int(item.get("volume")),
+                        num_stocks=_optional_int(item.get("num_stocks")),
+                    )
+                )
+            return result
+
+        return await self._cache.get_or_compute(
+            ("sector_performance", index),
+            _compute,
+            ttl_seconds=SECTOR_PERFORMANCE_CACHE_TTL_SECONDS,
+            model=SahmkSectorPerformance,
         )
 
     async def get_recent_events(self, limit: int = 10) -> List[SahmkEvent]:
