@@ -59,7 +59,7 @@ jobs:
       - name: Print relevant flags (read-only)
         run: |
           railway variable list --service backend --kv 2>/tmp/err.txt > /tmp/vars.txt || true
-          for VAR in LIVE_MARKET_MODE_ENABLED MARKET_INTELLIGENCE_SCHEDULER_ENABLED LIVE_RECURRENT_SCAN_ENABLED; do
+          for VAR in LIVE_MARKET_MODE_ENABLED MARKET_INTELLIGENCE_SCHEDULER_ENABLED LIVE_RECURRENT_SCAN_ENABLED OUTCOME_EVALUATION_SCHEDULER_ENABLED DECISION_V2_OUTCOME_SCHEDULER_ENABLED; do
             grep -E "^${VAR}=" /tmp/vars.txt || echo "${VAR} is NOT SET"
           done
 
@@ -125,6 +125,7 @@ jobs:
               "last_scan_started_at",
               "last_scan_finished_at",
               "last_scan_symbols_requested",
+              "decision_v2_outcome_scheduler_running",
           ]
           for k in relevant_keys:
               print(f"{k}: {summary.get(k)}")

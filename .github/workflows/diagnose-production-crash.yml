@@ -57,5 +57,7 @@ jobs:
           railway logs --service backend 2>&1 > /tmp/full_logs.txt || true
           echo "=== lines mentioning ERROR/CRITICAL/Traceback/Exception ==="
           grep -iE "error|critical|traceback|exception|fatal|killed|OOM" /tmp/full_logs.txt | tail -100 || echo "(no matching lines)"
+          echo "=== lines mentioning outcome evaluation scheduler ==="
+          grep -i "outcome evaluation" /tmp/full_logs.txt || echo "(no matching lines)"
           echo "=== full tail (last 150 lines) ==="
           tail -150 /tmp/full_logs.txt
