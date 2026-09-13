@@ -48,7 +48,7 @@ jobs:
         run: python3 .github/workflows/independent_audit/phase3_historical_validation_backtest.py
 
       - name: Upload full report artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phase3-backtest-full-report
           path: phase3_backtest_full_report.json
