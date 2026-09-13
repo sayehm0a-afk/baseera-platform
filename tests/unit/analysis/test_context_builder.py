@@ -112,6 +112,23 @@ class _QuoteFailsWithUpstreamQuotaExhaustionProvider(DevMarketDataProvider):
         )
 
 
+class _SectorPerformanceProvider(DevMarketDataProvider):
+    """Simulates SahmkMarketDataProvider's real get_sector_performance()
+    shape (not part of IMarketDataProvider, accessed opportunistically
+    via getattr -- same pattern as get_latest_quote/get_company_profile)."""
+
+    def __init__(self, sectors):
+        self._sectors = sectors
+
+    async def get_sector_performance(self, index="TASI"):
+        return self._sectors
+
+
+class _SectorPerformanceFailsProvider(DevMarketDataProvider):
+    async def get_sector_performance(self, index="TASI"):
+        raise RuntimeError("SAHMK is unreachable")
+
+
 @pytest.fixture
 def session():
     engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
@@ -307,6 +324,93 @@ async def test_real_persisted_news_populates_extra_news_sentiment(session):
     assert context.extra["news_sentiment"]["sentiment_score"] == pytest.approx(0.7)
     assert context.extra["news_sentiment"]["article_count"] == 1
     assert context.extra["news_sentiment"]["events"][0]["headline"] == "Saudi Aramco reports record quarterly profit"
+
+
+# --- sector_rotation: real SAHMK /market/sectors/ data, rank-based -------
+
+
+@pytest.mark.asyncio
+async def test_sector_rotation_absent_when_stock_has_no_known_sector(session):
+    stock = Stock(symbol="2222", name_en="Saudi Aramco", sector=None)
+    session.add(stock)
+    session.commit()
+
+    context = await build_analysis_context(
+        stock, PeriodType.ANNUAL, session,
+        _SectorPerformanceProvider([{"sector_name": "Energy", "change_percent": 1.0}]),
+    )
+    assert "sector_rotation" not in context.extra
+
+
+@pytest.mark.asyncio
+async def test_sector_rotation_absent_when_provider_has_no_sector_performance_support(session):
+    # DevMarketDataProvider (the default used across most other tests in
+    # this file) has no get_sector_performance -- same
+    # "opportunistic getattr, absent when unsupported" degradation as
+    # get_latest_quote/get_company_profile elsewhere in this module.
+    stock = _make_stock(session)  # sector="Energy" by default
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, DevMarketDataProvider())
+    assert "sector_rotation" not in context.extra
+
+
+@pytest.mark.asyncio
+async def test_sector_rotation_absent_when_stocks_sector_is_not_among_returned_sectors(session):
+    stock = _make_stock(session)  # sector="Energy"
+    provider = _SectorPerformanceProvider([{"sector_name": "Banks", "change_percent": -0.26}])
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, provider)
+    assert "sector_rotation" not in context.extra
+
+
+@pytest.mark.asyncio
+async def test_sector_rotation_absent_when_the_call_fails(session):
+    stock = _make_stock(session)
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, _SectorPerformanceFailsProvider())
+    assert "sector_rotation" not in context.extra
+
+
+@pytest.mark.asyncio
+async def test_sector_rotation_worst_performing_sector_is_strength_negative_one(session):
+    stock = _make_stock(session)  # sector="Energy"
+    provider = _SectorPerformanceProvider([
+        {"sector_name": "Energy", "change_percent": -0.89},
+        {"sector_name": "Banks", "change_percent": -0.26},
+        {"sector_name": "Insurance", "change_percent": 3.28},
+    ])
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, provider)
+    assert context.extra["sector_rotation"] == {"sector_relative_strength": -1.0}
+
+
+@pytest.mark.asyncio
+async def test_sector_rotation_best_performing_sector_is_strength_positive_one(session):
+    stock = _make_stock(session)  # sector="Energy"
+    provider = _SectorPerformanceProvider([
+        {"sector_name": "Banks", "change_percent": -0.26},
+        {"sector_name": "Insurance", "change_percent": 3.28},
+        {"sector_name": "Energy", "change_percent": 5.0},
+    ])
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, provider)
+    assert context.extra["sector_rotation"] == {"sector_relative_strength": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_sector_rotation_median_sector_is_strength_near_zero(session):
+    stock = _make_stock(session)  # sector="Energy"
+    provider = _SectorPerformanceProvider([
+        {"sector_name": "Banks", "change_percent": -1.0},
+        {"sector_name": "Energy", "change_percent": 0.0},
+        {"sector_name": "Insurance", "change_percent": 1.0},
+    ])
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, provider)
+    assert context.extra["sector_rotation"] == {"sector_relative_strength": 0.0}
+
+
+@pytest.mark.asyncio
+async def test_sector_rotation_single_sector_returned_defaults_to_neutral(session):
+    # denominator (len(ordered) - 1) is 0 -- must not divide by zero.
+    stock = _make_stock(session)  # sector="Energy"
+    provider = _SectorPerformanceProvider([{"sector_name": "Energy", "change_percent": 2.5}])
+    context = await build_analysis_context(stock, PeriodType.ANNUAL, session, provider)
+    assert context.extra["sector_rotation"] == {"sector_relative_strength": 0.0}
 
 
 # --- ohlcv_latest_bar_age_days: distinct from quote/scan freshness --------
