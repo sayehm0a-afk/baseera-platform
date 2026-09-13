@@ -1,0 +1,100 @@
+name: Enable Outcome Evaluation Scheduler (one-shot, production env change)
+
+# User (2026-09-13) asked to review and confirm real recommendation
+# results (targets actually hit vs. missed), flagging that most of the
+# watchlist "looks red" despite some symbols moving 9-10%. Investigation
+# found the OWNER-only /admin/ai-evolution/personal-performance
+# dashboard -- the exact tool built for this -- shows 2648 tracked live
+# recommendation outcomes, ALL still PENDING, ZERO ever resolved, across
+# a 90-day window (confirmed via
+# diagnose-real-recommendation-performance.yml). Root cause: this table
+# (RecommendationOutcome, source=live_scan) is only ever advanced by
+# OutcomeEvaluationScheduler, and OUTCOME_EVALUATION_SCHEDULER_ENABLED
+# was never set (confirmed unset via
+# ops-check-live-market-mode-status.yml). This is a measurement gap, not
+# evidence recommendations are failing -- nobody has ever actually
+# checked. evaluate_due_outcomes() (src/ai_evolution/outcome_evaluation.py)
+# reads only already-ingested local PriceBar rows (never SAHMK), is
+# idempotent, batches 500 rows/cycle, and never mutates a recommendation
+# or its display -- purely a backfill measurement job. Same pattern as
+# enable-decision-v2-outcome-scheduler.yml, which is already running
+# clean in production.
+#
+# `railway variable set` triggers a real redeploy (needed -- the flag is
+# only read at process startup) and does not touch any other variable
+# deploy-railway.yml manages, so it persists across future deploys.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RAILWAY_BACKEND_SERVICE: backend
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - name: Fail fast if RAILWAY_TOKEN is not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not readable by this job."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Confirm current state (before)
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -i "OUTCOME_EVALUATION_SCHEDULER_ENABLED" \
+            || echo "OUTCOME_EVALUATION_SCHEDULER_ENABLED not currently set (defaults to false)."
+
+      - name: Set OUTCOME_EVALUATION_SCHEDULER_ENABLED=true (triggers a redeploy)
+        run: railway variable set "OUTCOME_EVALUATION_SCHEDULER_ENABLED=true" --service "$RAILWAY_BACKEND_SERVICE"
+
+      - name: Confirm the variable is now set
+        run: |
+          railway variable list --service "$RAILWAY_BACKEND_SERVICE" --kv 2>/dev/null \
+            | grep -i "OUTCOME_EVALUATION_SCHEDULER_ENABLED"
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service "$RAILWAY_BACKEND_SERVICE" --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/backend_domains.json
+
+      - name: Wait for backend to become healthy again after the redeploy
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          echo "Polling $BACKEND_URL/health/live ..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "%{http_code}" "$BACKEND_URL/health/live" || echo "000")
+            echo "attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Backend is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "::error::Backend did not become healthy within the timeout after setting the variable."
+          exit 1
+
+      - name: Real evidence the scheduler actually started (grep the live deployment's own stdout)
+        run: |
+          sleep 10
+          railway logs --service "$RAILWAY_BACKEND_SERVICE" --deployment --lines 500 2>&1 \
+            | grep -i "Outcome evaluation scheduler started\|OutcomeEvaluationScheduler" \
+            || echo "No matching log line found yet in the last 500 lines -- may need a later re-check if the deployment just rolled over."
+
+      - name: Confirm application health (DB/Redis, deployed commit) after the restart
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/ready" -w "\nHTTP %{http_code}\n"
