@@ -26,7 +26,7 @@ jobs:
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
       EXPECTED_COMMIT: "9292d666d31a19e38838fe0ea855403507fe824"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli

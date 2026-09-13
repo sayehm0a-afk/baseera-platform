@@ -26,7 +26,7 @@ jobs:
       EXPECTED_COMMIT: ${{ inputs.expected_commit }}
       SCAN_RUN_ID: ${{ inputs.scan_run_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - run: npm install -g @railway/cli
 

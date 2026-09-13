@@ -47,7 +47,7 @@ jobs:
       RAILWAY_BACKEND_SERVICE: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
