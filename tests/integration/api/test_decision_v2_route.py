@@ -7,19 +7,23 @@ providers (see conftest.py). No live network call anywhere.
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from unittest.mock import patch
 
 from sqlalchemy.orm import Session
 
 import numpy as np
 import pytest
 
+from src.analysis.decision_v2.engine import DecisionEngineV2
 from src.analysis.decision_v2.types import (
     DataFreshnessStatus, Decision, DecisionResult, GateOutcome, GateStatus, SubScores,
 )
 from src.analysis.recommendation.types import Recommendation
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
 from src.domain.models import (
-    DecisionV2Snapshot, FundamentalSnapshot, MarketScanStatus, PeriodType, PriceBar, Stock, Timeframe,
+    DecisionV2Snapshot, FundamentalSnapshot, MarketScanStatus, PeriodType, PriceBar,
+    RecommendationLabel, RecommendationOutcome, RecommendationOutcomeStatus, RecommendationSnapshot,
+    Stock, Timeframe,
 )
 from src.market_data.providers.market_data_provider import IMarketDataProvider, ProviderHealth
 from src.market_intelligence.market_status import MarketSessionStatus, MarketStatusInfo
@@ -150,6 +154,72 @@ def test_decision_v2_with_both_legs_available(client, db_session):
     rows = db_session.query(DecisionV2Snapshot).filter(DecisionV2Snapshot.symbol == "2222").all()
     assert len(rows) == 1
     assert rows[0].decision == body["decision"]
+
+
+def _add_sector_outcome(db_session, symbol, sector_en, status, horizon_days=3):
+    """Same helper as tests/integration/api/test_radar_route.py's own --
+    seeds one real, terminal RecommendationOutcome for `sector_en` so
+    src.market_intelligence.sector_reliability's aggregate query (the
+    exact same one the reliability disclosure badge and the
+    historical_sector_failure gate both read) has real evidence to
+    compute from."""
+    stock = db_session.query(Stock).filter_by(symbol=symbol).first()
+    if stock is None:
+        stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector=sector_en)
+        db_session.add(stock)
+        db_session.commit()
+    rec_snapshot = RecommendationSnapshot(
+        stock_id=stock.id, symbol=symbol, evaluated_at=datetime.now(timezone.utc),
+        recommendation=RecommendationLabel.BUY, total_score=70.0, confidence_score=75.0,
+        engine_version="v2", source="live_scan", is_paper_trade=False,
+    )
+    db_session.add(rec_snapshot)
+    db_session.commit()
+    db_session.add(
+        RecommendationOutcome(
+            snapshot_id=rec_snapshot.id, symbol=symbol, evaluation_horizon_days=horizon_days,
+            due_at=datetime.now(timezone.utc), status=status,
+            return_pct=5.0 if status == RecommendationOutcomeStatus.SUCCESSFUL else -3.0,
+            hit_target=status == RecommendationOutcomeStatus.SUCCESSFUL,
+            hit_stop=status == RecommendationOutcomeStatus.FAILED,
+        )
+    )
+    db_session.commit()
+
+
+def test_decision_v2_route_passes_real_sector_reliability_into_the_engine(client, db_session):
+    """Comprehensive accuracy audit (2026-09-15): proves the actual
+    end-to-end wiring -- real seeded outcome history for this exact
+    symbol's sector ("Energy" -- see _make_stock's default) reaches
+    DecisionEngineV2.decide() as sector_reliability_win_rate_pct/
+    sector_reliability_sample_size, not just the pure gates.py unit
+    tests' synthetic inputs. Patches DecisionEngineV2.decide with a
+    thin recording wrapper around the real implementation (never a
+    stub) so the route's actual response is completely unaffected."""
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    for i in range(29):
+        _add_sector_outcome(db_session, f"ENGF{i}", "Energy", RecommendationOutcomeStatus.FAILED)
+    _add_sector_outcome(db_session, "ENGS0", "Energy", RecommendationOutcomeStatus.SUCCESSFUL)
+    # 1 win / 29 losses across 30 tracked outcomes -- comfortably clears
+    # the gate's own sample-size floor with a near-zero win rate.
+
+    original_decide = DecisionEngineV2.decide
+    captured = {}
+
+    def _recording_decide(self, *args, **kwargs):
+        captured["win_rate_pct"] = kwargs.get("sector_reliability_win_rate_pct")
+        captured["sample_size"] = kwargs.get("sector_reliability_sample_size")
+        return original_decide(self, *args, **kwargs)
+
+    with patch.object(DecisionEngineV2, "decide", _recording_decide):
+        response = client.get("/api/v1/stocks/2222/decision-v2")
+
+    assert response.status_code == 200
+    assert captured["sample_size"] == 30
+    assert captured["win_rate_pct"] == pytest.approx(1 / 30 * 100, abs=0.1)
 
 
 def test_decision_v2_persists_the_phase_2a_canonical_fields(client, db_session):

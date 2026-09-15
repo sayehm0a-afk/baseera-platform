@@ -357,6 +357,66 @@ class TestRiskRewardAndLiquidity:
         assert gate.status is GateStatus.NOT_EVALUATED
 
 
+class TestHistoricalSectorFailureGate:
+    """Comprehensive accuracy audit (2026-09-15): a large-sample, real
+    track record of near-total sector failure (Energy: 0% win rate,
+    n=51) must downgrade an otherwise-valid BUY thesis to WATCH."""
+
+    def test_default_inputs_never_trigger_the_gate(self):
+        # No sector_reliability_* overrides at all -- the exact same
+        # GateInputs every pre-existing test in this file already
+        # builds. Golden-master property: must still be BUY_CANDIDATE.
+        result = evaluate_decision(_base_buy_inputs(), TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "historical_sector_reliability")
+        assert gate.status is GateStatus.PASS
+
+    def test_large_sample_near_zero_win_rate_downgrades_to_watch(self):
+        inputs = _base_buy_inputs(sector_reliability_win_rate_pct=0.0, sector_reliability_sample_size=51)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+        gate = next(g for g in result.gates if g.name == "historical_sector_reliability")
+        assert gate.status is GateStatus.FAIL
+
+    def test_small_sample_near_zero_win_rate_does_not_block(self):
+        # Only 5 tracked outcomes -- far below the gate's own strict
+        # sample-size floor, deliberately stricter than the disclosure
+        # badge's own (n>=10) threshold.
+        inputs = _base_buy_inputs(sector_reliability_win_rate_pct=0.0, sector_reliability_sample_size=5)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_large_sample_moderate_win_rate_does_not_block(self):
+        inputs = _base_buy_inputs(sector_reliability_win_rate_pct=45.0, sector_reliability_sample_size=100)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_win_rate_exactly_at_the_threshold_does_not_block(self):
+        inputs = _base_buy_inputs(
+            sector_reliability_win_rate_pct=TUNING.historical_sector_failure_max_win_rate_pct,
+            sector_reliability_sample_size=100,
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_sample_size_exactly_at_the_threshold_can_block(self):
+        inputs = _base_buy_inputs(
+            sector_reliability_win_rate_pct=0.0,
+            sector_reliability_sample_size=TUNING.historical_sector_failure_min_sample_size,
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+
+    def test_gate_fires_before_liquidity_is_evaluated(self):
+        # A sector-failure downgrade must not be masked by an unrelated
+        # liquidity NOT_EVALUATED/PASS further down the same function.
+        inputs = _base_buy_inputs(
+            sector_reliability_win_rate_pct=0.0, sector_reliability_sample_size=51, average_traded_value=None,
+        )
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+
+
 class TestVolatilityAndEvidence:
     def test_excessive_volatility_downgrades_to_watch(self):
         inputs = _base_buy_inputs(atr_pct=0.15, excessive_volatility_pct=0.08)

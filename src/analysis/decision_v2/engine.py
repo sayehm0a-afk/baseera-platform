@@ -72,6 +72,8 @@ class DecisionEngineV2:
         market_is_open: Optional[bool],
         scan_run_id: Optional[int] = None,
         market_breadth: Optional[MarketBreadthSummary] = None,
+        sector_reliability_win_rate_pct: Optional[float] = None,
+        sector_reliability_sample_size: int = 0,
     ) -> DecisionResult:
         tuning = self._tuning
         technical = context.technical_result
@@ -279,6 +281,15 @@ class DecisionEngineV2:
             # a second, independent computation.
             price_severely_missed_entry_zone=severely_missed_entry,
             breakout_status=breakout_confirmation.get("status", "NOT_APPLICABLE"),
+            # Comprehensive accuracy audit (2026-09-15): the caller
+            # (MarketScanner/_build_decision_v2 for a batch scan, the
+            # /decision-v2 route for a single symbol) resolves these
+            # from src.market_intelligence.sector_reliability -- this
+            # pure engine never queries the database itself. Defaults
+            # (None, 0) mean "no sector evidence available," which
+            # gates.py's historical_sector_failure gate never fires on.
+            sector_reliability_win_rate_pct=sector_reliability_win_rate_pct,
+            sector_reliability_sample_size=sector_reliability_sample_size,
         )
         evaluation = evaluate_decision(gate_inputs, tuning)
         warnings.extend(evaluation.warnings)

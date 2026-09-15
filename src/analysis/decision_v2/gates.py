@@ -105,6 +105,16 @@ class GateInputs:
     price_severely_missed_entry_zone: bool = False
     breakout_status: str = "NOT_APPLICABLE"
 
+    # --- Historical-sector-failure gate (comprehensive accuracy audit,
+    # 2026-09-15) -- see DecisionV2Tuning.historical_sector_failure_*
+    # for why this exists and why its bar is stricter than the
+    # sector-reliability disclosure badge's own. Defaults (None
+    # win_rate, 0 sample_size) mean "no sector evidence available,"
+    # which never triggers the gate -- preserves exact existing
+    # behavior for any caller not yet updated to pass real values.
+    sector_reliability_win_rate_pct: Optional[float] = None
+    sector_reliability_sample_size: int = 0
+
 
 @dataclass
 class GateEvaluation:
@@ -348,6 +358,49 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     ))
     if not rr_ok:
         return GateEvaluation(Decision.REJECT, gates, warnings, disclosures)
+
+    # Historical-sector-failure gate (comprehensive accuracy audit,
+    # 2026-09-15): downgrades to WATCH -- never REJECT, matching every
+    # other real-evidence-contradicts-the-thesis gate in this file
+    # (trend_momentum_consistency, volume_quality, breakout_not_failed)
+    # -- when this sector has a real, large-sample track record of
+    # near-total failure. Only ever fires with `tuning`'s own
+    # deliberately strict sample-size/win-rate bar (see
+    # DecisionV2Tuning.historical_sector_failure_* for why); a sector
+    # with too few tracked outcomes, or a win rate above the bar, PASSes
+    # through unchanged -- this is not the same "LOW" threshold the
+    # reliability disclosure badge uses, and must not be conflated with
+    # it.
+    sector_history_ok = not (
+        inputs.sector_reliability_sample_size >= tuning.historical_sector_failure_min_sample_size
+        and inputs.sector_reliability_win_rate_pct is not None
+        and inputs.sector_reliability_win_rate_pct < tuning.historical_sector_failure_max_win_rate_pct
+    )
+    if sector_history_ok:
+        gates.append(GateOutcome(
+            "historical_sector_reliability", GateStatus.PASS,
+            (
+                f"لا يوجد سجل تاريخي كافٍ من الفشل الحاد لهذا القطاع "
+                f"({inputs.sector_reliability_sample_size} توصية متتبَّعة)."
+                if inputs.sector_reliability_sample_size < tuning.historical_sector_failure_min_sample_size
+                else f"نسبة النجاح التاريخية لهذا القطاع {inputs.sector_reliability_win_rate_pct:.0f}٪، أعلى من حد الرفض."
+            ),
+            False,
+        ))
+    else:
+        gates.append(GateOutcome(
+            "historical_sector_reliability", GateStatus.FAIL,
+            (
+                f"هذا القطاع سجّل نسبة نجاح {inputs.sector_reliability_win_rate_pct:.0f}٪ فقط عبر "
+                f"{inputs.sector_reliability_sample_size} توصية حقيقية متتبَّعة -- دليل قوي على فشل متكرر."
+            ),
+            True,
+        ))
+        warnings.append(
+            "هذا القطاع سجّل تاريخيًا نسبة فشل مرتفعة جدًا في توصيات مماثلة -- تم تحويل هذه الفرصة للمراقبة فقط بدل "
+            "التوصية بالدخول الفوري."
+        )
+        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
 
     # Gate 8: liquidity (NOT_EVALUATED, not blocking, when unknown) -----------
     if inputs.average_traded_value is None:

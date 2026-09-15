@@ -114,3 +114,18 @@ class DecisionV2Tuning:
     # limit (Basirah does not ingest per-symbol limit-band reference
     # data) -- so this gate only ever warns, never blocks.
     price_limit_proximity_pct: float = 9.0
+
+    # Historical-sector-failure gate (comprehensive accuracy audit,
+    # 2026-09-15): real tracked outcomes showed Energy at a 0% win rate
+    # across 51 real resolved recommendations -- a technically-sound-
+    # looking BUY signal in a sector with this scale of demonstrated
+    # real-world failure must not be published as an actionable entry.
+    # Deliberately stricter than sector_reliability.py's own "LOW"
+    # disclosure threshold (<35% win rate, n>=10) -- a gate that changes
+    # what gets published needs far more evidence than a disclosure
+    # badge does before it overrides a technical thesis. Reuses the
+    # exact same win-rate/sample-size numbers already shown to the user
+    # on the reliability badge; never a second, independently-computed
+    # figure.
+    historical_sector_failure_min_sample_size: int = 30
+    historical_sector_failure_max_win_rate_pct: float = 15.0
