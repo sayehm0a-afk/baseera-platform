@@ -525,6 +525,48 @@ def _seed_active_calibration_model_mapping_everything_near_zero(session_factory)
     session.close()
 
 
+def _seed_active_calibration_model_mapping_everything_to_one_half(session_factory):
+    """coef=0, intercept=0 -> sigmoid(0) == 0.5 exactly for every raw
+    confidence -- well above the 0.35 gate threshold (so the symbol
+    still clears every category), used to prove the calibrated number
+    itself now reaches the API response rather than being discarded
+    after gating (2026-09-15 audit finding)."""
+    session = session_factory()
+    session.add(
+        ConfidenceCalibrationModel(
+            version="test-v-half", status=ConfidenceCalibrationStatus.ACTIVE,
+            method=ConfidenceCalibrationMethod.PLATT, model_params={"coef": 0.0, "intercept": 0.0},
+            training_sample_size=100,
+        )
+    )
+    session.commit()
+    session.close()
+
+
+def test_rankings_opportunities_and_watchlists_expose_the_calibrated_confidence_value(client, session_factory):
+    """The 2026-09-15 audit finding this closes: compute_calibrated_
+    confidences' output was already computed and used to gate
+    is_publishable(), but the calibrated number itself was discarded
+    rather than returned -- every response that carries a raw
+    `confidence` must now also carry the real `calibrated_confidence`
+    whenever a model was active, not silently drop it."""
+    run_id = _seed_publishable_buy(session_factory)
+    _seed_active_calibration_model_mapping_everything_to_one_half(session_factory)
+
+    rankings = client.get("/api/v1/market/rankings", params={"run_id": run_id}).json()
+    top_buy = next(r for r in rankings["rankings"] if r["category"] == "TOP_BUY")
+    assert top_buy["entries"][0]["symbol"] == "7777"
+    assert top_buy["entries"][0]["calibrated_confidence"] == pytest.approx(0.5)
+
+    opportunities = client.get("/api/v1/market/opportunities", params={"run_id": run_id}).json()
+    top_buy_opportunity = next(c for c in opportunities["categories"] if c["category"] == "TOP_BUY")
+    assert top_buy_opportunity["entries"][0]["calibrated_confidence"] == pytest.approx(0.5)
+
+    watchlists = client.get("/api/v1/market/watchlists", params={"run_id": run_id}).json()
+    swing = next(w for w in watchlists["watchlists"] if w["category"] == "SWING")
+    assert swing["entries"][0]["calibrated_confidence"] == pytest.approx(0.5)
+
+
 def test_rankings_include_a_gate_clearing_buy_when_no_calibration_model_is_active(client, session_factory):
     run_id = _seed_publishable_buy(session_factory)
 

@@ -79,6 +79,7 @@ export interface RankingEntry {
   stop_loss: number | null;
   risk_reward_ratio: number | null;
   time_horizon: string | null;
+  calibrated_confidence: number | null;
 }
 
 export interface RankingList {
@@ -186,6 +187,7 @@ export interface WatchlistEntry {
   recommendation: string | null;
   confidence: number | null;
   reason: string;
+  calibrated_confidence: number | null;
 }
 
 export interface WatchlistResult {

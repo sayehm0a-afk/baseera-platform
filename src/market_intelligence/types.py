@@ -319,6 +319,12 @@ class RankingEntry:
     stop_loss: Optional[float] = None
     risk_reward_ratio: Optional[float] = None
     time_horizon: Optional[str] = None
+    # Confidence-calibration audit (2026-09-15): compute_calibrated_
+    # confidences' output was already used to gate publication
+    # (is_publishable) but the actual calibrated number was discarded
+    # rather than shown -- None whenever no calibration model was
+    # active/applicable for this symbol, never fabricated.
+    calibrated_confidence: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -335,6 +341,10 @@ class WatchlistEntry:
     recommendation: Optional[str]
     confidence: Optional[float]
     reason: str
+    # Confidence-calibration audit (2026-09-15): see RankingEntry.
+    # calibrated_confidence's own comment -- same "computed to gate
+    # publication, now also shown" reasoning.
+    calibrated_confidence: Optional[float] = None
 
 
 @dataclass(frozen=True)

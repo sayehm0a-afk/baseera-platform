@@ -48,6 +48,7 @@ describe("ReportsPage", () => {
       stop_loss: null,
       risk_reward_ratio: null,
       time_horizon: null,
+      calibrated_confidence: null,
     });
     vi.mocked(getRankings).mockResolvedValue({
       scan_run_id: 81,
