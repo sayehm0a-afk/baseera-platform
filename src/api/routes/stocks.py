@@ -123,6 +123,7 @@ from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpe
 from src.domain.arabic_text import normalize_arabic
 from src.domain.models import DecisionV2Snapshot, FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe, User
 from src.domain.sector_labels import sector_label_ar
+from src.market_intelligence.sector_reliability import compute_sector_reliability_by_arabic_label, reliability_for_sector
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
 from src.market_data.sahmk.operation_scope import STOCK_DETAIL, operation_scope
@@ -791,6 +792,13 @@ async def get_decision_v2(
     stock = _get_stock_or_404(session, symbol)
     quote_info = context.extra.get("quote", {})
     market_info = get_market_status()
+    sector_ar = sector_label_ar(stock.sector)
+    # Comprehensive accuracy audit (2026-09-15): same computation, same
+    # source (src.market_intelligence.sector_reliability) already used
+    # for the reliability disclosure badge on /today and /radar -- never
+    # a second, independently-derived figure feeding gates.py's
+    # historical_sector_failure gate.
+    sector_reliability = reliability_for_sector(compute_sector_reliability_by_arabic_label(session), sector_ar)
 
     result = DecisionEngineV2().decide(
         context,
@@ -798,13 +806,15 @@ async def get_decision_v2(
         company_name_ar=stock.name_ar,
         company_name_en=stock.name_en,
         sector=stock.sector,
-        sector_ar=sector_label_ar(stock.sector),
+        sector_ar=sector_ar,
         is_synthetic=quote_info.get("is_synthetic"),
         data_source=quote_info.get("source") or "unknown",
         quote_timestamp=parse_quote_timestamp(quote_info.get("timestamp")),
         market_status=market_info.status.value,
         market_is_open=market_info.status == MarketSessionStatus.OPEN,
         market_breadth=_latest_market_breadth(session),
+        sector_reliability_win_rate_pct=sector_reliability.win_rate_pct,
+        sector_reliability_sample_size=sector_reliability.sample_size,
     )
 
     snapshot = None

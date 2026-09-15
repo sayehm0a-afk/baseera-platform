@@ -21,6 +21,7 @@ from src.market_intelligence.change_detector import ChangeDetector
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scanner import MarketScanner
 from src.market_intelligence.sector_analysis import SectorAnalyzer
+from src.market_intelligence.sector_reliability import compute_sector_reliability_by_arabic_label
 from src.market_intelligence.symbol_selector import SymbolSelector
 from src.market_intelligence.types import SymbolScanOutcome
 
@@ -112,12 +113,29 @@ class MarketIntelligenceEngine:
         finally:
             breadth_session.close()
 
+        # Comprehensive accuracy audit (2026-09-15): same "computed once
+        # per scan, not once per symbol" shape as market_breadth above --
+        # a sector-reliability aggregate query is not cheap enough to
+        # re-run for every symbol in a full market scan. Best-effort:
+        # a failed lookup degrades to an empty map, which
+        # reliability_for_sector already handles honestly as
+        # INSUFFICIENT_DATA per symbol rather than failing the whole scan.
+        sector_reliability_session = self._session_factory()
+        try:
+            sector_reliability_by_ar = compute_sector_reliability_by_arabic_label(sector_reliability_session)
+        except Exception as exc:  # noqa: BLE001 -- best-effort, matches market_breadth's pattern above
+            logger.info("Could not compute sector reliability for this scan's Decision V2 pass: %s", exc)
+            sector_reliability_by_ar = {}
+        finally:
+            sector_reliability_session.close()
+
         outcomes = await self._scanner.scan(
             resolved_symbols,
             on_symbol_start=on_symbol_start,
             on_symbol_complete=on_symbol_complete,
             on_retry=on_retry,
             market_breadth=market_breadth,
+            sector_reliability_by_ar=sector_reliability_by_ar,
         )
 
         try:

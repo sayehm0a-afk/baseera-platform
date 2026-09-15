@@ -1,5 +1,6 @@
 """Unit tests for MarketScanner."""
 
+import unittest.mock
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ from src.analysis.decision_v2.engine import DecisionEngineV2
 from src.core.db.database import Base
 from src.domain.models import PriceBar, Stock, Timeframe
 from src.market_intelligence.scanner import MarketScanner
+from src.market_intelligence.sector_reliability import SectorReliability
 from src.market_intelligence.types import MarketBreadthSummary
 from src.market_data.providers.dev_market_data_provider import DevMarketDataProvider
 
@@ -79,6 +81,42 @@ async def test_scan_passes_market_breadth_through_to_decision_v2(factory):
 
     assert outcomes[0].decision_v2 is not None
     assert outcomes[0].decision_v2.market_breadth_symbols_scanned == 42
+
+
+@pytest.mark.asyncio
+async def test_scan_passes_sector_reliability_through_to_decision_v2(factory):
+    """Comprehensive accuracy audit (2026-09-15): the same
+    "computed once per scan, not once per symbol" plumbing
+    market_breadth already gets (test above) now also applies to
+    sector_reliability_by_ar -- MarketIntelligenceEngine.execute_scan
+    is the real caller in production; this test exercises MarketScanner
+    directly with the map an already-tested compute_sector_reliability_
+    by_arabic_label() call would have produced.
+
+    Patches DecisionEngineV2.decide with a thin recording wrapper around
+    the real implementation (never a stub) -- DevMarketDataProvider's
+    data is always synthetic, so the real gate chain REJECTs before ever
+    reaching historical_sector_reliability (see real_data_source, gate
+    1a); that is a property of this fixture, not something this test is
+    about. What matters here is only that the correct, real win_rate_pct/
+    sample_size for "Energy" reach decide()'s own kwargs."""
+    _add_stock_with_bars(factory, "2222", sector="Energy")
+    scanner = MarketScanner(session_factory=factory, market_provider=DevMarketDataProvider())
+    reliability_map = {"الطاقة": SectorReliability(level="LOW", label_ar="ضعيف", win_rate_pct=3.3, sample_size=30)}
+
+    original_decide = DecisionEngineV2.decide
+    captured = {}
+
+    def _recording_decide(self, *args, **kwargs):
+        captured["win_rate_pct"] = kwargs.get("sector_reliability_win_rate_pct")
+        captured["sample_size"] = kwargs.get("sector_reliability_sample_size")
+        return original_decide(self, *args, **kwargs)
+
+    with unittest.mock.patch.object(DecisionEngineV2, "decide", _recording_decide):
+        await scanner.scan(["2222"], sector_reliability_by_ar=reliability_map)
+
+    assert captured["sample_size"] == 30
+    assert captured["win_rate_pct"] == pytest.approx(3.3)
 
 
 @pytest.mark.asyncio
@@ -150,7 +188,7 @@ async def test_scan_retries_a_transient_failure_and_eventually_succeeds(factory,
     calls = {"n": 0}
     real_scan_one = scanner._scan_one
 
-    async def _flaky_scan_one(symbol, market_breadth=None):
+    async def _flaky_scan_one(symbol, market_breadth=None, sector_reliability_by_ar=None):
         calls["n"] += 1
         if calls["n"] < 2:
             raise RuntimeError("transient failure")
@@ -170,7 +208,7 @@ async def test_scan_records_failure_after_exhausting_retries(factory, monkeypatc
     monkeypatch.setenv("MARKET_SCAN_RETRY_BASE_DELAY_SECONDS", "0.001")
     scanner = MarketScanner(session_factory=factory, market_provider=DevMarketDataProvider())
 
-    async def _always_fails(symbol, market_breadth=None):
+    async def _always_fails(symbol, market_breadth=None, sector_reliability_by_ar=None):
         raise RuntimeError("permanent failure")
 
     scanner._scan_one = _always_fails

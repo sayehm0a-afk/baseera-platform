@@ -21,7 +21,7 @@ scale.
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -41,6 +41,7 @@ from src.market_intelligence.config import (
     get_scan_symbol_timeout_seconds,
 )
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status
+from src.market_intelligence.sector_reliability import SectorReliability, reliability_for_sector
 from src.market_intelligence.types import MarketBreadthSummary, MarketScanSummary, SymbolScanOutcome
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class MarketScanner:
         on_symbol_complete: Optional[Callable[[SymbolScanOutcome], None]] = None,
         on_retry: Optional[Callable[[str, int, int, Exception], None]] = None,
         market_breadth: Optional[MarketBreadthSummary] = None,
+        sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
     ) -> List[SymbolScanOutcome]:
         """Optional progress hooks (all None by default, so every
         existing caller is unaffected): `on_symbol_start(symbol)` fires
@@ -83,10 +85,18 @@ class MarketScanner:
         (`MarketIntelligenceEngine.execute_scan`) and passed through to
         every symbol's Decision Engine V2 computation -- the same
         "most recent completed run" semantics `/decision-v2`'s own
-        `_latest_market_breadth` already uses for a single symbol."""
+        `_latest_market_breadth` already uses for a single symbol.
+
+        `sector_reliability_by_ar` (comprehensive accuracy audit,
+        2026-09-15, None/empty by default): same "computed once per
+        scan, not once per symbol" shape as `market_breadth` -- see
+        `MarketIntelligenceEngine.execute_scan`."""
         semaphore = asyncio.Semaphore(max(1, get_scan_batch_size()))
         tasks = [
-            self._scan_one_bounded(symbol, semaphore, on_symbol_start, on_symbol_complete, on_retry, market_breadth)
+            self._scan_one_bounded(
+                symbol, semaphore, on_symbol_start, on_symbol_complete, on_retry, market_breadth,
+                sector_reliability_by_ar,
+            )
             for symbol in symbols
         ]
         return list(await asyncio.gather(*tasks))
@@ -115,11 +125,12 @@ class MarketScanner:
         on_symbol_complete: Optional[Callable[[SymbolScanOutcome], None]],
         on_retry: Optional[Callable[[str, int, int, Exception], None]],
         market_breadth: Optional[MarketBreadthSummary] = None,
+        sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
     ) -> SymbolScanOutcome:
         async with semaphore:
             if on_symbol_start is not None:
                 on_symbol_start(symbol)
-            outcome = await self._scan_one_with_retry(symbol, on_retry, market_breadth)
+            outcome = await self._scan_one_with_retry(symbol, on_retry, market_breadth, sector_reliability_by_ar)
             if on_symbol_complete is not None:
                 on_symbol_complete(outcome)
             return outcome
@@ -129,6 +140,7 @@ class MarketScanner:
         symbol: str,
         on_retry: Optional[Callable[[str, int, int, Exception], None]] = None,
         market_breadth: Optional[MarketBreadthSummary] = None,
+        sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
     ) -> SymbolScanOutcome:
         """Retries only real, unexpected failures -- a symbol correctly
         identified as having insufficient data is not an error and is
@@ -141,7 +153,8 @@ class MarketScanner:
         for attempt in range(1, max_attempts + 1):
             try:
                 return await asyncio.wait_for(
-                    self._scan_one(symbol, market_breadth), timeout=get_scan_symbol_timeout_seconds()
+                    self._scan_one(symbol, market_breadth, sector_reliability_by_ar),
+                    timeout=get_scan_symbol_timeout_seconds(),
                 )
             except Exception as exc:  # noqa: BLE001 -- deliberate: one symbol's failure must never abort the whole scan.
                 last_error = exc
@@ -159,7 +172,12 @@ class MarketScanner:
         logger.error("Market scan for '%s' failed after %d attempt(s): %s", symbol, max_attempts, last_error, exc_info=True)
         return SymbolScanOutcome(symbol=symbol, sector=None, success=False, report=None, error=str(last_error))
 
-    async def _scan_one(self, symbol: str, market_breadth: Optional[MarketBreadthSummary] = None) -> SymbolScanOutcome:
+    async def _scan_one(
+        self,
+        symbol: str,
+        market_breadth: Optional[MarketBreadthSummary] = None,
+        sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
+    ) -> SymbolScanOutcome:
         session = self._session_factory()
         try:
             stock = session.query(Stock).filter(Stock.symbol == symbol).one_or_none()
@@ -180,7 +198,7 @@ class MarketScanner:
             data_source = "DEV_SYNTHETIC" if is_synthetic else "SAHMK_REAL"
 
             decision_v2 = self._build_decision_v2(
-                stock, context, report.decision, is_synthetic, data_source, market_breadth
+                stock, context, report.decision, is_synthetic, data_source, market_breadth, sector_reliability_by_ar
             )
 
             return SymbolScanOutcome(
@@ -207,6 +225,7 @@ class MarketScanner:
         is_synthetic: bool,
         data_source: str,
         market_breadth: Optional[MarketBreadthSummary],
+        sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
     ) -> Optional[DecisionResult]:
         """Phase 3A: computes the same `DecisionResult` the `/decision-
         v2` route would for this symbol, from the exact `InvestmentDecision`
@@ -221,19 +240,23 @@ class MarketScanner:
         try:
             quote_info = context.extra.get("quote", {})
             market_info = get_market_status()
+            sector_ar = sector_label_ar(stock.sector)
+            sector_reliability = reliability_for_sector(sector_reliability_by_ar or {}, sector_ar)
             return DecisionEngineV2().decide(
                 context,
                 investment_decision,
                 company_name_ar=stock.name_ar,
                 company_name_en=stock.name_en,
                 sector=stock.sector,
-                sector_ar=sector_label_ar(stock.sector),
+                sector_ar=sector_ar,
                 is_synthetic=is_synthetic,
                 data_source=data_source,
                 quote_timestamp=parse_quote_timestamp(quote_info.get("timestamp")),
                 market_status=market_info.status.value,
                 market_is_open=market_info.status == MarketSessionStatus.OPEN,
                 market_breadth=market_breadth,
+                sector_reliability_win_rate_pct=sector_reliability.win_rate_pct,
+                sector_reliability_sample_size=sector_reliability.sample_size,
             )
         except Exception:  # noqa: BLE001 -- best-effort: see docstring above.
             logger.warning(

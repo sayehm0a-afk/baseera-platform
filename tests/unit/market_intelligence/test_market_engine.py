@@ -40,7 +40,7 @@ class _FakeScanner:
     def __init__(self, outcomes):
         self._outcomes = outcomes
 
-    async def scan(self, symbols, on_symbol_start=None, on_symbol_complete=None, on_retry=None, market_breadth=None):
+    async def scan(self, symbols, on_symbol_start=None, on_symbol_complete=None, on_retry=None, market_breadth=None, sector_reliability_by_ar=None):
         for outcome in self._outcomes:
             if on_symbol_start is not None:
                 on_symbol_start(outcome.symbol)
@@ -50,19 +50,22 @@ class _FakeScanner:
 
 
 class _CapturingFakeScanner(_FakeScanner):
-    """Same as `_FakeScanner`, but records the `market_breadth` it was
-    actually called with -- the Decision V2 input `execute_scan`
-    resolves at line ~103, and the Market Engine Shadow contamination
-    fix's entire point is what this captures."""
+    """Same as `_FakeScanner`, but records the `market_breadth` (and,
+    comprehensive accuracy audit 2026-09-15: `sector_reliability_by_ar`)
+    it was actually called with -- the Decision V2 inputs `execute_scan`
+    resolves once per scan, and the Market Engine Shadow contamination
+    fix's entire point is what `received_market_breadth` captures."""
 
     _UNSET = object()
 
     def __init__(self, outcomes):
         super().__init__(outcomes)
         self.received_market_breadth = self._UNSET
+        self.received_sector_reliability_by_ar = self._UNSET
 
-    async def scan(self, symbols, on_symbol_start=None, on_symbol_complete=None, on_retry=None, market_breadth=None):
+    async def scan(self, symbols, on_symbol_start=None, on_symbol_complete=None, on_retry=None, market_breadth=None, sector_reliability_by_ar=None):
         self.received_market_breadth = market_breadth
+        self.received_sector_reliability_by_ar = sector_reliability_by_ar
         return await super().scan(symbols, on_symbol_start, on_symbol_complete, on_retry, market_breadth)
 
 
@@ -250,6 +253,61 @@ async def test_execute_scan_marks_running_before_finishing(factory):
     assert run_row.finished_at is not None
     assert run_row.started_at <= run_row.finished_at
     session.close()
+
+
+@pytest.mark.asyncio
+async def test_execute_scan_computes_sector_reliability_once_and_passes_it_to_the_scanner(factory):
+    """Comprehensive accuracy audit (2026-09-15): same "computed once
+    per scan, not once per symbol" shape as market_breadth -- seeds real
+    RecommendationOutcome history for a sector and confirms the
+    resulting map (computed by execute_scan itself, not the fake
+    scanner) reaches MarketScanner.scan()'s own kwargs."""
+    from src.domain.models import (
+        RecommendationLabel, RecommendationOutcome, RecommendationOutcomeStatus, RecommendationSnapshot,
+    )
+    from datetime import datetime, timezone
+
+    _seed_stock(factory, "2222", sector="Energy")
+    session = factory()
+    for i in range(30):
+        stock = Stock(symbol=f"ENG{i}", name_en=f"Stock ENG{i}", sector="Energy")
+        session.add(stock)
+        session.commit()
+        snapshot = RecommendationSnapshot(
+            stock_id=stock.id, symbol=stock.symbol, evaluated_at=datetime.now(timezone.utc),
+            recommendation=RecommendationLabel.BUY, total_score=70.0, confidence_score=75.0,
+            engine_version="v2", source="live_scan", is_paper_trade=False,
+        )
+        session.add(snapshot)
+        session.commit()
+        session.add(
+            RecommendationOutcome(
+                snapshot_id=snapshot.id, symbol=stock.symbol, evaluation_horizon_days=3,
+                due_at=datetime.now(timezone.utc), status=RecommendationOutcomeStatus.FAILED,
+                return_pct=-3.0, hit_target=False, hit_stop=True,
+            )
+        )
+        session.commit()
+    session.close()
+
+    repo = MarketIntelligenceRepository()
+    capturing_scanner = _CapturingFakeScanner([make_outcome(symbol="2222", decision=make_decision(symbol="2222"))])
+    engine = MarketIntelligenceEngine(
+        factory, market_provider=object(), repository=repo,
+        scanner=capturing_scanner, symbol_selector=_FakeSymbolSelector(["2222"]),
+    )
+    session = factory()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    run_id = run.id
+    session.close()
+
+    await engine.execute_scan(run_id)
+
+    received = capturing_scanner.received_sector_reliability_by_ar
+    assert received is not None and received != capturing_scanner._UNSET
+    reliability = received["الطاقة"]
+    assert reliability.sample_size == 30
+    assert reliability.win_rate_pct == pytest.approx(0.0)
 
 
 # --- strict real-data mode: mixed real/synthetic batches must fail ----
