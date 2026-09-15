@@ -30,6 +30,10 @@ from src.domain.models import (
     MarketScanRun,
     MarketScanStatus,
     RadarOpportunity,
+    RecommendationLabel,
+    RecommendationOutcome,
+    RecommendationOutcomeStatus,
+    RecommendationSnapshot,
     Stock,
     Subscription,
     SubscriptionPlan,
@@ -72,13 +76,18 @@ def _make_snapshot(
     confidence=82.5,
     freshness="LIVE",
     scan_run_id=1,
+    sector_ar=None,
 ):
     snapshot = DecisionV2Snapshot(
         stock_id=stock.id,
         symbol=stock.symbol,
         company_name_en=stock.name_en,
         company_name_ar=stock.name_ar,
-        sector_ar=stock.sector,
+        # Real decisions store the already-translated Arabic label (see
+        # src.domain.sector_labels.sector_label_ar), not Stock.sector's
+        # raw value verbatim -- callers needing a specific translated
+        # label for reliability-lookup tests pass it explicitly.
+        sector_ar=sector_ar if sector_ar is not None else stock.sector,
         decision=decision,
         decision_label_ar=decision_label_ar,
         confidence_score=Decimal(str(confidence)),
@@ -349,6 +358,76 @@ def test_opportunities_list_reflects_a_real_live_opportunity(client, db_session,
     assert row["target_1"] == pytest.approx(32.0)
     assert row["stop_loss"] == pytest.approx(29.0)
     assert row["decision_v2_snapshot_id"] == snapshot.id
+
+
+def test_opportunities_list_discloses_insufficient_reliability_data_by_default(
+    client, db_session, authenticated_as_staff
+):
+    """Smart Radar is the app's de facto home screen (2026-09-15
+    beginner-safety fix) -- every card must carry the same real,
+    independent per-sector reliability disclosure PersonalOpportunityOut
+    already has. With zero tracked RecommendationOutcome rows, the
+    honest state is INSUFFICIENT_DATA, never a fabricated rate."""
+    stock = _make_stock(db_session, "2222")
+    snapshot = _make_snapshot(db_session, stock)
+    _make_opportunity(db_session, stock, snapshot)
+
+    response = client.get(_OPPORTUNITIES_ROUTE)
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["sector_ar"] == stock.sector
+    assert row["historical_reliability_level"] == "INSUFFICIENT_DATA"
+    assert row["historical_reliability_win_rate_pct"] is None
+    assert row["historical_reliability_sample_size"] == 0
+
+
+def _add_sector_outcome(db_session, symbol, sector_en, status, horizon_days=3):
+    stock = db_session.query(Stock).filter_by(symbol=symbol).first()
+    if stock is None:
+        stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector=sector_en)
+        db_session.add(stock)
+        db_session.commit()
+    rec_snapshot = RecommendationSnapshot(
+        stock_id=stock.id, symbol=symbol, evaluated_at=datetime.now(timezone.utc),
+        recommendation=RecommendationLabel.BUY, total_score=70.0, confidence_score=75.0,
+        engine_version="v2", source="live_scan", is_paper_trade=False,
+    )
+    db_session.add(rec_snapshot)
+    db_session.commit()
+    db_session.add(
+        RecommendationOutcome(
+            snapshot_id=rec_snapshot.id, symbol=symbol, evaluation_horizon_days=horizon_days,
+            due_at=datetime.now(timezone.utc), status=status,
+            return_pct=5.0 if status == RecommendationOutcomeStatus.SUCCESSFUL else -3.0,
+            hit_target=status == RecommendationOutcomeStatus.SUCCESSFUL,
+            hit_stop=status == RecommendationOutcomeStatus.FAILED,
+        )
+    )
+    db_session.commit()
+
+
+def test_opportunities_list_discloses_a_real_sector_win_rate_when_enough_history_exists(
+    client, db_session, authenticated_as_staff
+):
+    """Same real win-rate computation as PersonalOpportunityOut's own
+    (src.market_intelligence.sector_reliability), applied here to Smart
+    Radar cards -- a sector with 9 real wins / 1 loss (>= the 10-sample
+    floor) is disclosed as HIGH, not left silent."""
+    for i in range(9):
+        _add_sector_outcome(db_session, f"BANKW{i}", "Banks", RecommendationOutcomeStatus.SUCCESSFUL)
+    _add_sector_outcome(db_session, "BANKL0", "Banks", RecommendationOutcomeStatus.FAILED)
+
+    stock = _make_stock(db_session, "1180", sector="Banks")
+    snapshot = _make_snapshot(db_session, stock, sector_ar="البنوك")
+    _make_opportunity(db_session, stock, snapshot)
+
+    response = client.get(_OPPORTUNITIES_ROUTE)
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["sector_ar"] == "البنوك"
+    assert row["historical_reliability_level"] == "HIGH"
+    assert row["historical_reliability_win_rate_pct"] == pytest.approx(90.0)
+    assert row["historical_reliability_sample_size"] == 10
 
 
 def test_opportunity_detail_includes_stage1_evidence_and_reasoning(client, db_session, authenticated_as_staff):

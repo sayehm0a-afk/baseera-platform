@@ -146,6 +146,7 @@ from src.market_intelligence.radar_v2 import (
 )
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
+from src.market_intelligence.sector_reliability import SectorReliability, reliability_for_sector
 from src.market_intelligence.services.scan_job_runner import run_market_scan_job
 from src.market_intelligence.stage1_local_scan import run_stage1_local_scan
 from src.market_intelligence.symbol_selector import SymbolSelector
@@ -621,8 +622,12 @@ async def stage2_validate_candidates(
 # ============================================================================
 
 
-def radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummaryOut:
+def radar_summary_out(
+    opportunity: RadarOpportunity,
+    sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
+) -> RadarOpportunitySummaryOut:
     snapshot = opportunity.snapshot
+    reliability = reliability_for_sector(sector_reliability_by_ar or {}, snapshot.sector_ar)
     return RadarOpportunitySummaryOut(
         id=opportunity.id,
         symbol=opportunity.symbol,
@@ -665,12 +670,21 @@ def radar_summary_out(opportunity: RadarOpportunity) -> RadarOpportunitySummaryO
         decision_freshness_status=classify_decision_freshness(opportunity.emitted_at).value,
         is_decision_fresh=is_decision_fresh(opportunity.emitted_at),
         decision_v2_snapshot_id=opportunity.decision_v2_snapshot_id,
+        sector_ar=snapshot.sector_ar,
+        historical_reliability_level=reliability.level,
+        historical_reliability_label_ar=reliability.label_ar,
+        historical_reliability_win_rate_pct=reliability.win_rate_pct,
+        historical_reliability_sample_size=reliability.sample_size,
     )
 
 
-def radar_detail_out(opportunity: RadarOpportunity, outcome: Optional[DecisionV2Outcome]) -> RadarOpportunityDetailOut:
+def radar_detail_out(
+    opportunity: RadarOpportunity,
+    outcome: Optional[DecisionV2Outcome],
+    sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
+) -> RadarOpportunityDetailOut:
     snapshot = opportunity.snapshot
-    summary = radar_summary_out(opportunity)
+    summary = radar_summary_out(opportunity, sector_reliability_by_ar)
     component_scores = opportunity.stage1_component_scores or {}
     signals = opportunity.stage1_signals or []
     return RadarOpportunityDetailOut(
@@ -713,7 +727,9 @@ def radar_detail_out(opportunity: RadarOpportunity, outcome: Optional[DecisionV2
         why_not_buy_reasons=snapshot.why_not_buy_reasons or [],
         market_risk_state=snapshot.market_risk_state,
         market_risk_label_ar=snapshot.market_risk_label_ar,
-        sector_ar=snapshot.sector_ar,
+        # sector_ar and the historical_reliability_* fields already come
+        # from **summary.model_dump() above -- passing them again here
+        # would raise "multiple values for keyword argument".
         invalidation_conditions=snapshot.invalidation_conditions or [],
         decision_timestamp=snapshot.decision_timestamp,
         market_status=snapshot.market_status,
