@@ -1,0 +1,87 @@
+name: Verify confidence calibration is live (read-only)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Check calibration-status, opportunities category counts, and a real decision-v2 confidence
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          cat > /tmp/check.py <<'PYEOF'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          BACKEND = os.environ["BACKEND_URL"]
+          STAFF_EMAIL = os.environ["STAFF_EMAIL"]
+          STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
+
+          def get(url, cookies):
+              req = urllib.request.Request(url, method="GET", headers={"Cookie": cookies})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return resp.status, resp.read().decode()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode()
+
+          def post(url, body):
+              data = json.dumps(body).encode()
+              req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  return resp.status, resp.read().decode(), resp.headers
+
+          status, body, headers = post(f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
+          cookie_header = "; ".join(c.split(";")[0] for c in (headers.get_all("Set-Cookie") or []))
+
+          print("=== GET /admin/ai-evolution/calibration-status ===")
+          status, body = get(f"{BACKEND}/api/v1/admin/ai-evolution/calibration-status", cookie_header)
+          print(f"HTTP {status}")
+          print(body)
+          print()
+
+          print("=== GET /opportunities (category counts, staff bypasses subscription gate) ===")
+          status, body = get(f"{BACKEND}/api/v1/market/opportunities", cookie_header)
+          print(f"HTTP {status}")
+          if status == 200:
+              data = json.loads(body)
+              for category in data.get("categories", []):
+                  print(f"  {category.get('category')}: {len(category.get('entries', []))} entries")
+          else:
+              print(body[:1000])
+          print()
+
+          for symbol in ["2222", "1830"]:
+              print(f"=== GET /api/v1/stocks/{symbol}/decision-v2 (calibrated confidence check) ===")
+              status, body = get(f"{BACKEND}/api/v1/stocks/{symbol}/decision-v2", cookie_header)
+              print(f"HTTP {status}")
+              if status == 200:
+                  d = json.loads(body)
+                  print("decision:", d.get("decision"), "confidence_score:", d.get("confidence_score"))
+              else:
+                  print(body[:500])
+              print()
+          PYEOF
+          python3 /tmp/check.py
