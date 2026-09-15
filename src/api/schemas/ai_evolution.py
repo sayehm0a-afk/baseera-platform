@@ -6,9 +6,9 @@ live or fabricates a value not already stored.
 """
 
 from datetime import date, datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class GroupPerformanceOut(BaseModel):
@@ -302,3 +302,48 @@ class ValidationLedgerEntryOut(BaseModel):
 class ValidationLedgerOut(BaseModel):
     validation_session_id: int
     entries: List[ValidationLedgerEntryOut]
+
+
+class ConfidenceCalibrationCreateRequest(BaseModel):
+    """POST body for proposing a new ConfidenceCalibrationModel --
+    see ConfidenceCalibrationEngine.propose. `source` selects which
+    outcome ledger to train on ('legacy_v1', the default, or
+    'decision_v2'); `reference_horizon_days` is silently unused for
+    'decision_v2' (that ledger has no fixed-horizon concept -- see
+    propose()'s own comment)."""
+
+    training_period_start: date
+    training_period_end: date
+    reference_horizon_days: Optional[int] = None
+    source: Optional[str] = None
+    min_sample_size: Optional[int] = None
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_period(self) -> "ConfidenceCalibrationCreateRequest":
+        if self.training_period_end <= self.training_period_start:
+            raise ValueError("training_period_end must be after training_period_start")
+        return self
+
+
+class ConfidenceCalibrationModelOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    version: str
+    status: str
+    method: str
+    training_source: str
+    model_params: Dict[str, Any]
+    training_period_start: Optional[date] = None
+    training_period_end: Optional[date] = None
+    training_sample_size: int
+    calibration_error_before: Optional[float] = None
+    calibration_error_after: Optional[float] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    activated_at: Optional[datetime] = None
+    deactivated_at: Optional[datetime] = None
+
+
+class ConfidenceCalibrationListOut(BaseModel):
+    models: List[ConfidenceCalibrationModelOut]

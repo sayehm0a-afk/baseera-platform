@@ -1,0 +1,99 @@
+name: Confidence calibration - propose and test (real production data)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Training source: legacy_v1 or decision_v2"
+        required: false
+        default: "legacy_v1"
+      training_period_start:
+        description: "Training period start (YYYY-MM-DD)"
+        required: false
+        default: "2020-01-01"
+      training_period_end:
+        description: "Training period end (YYYY-MM-DD)"
+        required: false
+        default: "2026-09-15"
+
+permissions:
+  contents: read
+
+jobs:
+  propose-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      CAL_SOURCE: ${{ github.event.inputs.source }}
+      CAL_PERIOD_START: ${{ github.event.inputs.training_period_start }}
+      CAL_PERIOD_END: ${{ github.event.inputs.training_period_end }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Propose then test a confidence calibration model against real outcome history
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          cat > /tmp/propose_test.py <<'PYEOF'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          BACKEND = os.environ["BACKEND_URL"]
+          STAFF_EMAIL = os.environ["STAFF_EMAIL"]
+          STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
+          SOURCE = os.environ["CAL_SOURCE"]
+          PERIOD_START = os.environ["CAL_PERIOD_START"]
+          PERIOD_END = os.environ["CAL_PERIOD_END"]
+
+          def request(method, url, body=None, cookies=None):
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+              if cookies:
+                  req.add_header("Cookie", cookies)
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return resp.status, resp.read().decode(), resp.headers
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(), e.headers
+
+          status, body, headers = request("POST", f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
+          cookie_pairs = [c.split(";")[0] for c in (headers.get_all("Set-Cookie") or [])]
+          cookie_header = "; ".join(cookie_pairs)
+
+          print(f"=== POST /admin/ai-evolution/confidence-calibrations (source={SOURCE}, period={PERIOD_START}..{PERIOD_END}) ===")
+          status, body, _ = request(
+              "POST",
+              f"{BACKEND}/api/v1/admin/ai-evolution/confidence-calibrations",
+              {"training_period_start": PERIOD_START, "training_period_end": PERIOD_END, "source": SOURCE},
+              cookie_header,
+          )
+          print(f"HTTP {status}")
+          print(body)
+          print()
+          if status != 200:
+              raise SystemExit(0)
+
+          proposed = json.loads(body)
+          version = proposed["version"]
+
+          print(f"=== POST /admin/ai-evolution/confidence-calibrations/{version}/test ===")
+          status, body, _ = request(
+              "POST", f"{BACKEND}/api/v1/admin/ai-evolution/confidence-calibrations/{version}/test", None, cookie_header,
+          )
+          print(f"HTTP {status}")
+          print(body)
+          PYEOF
+          python3 /tmp/propose_test.py
