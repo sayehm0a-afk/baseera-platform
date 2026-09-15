@@ -1,0 +1,88 @@
+name: Confidence calibration - activate a validated model
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string of a VALIDATED confidence calibration model to activate"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      CAL_VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Activate the named confidence calibration model
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          cat > /tmp/activate.py <<'PYEOF'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          BACKEND = os.environ["BACKEND_URL"]
+          STAFF_EMAIL = os.environ["STAFF_EMAIL"]
+          STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
+          VERSION = os.environ["CAL_VERSION"]
+
+          def request(method, url, body=None, cookies=None, csrf_token=None):
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+              if cookies:
+                  req.add_header("Cookie", cookies)
+              if csrf_token:
+                  req.add_header("X-CSRF-Token", csrf_token)
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return resp.status, resp.read().decode(), resp.headers
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(), e.headers
+
+          status, body, headers = request("POST", f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
+          cookie_pairs = [c.split(";")[0] for c in (headers.get_all("Set-Cookie") or [])]
+          cookie_header = "; ".join(cookie_pairs)
+          csrf_token = next(
+              (pair.split("=", 1)[1] for pair in cookie_pairs if pair.startswith("csrf_token=")), None,
+          )
+
+          print(f"=== GET /admin/ai-evolution/confidence-calibrations/{VERSION} (pre-activation state) ===")
+          status, body, _ = request("GET", f"{BACKEND}/api/v1/admin/ai-evolution/confidence-calibrations/{VERSION}", None, cookie_header)
+          print(f"HTTP {status}")
+          print(body)
+          print()
+
+          print(f"=== POST /admin/ai-evolution/confidence-calibrations/{VERSION}/activate ===")
+          status, body, _ = request(
+              "POST", f"{BACKEND}/api/v1/admin/ai-evolution/confidence-calibrations/{VERSION}/activate", None,
+              cookie_header, csrf_token,
+          )
+          print(f"HTTP {status}")
+          print(body)
+          print()
+
+          print("=== GET /admin/ai-evolution/calibration-status (confirm) ===")
+          status, body, _ = request("GET", f"{BACKEND}/api/v1/admin/ai-evolution/calibration-status", None, cookie_header)
+          print(f"HTTP {status}")
+          print(body)
+          PYEOF
+          python3 /tmp/activate.py
