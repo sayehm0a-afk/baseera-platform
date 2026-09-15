@@ -215,7 +215,7 @@ def test_strongest_and_weakest_groups_require_minimum_sample_size(session):
 
     result = compute_personal_performance_dashboard(session)
 
-    # Banking has only 5 samples (< _MIN_GROUP_SAMPLE_SIZE=10) -- must
+    # Banking has only 5 samples (< MIN_GROUP_SAMPLE_SIZE=10) -- must
     # not appear in strongest/weakest at all, never shown as if reliable.
     groups_seen = {g.group for g in result.strongest_groups + result.weakest_groups}
     assert "Banking" not in groups_seen

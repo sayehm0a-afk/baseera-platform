@@ -74,6 +74,11 @@ from src.market_intelligence.market_snapshot import MarketSnapshotBuilder
 from src.market_intelligence.market_status import get_market_status, market_status_label_ar
 from src.market_intelligence.opportunity_ranking import curate_opportunity_rankings
 from src.market_intelligence.personal_scan import select_top_opportunities
+from src.market_intelligence.sector_reliability import (
+    SectorReliability,
+    compute_sector_reliability_by_arabic_label,
+    reliability_for_sector,
+)
 from src.market_intelligence.ranking import RankingEngine
 from src.market_intelligence.read_model import outcome_from_record
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
@@ -513,7 +518,9 @@ def get_opportunities(
     )
 
 
-def _to_personal_opportunity_out(rank: int, snapshot: DecisionV2Snapshot) -> PersonalOpportunityOut:
+def _to_personal_opportunity_out(
+    rank: int, snapshot: DecisionV2Snapshot, sector_reliability: SectorReliability
+) -> PersonalOpportunityOut:
     # entry_status is already derived from price_has_missed_entry_zone
     # (see engine.py) -- reusing the field instead of recomputing it.
     is_entry_late = snapshot.entry_status == "MISSED_ENTRY"
@@ -550,6 +557,10 @@ def _to_personal_opportunity_out(rank: int, snapshot: DecisionV2Snapshot) -> Per
         nearest_resistance=float(snapshot.nearest_resistance) if snapshot.nearest_resistance is not None else None,
         breakout_level=float(snapshot.breakout_level) if snapshot.breakout_level is not None else None,
         decision_timestamp=snapshot.decision_timestamp,
+        historical_reliability_level=sector_reliability.level,
+        historical_reliability_label_ar=sector_reliability.label_ar,
+        historical_reliability_win_rate_pct=sector_reliability.win_rate_pct,
+        historical_reliability_sample_size=sector_reliability.sample_size,
     )
 
 
@@ -579,6 +590,10 @@ def get_personal_top_opportunities(
     else:
         message_ar = None
 
+    sector_reliability_by_ar = (
+        compute_sector_reliability_by_arabic_label(session) if result.candidates else {}
+    )
+
     return PersonalScanOut(
         scan_run_id=result.scan_run.id if result.scan_run is not None else None,
         generated_at=result.scan_run.finished_at if result.scan_run is not None else None,
@@ -587,7 +602,12 @@ def get_personal_top_opportunities(
         is_stale=result.is_stale,
         freshness_state=result.freshness_state,
         freshness_label_ar=result.freshness_label_ar,
-        opportunities=[_to_personal_opportunity_out(i + 1, s) for i, s in enumerate(result.candidates)],
+        opportunities=[
+            _to_personal_opportunity_out(
+                i + 1, s, reliability_for_sector(sector_reliability_by_ar, s.sector_ar)
+            )
+            for i, s in enumerate(result.candidates)
+        ],
         message_ar=message_ar,
     )
 
