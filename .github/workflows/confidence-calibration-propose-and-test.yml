@@ -58,11 +58,13 @@ jobs:
           PERIOD_START = os.environ["CAL_PERIOD_START"]
           PERIOD_END = os.environ["CAL_PERIOD_END"]
 
-          def request(method, url, body=None, cookies=None):
+          def request(method, url, body=None, cookies=None, csrf_token=None):
               data = json.dumps(body).encode() if body is not None else None
               req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
               if cookies:
                   req.add_header("Cookie", cookies)
+              if csrf_token:
+                  req.add_header("X-CSRF-Token", csrf_token)
               try:
                   with urllib.request.urlopen(req, timeout=30) as resp:
                       return resp.status, resp.read().decode(), resp.headers
@@ -70,8 +72,15 @@ jobs:
                   return e.code, e.read().decode(), e.headers
 
           status, body, headers = request("POST", f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
-          cookie_pairs = [c.split(";")[0] for c in (headers.get_all("Set-Cookie") or [])]
+          set_cookies = headers.get_all("Set-Cookie") or []
+          cookie_pairs = [c.split(";")[0] for c in set_cookies]
           cookie_header = "; ".join(cookie_pairs)
+          # CSRFMiddleware (double-submit cookie): every mutating /api/v1/*
+          # request with a session cookie must also echo the non-httpOnly
+          # csrf_token cookie back as an X-CSRF-Token header.
+          csrf_token = next(
+              (pair.split("=", 1)[1] for pair in cookie_pairs if pair.startswith("csrf_token=")), None,
+          )
 
           print(f"=== POST /admin/ai-evolution/confidence-calibrations (source={SOURCE}, period={PERIOD_START}..{PERIOD_END}) ===")
           status, body, _ = request(
@@ -79,6 +88,7 @@ jobs:
               f"{BACKEND}/api/v1/admin/ai-evolution/confidence-calibrations",
               {"training_period_start": PERIOD_START, "training_period_end": PERIOD_END, "source": SOURCE},
               cookie_header,
+              csrf_token,
           )
           print(f"HTTP {status}")
           print(body)
@@ -91,7 +101,8 @@ jobs:
 
           print(f"=== POST /admin/ai-evolution/confidence-calibrations/{version}/test ===")
           status, body, _ = request(
-              "POST", f"{BACKEND}/api/v1/admin/ai-evolution/confidence-calibrations/{version}/test", None, cookie_header,
+              "POST", f"{BACKEND}/api/v1/admin/ai-evolution/confidence-calibrations/{version}/test", None,
+              cookie_header, csrf_token,
           )
           print(f"HTTP {status}")
           print(body)
