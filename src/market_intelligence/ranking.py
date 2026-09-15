@@ -38,7 +38,9 @@ _BUY_LIKE = {Recommendation.BUY, Recommendation.STRONG_BUY}
 _SELL_LIKE = {Recommendation.SELL, Recommendation.STRONG_SELL}
 
 
-def _to_entry(outcome: SymbolScanOutcome, rank_value: Optional[float]) -> RankingEntry:
+def _to_entry(
+    outcome: SymbolScanOutcome, rank_value: Optional[float], calibrated_confidences: Dict[str, float]
+) -> RankingEntry:
     return RankingEntry(
         symbol=outcome.symbol,
         sector=outcome.sector,
@@ -53,6 +55,7 @@ def _to_entry(outcome: SymbolScanOutcome, rank_value: Optional[float]) -> Rankin
         stop_loss=outcome.stop_loss,
         risk_reward_ratio=outcome.risk_reward_ratio,
         time_horizon=outcome.time_horizon.value if outcome.time_horizon else None,
+        calibrated_confidence=calibrated_confidences.get(outcome.symbol),
     )
 
 
@@ -218,7 +221,9 @@ class RankingEngine:
             RankingCategory.RECENTLY_UPGRADED,
             RankingCategory.RECENTLY_DOWNGRADED,
         ):
-            rankings[category] = self._build_from_changes(category, change_result, by_symbol, top_n, generated_at)
+            rankings[category] = self._build_from_changes(
+                category, change_result, by_symbol, top_n, generated_at, calibrated_confidences
+            )
 
         rankings[RankingCategory.NEW_OPPORTUNITIES] = self._build_new_opportunities(
             change_result, by_symbol, top_n, generated_at, calibrated_confidences
@@ -239,7 +244,7 @@ class RankingEngine:
     ) -> RankingList:
         matching = [o for o in outcomes if rule.predicate(o, calibrated_confidences)]
         matching.sort(key=rule.key_fn, reverse=rule.reverse)
-        entries = [_to_entry(o, _scalar_rank_value(rule.key_fn(o))) for o in matching[:top_n]]
+        entries = [_to_entry(o, _scalar_rank_value(rule.key_fn(o)), calibrated_confidences) for o in matching[:top_n]]
         return RankingList(category=category, entries=entries, generated_at=generated_at)
 
     @staticmethod
@@ -249,6 +254,7 @@ class RankingEngine:
         by_symbol: Dict[str, SymbolScanOutcome],
         top_n: int,
         generated_at: datetime,
+        calibrated_confidences: Dict[str, float],
     ) -> RankingList:
         if change_result is None:
             return RankingList(category=category, entries=[], generated_at=generated_at)
@@ -261,7 +267,7 @@ class RankingEngine:
         matching_events.sort(key=lambda e: e.delta if e.delta is not None else 0.0, reverse=reverse)
 
         entries = [
-            _to_entry(by_symbol[e.symbol], e.delta) for e in matching_events[:top_n]
+            _to_entry(by_symbol[e.symbol], e.delta, calibrated_confidences) for e in matching_events[:top_n]
         ]
         return RankingList(category=category, entries=entries, generated_at=generated_at)
 
@@ -301,7 +307,7 @@ class RankingEngine:
 
         matching = [by_symbol[s] for s in candidates if s in by_symbol]
         matching.sort(key=lambda o: o.final_score, reverse=True)
-        entries = [_to_entry(o, o.final_score) for o in matching[:top_n]]
+        entries = [_to_entry(o, o.final_score, calibrated_confidences) for o in matching[:top_n]]
         return RankingList(category=RankingCategory.NEW_OPPORTUNITIES, entries=entries, generated_at=generated_at)
 
     @staticmethod

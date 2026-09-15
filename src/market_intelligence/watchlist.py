@@ -226,6 +226,7 @@ class WatchlistEngine:
                     recommendation=o.recommendation.value if o.recommendation else None,
                     confidence=o.confidence,
                     reason=rule.reason_fn(o),
+                    calibrated_confidence=calibrated_confidences.get(o.symbol),
                 )
                 for o in matching[:max_size]
             ]

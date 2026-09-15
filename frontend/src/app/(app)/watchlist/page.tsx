@@ -105,6 +105,9 @@ export default function WatchlistPage() {
                         <AiStar size="sm" />
                         <span className="bsr-numeric">
                           {Math.round(entry.confidence)}%
+                          {entry.calibrated_confidence != null
+                            ? ` (معايرة: ${Math.round(entry.calibrated_confidence * 100)}%)`
+                            : ""}
                         </span>
                       </span>
                     ) : null}

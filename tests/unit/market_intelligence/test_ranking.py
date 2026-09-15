@@ -298,6 +298,45 @@ def test_generated_at_uses_the_real_supplied_timestamp_not_read_time():
         assert ranking_list.generated_at != datetime.now(timezone.utc)
 
 
+def test_calibrated_confidence_is_surfaced_on_the_entry_not_just_used_to_gate():
+    # Confidence-calibration audit (2026-09-15): compute_calibrated_
+    # confidences' output was already used to gate publication but the
+    # actual number was discarded before reaching RankingEntry -- every
+    # entry-building path must now carry it through.
+    outcomes = [
+        make_outcome(symbol="HIGH_CAL", decision=make_decision(symbol="HIGH_CAL", final_score=60.0, confidence=70.0)),
+        make_outcome(symbol="NO_CAL", decision=make_decision(symbol="NO_CAL", final_score=55.0, confidence=65.0)),
+    ]
+    calibrated_confidences = {"HIGH_CAL": 0.62}
+
+    rankings = RankingEngine().rank(outcomes, calibrated_confidences=calibrated_confidences)
+
+    entries_by_symbol = {e.symbol: e for e in rankings[RankingCategory.HIGHEST_CONFIDENCE].entries}
+    assert entries_by_symbol["HIGH_CAL"].calibrated_confidence == 0.62
+    # Honest null, not fabricated, when no model applied to this symbol.
+    assert entries_by_symbol["NO_CAL"].calibrated_confidence is None
+
+
+def test_calibrated_confidence_is_surfaced_on_change_dependent_categories_too():
+    now = datetime.now(timezone.utc)
+    change_result = ChangeDetectionResult(
+        events=[
+            ChangeEvent(
+                symbol="A", change_type=ChangeType.SCORE_CHANGE, previous_value="50.0", new_value="70.0",
+                delta=20.0, detected_at=now,
+            ),
+        ],
+        new_symbols=[], removed_symbols=[], previous_scan_run_id=1,
+    )
+    outcomes = [make_outcome(symbol="A", decision=make_decision(symbol="A", final_score=70.0))]
+    calibrated_confidences = {"A": 0.55}
+
+    rankings = RankingEngine().rank(outcomes, change_result, calibrated_confidences)
+
+    entries = rankings[RankingCategory.MOST_IMPROVED_TODAY].entries
+    assert entries[0].calibrated_confidence == 0.55
+
+
 def test_no_calibrated_confidences_argument_behaves_exactly_as_before():
     # Backward compatibility: omitting calibrated_confidences entirely
     # (every existing caller before this hardening pass) must produce

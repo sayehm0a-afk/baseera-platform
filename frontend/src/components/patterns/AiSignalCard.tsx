@@ -11,6 +11,7 @@ interface AiSignalCardProps {
   sector?: string | null;
   recommendation: RecommendationValue;
   confidence?: number | null;
+  calibratedConfidence?: number | null;
   currentPrice?: number | null;
   targetPrice?: number | null;
   stopLoss?: number | null;
@@ -29,6 +30,7 @@ export function AiSignalCard({
   sector,
   recommendation,
   confidence,
+  calibratedConfidence,
   currentPrice,
   targetPrice,
   stopLoss,
@@ -59,7 +61,10 @@ export function AiSignalCard({
               <AiStar size="sm" />
               نسبة الثقة
             </span>
-            <span className="bsr-numeric">{Math.round(confidence)}%</span>
+            <span className="bsr-numeric">
+              {Math.round(confidence)}%
+              {calibratedConfidence != null ? ` (معايرة: ${Math.round(calibratedConfidence * 100)}%)` : ""}
+            </span>
           </div>
           <ConfidenceBar confidence={confidence} />
         </div>

@@ -129,6 +129,24 @@ def test_calibrated_confidences_excludes_a_below_threshold_symbol_from_gated_wat
     assert [e.symbol for e in result.entries] == ["HIGH_CAL"]
 
 
+def test_calibrated_confidence_is_surfaced_on_the_entry_not_just_used_to_gate():
+    # Confidence-calibration audit (2026-09-15): see ranking.py's
+    # equivalent test -- the calibrated number was already computed to
+    # gate INVESTMENT/SWING/RECOVERY but discarded before reaching
+    # WatchlistEntry.
+    outcomes = [
+        make_outcome(symbol="HIGH_CAL", decision=make_decision(
+            symbol="HIGH_CAL", recommendation=Recommendation.BUY,
+            time_horizon=TimeHorizon.LONG_TERM, risk_level=RiskLevel.LOW,
+        )),
+    ]
+    calibrated_confidences = {"HIGH_CAL": 0.62}
+
+    result = WatchlistEngine().build(outcomes, calibrated_confidences)[WatchlistCategory.INVESTMENT]
+
+    assert result.entries[0].calibrated_confidence == 0.62
+
+
 def test_no_calibrated_confidences_argument_behaves_exactly_as_before():
     outcomes = [make_outcome(symbol="A", decision=make_decision(
         symbol="A", recommendation=Recommendation.BUY, time_horizon=TimeHorizon.LONG_TERM, risk_level=RiskLevel.LOW,

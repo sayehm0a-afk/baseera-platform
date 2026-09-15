@@ -453,6 +453,7 @@ def get_rankings(
                         expected_return_pct=e.expected_return_pct, risk_level=e.risk_level, rank_value=e.rank_value,
                         current_price=e.current_price, stop_loss=e.stop_loss,
                         risk_reward_ratio=e.risk_reward_ratio, time_horizon=e.time_horizon,
+                        calibrated_confidence=e.calibrated_confidence,
                     )
                     for e in ranking_list.entries
                 ],
@@ -508,6 +509,7 @@ def get_opportunities(
                         expected_return_pct=e.expected_return_pct, risk_level=e.risk_level, rank_value=e.rank_value,
                         current_price=e.current_price, stop_loss=e.stop_loss,
                         risk_reward_ratio=e.risk_reward_ratio, time_horizon=e.time_horizon,
+                        calibrated_confidence=e.calibrated_confidence,
                     )
                     for e in entry.ranking_list.entries
                 ],
@@ -656,7 +658,7 @@ def get_watchlists(
                 entries=[
                     WatchlistEntryOut(
                         symbol=e.symbol, sector=e.sector, sector_ar=sector_label_ar(e.sector), recommendation=e.recommendation,
-                        confidence=e.confidence, reason=e.reason,
+                        confidence=e.confidence, reason=e.reason, calibrated_confidence=e.calibrated_confidence,
                     )
                     for e in result.entries
                 ],

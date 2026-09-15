@@ -29,6 +29,20 @@ describe("AiSignalCard", () => {
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
+  it("shows calibrated confidence alongside raw confidence when a calibration model was applied", () => {
+    render(
+      <AiSignalCard symbol="2222" recommendation="BUY" confidence={85} calibratedConfidence={0.62} />
+    );
+    expect(screen.getByText(/85%/)).toBeInTheDocument();
+    expect(screen.getByText(/معايرة: 62%/)).toBeInTheDocument();
+  });
+
+  it("shows only raw confidence when no calibration model was applied", () => {
+    render(<AiSignalCard symbol="2222" recommendation="BUY" confidence={72} />);
+    expect(screen.getByText("72%")).toBeInTheDocument();
+    expect(screen.queryByText(/معايرة/)).not.toBeInTheDocument();
+  });
+
   it("renders the target price and colors a positive expected return with the up token", () => {
     render(<AiSignalCard symbol="2222" recommendation="BUY" targetPrice={30.5} expectedReturnPct={4.2} />);
     expect(screen.getByText("الهدف: 30.50")).toBeInTheDocument();

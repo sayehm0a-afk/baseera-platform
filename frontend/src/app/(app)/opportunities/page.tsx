@@ -109,6 +109,7 @@ export default function OpportunitiesPage() {
                   sector={entry.sector_ar ?? entry.sector}
                   recommendation={(entry.recommendation as RecommendationValue) ?? "HOLD"}
                   confidence={entry.confidence}
+                  calibratedConfidence={entry.calibrated_confidence}
                   currentPrice={entry.current_price}
                   targetPrice={entry.target_price}
                   stopLoss={entry.stop_loss}

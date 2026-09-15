@@ -81,6 +81,11 @@ class RankingEntryOut(BaseModel):
     stop_loss: Optional[float] = None
     risk_reward_ratio: Optional[float] = None
     time_horizon: Optional[str] = None
+    # Confidence-calibration audit (2026-09-15): the calibrated 0-1
+    # success probability already computed to gate publication -- None
+    # whenever no calibration model was active/applicable, never
+    # fabricated. See RankingEntry.calibrated_confidence.
+    calibrated_confidence: Optional[float] = None
 
 
 class RankingListOut(BaseModel):
@@ -215,6 +220,9 @@ class WatchlistEntryOut(BaseModel):
     recommendation: Optional[str] = None
     confidence: Optional[float] = None
     reason: str
+    # Confidence-calibration audit (2026-09-15): see RankingEntryOut.
+    # calibrated_confidence's own comment.
+    calibrated_confidence: Optional[float] = None
 
 
 class WatchlistResultOut(BaseModel):
