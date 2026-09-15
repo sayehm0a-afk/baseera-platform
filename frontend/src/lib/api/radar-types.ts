@@ -54,6 +54,17 @@ export interface RadarOpportunitySummary {
   decision_freshness_status: "LIVE" | "LAST_SESSION" | "STALE" | "UNKNOWN";
   is_decision_fresh: boolean;
   decision_v2_snapshot_id: number;
+
+  sector_ar: string | null;
+  // Real, independent per-sector win-rate disclosure -- same fields,
+  // same source as PersonalOpportunity's own (see that type's
+  // comment and src.market_intelligence.sector_reliability on the
+  // backend). Smart Radar is the app's de facto home screen, so it
+  // must carry the same beginner-safety disclosure as "/today".
+  historical_reliability_level: "HIGH" | "MODERATE" | "LOW" | "INSUFFICIENT_DATA";
+  historical_reliability_label_ar: string;
+  historical_reliability_win_rate_pct: number | null;
+  historical_reliability_sample_size: number;
 }
 
 export interface RadarStage1ComponentScores {
@@ -113,11 +124,11 @@ export interface RadarOpportunityDetail extends RadarOpportunitySummary {
   why_not_stronger_ar: string | null;
   why_not_buy_reasons: string[];
 
-  // Phase 5: per-opportunity market-risk read, sector, and any
-  // conditions that would invalidate this decision.
+  // Phase 5: per-opportunity market-risk read and any conditions that
+  // would invalidate this decision. sector_ar is inherited from
+  // RadarOpportunitySummary above.
   market_risk_state: string | null;
   market_risk_label_ar: string | null;
-  sector_ar: string | null;
   invalidation_conditions: string[];
 
   decision_timestamp: string;

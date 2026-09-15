@@ -1007,6 +1007,19 @@ class RadarOpportunitySummaryOut(BaseModel):
     is_decision_fresh: bool = False
     decision_v2_snapshot_id: int
 
+    sector_ar: Optional[str] = None
+    # Real, independent disclosure (2026-09-15) -- same fields, same
+    # source, and same rationale as PersonalOpportunityOut's own (see
+    # that schema's docstring and src.market_intelligence.
+    # sector_reliability): confidence_score has NOT been shown to track
+    # real accuracy reliably, so a beginner reading Smart Radar -- the
+    # app's de facto home screen -- must see this sector's own real
+    # historical win rate too, not confidence alone.
+    historical_reliability_level: str = "INSUFFICIENT_DATA"
+    historical_reliability_label_ar: str = "بيانات غير كافية لتقييم موثوقية هذا القطاع بعد"
+    historical_reliability_win_rate_pct: Optional[float] = None
+    historical_reliability_sample_size: int = 0
+
 
 class RadarOpportunityDetailOut(RadarOpportunitySummaryOut):
     """GET .../radar-v2/opportunities/{id} -- adds Stage 1's full
@@ -1075,12 +1088,11 @@ class RadarOpportunityDetailOut(RadarOpportunitySummaryOut):
     # market-wide classifier's read at decision time (already computed
     # and gating entries in gates.py -- this only exposes the per-
     # opportunity value alongside the market-wide banner already shown
-    # on the Radar home page). sector_ar and invalidation_conditions are
-    # likewise pre-existing DecisionV2Snapshot fields with no prior
-    # Radar API exposure.
+    # on the Radar home page). invalidation_conditions is likewise a
+    # pre-existing DecisionV2Snapshot field with no prior Radar API
+    # exposure. sector_ar is inherited from RadarOpportunitySummaryOut.
     market_risk_state: Optional[str] = None
     market_risk_label_ar: Optional[str] = None
-    sector_ar: Optional[str] = None
     invalidation_conditions: List[str] = Field(default_factory=list)
 
     decision_timestamp: datetime

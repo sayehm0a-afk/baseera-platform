@@ -20,6 +20,13 @@ function priceLabel(value: number | null): string {
   return value == null ? "--" : value.toFixed(2);
 }
 
+const RELIABILITY_COLOR: Record<string, string> = {
+  HIGH: "bg-bsr-market-up/15 text-bsr-market-up",
+  MODERATE: "bg-bsr-gold-500/15 text-bsr-gold-500",
+  LOW: "bg-bsr-market-down/15 text-bsr-market-down",
+  INSUFFICIENT_DATA: "bg-bsr-surface-raised text-bsr-text-secondary",
+};
+
 /** One Smart Radar opportunity card -- every field is read straight
  * from GET /api/v1/radar/summary or /opportunities, never recomputed
  * here (see src.market_intelligence.radar_v2). Mirrors
@@ -47,6 +54,22 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
           <span className="bsr-numeric text-sm text-bsr-text-secondary">{o.symbol}</span>
         </div>
         <DecisionBadge value={o.classification} labelAr={o.classification_label_ar} />
+      </div>
+
+      {/* Real, independent per-sector win-rate disclosure -- shown
+       * prominently because confidence_score alone has not been shown
+       * to track real accuracy reliably; Smart Radar is the app's
+       * de facto home screen, so this must appear here too, not only
+       * on "/today". See src.market_intelligence.sector_reliability. */}
+      <div
+        className={`rounded-bsr-md px-bsr-3 py-bsr-2 text-xs font-semibold ${
+          RELIABILITY_COLOR[o.historical_reliability_level]
+        }`}
+      >
+        {o.historical_reliability_label_ar}
+        {o.historical_reliability_win_rate_pct != null
+          ? ` (${Math.round(o.historical_reliability_win_rate_pct)}% نسبة ربح فعلية على ${o.historical_reliability_sample_size} توصية سابقة)`
+          : ""}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-bsr-2 text-xs text-bsr-text-secondary">

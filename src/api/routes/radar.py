@@ -74,6 +74,7 @@ from src.market_intelligence.config import get_radar_scan_now_cooldown_seconds, 
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status, market_status_label_ar
 from src.market_intelligence.radar_v2 import list_live_opportunities, run_radar_v2_cycle
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
+from src.market_intelligence.sector_reliability import compute_sector_reliability_by_arabic_label
 
 router = APIRouter(prefix="/api/v1/radar", tags=["radar"])
 
@@ -146,6 +147,7 @@ def get_radar_summary(
     risk = classify_market_risk(market_is_open=market_is_open, breadth=breadth)
 
     top = live[:_HOME_TOP_OPPORTUNITIES_LIMIT]
+    sector_reliability_by_ar = compute_sector_reliability_by_arabic_label(session) if top else {}
 
     latest_stage1_run = _repository.get_latest_run_with_stage1_metrics(session)
     final_opportunities_count = (
@@ -167,7 +169,7 @@ def get_radar_summary(
         market_risk_basis_ar=risk.basis_ar,
         entry_permitted=risk.entry_permitted,
         market_risk_is_live=risk.is_live,
-        top_opportunities=[radar_summary_out(o) for o in top],
+        top_opportunities=[radar_summary_out(o, sector_reliability_by_ar) for o in top],
         stage1_universe_size=latest_stage1_run.stage1_universe_size if latest_stage1_run else None,
         stage1_evaluated_count=latest_stage1_run.stage1_evaluated_count if latest_stage1_run else None,
         stage1_candidate_count=latest_stage1_run.stage1_candidate_count if latest_stage1_run else None,
@@ -192,7 +194,8 @@ def list_radar_opportunities(
     stage1_ranking_score descending. Returns an empty list, never a
     fabricated one, when no real opportunity has been emitted yet."""
     rows = list_live_opportunities(session, classification=classification, limit=limit)
-    return [radar_summary_out(o) for o in rows]
+    sector_reliability_by_ar = compute_sector_reliability_by_arabic_label(session) if rows else {}
+    return [radar_summary_out(o, sector_reliability_by_ar) for o in rows]
 
 
 @router.get("/opportunities/{opportunity_id}", response_model=RadarOpportunityDetailOut)
@@ -216,7 +219,8 @@ def get_radar_opportunity(
         .filter_by(decision_v2_snapshot_id=opportunity.decision_v2_snapshot_id)
         .first()
     )
-    return radar_detail_out(opportunity, outcome)
+    sector_reliability_by_ar = compute_sector_reliability_by_arabic_label(session)
+    return radar_detail_out(opportunity, outcome, sector_reliability_by_ar)
 
 
 @router.post("/scan-now", response_model=RadarScanNowOut)

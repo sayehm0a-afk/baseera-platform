@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import RadarPage from "./page";
-import type { RadarHomeSummary } from "@/lib/api/radar-types";
+import type { RadarHomeSummary, RadarOpportunitySummary } from "@/lib/api/radar-types";
 
 /** GET /api/v1/radar/summary is a read-only, zero-SAHMK-cost view over
  * already-persisted RadarOpportunity rows -- this page never triggers
@@ -23,7 +23,7 @@ function opportunity(
     is_decision_fresh?: boolean;
     decision_freshness_status?: "LIVE" | "LAST_SESSION" | "STALE" | "UNKNOWN";
   } = {}
-) {
+): RadarOpportunitySummary {
   return {
     id: overrides.id ?? 1,
     symbol,
@@ -55,6 +55,11 @@ function opportunity(
     decision_freshness_status: overrides.decision_freshness_status ?? ("LIVE" as const),
     is_decision_fresh: overrides.is_decision_fresh ?? true,
     decision_v2_snapshot_id: 100,
+    sector_ar: null,
+    historical_reliability_level: "INSUFFICIENT_DATA",
+    historical_reliability_label_ar: "بيانات غير كافية لتقييم موثوقية هذا القطاع بعد",
+    historical_reliability_win_rate_pct: null,
+    historical_reliability_sample_size: 0,
   };
 }
 

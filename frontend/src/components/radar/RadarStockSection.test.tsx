@@ -41,6 +41,11 @@ function buildSummary(overrides: Partial<RadarOpportunitySummary> = {}): RadarOp
     decision_freshness_status: "LIVE" as const,
     is_decision_fresh: true,
     decision_v2_snapshot_id: 100,
+    sector_ar: "الطاقة",
+    historical_reliability_level: "HIGH",
+    historical_reliability_label_ar: "موثوقية تاريخية عالية لهذا القطاع",
+    historical_reliability_win_rate_pct: 74.1,
+    historical_reliability_sample_size: 88,
     ...overrides,
   };
 }
