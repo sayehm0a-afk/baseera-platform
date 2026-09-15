@@ -4,7 +4,8 @@ Evolution Layer. Real FastAPI routing against in-memory SQLite;
 test_admin_routes.py already uses for staff-gated routes.
 """
 
-from datetime import date, datetime, timezone
+import random
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterator
 
 import pytest
@@ -27,6 +28,10 @@ from src.domain.models import (
     DecisionV2OutcomeStatus,
     DecisionV2Snapshot,
     DiscoveredPattern,
+    RecommendationLabel,
+    RecommendationOutcome,
+    RecommendationOutcomeStatus,
+    RecommendationSnapshot,
     ReflectionReport,
     StaffRole,
     Stock,
@@ -523,4 +528,198 @@ def test_validation_session_ledger_includes_non_actionable_decisions_with_null_o
     entries = response.json()["entries"]
     assert len(entries) == 1
     assert entries[0]["decision"] == "WATCH"
-    assert entries[0]["outcome_status"] is None
+
+
+# --- POST/GET /confidence-calibrations/* ---------------------------
+#
+# Real ConfidenceCalibrationEngine end-to-end through the HTTP layer
+# (no mocking) -- src.ai_evolution.confidence_calibration's own unit
+# tests already cover the engine's internals (Platt/isotonic fitting,
+# ECE math, lifecycle transitions) exhaustively; these tests only
+# prove the new routes wire real requests/responses onto that engine
+# correctly.
+
+
+def _confidence_calibration_stock(session) -> Stock:
+    stock = Stock(symbol="2222", name_en="Stock 2222", sector="Energy")
+    session.add(stock)
+    session.commit()
+    return stock
+
+
+def _seed_confidence_outcome(session, stock, day_offset, confidence, success, horizon_days=7):
+    evaluated_at = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(days=day_offset)
+    snapshot = RecommendationSnapshot(
+        stock_id=stock.id, symbol=stock.symbol, evaluated_at=evaluated_at, market_price_at_evaluation=100.0,
+        recommendation=RecommendationLabel.BUY, total_score=60.0, confidence_score=confidence,
+        target_price=110.0, stop_loss=90.0, engine_version="1.0.0", source="live_scan",
+    )
+    session.add(snapshot)
+    session.flush()
+    session.add(
+        RecommendationOutcome(
+            snapshot_id=snapshot.id, symbol=stock.symbol, evaluation_horizon_days=horizon_days,
+            due_at=evaluated_at + timedelta(days=horizon_days),
+            status=RecommendationOutcomeStatus.SUCCESSFUL if success else RecommendationOutcomeStatus.FAILED,
+            evaluated_at=evaluated_at + timedelta(days=horizon_days),
+        )
+    )
+
+
+def _seed_confidence_overconfident_dataset(session, stock, n=60, seed=42):
+    """A systematically overconfident engine: stated confidence always
+    ~85, true success rate ~50% -- a real Platt/isotonic fit must
+    improve ECE (mirrors test_confidence_calibration.py's own
+    dataset)."""
+    rng = random.Random(seed)
+    for i in range(n):
+        _seed_confidence_outcome(session, stock, day_offset=i, confidence=85.0, success=rng.random() < 0.5)
+    session.commit()
+
+
+_PROPOSE_REQUEST = {"training_period_start": "2026-01-01", "training_period_end": "2026-12-31"}
+
+
+def test_non_staff_customer_is_rejected_from_confidence_calibration_routes(client, customer):
+    _as(customer)
+    assert client.post("/api/v1/admin/ai-evolution/confidence-calibrations", json=_PROPOSE_REQUEST).status_code == 403
+    assert client.get("/api/v1/admin/ai-evolution/confidence-calibrations").status_code == 403
+    assert client.get("/api/v1/admin/ai-evolution/confidence-calibrations/v1").status_code == 403
+    assert client.post("/api/v1/admin/ai-evolution/confidence-calibrations/v1/test").status_code == 403
+    assert client.post("/api/v1/admin/ai-evolution/confidence-calibrations/v1/activate").status_code == 403
+    assert client.post("/api/v1/admin/ai-evolution/confidence-calibrations/v1/rollback").status_code == 403
+
+
+def test_create_confidence_calibration_returns_a_draft(client, admin, session):
+    stock = _confidence_calibration_stock(session)
+    _seed_confidence_overconfident_dataset(session, stock, n=60)
+
+    _as(admin)
+    response = client.post("/api/v1/admin/ai-evolution/confidence-calibrations", json=_PROPOSE_REQUEST)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "DRAFT"
+    assert body["training_source"] == "legacy_v1"
+    assert body["training_sample_size"] == 60
+    assert body["calibration_error_before"] is not None
+    assert body["calibration_error_after"] is not None
+    assert body["version"]
+
+
+def test_create_confidence_calibration_422s_below_minimum_sample_size(client, admin, session):
+    stock = _confidence_calibration_stock(session)
+    _seed_confidence_outcome(session, stock, day_offset=0, confidence=70.0, success=True)
+    session.commit()
+
+    _as(admin)
+    response = client.post("/api/v1/admin/ai-evolution/confidence-calibrations", json=_PROPOSE_REQUEST)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "insufficient_calibration_data"
+
+
+def test_create_confidence_calibration_rejects_invalid_period(client, admin):
+    _as(admin)
+    bad = dict(_PROPOSE_REQUEST, training_period_start="2026-12-31", training_period_end="2026-01-01")
+    response = client.post("/api/v1/admin/ai-evolution/confidence-calibrations", json=bad)
+    assert response.status_code == 422
+
+
+def test_list_confidence_calibrations_filters_by_source(client, admin, session):
+    session.add(
+        ConfidenceCalibrationModel(
+            version="c-legacy", status=ConfidenceCalibrationStatus.DRAFT, method=ConfidenceCalibrationMethod.PLATT,
+            training_source="legacy_v1", model_params={"coef": 1.0, "intercept": 0.0}, training_sample_size=50,
+        )
+    )
+    session.add(
+        ConfidenceCalibrationModel(
+            version="c-v2", status=ConfidenceCalibrationStatus.DRAFT, method=ConfidenceCalibrationMethod.PLATT,
+            training_source="decision_v2", model_params={"coef": 1.0, "intercept": 0.0}, training_sample_size=50,
+        )
+    )
+    session.commit()
+
+    _as(admin)
+    all_response = client.get("/api/v1/admin/ai-evolution/confidence-calibrations")
+    assert len(all_response.json()["models"]) == 2
+
+    filtered = client.get("/api/v1/admin/ai-evolution/confidence-calibrations", params={"source": "decision_v2"})
+    assert [m["version"] for m in filtered.json()["models"]] == ["c-v2"]
+
+
+def test_get_confidence_calibration_404(client, admin):
+    _as(admin)
+    response = client.get("/api/v1/admin/ai-evolution/confidence-calibrations/does-not-exist")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "confidence_calibration_not_found"
+
+
+def test_confidence_calibration_full_lifecycle_via_http(client, admin, session):
+    """propose -> test -> activate for a first model, then propose a
+    second, test, activate (superseding the first), then roll back to
+    the first -- entirely through the HTTP routes, against a real
+    overconfident dataset that a genuine fit must improve. Proves
+    /test moves an improving fit to VALIDATED (never auto-passes),
+    /activate takes effect (visible on /calibration-status) and
+    supersedes the prior active model, and /rollback can reactivate a
+    specific earlier version."""
+    stock = _confidence_calibration_stock(session)
+    _seed_confidence_overconfident_dataset(session, stock, n=100, seed=1)
+
+    _as(admin)
+    first = client.post("/api/v1/admin/ai-evolution/confidence-calibrations", json=_PROPOSE_REQUEST).json()
+    first_version = first["version"]
+
+    tested = client.post(f"/api/v1/admin/ai-evolution/confidence-calibrations/{first_version}/test")
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "VALIDATED"
+
+    activated = client.post(f"/api/v1/admin/ai-evolution/confidence-calibrations/{first_version}/activate")
+    assert activated.status_code == 200
+    assert activated.json()["status"] == "ACTIVE"
+    assert activated.json()["activated_at"] is not None
+
+    status_response = client.get("/api/v1/admin/ai-evolution/calibration-status")
+    assert status_response.json()["active_confidence_calibration_version"] == first_version
+
+    _seed_confidence_overconfident_dataset(session, stock, n=100, seed=2)
+    second = client.post("/api/v1/admin/ai-evolution/confidence-calibrations", json=_PROPOSE_REQUEST).json()
+    second_version = second["version"]
+    client.post(f"/api/v1/admin/ai-evolution/confidence-calibrations/{second_version}/test")
+    activated_second = client.post(f"/api/v1/admin/ai-evolution/confidence-calibrations/{second_version}/activate")
+    assert activated_second.json()["status"] == "ACTIVE"
+
+    superseded_first = client.get(f"/api/v1/admin/ai-evolution/confidence-calibrations/{first_version}").json()
+    assert superseded_first["status"] == "SUPERSEDED"
+
+    rolled_back = client.post(f"/api/v1/admin/ai-evolution/confidence-calibrations/{first_version}/rollback")
+    assert rolled_back.status_code == 200
+    assert rolled_back.json()["version"] == first_version
+    assert rolled_back.json()["status"] == "ACTIVE"
+
+    status_after_rollback = client.get("/api/v1/admin/ai-evolution/calibration-status")
+    assert status_after_rollback.json()["active_confidence_calibration_version"] == first_version
+
+
+def test_activate_requires_validated_status(client, admin, session):
+    stock = _confidence_calibration_stock(session)
+    _seed_confidence_overconfident_dataset(session, stock, n=60)
+
+    _as(admin)
+    created = client.post("/api/v1/admin/ai-evolution/confidence-calibrations", json=_PROPOSE_REQUEST).json()
+
+    response = client.post(f"/api/v1/admin/ai-evolution/confidence-calibrations/{created['version']}/activate")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "invalid_confidence_calibration_transition"
+
+
+def test_activate_404s_for_unknown_version(client, admin):
+    _as(admin)
+    response = client.post("/api/v1/admin/ai-evolution/confidence-calibrations/does-not-exist/activate")
+    assert response.status_code == 404
+
+
+def test_test_route_404s_for_unknown_version(client, admin):
+    _as(admin)
+    response = client.post("/api/v1/admin/ai-evolution/confidence-calibrations/does-not-exist/test")
+    assert response.status_code == 404

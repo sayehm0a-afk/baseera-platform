@@ -79,6 +79,35 @@ class InvalidCalibrationTransitionError(APIError):
     code = "invalid_calibration_transition"
 
 
+class ConfidenceCalibrationNotFoundError(APIError):
+    """Kept distinct from CalibrationNotFoundError -- confidence-
+    probability calibration (ConfidenceCalibrationModel) and
+    contributor-weight calibration (CalibrationConfig) are two
+    different concepts with two different version namespaces; see
+    ConfidenceCalibrationModel's module docstring."""
+
+    status_code = 404
+    code = "confidence_calibration_not_found"
+
+
+class InvalidConfidenceCalibrationTransitionError(APIError):
+    """A confidence-calibration lifecycle action (test/activate/
+    rollback) was requested from a status that doesn't allow it."""
+
+    status_code = 409
+    code = "invalid_confidence_calibration_transition"
+
+
+class InsufficientCalibrationDataError(APIError):
+    """Too few labeled real outcomes exist yet to propose a confidence-
+    calibration model -- a legitimate "not yet" state (see
+    ConfidenceCalibrationEngine.propose's min_sample_size check), not a
+    server failure."""
+
+    status_code = 422
+    code = "insufficient_calibration_data"
+
+
 class MarketScanRunNotFoundError(APIError):
     status_code = 404
     code = "market_scan_run_not_found"
