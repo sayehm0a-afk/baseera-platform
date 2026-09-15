@@ -10,6 +10,13 @@ const DECISION_COLOR: Record<string, string> = {
   تجاهل: "bg-bsr-market-down/15 text-bsr-market-down",
 };
 
+const RELIABILITY_COLOR: Record<string, string> = {
+  HIGH: "bg-bsr-market-up/15 text-bsr-market-up",
+  MODERATE: "bg-bsr-gold-500/15 text-bsr-gold-500",
+  LOW: "bg-bsr-market-down/15 text-bsr-market-down",
+  INSUFFICIENT_DATA: "bg-bsr-surface-raised text-bsr-text-secondary",
+};
+
 function priceLabel(value: number | null): string {
   return value == null ? "--" : value.toFixed(2);
 }
@@ -38,6 +45,22 @@ export function PersonalOpportunityCard({ opportunity: o }: PersonalOpportunityC
         >
           قرار بصيرة: {o.simple_decision_ar}
         </span>
+      </div>
+
+      {/* Real, independent per-sector win-rate disclosure -- shown
+       * prominently (not buried) because confidence_score alone has
+       * not been shown to track real accuracy reliably; a beginner
+       * must be able to see this even if the confidence badge looks
+       * high. See src.market_intelligence.sector_reliability. */}
+      <div
+        className={`rounded-bsr-md px-bsr-3 py-bsr-2 text-xs font-semibold ${
+          RELIABILITY_COLOR[o.historical_reliability_level]
+        }`}
+      >
+        {o.historical_reliability_label_ar}
+        {o.historical_reliability_win_rate_pct != null
+          ? ` (${Math.round(o.historical_reliability_win_rate_pct)}% نسبة ربح فعلية على ${o.historical_reliability_sample_size} توصية سابقة)`
+          : ""}
       </div>
 
       <div className="grid grid-cols-2 gap-bsr-2 text-sm md:grid-cols-4">

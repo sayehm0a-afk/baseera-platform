@@ -156,6 +156,15 @@ export interface PersonalOpportunity {
   breakout_level: number | null;
 
   decision_timestamp: string;
+
+  // Real, independent per-sector win-rate disclosure -- computed from
+  // this sector's own already-tracked outcomes, never from
+  // confidence_score or the decision itself (see
+  // src.market_intelligence.sector_reliability on the backend).
+  historical_reliability_level: "HIGH" | "MODERATE" | "LOW" | "INSUFFICIENT_DATA";
+  historical_reliability_label_ar: string;
+  historical_reliability_win_rate_pct: number | null;
+  historical_reliability_sample_size: number;
 }
 
 export interface PersonalScanResponse {

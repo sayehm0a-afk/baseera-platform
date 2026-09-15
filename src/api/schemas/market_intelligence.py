@@ -167,6 +167,21 @@ class PersonalOpportunityOut(BaseModel):
 
     decision_timestamp: datetime
 
+    # Real, independent disclosure (2026-09-15) -- computed from this
+    # sector's own already-tracked RecommendationOutcome win rate, never
+    # from confidence_score or the decision itself (see
+    # src.market_intelligence.sector_reliability). Beginners relying on
+    # this screen alone must be able to see when a sector has a real,
+    # historically poor track record even if this specific card's
+    # confidence_score looks high -- confidence_score is a per-call
+    # model output and has NOT been shown to track real accuracy well
+    # (see calibration_by_bucket on the OWNER personal-performance
+    # dashboard), so it must never be the beginner's only signal.
+    historical_reliability_level: str
+    historical_reliability_label_ar: str
+    historical_reliability_win_rate_pct: Optional[float] = None
+    historical_reliability_sample_size: int
+
 
 class PersonalScanOut(BaseModel):
     """GET /api/v1/market/personal/top-opportunities -- at most 5

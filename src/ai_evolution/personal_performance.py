@@ -52,10 +52,15 @@ _INSUFFICIENT_DATA_AR = "بيانات غير كافية لعرض هذا المق
 # "weakest" group once at least this many terminal outcomes back it --
 # matches RecommendationHistoryStatsOut's own small_sample_warning
 # threshold (30) for the same "never let one lucky/unlucky call look
-# like a track record" reason.
-_MIN_GROUP_SAMPLE_SIZE = 10
+# like a track record" reason. Also reused by sector_reliability.py's
+# per-sector disclosure so both features agree on what counts as a
+# large-enough sample.
+MIN_GROUP_SAMPLE_SIZE = 10
 
-_TERMINAL_STATUSES = {
+# Shared with sector_reliability.py -- both read the exact same
+# real, already-tracked outcome population, so they must agree on
+# which statuses count as "resolved" (never PENDING/CANCELLED).
+TERMINAL_OUTCOME_STATUSES = {
     RecommendationOutcomeStatus.SUCCESSFUL,
     RecommendationOutcomeStatus.FAILED,
     RecommendationOutcomeStatus.PARTIAL,
@@ -148,7 +153,7 @@ def _fraction(numerator_flags: List[Optional[bool]]) -> Optional[float]:
     return round(sum(1 for flag in known if flag) / len(known) * 100, 2)
 
 
-def _fetch_live_outcomes(session: Session, evaluation_horizon_days: int):
+def fetch_live_outcomes(session: Session, evaluation_horizon_days: int):
     return (
         session.query(RecommendationOutcome, RecommendationSnapshot, Stock)
         .join(RecommendationSnapshot, RecommendationOutcome.snapshot_id == RecommendationSnapshot.id)
@@ -160,7 +165,7 @@ def _fetch_live_outcomes(session: Session, evaluation_horizon_days: int):
     )
 
 
-def _to_evaluation_outcome(outcome: RecommendationOutcome, snapshot: RecommendationSnapshot, stock: Optional[Stock]) -> EvaluationOutcome:
+def to_evaluation_outcome(outcome: RecommendationOutcome, snapshot: RecommendationSnapshot, stock: Optional[Stock]) -> EvaluationOutcome:
     return EvaluationOutcome(
         symbol=snapshot.symbol,
         evaluated_at=snapshot.evaluated_at.date(),
@@ -186,7 +191,7 @@ def _rank_groups(breakdown: Dict[str, Dict]) -> List[GroupPerformance]:
     eligible = [
         GroupPerformance(group=key, sample_size=metrics["evaluation_count"], win_rate=metrics["win_rate"])
         for key, metrics in breakdown.items()
-        if metrics["evaluation_count"] >= _MIN_GROUP_SAMPLE_SIZE and metrics["win_rate"] is not None
+        if metrics["evaluation_count"] >= MIN_GROUP_SAMPLE_SIZE and metrics["win_rate"] is not None
     ]
     return sorted(eligible, key=lambda g: g.win_rate, reverse=True)
 
@@ -206,17 +211,17 @@ def compute_personal_performance_dashboard(
     market_risk_state_distribution = _string_column_distribution(session, DecisionV2Snapshot.market_risk_state)
     sector_distribution = _string_column_distribution(session, DecisionV2Snapshot.sector_ar)
 
-    rows = _fetch_live_outcomes(session, evaluation_horizon_days)
+    rows = fetch_live_outcomes(session, evaluation_horizon_days)
     outcome_sample_size = len(rows)
     outcomes_only = [row[0] for row in rows]
-    terminal_rows = [row for row in rows if row[0].status in _TERMINAL_STATUSES]
+    terminal_rows = [row for row in rows if row[0].status in TERMINAL_OUTCOME_STATUSES]
     terminal_outcome_sample_size = len(terminal_rows)
 
     status_counts: Dict[str, int] = {}
     for outcome in outcomes_only:
         status_counts[outcome.status.value] = status_counts.get(outcome.status.value, 0) + 1
 
-    evaluation_outcomes = [_to_evaluation_outcome(o, s, stock) for o, s, stock in terminal_rows]
+    evaluation_outcomes = [to_evaluation_outcome(o, s, stock) for o, s, stock in terminal_rows]
 
     calibration = calibration_error(evaluation_outcomes) if evaluation_outcomes else None
     by_type = breakdown_by(evaluation_outcomes, lambda o: o.recommendation) if evaluation_outcomes else {}
@@ -226,7 +231,7 @@ def compute_personal_performance_dashboard(
     strongest = _rank_groups(by_sector)
     weakest = list(reversed(strongest))
 
-    small_sample = terminal_outcome_sample_size < _MIN_GROUP_SAMPLE_SIZE
+    small_sample = terminal_outcome_sample_size < MIN_GROUP_SAMPLE_SIZE
     insufficient_message = _INSUFFICIENT_DATA_AR if outcome_sample_size == 0 else None
 
     return PersonalPerformanceDashboard(

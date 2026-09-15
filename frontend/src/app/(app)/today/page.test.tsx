@@ -12,8 +12,9 @@ vi.mock("@/lib/api/market", () => ({
 }));
 
 import { getPersonalTopOpportunities } from "@/lib/api/market";
+import type { PersonalOpportunity } from "@/lib/api/types";
 
-function opportunity(symbol: string) {
+function opportunity(symbol: string): PersonalOpportunity {
   return {
     rank: 1,
     symbol,
@@ -47,6 +48,10 @@ function opportunity(symbol: string) {
     nearest_resistance: null,
     breakout_level: null,
     decision_timestamp: "2026-08-11T10:00:00Z",
+    historical_reliability_level: "INSUFFICIENT_DATA",
+    historical_reliability_label_ar: "بيانات غير كافية لتقييم موثوقية هذا القطاع بعد",
+    historical_reliability_win_rate_pct: null,
+    historical_reliability_sample_size: 0,
   };
 }
 

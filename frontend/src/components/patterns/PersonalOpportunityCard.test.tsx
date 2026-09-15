@@ -40,6 +40,10 @@ const BASE: PersonalOpportunity = {
   nearest_resistance: 31.5,
   breakout_level: 30.8,
   decision_timestamp: "2026-08-11T10:00:00Z",
+  historical_reliability_level: "HIGH",
+  historical_reliability_label_ar: "موثوقية تاريخية عالية لهذا القطاع",
+  historical_reliability_win_rate_pct: 74.1,
+  historical_reliability_sample_size: 88,
 };
 
 describe("PersonalOpportunityCard", () => {
@@ -86,5 +90,28 @@ describe("PersonalOpportunityCard", () => {
     render(<PersonalOpportunityCard opportunity={BASE} />);
     expect(screen.getByText("السوق مفتوح")).toBeInTheDocument();
     expect(screen.queryByText("OPEN")).not.toBeInTheDocument();
+  });
+
+  it("shows the real per-sector reliability disclosure with its win rate and sample size, independent of confidence_score", () => {
+    render(<PersonalOpportunityCard opportunity={BASE} />);
+    expect(screen.getByText(/موثوقية تاريخية عالية لهذا القطاع/)).toBeInTheDocument();
+    expect(screen.getByText(/74% نسبة ربح فعلية على 88 توصية سابقة/)).toBeInTheDocument();
+  });
+
+  it("flags a historically weak sector with the market-down color, and omits the win-rate parenthetical when data is insufficient", () => {
+    render(
+      <PersonalOpportunityCard
+        opportunity={{
+          ...BASE,
+          historical_reliability_level: "INSUFFICIENT_DATA",
+          historical_reliability_label_ar: "بيانات غير كافية لتقييم موثوقية هذا القطاع بعد",
+          historical_reliability_win_rate_pct: null,
+          historical_reliability_sample_size: 4,
+        }}
+      />
+    );
+    const badge = screen.getByText("بيانات غير كافية لتقييم موثوقية هذا القطاع بعد");
+    expect(badge.className).not.toContain("bsr-market-down");
+    expect(screen.queryByText(/نسبة ربح فعلية/)).not.toBeInTheDocument();
   });
 });
