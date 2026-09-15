@@ -94,6 +94,9 @@ function HistoryItemRow({ item }: { item: RecommendationHistoryItem }) {
           <span className="text-xs text-bsr-text-secondary">{item.company_name_ar ?? ""}</span>
           <p className="text-[11px] text-bsr-text-tertiary">
             {new Date(item.evaluated_at).toLocaleDateString("ar-SA", { calendar: "gregory" })} · ثقة {Math.round(item.confidence_score)}%
+            {item.calibrated_confidence_score !== null
+              ? ` (معايرة: ${Math.round(item.calibrated_confidence_score * 100)}%)`
+              : ""}
           </p>
         </div>
         <div className="flex flex-col items-end gap-1">

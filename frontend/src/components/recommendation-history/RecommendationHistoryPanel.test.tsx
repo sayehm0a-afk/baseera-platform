@@ -131,6 +131,34 @@ describe("RecommendationHistoryPanel", () => {
     expect(screen.getByText(/-10%/)).toBeInTheDocument();
   });
 
+  it("shows calibrated confidence alongside raw confidence when a calibration model was active at write time", async () => {
+    vi.mocked(getRecommendationHistory).mockResolvedValue({
+      generated_at: "2026-08-08T00:00:00Z",
+      total: 1,
+      items: [buildItem({ confidence_score: 85, calibrated_confidence_score: 0.62 })],
+    });
+    vi.mocked(getRecommendationHistoryStats).mockResolvedValue(buildStats());
+
+    render(<RecommendationHistoryPanel />);
+
+    expect(await screen.findByText(/ثقة 85%/)).toBeInTheDocument();
+    expect(screen.getByText(/معايرة: 62%/)).toBeInTheDocument();
+  });
+
+  it("shows only raw confidence when no calibration model was active at write time", async () => {
+    vi.mocked(getRecommendationHistory).mockResolvedValue({
+      generated_at: "2026-08-08T00:00:00Z",
+      total: 1,
+      items: [buildItem({ confidence_score: 72, calibrated_confidence_score: null })],
+    });
+    vi.mocked(getRecommendationHistoryStats).mockResolvedValue(buildStats());
+
+    render(<RecommendationHistoryPanel />);
+
+    expect(await screen.findByText(/ثقة 72%/)).toBeInTheDocument();
+    expect(screen.queryByText(/معايرة/)).not.toBeInTheDocument();
+  });
+
   it("shows the small-sample warning when the terminal sample is below 30", async () => {
     vi.mocked(getRecommendationHistory).mockResolvedValue({
       generated_at: "2026-08-08T00:00:00Z",
