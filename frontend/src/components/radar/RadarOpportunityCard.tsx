@@ -56,6 +56,23 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
         <DecisionBadge value={o.classification} labelAr={o.classification_label_ar} />
       </div>
 
+      {/* Real-world evidence (owner, 2026-09-15): this exact symbol can
+       * be re-quoted as a "fresh" BUY_CANDIDATE with a recalculated,
+       * lower entry/stop right after its OWN earlier signal already
+       * failed -- this disclosure links the two together instead of
+       * letting the new card read as unrelated. See
+       * src.market_intelligence.recent_symbol_outcome. Shown before the
+       * sector-level badge below: a symbol's own very recent failure is
+       * more specific and more urgent than its sector's aggregate rate. */}
+      {o.recent_negative_outcome_status != null ? (
+        <div className="rounded-bsr-md bg-bsr-market-down/15 px-bsr-3 py-bsr-2 text-xs font-semibold text-bsr-market-down">
+          ⚠️ {o.recent_negative_outcome_label_ar}
+          {o.recent_negative_outcome_at != null
+            ? ` (بتاريخ ${formatArabicDateTime(o.recent_negative_outcome_at)})`
+            : ""}
+        </div>
+      ) : null}
+
       {/* Real, independent per-sector win-rate disclosure -- shown
        * prominently because confidence_score alone has not been shown
        * to track real accuracy reliably; Smart Radar is the app's

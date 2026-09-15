@@ -40,6 +40,10 @@ function buildOpportunity(overrides: Partial<RadarOpportunitySummary> = {}): Rad
     historical_reliability_label_ar: "موثوقية تاريخية عالية لهذا القطاع",
     historical_reliability_win_rate_pct: 74.1,
     historical_reliability_sample_size: 88,
+    recent_negative_outcome_status: null,
+    recent_negative_outcome_label_ar: null,
+    recent_negative_outcome_at: null,
+    recent_negative_outcome_return_pct: null,
     ...overrides,
   };
 }
@@ -159,5 +163,24 @@ describe("RadarOpportunityCard", () => {
     const badge = screen.getByText("بيانات غير كافية لتقييم موثوقية هذا القطاع بعد");
     expect(badge.className).not.toContain("bsr-market-down");
     expect(screen.queryByText(/نسبة ربح فعلية/)).not.toBeInTheDocument();
+  });
+
+  it("does not show a recent-failure warning when the backend reports none", () => {
+    render(<RadarOpportunityCard opportunity={buildOpportunity()} />);
+    expect(screen.queryByText(/آخر إشارة لهذا السهم/)).not.toBeInTheDocument();
+  });
+
+  it("shows a prominent warning when this exact symbol's own recent signal already failed -- production regression: symbol 1830, re-quoted as a fresh BUY_CANDIDATE hours after its own stop-loss was breached", () => {
+    render(
+      <RadarOpportunityCard
+        opportunity={buildOpportunity({
+          recent_negative_outcome_status: "STOP_LOSS_HIT",
+          recent_negative_outcome_label_ar: "آخر إشارة لهذا السهم اخترقت وقف الخسارة",
+          recent_negative_outcome_at: "2026-09-15T15:00:00Z",
+          recent_negative_outcome_return_pct: -2.3,
+        })}
+      />
+    );
+    expect(screen.getByText(/آخر إشارة لهذا السهم اخترقت وقف الخسارة/)).toBeInTheDocument();
   });
 });

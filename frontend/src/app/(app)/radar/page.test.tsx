@@ -60,6 +60,10 @@ function opportunity(
     historical_reliability_label_ar: "بيانات غير كافية لتقييم موثوقية هذا القطاع بعد",
     historical_reliability_win_rate_pct: null,
     historical_reliability_sample_size: 0,
+    recent_negative_outcome_status: null,
+    recent_negative_outcome_label_ar: null,
+    recent_negative_outcome_at: null,
+    recent_negative_outcome_return_pct: null,
   };
 }
 

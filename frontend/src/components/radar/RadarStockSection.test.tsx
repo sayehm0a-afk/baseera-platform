@@ -46,6 +46,10 @@ function buildSummary(overrides: Partial<RadarOpportunitySummary> = {}): RadarOp
     historical_reliability_label_ar: "موثوقية تاريخية عالية لهذا القطاع",
     historical_reliability_win_rate_pct: 74.1,
     historical_reliability_sample_size: 88,
+    recent_negative_outcome_status: null,
+    recent_negative_outcome_label_ar: null,
+    recent_negative_outcome_at: null,
+    recent_negative_outcome_return_pct: null,
     ...overrides,
   };
 }

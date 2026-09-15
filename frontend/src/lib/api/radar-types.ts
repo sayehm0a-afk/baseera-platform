@@ -65,6 +65,16 @@ export interface RadarOpportunitySummary {
   historical_reliability_label_ar: string;
   historical_reliability_win_rate_pct: number | null;
   historical_reliability_sample_size: number;
+
+  // Real-world evidence (owner, 2026-09-15): this exact symbol's most
+  // recent STOP_LOSS_HIT/INVALIDATED/negative-EXPIRED signal within a
+  // short lookback window -- see src.market_intelligence.
+  // recent_symbol_outcome on the backend. null whenever no such recent
+  // failure exists, never a fabricated "all clear".
+  recent_negative_outcome_status: string | null;
+  recent_negative_outcome_label_ar: string | null;
+  recent_negative_outcome_at: string | null;
+  recent_negative_outcome_return_pct: number | null;
 }
 
 export interface RadarStage1ComponentScores {

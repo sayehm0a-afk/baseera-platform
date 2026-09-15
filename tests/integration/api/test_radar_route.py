@@ -26,6 +26,8 @@ import pytest
 import main
 from src.api.dependencies import get_current_user
 from src.domain.models import (
+    DecisionV2Outcome,
+    DecisionV2OutcomeStatus,
     DecisionV2Snapshot,
     MarketScanRun,
     MarketScanStatus,
@@ -428,6 +430,99 @@ def test_opportunities_list_discloses_a_real_sector_win_rate_when_enough_history
     assert row["historical_reliability_level"] == "HIGH"
     assert row["historical_reliability_win_rate_pct"] == pytest.approx(90.0)
     assert row["historical_reliability_sample_size"] == 10
+
+
+def _add_decision_v2_outcome(db_session, stock, symbol, status, evaluated_at=None, return_pct=None):
+    """A DecisionV2Outcome tied to its OWN (earlier) DecisionV2Snapshot
+    for this symbol -- distinct from whatever snapshot backs the
+    RadarOpportunity under test -- mirroring the real production case
+    (owner, 2026-09-15): symbol 1830's morning signal already had its
+    stop-loss breached hours before the card being tested was emitted."""
+    prior_snapshot = _make_snapshot(db_session, stock)
+    outcome = DecisionV2Outcome(
+        decision_v2_snapshot_id=prior_snapshot.id,
+        symbol=symbol,
+        due_at=datetime.now(timezone.utc),
+        status=status,
+        entry_triggered=True,
+        evaluated_at=evaluated_at or datetime.now(timezone.utc),
+        return_pct=return_pct,
+    )
+    db_session.add(outcome)
+    db_session.commit()
+    return outcome
+
+
+def test_opportunities_list_discloses_no_recent_failure_when_none_exists(
+    client, db_session, authenticated_as_staff
+):
+    stock = _make_stock(db_session, "1830")
+    snapshot = _make_snapshot(db_session, stock)
+    _make_opportunity(db_session, stock, snapshot)
+
+    response = client.get(_OPPORTUNITIES_ROUTE)
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["recent_negative_outcome_status"] is None
+    assert row["recent_negative_outcome_label_ar"] is None
+
+
+def test_opportunities_list_discloses_this_symbols_own_recent_stop_loss_breach(
+    client, db_session, authenticated_as_staff
+):
+    """Production regression (owner, 2026-09-15): symbol 1830 was
+    re-quoted as a fresh BUY_CANDIDATE with a recalculated, lower entry/
+    stop, hours after its OWN earlier signal that same day already had
+    its stop-loss breached by real price -- with nothing on the card
+    disclosing that history. See src.market_intelligence.
+    recent_symbol_outcome."""
+    stock = _make_stock(db_session, "1830")
+    _add_decision_v2_outcome(
+        db_session, stock, "1830", DecisionV2OutcomeStatus.STOP_LOSS_HIT,
+        evaluated_at=datetime.now(timezone.utc) - timedelta(hours=2), return_pct=-1.9,
+    )
+    snapshot = _make_snapshot(db_session, stock)
+    _make_opportunity(db_session, stock, snapshot)
+
+    response = client.get(_OPPORTUNITIES_ROUTE)
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["recent_negative_outcome_status"] == "STOP_LOSS_HIT"
+    assert "وقف الخسارة" in row["recent_negative_outcome_label_ar"]
+    assert row["recent_negative_outcome_return_pct"] == pytest.approx(-1.9)
+
+
+def test_opportunities_list_ignores_a_recent_positive_outcome(client, db_session, authenticated_as_staff):
+    """A TARGET_1_HIT is real history, but never a failure -- must never
+    trigger this warning."""
+    stock = _make_stock(db_session, "1830")
+    _add_decision_v2_outcome(db_session, stock, "1830", DecisionV2OutcomeStatus.TARGET_1_HIT)
+    snapshot = _make_snapshot(db_session, stock)
+    _make_opportunity(db_session, stock, snapshot)
+
+    response = client.get(_OPPORTUNITIES_ROUTE)
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["recent_negative_outcome_status"] is None
+
+
+def test_opportunities_list_ignores_a_stale_stop_loss_breach_outside_the_lookback_window(
+    client, db_session, authenticated_as_staff
+):
+    """A real stop-loss breach from months ago no longer reflects this
+    symbol's current situation -- must not stay disclosed forever."""
+    stock = _make_stock(db_session, "1830")
+    _add_decision_v2_outcome(
+        db_session, stock, "1830", DecisionV2OutcomeStatus.STOP_LOSS_HIT,
+        evaluated_at=datetime.now(timezone.utc) - timedelta(days=60),
+    )
+    snapshot = _make_snapshot(db_session, stock)
+    _make_opportunity(db_session, stock, snapshot)
+
+    response = client.get(_OPPORTUNITIES_ROUTE)
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["recent_negative_outcome_status"] is None
 
 
 def test_opportunity_detail_includes_stage1_evidence_and_reasoning(client, db_session, authenticated_as_staff):
