@@ -23,6 +23,7 @@ from src.market_data.sahmk.models import (
     SahmkHistoricalBar,
     SahmkMarketSummary,
     SahmkQuote,
+    SahmkSectorPerformance,
 )
 
 
@@ -343,6 +344,32 @@ async def test_get_company_profile_maps_to_dict():
         "source": "sahmk",
         "is_synthetic": False,
     }
+
+
+# --- get_sector_performance() (extra, not part of IMarketDataProvider) ----
+
+
+@pytest.mark.asyncio
+async def test_get_sector_performance_maps_to_list_of_dicts():
+    provider = _provider_with_mock_service()
+    provider._service.get_sector_performance.return_value = [
+        SahmkSectorPerformance(
+            sector_name="Insurance", sector_name_ar="التأمين",
+            change_percent=3.28, avg_change_percent=1.75, volume=22984132, num_stocks=26,
+        ),
+    ]
+    sectors = await provider.get_sector_performance()
+    assert sectors == [
+        {
+            "sector_name": "Insurance",
+            "sector_name_ar": "التأمين",
+            "change_percent": 3.28,
+            "avg_change_percent": 1.75,
+            "volume": 22984132,
+            "num_stocks": 26,
+        }
+    ]
+    provider._service.get_sector_performance.assert_awaited_once_with(index="TASI")
 
 
 # --- get_index_data() -----------------------------------------------------
