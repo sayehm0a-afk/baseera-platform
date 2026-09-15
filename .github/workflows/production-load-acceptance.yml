@@ -54,7 +54,7 @@ jobs:
       REQUESTS_PER_USER: ${{ github.event.inputs.requests_per_user }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Fail fast if required secrets are not configured
         run: |
@@ -295,7 +295,7 @@ jobs:
 
       - name: Upload load test evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-load-acceptance-evidence
           path: /tmp/load_summary.json

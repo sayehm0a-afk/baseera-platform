@@ -20,12 +20,12 @@ jobs:
       STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -45,7 +45,7 @@ jobs:
         run: python3 .github/workflows/independent_audit/phase3_zero_signal_root_cause.py
 
       - name: Upload full report artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phase3-zero-signal-root-cause
           path: phase3_zero_signal_root_cause.json

@@ -1,0 +1,100 @@
+name: Diagnose real recommendation performance (read-only, RAILWAY_TOKEN + STAFF creds only)
+
+# User (2026-09-13) flagged that most watchlist entries look "red" while
+# some symbols moved 9-10% -- asked for a real review of whether
+# recommendations actually hit their targets, not just anecdote. This
+# pulls the OWNER-only /admin/ai-evolution/personal-performance
+# dashboard, which is real, already-tracked target/stop hit rates,
+# average realized return, and calibration from RecommendationOutcome --
+# never fabricated, never a "successes only" filter. Read-only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      evaluation_horizon_days:
+        description: "How many days back to include"
+        required: false
+        default: "90"
+
+permissions:
+  contents: read
+
+jobs:
+  check-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      EVAL_HORIZON_DAYS: ${{ inputs.evaluation_horizon_days }}
+    steps:
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+          if [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::STAFF_EMAIL/STAFF_PASSWORD are not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Login as staff and fetch the personal-performance dashboard
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          cat > /tmp/check_performance.py <<'PYEOF'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          BACKEND = os.environ["BACKEND_URL"]
+          STAFF_EMAIL = os.environ["STAFF_EMAIL"]
+          STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
+          HORIZON = os.environ.get("EVAL_HORIZON_DAYS", "90")
+
+          def post(url, body, cookies=None):
+              data = json.dumps(body).encode()
+              req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+              if cookies:
+                  req.add_header("Cookie", cookies)
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode(), resp.headers
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(), e.headers
+
+          def get(url, cookies):
+              req = urllib.request.Request(url, method="GET", headers={"Cookie": cookies})
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode()
+
+          status, body, headers = post(f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
+          if status != 200:
+              print(f"::error::Staff login failed: HTTP {status} -- {body}")
+              sys.exit(1)
+          cookie_pairs = [c.split(";")[0] for c in (headers.get_all("Set-Cookie") or [])]
+          cookie_header = "; ".join(cookie_pairs)
+
+          status, body = get(f"{BACKEND}/api/v1/admin/ai-evolution/personal-performance?evaluation_horizon_days={HORIZON}", cookie_header)
+          print("=== personal-performance ===")
+          print(f"HTTP {status}")
+          print(json.dumps(json.loads(body), indent=2, ensure_ascii=False) if status == 200 else body)
+          PYEOF
+          python3 /tmp/check_performance.py

@@ -1,0 +1,130 @@
+name: Diagnose top-5 repetition and real accuracy (read-only, RAILWAY_TOKEN + STAFF creds only)
+
+# User (2026-09-15) flagged the homepage's top-5 "best opportunities now"
+# widget shows the same companies every day, and asked for a real review
+# of accuracy/whether the product is meeting its goal. Code investigation
+# already confirmed GET /api/v1/market/personal/top-opportunities
+# (personal_scan.select_top_opportunities) has NO cross-day
+# suppression/diversity logic -- it is a pure "take newest scan run,
+# sort by composite score, take top N" query every time. This workflow
+# pulls (a) today's actual top-5 symbols/sectors right now and (b) the
+# real, already-tracked personal-performance dashboard at several
+# horizons, to check whether the repetition is backed by genuinely
+# strong signals (sector distribution matches known Banks/Materials
+# outperformance) or looks arbitrary. Read-only.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Fail fast if required secrets are not configured
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set."
+            exit 1
+          fi
+          if [ -z "$STAFF_EMAIL" ] || [ -z "$STAFF_PASSWORD" ]; then
+            echo "::error::STAFF_EMAIL/STAFF_PASSWORD are not set."
+            exit 1
+          fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend public URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Login, fetch today's top-5 and personal-performance at several horizons
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          cat > /tmp/check.py <<'PYEOF'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          BACKEND = os.environ["BACKEND_URL"]
+          STAFF_EMAIL = os.environ["STAFF_EMAIL"]
+          STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
+
+          def post(url, body, cookies=None):
+              data = json.dumps(body).encode()
+              req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+              if cookies:
+                  req.add_header("Cookie", cookies)
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode(), resp.headers
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(), e.headers
+
+          def get(url, cookies):
+              req = urllib.request.Request(url, method="GET", headers={"Cookie": cookies})
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode()
+
+          status, body, headers = post(f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
+          if status != 200:
+              print(f"::error::Staff login failed: HTTP {status} -- {body}")
+              sys.exit(1)
+          cookie_pairs = [c.split(";")[0] for c in (headers.get_all("Set-Cookie") or [])]
+          cookie_header = "; ".join(cookie_pairs)
+
+          print("=== GET /api/v1/market/personal/top-opportunities (today, real-time) ===")
+          status, body = get(f"{BACKEND}/api/v1/market/personal/top-opportunities", cookie_header)
+          print(f"HTTP {status}")
+          if status == 200:
+              data = json.loads(body)
+              opps = data.get("opportunities") or data.get("items") or data
+              print(json.dumps(data, indent=2, ensure_ascii=False)[:6000])
+          else:
+              print(body)
+
+          for horizon in (1, 3, 7):
+              print(f"\n=== GET /api/v1/admin/ai-evolution/personal-performance?evaluation_horizon_days={horizon} ===")
+              status, body = get(f"{BACKEND}/api/v1/admin/ai-evolution/personal-performance?evaluation_horizon_days={horizon}", cookie_header)
+              print(f"HTTP {status}")
+              if status == 200:
+                  d = json.loads(body)
+                  summary = {
+                      "evaluation_horizon_days": d.get("evaluation_horizon_days"),
+                      "total_decisions_issued": d.get("total_decisions_issued"),
+                      "decision_distribution": d.get("decision_distribution"),
+                      "sector_distribution": d.get("sector_distribution"),
+                      "outcome_sample_size": d.get("outcome_sample_size"),
+                      "terminal_outcome_sample_size": d.get("terminal_outcome_sample_size"),
+                      "status_counts": d.get("status_counts"),
+                      "target_1_hit_rate": d.get("target_1_hit_rate"),
+                      "target_2_hit_rate": d.get("target_2_hit_rate"),
+                      "stop_loss_hit_rate": d.get("stop_loss_hit_rate"),
+                      "average_realized_return_pct": d.get("average_realized_return_pct"),
+                      "calibration_by_sector": d.get("calibration_by_sector"),
+                      "strongest_groups": d.get("strongest_groups"),
+                      "weakest_groups": d.get("weakest_groups"),
+                      "small_sample_warning": d.get("small_sample_warning"),
+                  }
+                  print(json.dumps(summary, indent=2, ensure_ascii=False))
+              else:
+                  print(body)
+          PYEOF
+          python3 /tmp/check.py

@@ -47,7 +47,7 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 

@@ -68,7 +68,16 @@ class InvestmentCommitteeOrchestrator:
                     agent_name=verdict.agent_name,
                     agent_role=verdict.role,
                     stance=verdict.stance,
-                    confidence=verdict.confidence,
+                    # float(...): some agents derive confidence from a numpy
+                    # scalar (e.g. a risk/reward ratio computed upstream in
+                    # pandas/numpy). SQLAlchemy's insertmanyvalues RETURNING
+                    # path renders Numeric literals via repr(), and numpy's
+                    # own repr (e.g. "np.float64(56.7)") is not valid SQL --
+                    # confirmed in production 2026-09-13 as
+                    # "psycopg2.errors.InvalidSchemaName: schema \"np\" does
+                    # not exist", which silently dropped a live symbol's
+                    # entire committee breakdown.
+                    confidence=float(verdict.confidence),
                     reasoning=verdict.reasoning,
                     evidence=list(verdict.evidence),
                     rejection_reasons=list(verdict.rejection_reasons),
@@ -80,12 +89,16 @@ class InvestmentCommitteeOrchestrator:
             CommitteeConsensus(
                 decision_v2_snapshot_id=decision_v2_snapshot_id,
                 final_decision=consensus.final_decision,
-                final_confidence=consensus.final_confidence,
+                # float(...): same numpy-scalar-into-Numeric-column hazard as
+                # the committee_opinions insert above -- these four are all
+                # arithmetic derived from agent confidences and would inherit
+                # a numpy dtype the same way.
+                final_confidence=float(consensus.final_confidence),
                 participant_count=consensus.participant_count,
                 directional_count=consensus.directional_count,
-                agreement_pct=consensus.agreement_pct,
-                disagreement_pct=consensus.disagreement_pct,
-                disagreement_score=consensus.disagreement_score,
+                agreement_pct=float(consensus.agreement_pct),
+                disagreement_pct=float(consensus.disagreement_pct),
+                disagreement_score=float(consensus.disagreement_score),
                 most_optimistic_agent=consensus.most_optimistic_agent,
                 most_optimistic_stance=consensus.most_optimistic_stance,
                 most_conservative_agent=consensus.most_conservative_agent,

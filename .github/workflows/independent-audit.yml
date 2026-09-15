@@ -34,13 +34,13 @@ jobs:
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -71,7 +71,7 @@ jobs:
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -86,7 +86,7 @@ jobs:
           rm -f /tmp/frontend_domains.json
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -103,7 +103,7 @@ jobs:
 
       - name: Upload screenshots as evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-audit-screenshots
           path: /tmp/screenshots

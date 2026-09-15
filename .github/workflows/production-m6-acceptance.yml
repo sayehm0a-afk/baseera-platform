@@ -46,7 +46,7 @@ jobs:
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Fail fast if required secrets are not configured
         run: |
@@ -61,7 +61,7 @@ jobs:
           echo "Secrets present."
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -452,7 +452,7 @@ jobs:
 
       - name: Upload evidence artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-m6-acceptance-evidence
           path: |

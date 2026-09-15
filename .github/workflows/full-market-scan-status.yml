@@ -16,11 +16,11 @@ jobs:
       STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
       RAILWAY_BACKEND_SERVICE: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - run: npm install -g @railway/cli
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
