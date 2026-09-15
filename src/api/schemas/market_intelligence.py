@@ -1020,6 +1020,17 @@ class RadarOpportunitySummaryOut(BaseModel):
     historical_reliability_win_rate_pct: Optional[float] = None
     historical_reliability_sample_size: int = 0
 
+    # Real-world evidence (owner, 2026-09-15): a symbol can be re-quoted
+    # as a "fresh" BUY_CANDIDATE with a recalculated, lower entry/stop
+    # after its OWN earlier signal already had its stop-loss breached --
+    # see src.market_intelligence.recent_symbol_outcome's docstring. None
+    # (never a fabricated "no failure") whenever no qualifying recent
+    # DecisionV2Outcome exists for this exact symbol.
+    recent_negative_outcome_status: Optional[str] = None
+    recent_negative_outcome_label_ar: Optional[str] = None
+    recent_negative_outcome_at: Optional[datetime] = None
+    recent_negative_outcome_return_pct: Optional[float] = None
+
 
 class RadarOpportunityDetailOut(RadarOpportunitySummaryOut):
     """GET .../radar-v2/opportunities/{id} -- adds Stage 1's full

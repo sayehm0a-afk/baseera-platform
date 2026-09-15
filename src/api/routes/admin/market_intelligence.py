@@ -146,6 +146,7 @@ from src.market_intelligence.radar_v2 import (
 )
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scheduler_leader_lock import SchedulerLeaderLock
+from src.market_intelligence.recent_symbol_outcome import RecentSymbolOutcome, recent_negative_outcome_for_symbol
 from src.market_intelligence.sector_reliability import SectorReliability, reliability_for_sector
 from src.market_intelligence.services.scan_job_runner import run_market_scan_job
 from src.market_intelligence.stage1_local_scan import run_stage1_local_scan
@@ -625,9 +626,11 @@ async def stage2_validate_candidates(
 def radar_summary_out(
     opportunity: RadarOpportunity,
     sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
+    recent_negative_outcome_by_symbol: Optional[Dict[str, RecentSymbolOutcome]] = None,
 ) -> RadarOpportunitySummaryOut:
     snapshot = opportunity.snapshot
     reliability = reliability_for_sector(sector_reliability_by_ar or {}, snapshot.sector_ar)
+    recent_outcome = recent_negative_outcome_for_symbol(recent_negative_outcome_by_symbol or {}, opportunity.symbol)
     return RadarOpportunitySummaryOut(
         id=opportunity.id,
         symbol=opportunity.symbol,
@@ -675,6 +678,10 @@ def radar_summary_out(
         historical_reliability_label_ar=reliability.label_ar,
         historical_reliability_win_rate_pct=reliability.win_rate_pct,
         historical_reliability_sample_size=reliability.sample_size,
+        recent_negative_outcome_status=recent_outcome.status if recent_outcome is not None else None,
+        recent_negative_outcome_label_ar=recent_outcome.label_ar if recent_outcome is not None else None,
+        recent_negative_outcome_at=recent_outcome.occurred_at if recent_outcome is not None else None,
+        recent_negative_outcome_return_pct=recent_outcome.return_pct if recent_outcome is not None else None,
     )
 
 
@@ -682,9 +689,10 @@ def radar_detail_out(
     opportunity: RadarOpportunity,
     outcome: Optional[DecisionV2Outcome],
     sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
+    recent_negative_outcome_by_symbol: Optional[Dict[str, RecentSymbolOutcome]] = None,
 ) -> RadarOpportunityDetailOut:
     snapshot = opportunity.snapshot
-    summary = radar_summary_out(opportunity, sector_reliability_by_ar)
+    summary = radar_summary_out(opportunity, sector_reliability_by_ar, recent_negative_outcome_by_symbol)
     component_scores = opportunity.stage1_component_scores or {}
     signals = opportunity.stage1_signals or []
     return RadarOpportunityDetailOut(
