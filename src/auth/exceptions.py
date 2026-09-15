@@ -113,3 +113,54 @@ class AccountHasBillingHistoryError(APIError):
 
     status_code = 409
     code = "account_has_billing_history"
+
+
+class MfaAlreadyEnabledError(APIError):
+    """`/mfa/setup` was called for an account that already has 2FA
+    active -- must disable first (which itself requires a valid code or
+    password) before starting a fresh enrollment, never silently
+    overwrite an active secret out from under whoever holds the current
+    authenticator."""
+
+    status_code = 409
+    code = "mfa_already_enabled"
+
+
+class MfaSetupNotStartedError(APIError):
+    """`/mfa/activate` called with no pending enrollment
+    (`mfa_pending_secret_encrypted` is null) -- either `/mfa/setup` was
+    never called, or a previous pending secret already expired/was
+    superseded. Client-correctable: call `/mfa/setup` again."""
+
+    status_code = 409
+    code = "mfa_setup_not_started"
+
+
+class MfaNotEnabledError(APIError):
+    """`/mfa/disable` (or the backup-code-regeneration route) called on
+    an account with no active 2FA -- nothing to disable/regenerate."""
+
+    status_code = 409
+    code = "mfa_not_enabled"
+
+
+class InvalidMfaCodeError(APIError):
+    """A submitted TOTP/backup code did not verify -- covers both
+    `/mfa/activate` (confirming enrollment) and `/mfa/login-verify`
+    (completing a gated login). Deliberately generic (never says
+    whether the 6-digit format was even valid) to give an attacker
+    guessing codes no more signal than a flat "wrong"."""
+
+    status_code = 401
+    code = "invalid_mfa_code"
+
+
+class MfaRequiredError(APIError):
+    """Raised only internally to short-circuit `/mfa/login-verify` when
+    the presented `mfa_token` decodes but the account no longer has 2FA
+    enabled (e.g. disabled between issuing the token and redeeming it) --
+    never surfaced as the *first* login response, which uses
+    `MfaRequiredOut` (a normal 200 payload, not an error) instead."""
+
+    status_code = 409
+    code = "mfa_required"

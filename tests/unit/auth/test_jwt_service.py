@@ -3,7 +3,14 @@ import time
 import jwt as pyjwt
 import pytest
 
-from src.auth.jwt_service import InvalidAccessTokenError, decode_access_token, encode_access_token
+from src.auth.jwt_service import (
+    InvalidAccessTokenError,
+    InvalidMfaPendingTokenError,
+    decode_access_token,
+    decode_mfa_pending_token,
+    encode_access_token,
+    encode_mfa_pending_token,
+)
 from src.core.config import settings
 
 
@@ -65,3 +72,37 @@ def test_non_access_token_type_rejected():
     token = pyjwt.encode(claims, settings.secret_key, algorithm="HS256")
     with pytest.raises(InvalidAccessTokenError):
         decode_access_token(token)
+
+
+def test_mfa_pending_token_round_trip():
+    token = encode_mfa_pending_token(user_id=99)
+    assert decode_mfa_pending_token(token) == 99
+
+
+def test_mfa_pending_token_garbage_rejected():
+    with pytest.raises(InvalidMfaPendingTokenError):
+        decode_mfa_pending_token("not.a.valid.jwt")
+
+
+def test_mfa_pending_token_expired_rejected():
+    claims = {
+        "sub": "1",
+        "iat": int(time.time()) - 3600,
+        "exp": int(time.time()) - 1800,
+        "type": "mfa_pending",
+    }
+    token = pyjwt.encode(claims, settings.secret_key, algorithm="HS256")
+    with pytest.raises(InvalidMfaPendingTokenError):
+        decode_mfa_pending_token(token)
+
+
+def test_an_access_token_is_not_accepted_as_an_mfa_pending_token():
+    access_token = encode_access_token(user_id=1, is_staff=False, staff_role=None)
+    with pytest.raises(InvalidMfaPendingTokenError):
+        decode_mfa_pending_token(access_token)
+
+
+def test_an_mfa_pending_token_is_not_accepted_as_an_access_token():
+    mfa_token = encode_mfa_pending_token(user_id=1)
+    with pytest.raises(InvalidAccessTokenError):
+        decode_access_token(mfa_token)

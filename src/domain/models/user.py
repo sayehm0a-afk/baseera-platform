@@ -50,6 +50,20 @@ class User(Base):
     is_staff = Column(Boolean, nullable=False, default=False, server_default="false")
     staff_role = Column(Enum(StaffRole), nullable=True)
 
+    # Optional TOTP 2FA (governance audit 2026-09-11, item 7) -- opt-in
+    # only, see src.auth.mfa_totp's module docstring. `mfa_enabled`
+    # defaults False for every account, old and new, so nothing about an
+    # existing login changes until a staff member deliberately finishes
+    # enrollment. `mfa_secret_encrypted` is only ever populated once
+    # enrollment is CONFIRMED (a real code verified against it) --
+    # `mfa_pending_secret_encrypted` holds a freshly generated secret
+    # between "setup" and "activate" so an abandoned/never-confirmed
+    # enrollment attempt can never silently enable 2FA.
+    mfa_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    mfa_secret_encrypted = Column(String(255), nullable=True)
+    mfa_pending_secret_encrypted = Column(String(255), nullable=True)
+    mfa_enabled_at = Column(DateTime(timezone=True), nullable=True)
+
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     # Account-level lockout (distinct from src/api/middleware/rate_limiting.py's
@@ -84,6 +98,7 @@ class User(Base):
     )
 
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    mfa_backup_codes = relationship("MfaBackupCode", back_populates="user", cascade="all, delete-orphan")
     subscription = relationship(
         "Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )

@@ -37,6 +37,7 @@ from src.domain.models.portfolio_holding import PortfolioHolding
 from src.domain.models.portfolio_analysis_snapshot import PortfolioAnalysisSnapshot
 from src.domain.models.user import User, StaffRole
 from src.domain.models.user_session import UserSession
+from src.domain.models.mfa_backup_code import MfaBackupCode
 from src.domain.models.email_verification_token import EmailVerificationToken
 from src.domain.models.password_reset_token import PasswordResetToken
 from src.domain.models.subscription import Subscription, SubscriptionPlan, SubscriptionStatus
@@ -125,6 +126,7 @@ __all__ = [
     "User",
     "StaffRole",
     "UserSession",
+    "MfaBackupCode",
     "EmailVerificationToken",
     "PasswordResetToken",
     "Subscription",
