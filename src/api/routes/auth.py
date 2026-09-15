@@ -17,7 +17,7 @@ enumeration/abuse surface: register, verify-email, login, refresh,
 forgot-password, reset-password.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Union
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
@@ -36,9 +36,10 @@ from src.api.schemas.auth import (
     UserOut,
     VerifyEmailRequest,
 )
+from src.api.schemas.mfa import MfaRequiredOut
 from src.auth import data_export_service, email_verification_service, password_reset_service, session_service, user_service
 from src.auth.exceptions import InvalidOrExpiredTokenError, SessionNotFoundError
-from src.auth.jwt_service import InvalidAccessTokenError, decode_access_token
+from src.auth.jwt_service import InvalidAccessTokenError, decode_access_token, encode_mfa_pending_token
 from src.auth.repository import AuthRepository
 from src.auth.session_service import SessionPair
 from src.auth.token_hashing import generate_token, hash_token
@@ -211,7 +212,19 @@ def resend_verification(
     return MessageOut(message="If that email address is registered and not yet verified, a new verification link has been sent.")
 
 
-@router.post("/login", response_model=UserOut)
+def _complete_login(request: Request, response: Response, session: Session, user: User) -> UserOut:
+    """Shared by a normal password-only login and
+    `POST /auth/mfa/login-verify` (a code-gated one, once the code has
+    already been verified) -- both must produce an identical session
+    record, cookie set, and CSRF token, so this is the one place either
+    path ever calls to actually issue them."""
+    device_label = request.headers.get("user-agent")
+    pair = session_service.create_session(session, user, device_label=device_label, ip_address=_client_ip(request))
+    _set_session_cookies(response, pair)
+    return UserOut.model_validate(user)
+
+
+@router.post("/login", response_model=Union[UserOut, MfaRequiredOut])
 @limiter.limit("10/minute", key_func=auth_target_key)
 def login(
     request: Request,
@@ -219,12 +232,16 @@ def login(
     response: Response,
     session: Session = Depends(get_db),
     _network_ceiling: None = Depends(enforce_network_ceiling("login", "10/minute")),
-) -> UserOut:
+) -> Union[UserOut, MfaRequiredOut]:
     user = user_service.authenticate(session, body.email, body.password)
-    device_label = request.headers.get("user-agent")
-    pair = session_service.create_session(session, user, device_label=device_label, ip_address=_client_ip(request))
-    _set_session_cookies(response, pair)
-    return UserOut.model_validate(user)
+    # Optional staff 2FA (governance audit 2026-09-11, item 7): the
+    # password check above already succeeded, but a session/cookie is
+    # deliberately NOT issued yet for an account with 2FA enabled --
+    # completing the login now requires POST /auth/mfa/login-verify with
+    # a real code, within the short window `mfa_token` stays valid for.
+    if user.mfa_enabled:
+        return MfaRequiredOut(mfa_token=encode_mfa_pending_token(user.id))
+    return _complete_login(request, response, session, user)
 
 
 @router.post("/refresh", response_model=MessageOut)

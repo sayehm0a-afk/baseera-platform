@@ -12,7 +12,7 @@ from typing import List, Optional
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from src.domain.models import EmailVerificationToken, PasswordResetToken, StaffRole, User, UserSession
+from src.domain.models import EmailVerificationToken, MfaBackupCode, PasswordResetToken, StaffRole, User, UserSession
 
 
 class AuthRepository:
@@ -111,6 +111,59 @@ class AuthRepository:
         if user is not None:
             session.delete(user)
             session.commit()
+
+    # --- Mfa (optional staff TOTP 2FA, governance audit 2026-09-11 item 7) --
+
+    def set_mfa_pending_secret(self, session: Session, user_id: int, encrypted_secret: "str | None") -> None:
+        """`None` clears a pending enrollment (used both when starting a
+        fresh one, overwriting any stale unconfirmed attempt, and when
+        activation succeeds, so a later re-read of this column can never
+        be mistaken for an enrollment still in progress)."""
+        session.query(User).filter_by(id=user_id).update({"mfa_pending_secret_encrypted": encrypted_secret})
+        session.commit()
+
+    def activate_mfa(self, session: Session, user_id: int, encrypted_secret: str) -> None:
+        session.query(User).filter_by(id=user_id).update(
+            {
+                "mfa_enabled": True,
+                "mfa_secret_encrypted": encrypted_secret,
+                "mfa_pending_secret_encrypted": None,
+                "mfa_enabled_at": datetime.now(timezone.utc),
+            }
+        )
+        session.commit()
+
+    def disable_mfa(self, session: Session, user_id: int) -> None:
+        session.query(User).filter_by(id=user_id).update(
+            {
+                "mfa_enabled": False,
+                "mfa_secret_encrypted": None,
+                "mfa_pending_secret_encrypted": None,
+                "mfa_enabled_at": None,
+            }
+        )
+        session.query(MfaBackupCode).filter_by(user_id=user_id).delete()
+        session.commit()
+
+    def replace_backup_codes(self, session: Session, user_id: int, code_hashes: List[str]) -> None:
+        """Deletes every existing backup code (used or not) for this
+        user and inserts the freshly generated set -- both initial
+        activation and an explicit regenerate call go through this same
+        path, so there is only one place old codes are ever invalidated."""
+        session.query(MfaBackupCode).filter_by(user_id=user_id).delete()
+        session.add_all([MfaBackupCode(user_id=user_id, code_hash=h) for h in code_hashes])
+        session.commit()
+
+    def get_unused_backup_codes(self, session: Session, user_id: int) -> List[MfaBackupCode]:
+        return (
+            session.query(MfaBackupCode)
+            .filter_by(user_id=user_id, used_at=None)
+            .all()
+        )
+
+    def mark_backup_code_used(self, session: Session, backup_code_id: int) -> None:
+        session.query(MfaBackupCode).filter_by(id=backup_code_id).update({"used_at": datetime.now(timezone.utc)})
+        session.commit()
 
     # --- EmailVerificationToken ----------------------------------------
 

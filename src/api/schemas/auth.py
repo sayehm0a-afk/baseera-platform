@@ -77,6 +77,10 @@ class UserOut(BaseModel):
     staff_role: Optional[str] = None
     created_at: datetime
     last_login_at: Optional[datetime] = None
+    # Optional staff 2FA (governance audit 2026-09-11, item 7) -- always
+    # False for a non-staff account, since enrollment itself is
+    # staff-only (src/api/routes/mfa.py).
+    mfa_enabled: bool = False
 
 
 class SessionOut(BaseModel):

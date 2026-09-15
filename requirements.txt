@@ -65,6 +65,17 @@ bcrypt>=4.0.0
 PyJWT>=2.8.0
 slowapi>=0.1.10
 email-validator>=2.3.0
+# RFC 6238 TOTP for optional staff 2FA (src/auth/mfa_totp.py). Was already
+# an indirect dependency of nothing in this file -- added explicitly since
+# it is now imported directly, matching this section's own convention of
+# never relying on an unpinned transitive install for security-relevant code.
+pyotp>=2.9.0
+# Already installed transitively (via bcrypt/PyJWT's build chain, confirmed
+# 41.0.7 present) but never imported directly until now -- pinned explicitly
+# for the same reason as pyotp above. Used only to encrypt the TOTP secret
+# at rest (src/auth/mfa_totp.py); never used for password hashing (bcrypt
+# stays the one and only password hasher, see this section's own docstring).
+cryptography>=41.0.7
 
 # ===========================
 # Observability
