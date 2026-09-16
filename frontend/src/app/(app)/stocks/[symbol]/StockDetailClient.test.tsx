@@ -57,6 +57,8 @@ function buildDecisionV2(overrides: Partial<DecisionV2> = {}): DecisionV2 {
     decision_label_ar: "مرشح للشراء",
     confidence_score: 66,
     confidence_disclaimer_ar: "درجة الثقة تعكس قوة الأدلة، لا تضمن الربح.",
+    calibrated_confidence_score: null,
+    calibration_version: null,
     opportunity_quality_score: 72,
     risk_score: 40,
     data_quality_score: 90,

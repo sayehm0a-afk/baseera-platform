@@ -184,6 +184,13 @@ export interface DecisionV2 {
 
   confidence_score: number;
   confidence_disclaimer_ar: string;
+  // RADAR-C: empirical calibration of confidence_score against real
+  // DecisionV2Outcome history -- both null until a real ACTIVE
+  // decision_v2-source calibration model exists (see backend
+  // DecisionV2Out's own comment). A disclosed companion figure, never
+  // a silent replacement for confidence_score.
+  calibrated_confidence_score: number | null;
+  calibration_version: string | null;
   opportunity_quality_score: number;
   risk_score: number;
   data_quality_score: number;
