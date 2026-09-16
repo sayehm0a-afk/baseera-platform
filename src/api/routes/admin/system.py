@@ -14,7 +14,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from src.api.schemas.admin import AdminDashboardSummaryOut, SystemHealthOut
+from src.api.schemas.admin import (
+    AdminDashboardSummaryOut,
+    DecisionV2OutcomeSchedulerRunLogListOut,
+    SystemHealthOut,
+)
 from src.auth.rbac import require_staff_role
 from src.auth.token_store import get_redis_client
 from src.core.config import settings
@@ -346,3 +350,34 @@ async def get_dashboard_summary(
         sahmk_quota_status=sahmk_quota_status,
         market_data_cache_status=market_data_cache_status,
     )
+
+
+@router.get(
+    "/decision-v2-outcome-scheduler-runs",
+    response_model=DecisionV2OutcomeSchedulerRunLogListOut,
+)
+def list_decision_v2_outcome_scheduler_runs(
+    hours: int = 24,
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
+) -> DecisionV2OutcomeSchedulerRunLogListOut:
+    """2026-09-16 audit finding: `/summary` above only ever exposes the
+    single latest DecisionV2OutcomeSchedulerRunLog row, which cannot
+    answer a concrete question a mid-session redeploy raises -- did
+    more than one worker's cycle actually write a row in the same
+    window (the leader lease failing to hold), or did exactly one
+    cycle run per real scheduler tick as designed (see that model's
+    own "only the leader ever writes a row" docstring)? Lists every
+    row started within the last `hours` (default 24, i.e. one trading
+    day), newest first -- a real, auditable answer instead of trusting
+    the design comment alone."""
+    from src.domain.models import DecisionV2OutcomeSchedulerRunLog
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    runs = (
+        session.query(DecisionV2OutcomeSchedulerRunLog)
+        .filter(DecisionV2OutcomeSchedulerRunLog.started_at >= cutoff)
+        .order_by(DecisionV2OutcomeSchedulerRunLog.started_at.desc())
+        .all()
+    )
+    return DecisionV2OutcomeSchedulerRunLogListOut(window_hours=hours, runs=runs)
