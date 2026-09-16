@@ -112,16 +112,46 @@ def test_poor_entry_quality_downgrades_to_watch_only_not_rejected():
 
 
 def test_hold_is_published_without_risk_reward_or_entry_quality_gating():
-    # AIDecisionEngine always computes targets/stop/expected-return
-    # regardless of recommendation (see _compute_price_targets), so a
-    # real HOLD still carries these fields -- what must differ is that
-    # HOLD proposes no trade, so risk/reward and entry quality are
-    # never evaluated against it.
+    # A HOLD proposes no trade, so risk/reward and entry quality are
+    # never evaluated against it, even when these fields happen to
+    # carry stale/leftover non-None values.
     outcome = make_outcome(decision=make_decision(recommendation=Recommendation.HOLD, expected_return_pct=-1.0, risk_reward_ratio=None))
     evaluation = evaluate_publication(outcome)
     assert evaluation.status is PublicationStatus.PUBLISHED
     risk_reward_gate = next(g for g in evaluation.gates if g.name == "risk_reward")
     assert risk_reward_gate.status is GateStatus.NOT_EVALUATED
+
+
+def test_hold_with_no_target_or_stop_is_still_published_not_rejected():
+    # 2026-09-16 audit finding: AIDecisionEngine.decide() correctly
+    # leaves target_price/stop_loss/expected_return_pct as None for a
+    # real HOLD (PR #167 -- a HOLD has no direction to size a trade
+    # plan against). _targets_gate used to run unconditionally before
+    # is_actionable was even checked, so every real HOLD failed it and
+    # got REJECTED here -- before ever reaching the "HOLD proposes no
+    # trade" branch below -- which would have inflated scan_progress's
+    # rejected_count for the platform's single most common outcome.
+    outcome = make_outcome(decision=make_decision(
+        recommendation=Recommendation.HOLD, target_price=None, stop_loss=None, expected_return_pct=None,
+        risk_reward_ratio=None,
+    ))
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.PUBLISHED
+    targets_gate = next(g for g in evaluation.gates if g.name == "targets_present")
+    assert targets_gate.status is GateStatus.NOT_EVALUATED
+
+
+def test_buy_with_no_target_or_stop_is_rejected():
+    # The actionable case _targets_gate exists to catch must still be
+    # enforced: a BUY/SELL with no real trade plan (e.g. price data was
+    # unavailable) is not a real opportunity.
+    outcome = make_outcome(decision=make_decision(
+        recommendation=Recommendation.BUY, target_price=None, stop_loss=None, expected_return_pct=None,
+    ))
+    evaluation = evaluate_publication(outcome)
+    assert evaluation.status is PublicationStatus.REJECTED
+    targets_gate = next(g for g in evaluation.gates if g.name == "targets_present")
+    assert targets_gate.status is GateStatus.FAIL
 
 
 def test_unsuccessful_outcome_is_insufficient_data():

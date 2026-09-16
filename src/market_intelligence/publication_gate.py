@@ -97,7 +97,6 @@ def evaluate_publication(
     gates.append(_freshness_gate(outcome))
     gates.append(_price_validity_gate(outcome))
     gates.append(_confidence_gate(outcome))
-    gates.append(_targets_gate(outcome))
     gates.append(_min_candles_gate(outcome))
     gates.append(_ohlcv_staleness_gate(outcome))
     gates.append(_suspension_gate(outcome))
@@ -113,11 +112,25 @@ def evaluate_publication(
 
     if not is_actionable:
         for name in (
-            "risk_reward", "entry_quality", "abnormal_spread", "position_sizing",
+            "targets_present", "risk_reward", "entry_quality", "abnormal_spread", "position_sizing",
             "news_conflict", "fundamental_conflict", "confidence_calibration",
         ):
             gates.append(GateResult(name=name, status=GateStatus.NOT_EVALUATED, detail="HOLD proposes no trade"))
         return PublicationEvaluation(status=PublicationStatus.PUBLISHED, gates=gates, disclosures=disclosures)
+
+    # 2026-09-16 audit finding: _targets_gate used to run unconditionally
+    # above, before is_actionable was even known. That was invisible
+    # while ai_decision_engine.py still (incorrectly) attached a
+    # target/stop pair to HOLD calls, but since that was fixed (PR #167)
+    # a real HOLD's target_price/stop_loss/expected_return_pct are
+    # genuinely None -- which made *every* HOLD outcome fail this gate
+    # and get REJECTED here, before ever reaching the "HOLD proposes no
+    # trade" branch above. Only an actionable BUY/SELL call is actually
+    # supposed to be blocked for lacking a trade plan.
+    targets_gate = _targets_gate(outcome)
+    gates.append(targets_gate)
+    if targets_gate.status is GateStatus.FAIL:
+        return PublicationEvaluation(status=PublicationStatus.REJECTED, gates=gates, disclosures=disclosures)
 
     risk_reward_gate = _risk_reward_gate(outcome, recommendation)
     gates.append(risk_reward_gate)
