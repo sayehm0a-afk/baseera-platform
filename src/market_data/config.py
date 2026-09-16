@@ -250,8 +250,8 @@ def get_sahmk_reserved_for_live_scan_requests_per_day() -> Optional[int]:
 
 
 def get_sahmk_reserved_for_market_scan_requests_per_day() -> Optional[int]:
-    """PROPOSED (2026-09-10 production market-data audit finding, NOT
-    YET APPLIED). How many of get_sahmk_max_requests_per_day()'s
+    """APPLIED (2026-09-10 production market-data audit finding; PR #148,
+    merged and deployed to production 2026-09-11). How many of get_sahmk_max_requests_per_day()'s
     requests -- immediately outside the critical and live-scan reserves
     -- are reserved for priority=MARKET_SCAN callers only (the regular,
     always-on MarketIntelligenceScheduler recurring scan --

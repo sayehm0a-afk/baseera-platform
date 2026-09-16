@@ -33,8 +33,8 @@ rate_limiter.py's three-cutoff acquire() logic. LIVE_SCAN itself
 cannot dip into the CRITICAL reserve either: active-signal/pending-
 outcome tracking always outranks a live-scan cycle.
 
-PROPOSED (2026-09-10 production market-data audit finding, NOT YET
-APPLIED -- see the branch this change ships on): a fourth level,
+APPLIED (2026-09-10 production market-data audit finding; PR #148,
+merged and deployed to production 2026-09-11): a fourth level,
 MARKET_SCAN, sits strictly between LIVE_SCAN and BACKGROUND, for
 exactly the same reason LIVE_SCAN was added: `MarketIntelligenceScheduler
 ._run_one_cycle` (the regular, always-on recurring scan that actually
