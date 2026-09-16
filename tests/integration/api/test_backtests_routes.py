@@ -25,6 +25,7 @@ from src.api.dependencies import get_current_user
 from src.core.db import database
 from src.core.db.database import Base, get_db
 from src.domain.models import PriceBar, StaffRole, Stock, Timeframe, User
+from src.subscriptions import subscription_service
 
 
 @pytest.fixture
@@ -79,6 +80,23 @@ def _seed_bars(session_factory, symbol="2222", count=300, sector="Energy", sourc
         )
     session.commit()
     session.close()
+
+
+def _subscribed_customer(session_factory, email: str) -> User:
+    """A real, persisted, non-staff user with an active trial
+    subscription -- required to reach require_active_subscription()'s
+    non-staff branch at all (unlike the default staff_user fixture,
+    which bypasses it entirely), so ownership-scoping tests exercise
+    the actual customer path."""
+    session = session_factory()
+    user = User(email=email, password_hash="hashed", is_staff=False, is_email_verified=True)
+    session.add(user)
+    session.commit()
+    subscription_service.provision_trial_subscription(session, user)
+    session.refresh(user)
+    session.expunge(user)  # detach with attributes already loaded -- no refresh-on-access after close()
+    session.close()
+    return user
 
 
 _VALID_REQUEST = {
@@ -292,3 +310,93 @@ def test_non_staff_customer_without_a_subscription_gets_402(client, session_fact
         )
     assert response.status_code == 402
     assert response.json()["error"]["code"] == "subscription_required"
+
+
+# --- ownership scoping (2026-09-16 audit finding) -----------------------
+#
+# BacktestRun had no owner column at all before this fix -- any active-
+# subscription customer could view or cooperatively-cancel any other
+# customer's run just by guessing/incrementing run_id. These prove the
+# fix: a non-owning customer gets the same 404 an unknown run_id would
+# (never a 403 -- no existence leak), the owner themselves is
+# unaffected, and staff retain full access exactly as before.
+
+
+def _as_staff():
+    main.app.dependency_overrides[get_current_user] = (
+        lambda: User(email="staff@example.com", password_hash="hashed", is_staff=True, staff_role=StaffRole.OWNER)
+    )
+
+
+def test_a_different_customer_cannot_view_another_customers_run(client, session_factory):
+    _seed_bars(session_factory)
+    owner = _subscribed_customer(session_factory, "owner@example.com")
+    main.app.dependency_overrides[get_current_user] = lambda: owner
+    run_id = client.post("/api/v1/backtests", json=_VALID_REQUEST).json()["id"]
+
+    other = _subscribed_customer(session_factory, "other@example.com")
+    main.app.dependency_overrides[get_current_user] = lambda: other
+    for path in (
+        f"/api/v1/backtests/{run_id}",
+        f"/api/v1/backtests/{run_id}/status",
+        f"/api/v1/backtests/{run_id}/metrics",
+        f"/api/v1/backtests/{run_id}/trades",
+        f"/api/v1/backtests/{run_id}/confidence-calibration",
+        f"/api/v1/backtests/{run_id}/comparison",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404, path
+        assert response.json()["error"]["code"] == "backtest_run_not_found"
+
+
+def test_a_different_customer_cannot_cancel_another_customers_run(client, session_factory):
+    _seed_bars(session_factory)
+    owner = _subscribed_customer(session_factory, "owner@example.com")
+    main.app.dependency_overrides[get_current_user] = lambda: owner
+    run_id = client.post("/api/v1/backtests", json=_VALID_REQUEST).json()["id"]
+
+    other = _subscribed_customer(session_factory, "other@example.com")
+    main.app.dependency_overrides[get_current_user] = lambda: other
+    response = client.post(f"/api/v1/backtests/{run_id}/cancel")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "backtest_run_not_found"
+
+
+def test_owner_can_view_and_cancel_their_own_run(client, session_factory):
+    _seed_bars(session_factory)
+    owner = _subscribed_customer(session_factory, "owner@example.com")
+    main.app.dependency_overrides[get_current_user] = lambda: owner
+    run_id = client.post("/api/v1/backtests", json=_VALID_REQUEST).json()["id"]
+
+    assert client.get(f"/api/v1/backtests/{run_id}").status_code == 200
+    assert client.get(f"/api/v1/backtests/{run_id}/status").status_code == 200
+    assert client.post(f"/api/v1/backtests/{run_id}/cancel").status_code == 200
+
+
+def test_staff_can_still_view_and_cancel_any_customers_run(client, session_factory):
+    _seed_bars(session_factory)
+    owner = _subscribed_customer(session_factory, "owner@example.com")
+    main.app.dependency_overrides[get_current_user] = lambda: owner
+    run_id = client.post("/api/v1/backtests", json=_VALID_REQUEST).json()["id"]
+
+    _as_staff()
+    assert client.get(f"/api/v1/backtests/{run_id}").status_code == 200
+    assert client.post(f"/api/v1/backtests/{run_id}/cancel").status_code == 200
+
+
+def test_different_customers_submitting_the_identical_config_each_get_their_own_run(client, session_factory):
+    _seed_bars(session_factory)
+    first_customer = _subscribed_customer(session_factory, "first@example.com")
+    main.app.dependency_overrides[get_current_user] = lambda: first_customer
+    first_run_id = client.post("/api/v1/backtests", json=_VALID_REQUEST).json()["id"]
+    # Resubmitting one's own identical configuration still short-circuits to the same run.
+    assert client.post("/api/v1/backtests", json=_VALID_REQUEST).json()["id"] == first_run_id
+
+    second_customer = _subscribed_customer(session_factory, "second@example.com")
+    main.app.dependency_overrides[get_current_user] = lambda: second_customer
+    second_run_id = client.post("/api/v1/backtests", json=_VALID_REQUEST).json()["id"]
+    assert second_run_id != first_run_id
+
+    # And the second customer can't see the first's run despite the identical config.
+    assert client.get(f"/api/v1/backtests/{first_run_id}").status_code == 404
+    assert client.get(f"/api/v1/backtests/{second_run_id}").status_code == 200

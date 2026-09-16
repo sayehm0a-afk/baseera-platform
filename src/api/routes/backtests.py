@@ -86,9 +86,18 @@ def _to_run_out(run: BacktestRun) -> BacktestRunOut:
     )
 
 
-def _get_run_or_404(session: Session, run_id: int) -> BacktestRun:
+def _get_run_or_404(session: Session, run_id: int, current_user: User) -> BacktestRun:
+    """2026-09-16 audit finding: a run belongs to whoever submitted it
+    -- a customer requesting a run they don't own gets the same 404 a
+    genuinely-missing run_id would give (never a 403, matching
+    portfolio.py's own existence-leakage avoidance), so guessing IDs
+    reveals nothing. Staff bypass entirely, same as
+    require_active_subscription() itself already does for every other
+    check in this file."""
     run = session.query(BacktestRun).filter_by(id=run_id).one_or_none()
     if run is None:
+        raise BacktestRunNotFoundError(f"No backtest run {run_id}.")
+    if not current_user.is_staff and run.created_by_user_id != current_user.id:
         raise BacktestRunNotFoundError(f"No backtest run {run_id}.")
     return run
 
@@ -98,7 +107,7 @@ async def create_backtest(
     request: BacktestCreateRequest,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_db),
-    _current_user: User = Depends(require_active_subscription()),
+    current_user: User = Depends(require_active_subscription()),
 ) -> BacktestRunOut:
     if request.strategy not in DEFAULT_STRATEGIES:
         raise InvalidBacktestConfigError(
@@ -106,7 +115,11 @@ async def create_backtest(
         )
 
     idempotency_key = _compute_idempotency_key(request)
-    existing = session.query(BacktestRun).filter_by(idempotency_key=idempotency_key).one_or_none()
+    existing = (
+        session.query(BacktestRun)
+        .filter_by(idempotency_key=idempotency_key, created_by_user_id=current_user.id)
+        .one_or_none()
+    )
     if existing is not None:
         logger.info("Backtest request matches existing run %d (idempotent) -- not creating a duplicate.", existing.id)
         return _to_run_out(existing)
@@ -128,6 +141,7 @@ async def create_backtest(
 
     run = BacktestRun(
         idempotency_key=idempotency_key,
+        created_by_user_id=current_user.id,
         status=BacktestRunStatus.PENDING,
         symbols=request.symbols,
         data_provenance_mode=DataProvenanceMode(request.data_provenance_mode),
@@ -169,16 +183,16 @@ async def create_backtest(
 
 @router.get("/{run_id}", response_model=BacktestRunOut)
 def get_backtest(
-    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+    run_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> BacktestRunOut:
-    return _to_run_out(_get_run_or_404(session, run_id))
+    return _to_run_out(_get_run_or_404(session, run_id, current_user))
 
 
 @router.get("/{run_id}/status", response_model=BacktestStatusOut)
 def get_backtest_status(
-    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+    run_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> BacktestStatusOut:
-    run = _get_run_or_404(session, run_id)
+    run = _get_run_or_404(session, run_id, current_user)
     return BacktestStatusOut(
         id=run.id,
         status=run.status.value,
@@ -193,13 +207,13 @@ def get_backtest_status(
 
 @router.post("/{run_id}/cancel", response_model=BacktestStatusOut)
 def cancel_backtest(
-    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+    run_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> BacktestStatusOut:
     """Cooperative cancellation (Phase 8): sets cancel_requested, which
     the running job checks between evaluations and honors as soon as
     practical -- not an immediate hard stop, since a snapshot already
     being written should finish cleanly rather than leave a torn row."""
-    run = _get_run_or_404(session, run_id)
+    run = _get_run_or_404(session, run_id, current_user)
     if run.status in (BacktestRunStatus.PENDING, BacktestRunStatus.RUNNING):
         run.cancel_requested = True
         session.commit()
@@ -216,9 +230,9 @@ def cancel_backtest(
 
 @router.get("/{run_id}/metrics", response_model=BacktestMetricsOut)
 def get_backtest_metrics(
-    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+    run_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> BacktestMetricsOut:
-    run = _get_run_or_404(session, run_id)
+    run = _get_run_or_404(session, run_id, current_user)
     return BacktestMetricsOut(
         id=run.id, status=run.status.value, data_provenance_mode=run.data_provenance_mode.value,
         symbols=run.symbols, metrics=run.metrics,
@@ -231,9 +245,9 @@ def get_backtest_trades(
     limit: int = Query(default=50, ge=1),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db),
-    _current_user: User = Depends(require_active_subscription()),
+    current_user: User = Depends(require_active_subscription()),
 ) -> BacktestTradesOut:
-    _get_run_or_404(session, run_id)
+    _get_run_or_404(session, run_id, current_user)
     limit = min(limit, get_max_trades_page_size())
 
     query = session.query(RecommendationSnapshot).filter_by(run_id=run_id).order_by(
@@ -264,9 +278,9 @@ def get_backtest_trades(
 
 @router.get("/{run_id}/confidence-calibration", response_model=ConfidenceCalibrationOut)
 def get_backtest_confidence_calibration(
-    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+    run_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> ConfidenceCalibrationOut:
-    run = _get_run_or_404(session, run_id)
+    run = _get_run_or_404(session, run_id, current_user)
     calibration = ((run.metrics or {}).get("overall") or {}).get("calibration_error")
     if calibration is None:
         return ConfidenceCalibrationOut(id=run_id, overall_error=None, buckets=[])
@@ -275,7 +289,7 @@ def get_backtest_confidence_calibration(
 
 @router.get("/{run_id}/comparison", response_model=BacktestComparisonOut)
 def get_backtest_comparison(
-    run_id: int, session: Session = Depends(get_db), _current_user: User = Depends(require_active_subscription())
+    run_id: int, session: Session = Depends(get_db), current_user: User = Depends(require_active_subscription())
 ) -> BacktestComparisonOut:
     """Compares this run against any *other already-run* backtest that
     shares the same symbols/date range/provenance but a different
@@ -283,8 +297,20 @@ def get_backtest_comparison(
     (buy_and_hold, sma_crossover, ...) to populate a real comparison.
     Never triggers new backtests itself (this is a GET); a strategy
     with no matching run yet simply doesn't appear.
+
+    The comparison candidates deliberately are NOT owner-filtered
+    (unlike `run` itself, resolved via the same ownership-checked
+    `_get_run_or_404` every other route uses): this route's whole
+    purpose is comparing against a shared library of baseline-strategy
+    runs (buy_and_hold, sma_crossover, ...) covering the identical
+    symbols/date range/provenance, by design available to any
+    subscriber -- restricting candidates to only this caller's own
+    runs would make the feature useless unless one customer had
+    personally re-run every baseline themselves. Exposed fields are
+    strategy/status/aggregate metrics only, never another user's raw
+    request identity.
     """
-    run = _get_run_or_404(session, run_id)
+    run = _get_run_or_404(session, run_id, current_user)
 
     candidates = (
         session.query(BacktestRun)
