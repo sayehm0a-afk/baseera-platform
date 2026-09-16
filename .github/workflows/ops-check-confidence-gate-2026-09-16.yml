@@ -1,0 +1,101 @@
+name: Ops - Check active confidence-calibration model + gate status (read-only, 2026-09-16)
+
+# User feedback (2026-09-16): "one certain recommendation is much
+# better than many unguaranteed ones" -- investigating whether
+# publication_gate.py's confidence_calibration gate (the only gate
+# that enforces a minimum SUCCESS-PROBABILITY bar, not just "a
+# confidence number exists") is actually active in production right
+# now, or silently skipped (NOT_EVALUATED) because no calibration
+# model has enough real outcome history yet to be fit and activated.
+# Never modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as staff
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then echo "::error::login failed"; exit 1; fi
+
+      - name: List confidence-calibration models (which is active, if any)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/ai-evolution/confidence-calibrations" -o /tmp/calibrations.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/calibrations.json'))
+          print(json.dumps(d, indent=2, ensure_ascii=False)[:4000])
+          "
+
+      - name: Recommendation-history recent decisions with raw + calibrated confidence
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/recommendation-history?limit=30" -o /tmp/history.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/history.json'))
+          items = d.get('items') or d.get('results') or d.get('entries') or []
+          print('total items returned:', len(items))
+          print('top-level keys:', list(d.keys()))
+          for it in items[:30]:
+              print(it.get('symbol'), it.get('recommendation'), 'raw_conf=', it.get('confidence_score') or it.get('confidence'), 'calibrated=', it.get('calibrated_confidence_score') or it.get('calibrated_confidence'), it.get('evaluated_at'))
+          " || cat /tmp/history.json | head -c 2000
+
+      - name: Decision-intelligence dashboard (win rate / calibration status if exposed)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/decision-intelligence" -o /tmp/decint.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/decint.json'))
+          print(json.dumps(d, indent=2, ensure_ascii=False)[:4000])
+          "
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found."
