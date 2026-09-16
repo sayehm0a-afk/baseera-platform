@@ -14,7 +14,7 @@
     "lightweight-charts": "^5.2.1",
     "next": "16.2.11",
     "react": "19.3.0",
-    "react-dom": "19.2.4"
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -29,7 +29,7 @@
     "jsdom": "^30.0.1",
     "playwright": "^1.62.0",
     "tailwindcss": "^4",
-    "typescript": "^7",
+    "typescript": "6.0.3",
     "vitest": "^4.1.10"
   }
 }
