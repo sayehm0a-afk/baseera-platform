@@ -1,0 +1,96 @@
+name: Ops - Check decision_v2_outcome_scheduler for duplicate cycles (read-only, 2026-09-16)
+
+# Follow-up to PR #175: queries the new GET /admin/system/
+# decision-v2-outcome-scheduler-runs endpoint for the last 24h to
+# confirm whether the leader-election lease held during today's
+# redeploys, or whether more than one worker's cycle wrote a row for
+# what should be one logical cycle (the user's reported concern, via
+# an independent production monitor). Never modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as staff
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then echo "::error::login failed"; exit 1; fi
+
+      - name: List decision_v2_outcome_scheduler runs in the last 24h
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/system/decision-v2-outcome-scheduler-runs?hours=24" -o /tmp/runs.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/runs.json'))
+          runs = d.get('runs', [])
+          print('window_hours:', d.get('window_hours'))
+          print('total rows in window:', len(runs))
+          print()
+          for r in runs:
+              print(f\"id={r['id']} started_at={r['started_at']} finished_at={r['finished_at']} status={r['status']} \"
+                    f\"evaluated_terminal={r['evaluated_terminal']} still_pending={r['still_pending']} duration_seconds={r['duration_seconds']}\")
+          print()
+          # Overlap check: any two rows whose [started_at, finished_at] windows
+          # overlap would mean two cycles ran concurrently -- the leader lease
+          # failing to serialize them.
+          from datetime import datetime
+          def parse(ts):
+              return datetime.fromisoformat(ts.replace('Z', '+00:00')) if ts else None
+          intervals = [(parse(r['started_at']), parse(r['finished_at']) or parse(r['started_at']), r['id']) for r in runs]
+          intervals.sort()
+          overlaps = []
+          for i in range(len(intervals) - 1):
+              s1, f1, id1 = intervals[i]
+              s2, f2, id2 = intervals[i+1]
+              if f1 is not None and s2 < f1:
+                  overlaps.append((id1, id2))
+          if overlaps:
+              print('POTENTIAL OVERLAPPING/DUPLICATE CYCLES FOUND:', overlaps)
+          else:
+              print('No overlapping cycle windows found -- leader-election held, no duplicate concurrent processing.')
+          "
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found."
