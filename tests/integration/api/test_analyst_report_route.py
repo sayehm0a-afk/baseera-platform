@@ -118,9 +118,12 @@ def test_analyst_report_json_with_both_legs_available(client, db_session):
     for field in _EXPLANATION_LIST_FIELDS:
         assert isinstance(body[field], list), field
 
-    # a real price was ingested/quoted -> target/stop loss explanations should cite it.
-    assert body["target_price"] is not None
-    assert "could not be computed" not in body["target_price_explanation"]
+    # A real price was ingested/quoted -> target/stop loss explanations
+    # should cite it for a directional call. A HOLD has no direction
+    # to size a target/stop against (2026-09-16 audit fix).
+    if body["recommendation"] != "HOLD":
+        assert body["target_price"] is not None
+        assert "could not be computed" not in body["target_price_explanation"]
 
 
 def test_analyst_report_404_for_unknown_symbol(client, db_session):
