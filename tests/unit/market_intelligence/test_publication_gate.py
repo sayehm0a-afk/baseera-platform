@@ -506,6 +506,29 @@ def test_healthy_calibrated_probability_passes():
     assert evaluation.status is PublicationStatus.PUBLISHED
 
 
+def test_calibrated_probability_exactly_at_the_70_percent_floor_passes():
+    """2026-09-16 explicit product decision: the floor is 0.70, not
+    0.35 -- a value that would have passed comfortably before must now
+    only pass at or above 0.70."""
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
+    evaluation = evaluate_publication(outcome, calibrated_success_probability=0.70)
+    gate = next(g for g in evaluation.gates if g.name == "confidence_calibration")
+    assert gate.status is GateStatus.PASS
+    assert evaluation.status is PublicationStatus.PUBLISHED
+
+
+def test_calibrated_probability_just_below_the_70_percent_floor_is_rejected():
+    """The exact scenario the new floor exists for: a calibrated
+    probability (0.60) that would have comfortably passed the old 0.35
+    default -- and did in production on 2026-09-16 -- must now be
+    rejected."""
+    outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
+    evaluation = evaluate_publication(outcome, calibrated_success_probability=0.60)
+    assert evaluation.status is PublicationStatus.REJECTED
+    gate = next(g for g in evaluation.gates if g.name == "confidence_calibration")
+    assert gate.status is GateStatus.FAIL
+
+
 def test_no_calibration_supplied_is_not_evaluated_not_blocked():
     outcome = make_outcome(decision=make_decision(recommendation=Recommendation.BUY, expected_return_pct=5.0, risk_reward_ratio=2.0))
     evaluation = evaluate_publication(outcome)

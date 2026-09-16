@@ -41,3 +41,17 @@ def test_stage1_threshold_defaults_match_documented_values():
     assert config.get_stage1_atr_reward_multiple() == 2.0
     assert config.get_stage1_atr_risk_multiple() == 1.0
     assert config.get_radar_stage2_candidate_cap() == 15
+
+
+def test_min_calibrated_success_probability_default_is_70_percent():
+    """2026-09-16 explicit product decision: raised from 0.35 (which
+    filtered out nothing against real calibrated outputs clustering in
+    the mid-50s-to-low-60s%) to 0.70 -- deliberately severe, so most
+    days publish zero BUY/SELL candidates rather than a weak one."""
+    assert config.get_min_calibrated_success_probability() == 0.70
+
+
+def test_min_calibrated_success_probability_reads_env_at_call_time():
+    with mock.patch.dict(os.environ, {"MARKET_MIN_CALIBRATED_SUCCESS_PROBABILITY": "0.5"}):
+        assert config.get_min_calibrated_success_probability() == 0.5
+    assert config.get_min_calibrated_success_probability() == 0.70

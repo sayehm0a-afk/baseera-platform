@@ -140,11 +140,11 @@ def test_calibrated_confidence_is_surfaced_on_the_entry_not_just_used_to_gate():
             time_horizon=TimeHorizon.LONG_TERM, risk_level=RiskLevel.LOW,
         )),
     ]
-    calibrated_confidences = {"HIGH_CAL": 0.62}
+    calibrated_confidences = {"HIGH_CAL": 0.80}
 
     result = WatchlistEngine().build(outcomes, calibrated_confidences)[WatchlistCategory.INVESTMENT]
 
-    assert result.entries[0].calibrated_confidence == 0.62
+    assert result.entries[0].calibrated_confidence == 0.80
 
 
 def test_no_calibrated_confidences_argument_behaves_exactly_as_before():
