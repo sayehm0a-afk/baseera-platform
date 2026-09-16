@@ -2,11 +2,11 @@ name: Ops - Diagnose live crash/build-failure emails (read-only, 2026-09-16)
 
 # Read-only diagnostic dispatched in direct response to real Railway
 # "Deployment crashed" / "Build failed" emails received around 08:07-
-# 08:14 UTC on 2026-09-16. Two consecutive frontend deployments have
-# failed on unchanged frontend code. `railway logs --help` (previous
-# pass) revealed the correct syntax: the deployment id is a positional
-# argument to --build (not --deployment), and --latest forces showing
-# the latest deployment's logs even if it failed/is still building.
+# 08:14 UTC on 2026-09-16. Root cause found and fixed in PR #170
+# (typescript pinned below 7.0, react/react-dom version mismatch
+# fixed) and deployed. This pass independently confirms the new
+# frontend deployment's actual status is SUCCESS, not just that the
+# deploy job's own (too-fast, potentially-stale) healthcheck passed.
 # Never modifies anything.
 
 on:
@@ -25,5 +25,30 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Real build logs for the latest (failed) frontend deployment
-        run: railway logs --service frontend --build --latest --lines 300 2>&1 || echo "(could not fetch)"
+      - name: Current service/deployment status for backend and frontend
+        run: |
+          railway service list --json > /tmp/services3.json 2>/dev/null || echo '[]' > /tmp/services3.json
+          cat > /tmp/print_services3.py <<'PYEOF'
+          import json
+          d = json.load(open('/tmp/services3.json'))
+          items = d if isinstance(d, list) else d.get('services', d.get('edges', []))
+          for i in items:
+              n = i.get('node', i) if isinstance(i, dict) else i
+              dep = n.get('latestDeployment') or {}
+              print(f"--- service: {n.get('name') or n.get('serviceName')} ---")
+              print('  status:', n.get('status'))
+              print('  deployment_id:', dep.get('id'))
+              print('  deployment_status:', dep.get('status'))
+              print('  deployment_created_at:', dep.get('createdAt'))
+          PYEOF
+          python3 /tmp/print_services3.py
+
+      - name: Live smoke test right now
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json 2>/dev/null || echo '{}' > /tmp/backend_domains.json
+          railway domain list --service frontend --json > /tmp/frontend_domains.json 2>/dev/null || echo '{}' > /tmp/frontend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])" 2>/dev/null || echo "")
+          FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])" 2>/dev/null || echo "")
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "backend /health/live -> %{http_code}\n" "$BACKEND_URL/health/live" || echo "backend curl failed"
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "frontend / -> %{http_code}\n" "$FRONTEND_URL/" || echo "frontend curl failed"
+          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "frontend /login -> %{http_code}\n" "$FRONTEND_URL/login" || echo "frontend curl failed"
