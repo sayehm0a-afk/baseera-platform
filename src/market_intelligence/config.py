@@ -268,8 +268,15 @@ def get_min_calibrated_success_probability() -> float:
     exists and was actually applied (see
     src.ai_evolution.confidence_calibration.get_effective_confidence);
     NOT_EVALUATED, never a hard fail, before enough real outcome
-    history exists to fit one."""
-    return float(os.getenv("MARKET_MIN_CALIBRATED_SUCCESS_PROBABILITY", "0.35"))
+    history exists to fit one.
+
+    Raised from 0.35 to 0.70 (2026-09-16, explicit product decision):
+    the live model's real calibrated outputs that day clustered in the
+    mid-50s-to-low-60s%, meaning 0.35 filtered out nothing in
+    practice. The 0.70 bar is deliberately severe -- on most days it
+    will publish zero BUY/SELL candidates rather than a weak one, by
+    design (one certain call beats several unreliable ones)."""
+    return float(os.getenv("MARKET_MIN_CALIBRATED_SUCCESS_PROBABILITY", "0.70"))
 
 
 def get_min_risk_reward_ratio() -> float:
