@@ -475,7 +475,14 @@ jobs:
                       check_page(page, vp_name, f"/stocks/{stock_symbol}", "[professional] ", dump_text=True, check_decision=True)
                       check_page(page, vp_name, "/watchlist", "[professional] ")
                       check_page(page, vp_name, "/reports", "[professional] ")
-                      check_page(page, vp_name, "/more", "[professional] ")
+                      # /more was intentionally removed (see frontend/src/
+                      # components/shell/nav-items.ts's own docstring, RADAR-
+                      # C/E simplification down to 4 primary surfaces) -- a
+                      # 2026-09-16 audit run flagged its 404 as a false-
+                      # positive finding. /radar and /portfolio are two of
+                      # those 4 primary surfaces and weren't covered here.
+                      check_page(page, vp_name, "/radar", "[professional] ")
+                      check_page(page, vp_name, "/portfolio", "[professional] ")
 
                       # ---- Persona 3: owner/admin (representative subset) ----
                       print(f"\n-- Persona 3 (owner/admin) --")
