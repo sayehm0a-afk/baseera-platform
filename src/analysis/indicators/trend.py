@@ -73,7 +73,10 @@ def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
         dx = 100 * (plus_di - minus_di).abs() / di_sum
     dx = dx.where(di_sum != 0, 0.0)
 
-    return wilder_smooth(dx, period)
+    # dx is itself undefined until index `period` (it depends on the
+    # already-smoothed atr/+DM/-DM series), so its own Wilder seed must
+    # start there too -- see wilder_smooth's docstring.
+    return wilder_smooth(dx, period, seed_start=period)
 
 
 def supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> SuperTrendResult:

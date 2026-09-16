@@ -60,6 +60,20 @@ def _score_roe(roe: float) -> Tuple[float, Signal]:
     )
 
 
+def _roe_sign_is_corrupted_by_negative_equity(roe: float, net_margin: Optional[float]) -> bool:
+    """A lossmaking company with negative shareholders' equity (net
+    income AND total_equity both negative) produces a *positive* ROE
+    -- the two negatives cancel -- indistinguishable from a genuinely
+    healthy positive ROE by sign alone (unlike P/E and P/B, whose
+    numerator is always positive, so their own sign already reveals a
+    negative denominator; see _score_pe/_score_pb). net_profit_margin
+    shares ROE's numerator (net_income) but has a denominator
+    (revenue) that can't be negative, so its sign reveals net_income's
+    true sign independently -- net_margin<0 with roe>0 can only happen
+    when total_equity is also negative. 2026-09-16 audit finding."""
+    return net_margin is not None and net_margin < 0 and roe > 0
+
+
 def _score_net_margin(margin: float) -> Tuple[float, Signal]:
     return _bucket(
         margin, high=0.10, low=0.0, high_points=6.0, mid_points=2.0, low_points=-8.0,
@@ -80,9 +94,17 @@ def _score_current_ratio(ratio: float) -> Tuple[float, Signal]:
     )
 
 
-def _score_debt_to_equity(ratio: float) -> Tuple[float, Signal]:
+def _score_debt_to_equity(ratio: float) -> Optional[Tuple[float, Signal]]:
     # Lower is better for leverage, so the bucket direction is inverted
     # relative to the ratios above: "good" is a *low* value.
+    if ratio < 0:
+        # total_debt can't be negative, so a negative ratio can only
+        # come from negative total_equity -- the single worst leverage
+        # profile a company can have (debt exceeds a negative equity
+        # base), not "conservative." Not meaningful as a leverage
+        # signal by this formula; skip rather than mislabel it
+        # bullish. 2026-09-16 audit finding.
+        return None
     if ratio <= 1.0:
         return 5.0, Signal(
             name="debt_to_equity",
@@ -192,11 +214,16 @@ class FundamentalScoreContributor:
         signals: List[Signal] = []
         computed = 0
 
+        roe = result.return_on_equity
+        if roe is not None and not _roe_sign_is_corrupted_by_negative_equity(roe, result.net_profit_margin):
+            computed += 1
+            pts, sig = _score_roe(roe)
+            points += pts
+            signals.append(sig)
+
         for value, scorer in (
-            (result.return_on_equity, _score_roe),
             (result.net_profit_margin, _score_net_margin),
             (result.current_ratio, _score_current_ratio),
-            (result.debt_to_equity, _score_debt_to_equity),
             (result.revenue_growth, _score_revenue_growth),
             (result.eps_growth, _score_eps_growth),
         ):
@@ -210,6 +237,7 @@ class FundamentalScoreContributor:
         for value, scorer in (
             (result.price_to_earnings, _score_pe),
             (result.price_to_book, _score_pb),
+            (result.debt_to_equity, _score_debt_to_equity),
         ):
             if value is None:
                 continue
