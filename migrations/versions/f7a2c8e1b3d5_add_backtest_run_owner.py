@@ -20,6 +20,15 @@ and confusing. Existing rows keep their (now-NULL-owner) key as-is;
 no two pre-migration rows can collide since idempotency_key was
 already globally unique before this.
 
+batch_alter_table throughout (not plain op.add_column/op.create_
+foreign_key/op.create_unique_constraint): SQLite has no ALTER TABLE
+ADD CONSTRAINT, used by tests/integration/test_migrations.py's
+SQLite-based full chain replay -- batch mode falls back to its
+copy-and-move strategy there while emitting plain ALTER TABLE on
+Postgres (the same pattern already established in
+21250b80c56f_add_user_id_to_portfolios.py and
+c4d8e6f21b3d_add_user_deletion_fk_policies.py).
+
 Revision ID: f7a2c8e1b3d5
 Revises: 6c50a61c602f
 Create Date: 2026-09-16 00:00:00.000000
@@ -40,36 +49,28 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    op.add_column("backtest_runs", sa.Column("created_by_user_id", sa.Integer(), nullable=True))
-    op.create_index(
-        "ix_backtest_runs_created_by_user_id", "backtest_runs", ["created_by_user_id"]
-    )
-    op.create_foreign_key(
-        "fk_backtest_runs_created_by_user_id_users",
-        "backtest_runs", "users",
-        ["created_by_user_id"], ["id"],
-        ondelete="SET NULL",
-    )
-
-    op.drop_index("ix_backtest_runs_idempotency_key", table_name="backtest_runs")
-    op.create_index("ix_backtest_runs_idempotency_key", "backtest_runs", ["idempotency_key"])
-    op.create_unique_constraint(
-        "uq_backtest_runs_idempotency_key_created_by_user_id",
-        "backtest_runs",
-        ["idempotency_key", "created_by_user_id"],
-    )
+    with op.batch_alter_table("backtest_runs") as batch_op:
+        batch_op.add_column(sa.Column("created_by_user_id", sa.Integer(), nullable=True))
+        batch_op.create_index("ix_backtest_runs_created_by_user_id", ["created_by_user_id"])
+        batch_op.create_foreign_key(
+            "fk_backtest_runs_created_by_user_id_users",
+            "users", ["created_by_user_id"], ["id"], ondelete="SET NULL",
+        )
+        batch_op.drop_index("ix_backtest_runs_idempotency_key")
+        batch_op.create_index("ix_backtest_runs_idempotency_key", ["idempotency_key"])
+        batch_op.create_unique_constraint(
+            "uq_backtest_runs_idempotency_key_created_by_user_id",
+            ["idempotency_key", "created_by_user_id"],
+        )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_constraint(
-        "uq_backtest_runs_idempotency_key_created_by_user_id", "backtest_runs", type_="unique"
-    )
-    op.drop_index("ix_backtest_runs_idempotency_key", table_name="backtest_runs")
-    op.create_index(
-        "ix_backtest_runs_idempotency_key", "backtest_runs", ["idempotency_key"], unique=True
-    )
+    with op.batch_alter_table("backtest_runs") as batch_op:
+        batch_op.drop_constraint("uq_backtest_runs_idempotency_key_created_by_user_id", type_="unique")
+        batch_op.drop_index("ix_backtest_runs_idempotency_key")
+        batch_op.create_index("ix_backtest_runs_idempotency_key", ["idempotency_key"], unique=True)
 
-    op.drop_constraint("fk_backtest_runs_created_by_user_id_users", "backtest_runs", type_="foreignkey")
-    op.drop_index("ix_backtest_runs_created_by_user_id", table_name="backtest_runs")
-    op.drop_column("backtest_runs", "created_by_user_id")
+        batch_op.drop_constraint("fk_backtest_runs_created_by_user_id_users", type_="foreignkey")
+        batch_op.drop_index("ix_backtest_runs_created_by_user_id")
+        batch_op.drop_column("created_by_user_id")
