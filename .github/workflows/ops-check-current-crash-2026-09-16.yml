@@ -28,20 +28,21 @@ jobs:
       - name: Real service status + replica counts for backend and frontend
         run: |
           railway service list --json > /tmp/services.json 2>/dev/null || echo '[]' > /tmp/services.json
-          python3 -c "
-import json
-d = json.load(open('/tmp/services.json'))
-items = d if isinstance(d, list) else d.get('services', d.get('edges', []))
-for i in items:
-    n = i.get('node', i) if isinstance(i, dict) else i
-    dep = n.get('latestDeployment') or {}
-    print(f\"--- service: {n.get('name') or n.get('serviceName')} ---\")
-    print('  status:', n.get('status'))
-    print('  replicas:', n.get('replicas'))
-    print('  deployment_id:', dep.get('id'))
-    print('  deployment_status:', dep.get('status'))
-    print('  deployment_created_at:', dep.get('createdAt'))
-"
+          cat > /tmp/print_services.py <<'PYEOF'
+          import json
+          d = json.load(open('/tmp/services.json'))
+          items = d if isinstance(d, list) else d.get('services', d.get('edges', []))
+          for i in items:
+              n = i.get('node', i) if isinstance(i, dict) else i
+              dep = n.get('latestDeployment') or {}
+              print(f"--- service: {n.get('name') or n.get('serviceName')} ---")
+              print('  status:', n.get('status'))
+              print('  replicas:', n.get('replicas'))
+              print('  deployment_id:', dep.get('id'))
+              print('  deployment_status:', dep.get('status'))
+              print('  deployment_created_at:', dep.get('createdAt'))
+          PYEOF
+          python3 /tmp/print_services.py
 
       - name: Current /health/live and /login response codes right now
         run: |
