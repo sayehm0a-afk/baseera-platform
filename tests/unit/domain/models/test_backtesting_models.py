@@ -24,6 +24,7 @@ from src.domain.models import (
     RecommendationSnapshot,
     Stock,
     Timeframe,
+    User,
 )
 
 
@@ -113,14 +114,37 @@ def test_backtest_run_defaults_on_insert(session):
     assert fetched.symbols == ["2222", "1120"]
 
 
-def test_backtest_run_idempotency_key_is_unique(session):
-    session.add(_make_run(idempotency_key="dup"))
+def test_backtest_run_idempotency_key_is_unique_per_owner(session):
+    # 2026-09-16 audit finding: uniqueness is scoped to
+    # (idempotency_key, created_by_user_id), not the key alone -- two
+    # different owners submitting the identical configuration must each
+    # get their own row (see test_backtest_run_idempotency_key_can_
+    # repeat_across_different_owners below); only the SAME owner
+    # resubmitting their own identical configuration is a duplicate.
+    owner = User(email="owner@example.com", password_hash="hashed")
+    session.add(owner)
     session.commit()
 
-    session.add(_make_run(idempotency_key="dup"))
+    session.add(_make_run(idempotency_key="dup", created_by_user_id=owner.id))
+    session.commit()
+
+    session.add(_make_run(idempotency_key="dup", created_by_user_id=owner.id))
     with pytest.raises(IntegrityError):
         session.commit()
     session.rollback()
+
+
+def test_backtest_run_idempotency_key_can_repeat_across_different_owners(session):
+    first_owner = User(email="first@example.com", password_hash="hashed")
+    second_owner = User(email="second@example.com", password_hash="hashed")
+    session.add_all([first_owner, second_owner])
+    session.commit()
+
+    session.add(_make_run(idempotency_key="shared", created_by_user_id=first_owner.id))
+    session.add(_make_run(idempotency_key="shared", created_by_user_id=second_owner.id))
+    session.commit()  # must not raise -- different owners, same key
+
+    assert session.query(BacktestRun).filter_by(idempotency_key="shared").count() == 2
 
 
 def test_backtest_run_progress_and_completion_update_in_place(session):

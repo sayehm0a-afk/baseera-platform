@@ -8,13 +8,34 @@ requirements), and its final metrics.
 (symbols, date range, frequency, strategy, cost assumptions, ...) --
 submitting the same configuration twice returns the existing run
 instead of launching a duplicate, and is also what a "reject a second
-concurrent full-market job" guard checks against.
+concurrent full-market job" guard checks against. Unique per
+(idempotency_key, created_by_user_id), not globally (2026-09-16 audit
+finding): a global unique constraint meant a second user submitting
+the identical configuration transparently received the first user's
+run object, including its id -- fine for the read-only config/metrics
+content itself, but inconsistent with every other route's new
+ownership check (that same run_id then 404s for them on GET). Each
+owner gets their own row for the same configuration; resubmitting
+one's *own* identical configuration still short-circuits as before.
 """
 
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Enum, Integer, Numeric, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -44,9 +65,28 @@ class DataProvenanceMode(str, enum.Enum):
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
 
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", "created_by_user_id",
+            name="uq_backtest_runs_idempotency_key_created_by_user_id",
+        ),
+    )
+
     id = Column(Integer, primary_key=True)
-    idempotency_key = Column(String(64), nullable=False, unique=True, index=True)
+    idempotency_key = Column(String(64), nullable=False, index=True)
     status = Column(Enum(BacktestRunStatus), nullable=False, default=BacktestRunStatus.PENDING)
+
+    # 2026-09-16 audit finding: this run's owner. NULL for every run
+    # created before this column existed (there is no way to recover
+    # who submitted those retroactively) and for any run submitted by
+    # staff-only internal tooling that never had a "requesting
+    # customer" -- both cases are treated as visible to staff only, the
+    # same conservative default subscriptions.py/portfolio.py already
+    # use for "unknown owner." SET NULL on user deletion (not CASCADE):
+    # a backtest's computed result is a durable historical record, not
+    # personal data that should vanish with the account, the same
+    # reasoning as decision_v2_snapshots.requested_by_user_id.
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # --- configuration, frozen at submission time ---
     symbols = Column(JSON, nullable=False)  # List[str]; a full-universe run stores the resolved list
