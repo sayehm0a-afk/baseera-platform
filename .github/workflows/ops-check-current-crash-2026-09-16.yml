@@ -3,11 +3,14 @@ name: Ops - Diagnose live crash/build-failure emails (read-only, 2026-09-16)
 # Read-only diagnostic dispatched in direct response to real Railway
 # "Deployment crashed" / "Build failed" emails received around 08:07-
 # 08:14 UTC on 2026-09-16, shortly after deploy-railway.yml run 129
-# (commit dd90d37) reported full success. Purpose: get the ACTUAL
-# current service status, replica health, and real build/deploy logs
-# for both backend and frontend, to determine whether this is a real
-# regression from that deploy or an unrelated/transient Railway issue.
-# Never modifies anything.
+# (commit dd90d37) reported full success. First pass confirmed backend
+# deployed and is healthy on the new commit, and frontend's overall
+# service is healthy (Railway kept serving the prior good build), but
+# the NEW frontend deployment (id e3744e7f-0971-46aa-9cda-e6225ae8c771,
+# created 2026-09-16T08:06:54.282Z) is marked FAILED -- this second
+# pass fetches THAT specific deployment's logs by id (railway logs
+# defaults to the currently-active deployment, not a failed one) to
+# find the real root cause. Never modifies anything.
 
 on:
   workflow_dispatch: {}
@@ -25,46 +28,26 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Real service status + replica counts for backend and frontend
+      - name: Failed frontend deployment build logs (by deployment id)
+        run: railway logs --service frontend --deployment e3744e7f-0971-46aa-9cda-e6225ae8c771 --build 2>&1 | tail -300 || echo "(could not fetch -- trying without --build)"
+
+      - name: Failed frontend deployment logs (default stream, by deployment id)
+        run: railway logs --service frontend --deployment e3744e7f-0971-46aa-9cda-e6225ae8c771 2>&1 | tail -300 || echo "(could not fetch)"
+
+      - name: Re-check current service/deployment status (has it recovered or retried since?)
         run: |
-          railway service list --json > /tmp/services.json 2>/dev/null || echo '[]' > /tmp/services.json
-          cat > /tmp/print_services.py <<'PYEOF'
+          railway service list --json > /tmp/services2.json 2>/dev/null || echo '[]' > /tmp/services2.json
+          cat > /tmp/print_services2.py <<'PYEOF'
           import json
-          d = json.load(open('/tmp/services.json'))
+          d = json.load(open('/tmp/services2.json'))
           items = d if isinstance(d, list) else d.get('services', d.get('edges', []))
           for i in items:
               n = i.get('node', i) if isinstance(i, dict) else i
               dep = n.get('latestDeployment') or {}
               print(f"--- service: {n.get('name') or n.get('serviceName')} ---")
               print('  status:', n.get('status'))
-              print('  replicas:', n.get('replicas'))
               print('  deployment_id:', dep.get('id'))
               print('  deployment_status:', dep.get('status'))
               print('  deployment_created_at:', dep.get('createdAt'))
           PYEOF
-          python3 /tmp/print_services.py
-
-      - name: Current /health/live and /login response codes right now
-        run: |
-          railway domain list --service backend --json > /tmp/backend_domains.json 2>/dev/null || echo '{}' > /tmp/backend_domains.json
-          railway domain list --service frontend --json > /tmp/frontend_domains.json 2>/dev/null || echo '{}' > /tmp/frontend_domains.json
-          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])" 2>/dev/null || echo "")
-          FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])" 2>/dev/null || echo "")
-          echo "backend: $BACKEND_URL"
-          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "backend /health/live -> %{http_code}\n" "$BACKEND_URL/health/live" || echo "backend curl failed"
-          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/ready" || echo "(no body / failed)"
-          echo
-          echo "frontend: $FRONTEND_URL"
-          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "frontend /login -> %{http_code}\n" "$FRONTEND_URL/login" || echo "frontend curl failed"
-
-      - name: Real backend deploy logs (last 300 lines)
-        run: railway logs --service backend 2>&1 | tail -300 || echo "(could not fetch backend deploy logs)"
-
-      - name: Real backend BUILD logs (last 150 lines)
-        run: railway logs --service backend --build 2>&1 | tail -150 || echo "(could not fetch backend build logs)"
-
-      - name: Real frontend deploy logs (last 300 lines)
-        run: railway logs --service frontend 2>&1 | tail -300 || echo "(could not fetch frontend deploy logs)"
-
-      - name: Real frontend BUILD logs (last 150 lines)
-        run: railway logs --service frontend --build 2>&1 | tail -150 || echo "(could not fetch frontend build logs)"
+          python3 /tmp/print_services2.py
