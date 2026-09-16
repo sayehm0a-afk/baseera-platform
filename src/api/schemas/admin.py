@@ -360,3 +360,54 @@ class AdminDashboardSummaryOut(BaseModel):
     # never a credential or connection string. None only if this read
     # itself failed, never a placeholder for "unknown."
     market_data_cache_status: Optional[Dict[str, Any]] = None
+
+
+class DecisionV2OutcomeSchedulerRunLogEntryOut(BaseModel):
+    """One row of DecisionV2OutcomeSchedulerRunLog -- the summary
+    endpoint only ever exposes the single latest row, which cannot
+    answer "did more than one cycle actually run/write in this
+    window" (the concrete audit question a redeploy mid-session
+    raises: did the leader lease hold, or did a follower worker also
+    write a row). Every row here was, by the model's own docstring,
+    written only by whichever worker held the leader lease at the
+    time -- so N rows means N real cycles, never N-way duplication of
+    one cycle."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    status: str
+    evaluated_terminal: int
+    data_unavailable: int
+    cancelled: int
+    still_pending: int
+    error_summary: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_status_and_duration(cls, obj: Any) -> Any:
+        if hasattr(obj, "status") and hasattr(obj.status, "value"):
+            # ORM object with an Enum column -- construct a plain dict so
+            # `status` serializes to its string value, matching every
+            # other status field's convention in this module.
+            return {
+                "id": obj.id,
+                "started_at": obj.started_at,
+                "finished_at": obj.finished_at,
+                "duration_seconds": float(obj.duration_seconds) if obj.duration_seconds is not None else None,
+                "status": obj.status.value,
+                "evaluated_terminal": obj.evaluated_terminal,
+                "data_unavailable": obj.data_unavailable,
+                "cancelled": obj.cancelled,
+                "still_pending": obj.still_pending,
+                "error_summary": obj.error_summary,
+            }
+        return obj
+
+
+class DecisionV2OutcomeSchedulerRunLogListOut(BaseModel):
+    window_hours: int
+    runs: List[DecisionV2OutcomeSchedulerRunLogEntryOut]

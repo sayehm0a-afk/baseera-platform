@@ -860,6 +860,63 @@ def test_dashboard_summary_reflects_a_failed_decision_v2_outcome_run(client, adm
     assert response.json()["decision_v2_outcome_last_run_status"] == "failed"
 
 
+def test_list_decision_v2_outcome_scheduler_runs_returns_every_row_in_window(client, admin, session):
+    """2026-09-16 audit finding: /summary only ever exposes the single
+    latest row, which can't answer "did more than one cycle actually
+    run in this window" -- the concrete question a mid-session redeploy
+    raises. This lists every row, newest first."""
+    older = DecisionV2OutcomeSchedulerRunLog(
+        started_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        finished_at=datetime.now(timezone.utc) - timedelta(hours=2) + timedelta(seconds=5),
+        status=DecisionV2OutcomeSchedulerRunStatus.SUCCESS,
+        evaluated_terminal=1,
+    )
+    newer = DecisionV2OutcomeSchedulerRunLog(
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc) + timedelta(seconds=3),
+        status=DecisionV2OutcomeSchedulerRunStatus.SUCCESS,
+        evaluated_terminal=5,
+        data_unavailable=1,
+        still_pending=2,
+    )
+    session.add_all([older, newer])
+    session.commit()
+
+    _as(admin)
+    response = client.get("/api/v1/admin/system/decision-v2-outcome-scheduler-runs")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["window_hours"] == 24
+    assert len(body["runs"]) == 2
+    # newest first
+    assert body["runs"][0]["evaluated_terminal"] == 5
+    assert body["runs"][0]["still_pending"] == 2
+    assert body["runs"][1]["evaluated_terminal"] == 1
+
+
+def test_list_decision_v2_outcome_scheduler_runs_excludes_rows_outside_the_window(client, admin, session):
+    session.add(
+        DecisionV2OutcomeSchedulerRunLog(
+            started_at=datetime.now(timezone.utc) - timedelta(hours=30),
+            finished_at=datetime.now(timezone.utc) - timedelta(hours=30) + timedelta(seconds=5),
+            status=DecisionV2OutcomeSchedulerRunStatus.SUCCESS,
+            evaluated_terminal=1,
+        )
+    )
+    session.commit()
+
+    _as(admin)
+    response = client.get("/api/v1/admin/system/decision-v2-outcome-scheduler-runs?hours=24")
+    assert response.status_code == 200
+    assert response.json()["runs"] == []
+
+
+def test_list_decision_v2_outcome_scheduler_runs_requires_staff(client, customer):
+    _as(customer)
+    response = client.get("/api/v1/admin/system/decision-v2-outcome-scheduler-runs")
+    assert response.status_code == 403
+
+
 def test_dashboard_summary_phase1_decision_v2_fields(client, admin):
     """Phase 1 OWNER panel additions: decision engine version, current
     market status, and strict-real-data enforcement flag must always
