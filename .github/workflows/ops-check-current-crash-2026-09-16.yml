@@ -3,14 +3,15 @@ name: Ops - Diagnose live crash/build-failure emails (read-only, 2026-09-16)
 # Read-only diagnostic dispatched in direct response to real Railway
 # "Deployment crashed" / "Build failed" emails received around 08:07-
 # 08:14 UTC on 2026-09-16, shortly after deploy-railway.yml run 129
-# (commit dd90d37) reported full success. First pass confirmed backend
-# deployed and is healthy on the new commit, and frontend's overall
-# service is healthy (Railway kept serving the prior good build), but
-# the NEW frontend deployment (id e3744e7f-0971-46aa-9cda-e6225ae8c771,
-# created 2026-09-16T08:06:54.282Z) is marked FAILED -- this second
-# pass fetches THAT specific deployment's logs by id (railway logs
-# defaults to the currently-active deployment, not a failed one) to
-# find the real root cause. Never modifies anything.
+# (commit dd90d37) reported full success. Two consecutive frontend
+# deployments have now failed (e3744e7f at 08:06:54Z, 3de79193 at
+# 08:24:17Z, both on unchanged frontend code) while backend deploys
+# cleanly every time -- this pass gets `railway logs --help`'s real
+# flag surface to find the actual way to read a non-active
+# deployment's build log, since `--build` and `--deployment` are
+# mutually exclusive on this CLI version and the default (runtime)
+# stream is empty for a deployment that never finished building.
+# Never modifies anything.
 
 on:
   workflow_dispatch: {}
@@ -28,26 +29,11 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Failed frontend deployment build logs (by deployment id)
-        run: railway logs --service frontend --deployment e3744e7f-0971-46aa-9cda-e6225ae8c771 --build 2>&1 | tail -300 || echo "(could not fetch -- trying without --build)"
+      - name: railway logs --help (real flag surface for this CLI version)
+        run: railway logs --help
 
-      - name: Failed frontend deployment logs (default stream, by deployment id)
-        run: railway logs --service frontend --deployment e3744e7f-0971-46aa-9cda-e6225ae8c771 2>&1 | tail -300 || echo "(could not fetch)"
+      - name: railway --help (top-level command surface)
+        run: railway --help
 
-      - name: Re-check current service/deployment status (has it recovered or retried since?)
-        run: |
-          railway service list --json > /tmp/services2.json 2>/dev/null || echo '[]' > /tmp/services2.json
-          cat > /tmp/print_services2.py <<'PYEOF'
-          import json
-          d = json.load(open('/tmp/services2.json'))
-          items = d if isinstance(d, list) else d.get('services', d.get('edges', []))
-          for i in items:
-              n = i.get('node', i) if isinstance(i, dict) else i
-              dep = n.get('latestDeployment') or {}
-              print(f"--- service: {n.get('name') or n.get('serviceName')} ---")
-              print('  status:', n.get('status'))
-              print('  deployment_id:', dep.get('id'))
-              print('  deployment_status:', dep.get('status'))
-              print('  deployment_created_at:', dep.get('createdAt'))
-          PYEOF
-          python3 /tmp/print_services2.py
+      - name: Try railway logs -b (short form) for the failed frontend deployment
+        run: railway logs --service frontend --deployment 3de79193-a67b-4689-bb20-94effeb3108b -b 2>&1 || echo "(short form -b failed too)"
