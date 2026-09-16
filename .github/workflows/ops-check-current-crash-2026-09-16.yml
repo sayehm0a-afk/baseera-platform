@@ -2,15 +2,11 @@ name: Ops - Diagnose live crash/build-failure emails (read-only, 2026-09-16)
 
 # Read-only diagnostic dispatched in direct response to real Railway
 # "Deployment crashed" / "Build failed" emails received around 08:07-
-# 08:14 UTC on 2026-09-16, shortly after deploy-railway.yml run 129
-# (commit dd90d37) reported full success. Two consecutive frontend
-# deployments have now failed (e3744e7f at 08:06:54Z, 3de79193 at
-# 08:24:17Z, both on unchanged frontend code) while backend deploys
-# cleanly every time -- this pass gets `railway logs --help`'s real
-# flag surface to find the actual way to read a non-active
-# deployment's build log, since `--build` and `--deployment` are
-# mutually exclusive on this CLI version and the default (runtime)
-# stream is empty for a deployment that never finished building.
+# 08:14 UTC on 2026-09-16. Two consecutive frontend deployments have
+# failed on unchanged frontend code. `railway logs --help` (previous
+# pass) revealed the correct syntax: the deployment id is a positional
+# argument to --build (not --deployment), and --latest forces showing
+# the latest deployment's logs even if it failed/is still building.
 # Never modifies anything.
 
 on:
@@ -29,11 +25,5 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: railway logs --help (real flag surface for this CLI version)
-        run: railway logs --help
-
-      - name: railway --help (top-level command surface)
-        run: railway --help
-
-      - name: Try railway logs -b (short form) for the failed frontend deployment
-        run: railway logs --service frontend --deployment 3de79193-a67b-4689-bb20-94effeb3108b -b 2>&1 || echo "(short form -b failed too)"
+      - name: Real build logs for the latest (failed) frontend deployment
+        run: railway logs --service frontend --build --latest --lines 300 2>&1 || echo "(could not fetch)"
