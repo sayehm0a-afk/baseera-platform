@@ -1,0 +1,142 @@
+name: Ops - Check real market coverage vs eligible universe (read-only, 2026-09-16)
+
+# User-reported complaint: the Watchlist/Monitoring screen's category
+# tabs (overbought, oversold, breakout candidates, recovery, dividends,
+# high risk, ...) are almost all empty in production, with only one or
+# two symbols showing up total. The dashboard's own "stocks scanned"
+# counter showed 15 -- suspiciously small against Tadawul's real
+# ~250+ eligible main-market equities (universe_policy.py's own docs
+# confirm SAHMK's real /companies/ total is 517 instruments before
+# filtering). This pulls the real live numbers so the root cause can
+# be diagnosed from evidence, not guessed. Never modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as staff
+        id: login
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then echo "::error::login failed"; exit 1; fi
+          CSRF=$(grep -i csrf_token /tmp/cookies.txt | awk '{print $NF}')
+          echo "$CSRF" > /tmp/.csrf
+
+      - name: Universe diagnostics (real eligible equity count)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/universe-diagnostics" -o /tmp/universe.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/universe.json'))
+          print(json.dumps(d, indent=2, ensure_ascii=False)[:4000])
+          "
+
+      - name: Market coverage (what fraction is actually being scanned)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/coverage" -o /tmp/coverage.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/coverage.json'))
+          print(json.dumps(d, indent=2, ensure_ascii=False)[:4000])
+          "
+
+      - name: Market summary (last scan stats -- the '15 stocks scanned' figure)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/market/summary" -o /tmp/summary.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/summary.json'))
+          print(json.dumps(d, indent=2, ensure_ascii=False)[:3000])
+          "
+
+      - name: Watchlist categories (the actual screen the user reported as mostly empty)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/market/watchlists" -o /tmp/watchlists.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/watchlists.json'))
+          for wl in d.get('watchlists', d.get('lists', [])):
+              name = wl.get('category') or wl.get('name') or wl.get('key')
+              entries = wl.get('entries') or wl.get('stocks') or []
+              print(f'{name}: {len(entries)} entries')
+          print('--- raw keys ---')
+          print(list(d.keys()))
+          "
+
+      - name: Radar-v2 summary (Smart Radar's own coverage numbers)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/radar-v2/summary" -o /tmp/radar_summary.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/radar_summary.json'))
+          print(json.dumps(d, indent=2, ensure_ascii=False)[:3000])
+          "
+
+      - name: Recurrent live-scan status (is the scheduler actually running full-universe cycles)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/recurrent-live-scan/status" -o /tmp/recurrent.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/recurrent.json'))
+          print(json.dumps(d, indent=2, ensure_ascii=False)[:4000])
+          "
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found."
