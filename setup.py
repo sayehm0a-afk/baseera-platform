@@ -15,8 +15,6 @@ setup(
         'pydantic>=2.0.0',
         'pydantic-settings>=2.0.0',
         'openai>=1.0.0',
-        'langchain>=0.2.0',
-        'langchain-openai>=0.1.0',
         'pandas>=2.0.0',
         'numpy>=1.26.0',
         'fastapi>=0.110.0',
