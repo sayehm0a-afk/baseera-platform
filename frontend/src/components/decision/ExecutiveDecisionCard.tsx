@@ -77,7 +77,12 @@ export function ExecutiveDecisionCard({ decision }: { decision: DecisionV2 }) {
               <AiStar size="sm" />
               درجة الثقة
             </span>
-            <span className="bsr-numeric">{Math.round(decision.confidence_score)}%</span>
+            <span className="bsr-numeric">
+              {Math.round(decision.confidence_score)}%
+              {decision.calibrated_confidence_score != null
+                ? ` (معايرة: ${Math.round(decision.calibrated_confidence_score * 100)}%)`
+                : ""}
+            </span>
           </div>
           <ConfidenceBar confidence={decision.confidence_score} />
         </div>

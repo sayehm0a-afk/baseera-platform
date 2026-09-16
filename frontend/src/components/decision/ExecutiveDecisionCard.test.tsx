@@ -20,6 +20,8 @@ function buildDecision(overrides: Partial<DecisionV2> = {}): DecisionV2 {
     decision_label_ar: "مراقبة",
     confidence_score: 66,
     confidence_disclaimer_ar: "درجة الثقة تعكس قوة الأدلة، لا تضمن الربح.",
+    calibrated_confidence_score: null,
+    calibration_version: null,
     opportunity_quality_score: 72,
     risk_score: 40,
     data_quality_score: 90,
@@ -140,6 +142,22 @@ describe("ExecutiveDecisionCard", () => {
     render(<ExecutiveDecisionCard decision={buildDecision({ confidence_score: 66 })} />);
     expect(screen.getByText("66%")).toBeInTheDocument();
     expect(screen.getByText("درجة الثقة تعكس قوة الأدلة، لا تضمن الربح.")).toBeInTheDocument();
+  });
+
+  it("shows calibrated confidence alongside raw confidence when a decision_v2 calibration model was applied", () => {
+    render(
+      <ExecutiveDecisionCard
+        decision={buildDecision({ confidence_score: 85, calibrated_confidence_score: 0.62 })}
+      />
+    );
+    expect(screen.getByText(/85%/)).toBeInTheDocument();
+    expect(screen.getByText(/معايرة: 62%/)).toBeInTheDocument();
+  });
+
+  it("shows only raw confidence when no decision_v2 calibration model is active yet", () => {
+    render(<ExecutiveDecisionCard decision={buildDecision({ confidence_score: 72, calibrated_confidence_score: null })} />);
+    expect(screen.getByText("72%")).toBeInTheDocument();
+    expect(screen.queryByText(/معايرة/)).not.toBeInTheDocument();
   });
 
   it("renders the entry zone, stop loss, and both targets when present", () => {
