@@ -1,12 +1,11 @@
 name: Ops - Diagnose live crash/build-failure emails (read-only, 2026-09-16)
 
-# Read-only diagnostic dispatched in direct response to real Railway
-# "Deployment crashed" / "Build failed" emails received around 08:07-
-# 08:14 UTC on 2026-09-16. Root cause found and fixed in PR #170
-# (typescript pinned below 7.0, react/react-dom version mismatch
-# fixed) and deployed. This pass independently confirms the new
-# frontend deployment's actual status is SUCCESS, not just that the
-# deploy job's own (too-fast, potentially-stale) healthcheck passed.
+# Read-only diagnostic, reused to independently verify deploy-railway.yml
+# run 132 (commit 88526f9, PR #171's backtest-owner migration) actually
+# succeeded on both services -- deploy-railway.yml's own healthcheck
+# proved unreliable earlier today (passed against a stale deployment
+# while the real new build silently failed), so every deploy from here
+# on gets this independent re-check rather than trusting the job alone.
 # Never modifies anything.
 
 on:
@@ -27,10 +26,10 @@ jobs:
 
       - name: Current service/deployment status for backend and frontend
         run: |
-          railway service list --json > /tmp/services3.json 2>/dev/null || echo '[]' > /tmp/services3.json
-          cat > /tmp/print_services3.py <<'PYEOF'
+          railway service list --json > /tmp/services4.json 2>/dev/null || echo '[]' > /tmp/services4.json
+          cat > /tmp/print_services4.py <<'PYEOF'
           import json
-          d = json.load(open('/tmp/services3.json'))
+          d = json.load(open('/tmp/services4.json'))
           items = d if isinstance(d, list) else d.get('services', d.get('edges', []))
           for i in items:
               n = i.get('node', i) if isinstance(i, dict) else i
@@ -41,7 +40,7 @@ jobs:
               print('  deployment_status:', dep.get('status'))
               print('  deployment_created_at:', dep.get('createdAt'))
           PYEOF
-          python3 /tmp/print_services3.py
+          python3 /tmp/print_services4.py
 
       - name: Live smoke test right now
         run: |
@@ -49,6 +48,48 @@ jobs:
           railway domain list --service frontend --json > /tmp/frontend_domains.json 2>/dev/null || echo '{}' > /tmp/frontend_domains.json
           BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])" 2>/dev/null || echo "")
           FRONTEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/frontend_domains.json')); print('https://' + d['domains'][0]['domain'])" 2>/dev/null || echo "")
-          curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "backend /health/live -> %{http_code}\n" "$BACKEND_URL/health/live" || echo "backend curl failed"
+          curl -sS --connect-timeout 10 --max-time 20 "$BACKEND_URL/health/ready" | python3 -m json.tool || echo "backend /health/ready failed"
           curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "frontend / -> %{http_code}\n" "$FRONTEND_URL/" || echo "frontend curl failed"
           curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w "frontend /login -> %{http_code}\n" "$FRONTEND_URL/login" || echo "frontend curl failed"
+
+      - name: Confirm deployment_commit matches this deploy
+        run: |
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])" 2>/dev/null || echo "")
+          cat > /tmp/check_commit.py <<'PYEOF'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          BACKEND = os.environ["BACKEND_URL"]
+          STAFF_EMAIL = os.environ["STAFF_EMAIL"]
+          STAFF_PASSWORD = os.environ["STAFF_PASSWORD"]
+
+          def post(url, body):
+              data = json.dumps(body).encode()
+              req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode(), resp.headers
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode(), e.headers
+
+          def get(url, cookies):
+              req = urllib.request.Request(url, method="GET", headers={"Cookie": cookies})
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, resp.read().decode()
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode()
+
+          status, body, headers = post(f"{BACKEND}/api/v1/auth/login", {"email": STAFF_EMAIL, "password": STAFF_PASSWORD})
+          cookie_pairs = [c.split(";")[0] for c in (headers.get_all("Set-Cookie") or [])]
+          cookie_header = "; ".join(cookie_pairs)
+          status, body = get(f"{BACKEND}/api/v1/admin/system/summary", cookie_header)
+          d = json.loads(body)
+          print("deployment_commit:", d.get("deployment_commit"))
+          PYEOF
+          BACKEND_URL="$BACKEND_URL" STAFF_EMAIL="$STAFF_EMAIL" STAFF_PASSWORD="$STAFF_PASSWORD" python3 /tmp/check_commit.py
+        env:
+          STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+          STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
