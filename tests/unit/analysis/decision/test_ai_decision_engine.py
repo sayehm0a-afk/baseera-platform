@@ -29,6 +29,7 @@ from src.analysis.recommendation.types import (
 )
 from src.analysis.technical_analysis_engine import TechnicalAnalysisResult
 from src.analysis.types import (
+    BollingerBandsResult,
     FibonacciLevels,
     IndicatorCategory,
     IndicatorOutput,
@@ -67,34 +68,42 @@ def _context(latest_price=None, technical_result=None):
 
 def _technical_result_with_levels(
     atr=2.0, support=None, resistance=None, vwap=100.0, fib_levels=None, is_uptrend=True, adx=20.0,
-    bin_edges=None, bin_volumes=None, point_of_control=100.0,
+    bin_edges=None, bin_volumes=None, point_of_control=100.0, bollinger_middle=None,
 ):
-    return TechnicalAnalysisResult(
-        indicators={
-            "atr_14": IndicatorOutput(name="atr_14", category=IndicatorCategory.VOLATILITY, value=pd.Series([atr])),
-            "adx_14": IndicatorOutput(name="adx_14", category=IndicatorCategory.TREND, value=pd.Series([adx])),
-            "support_resistance": IndicatorOutput(
-                name="support_resistance", category=IndicatorCategory.PRICE_ACTION,
-                value=SupportResistanceLevels(support=support or [], resistance=resistance or []),
+    indicators = {
+        "atr_14": IndicatorOutput(name="atr_14", category=IndicatorCategory.VOLATILITY, value=pd.Series([atr])),
+        "adx_14": IndicatorOutput(name="adx_14", category=IndicatorCategory.TREND, value=pd.Series([adx])),
+        "support_resistance": IndicatorOutput(
+            name="support_resistance", category=IndicatorCategory.PRICE_ACTION,
+            value=SupportResistanceLevels(support=support or [], resistance=resistance or []),
+        ),
+        "fibonacci_retracement": IndicatorOutput(
+            name="fibonacci_retracement", category=IndicatorCategory.PRICE_ACTION,
+            value=FibonacciLevels(
+                swing_high=110.0, swing_high_at=1, swing_low=90.0, swing_low_at=0,
+                is_uptrend=is_uptrend, levels=fib_levels or {},
             ),
-            "fibonacci_retracement": IndicatorOutput(
-                name="fibonacci_retracement", category=IndicatorCategory.PRICE_ACTION,
-                value=FibonacciLevels(
-                    swing_high=110.0, swing_high_at=1, swing_low=90.0, swing_low_at=0,
-                    is_uptrend=is_uptrend, levels=fib_levels or {},
-                ),
+        ),
+        "vwap_20": IndicatorOutput(name="vwap_20", category=IndicatorCategory.VOLUME, value=pd.Series([vwap])),
+        "volume_profile": IndicatorOutput(
+            name="volume_profile", category=IndicatorCategory.VOLUME,
+            value=VolumeProfileResult(
+                bin_edges=bin_edges or [95.0, 100.0, 105.0],
+                bin_volumes=bin_volumes or [100.0, 100.0],
+                point_of_control=point_of_control,
             ),
-            "vwap_20": IndicatorOutput(name="vwap_20", category=IndicatorCategory.VOLUME, value=pd.Series([vwap])),
-            "volume_profile": IndicatorOutput(
-                name="volume_profile", category=IndicatorCategory.VOLUME,
-                value=VolumeProfileResult(
-                    bin_edges=bin_edges or [95.0, 100.0, 105.0],
-                    bin_volumes=bin_volumes or [100.0, 100.0],
-                    point_of_control=point_of_control,
-                ),
+        ),
+    }
+    if bollinger_middle is not None:
+        indicators["bollinger"] = IndicatorOutput(
+            name="bollinger", category=IndicatorCategory.VOLATILITY,
+            value=BollingerBandsResult(
+                upper=pd.Series([bollinger_middle + 5.0]),
+                middle=pd.Series([bollinger_middle]),
+                lower=pd.Series([bollinger_middle - 5.0]),
             ),
-        }
-    )
+        )
+    return TechnicalAnalysisResult(indicators=indicators)
 
 
 # --- basic wiring: reuses RecommendationEngine's output verbatim -----------
@@ -134,6 +143,32 @@ def test_default_construction_uses_all_eleven_contributors():
 def test_no_price_available_means_no_targets():
     engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
     decision = engine.decide(_context(latest_price=None))
+    assert decision.target_price is None
+    assert decision.stop_loss is None
+    assert decision.expected_return_pct is None
+
+
+def test_no_live_price_falls_back_to_bollinger_middle_band():
+    # 2026-09-16 audit finding: this fallback (_price_reference) is the
+    # only price source left when both the live quote and the provider's
+    # last daily close are unavailable (e.g. a SAHMK outage) while the
+    # technical leg still built fine from already-ingested historical
+    # bars -- a real, reachable production path (context_builder.py) that
+    # had no test coverage at all.
+    technical_result = _technical_result_with_levels(atr=2.0, bollinger_middle=100.0)
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=None, technical_result=technical_result))
+    assert decision.target_price > 100.0
+    assert decision.stop_loss < 100.0
+
+
+def test_no_live_price_and_bollinger_still_in_warmup_means_no_targets():
+    # Bollinger's own middle band is undefined (all-NaN) until its SMA(20)
+    # window fills -- the fallback must degrade to "no price" cleanly,
+    # not leak a NaN into the target/stop-loss arithmetic.
+    technical_result = _technical_result_with_levels(atr=2.0, bollinger_middle=float("nan"))
+    engine = _engine([_FakeContributor("technical", score=80.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=None, technical_result=technical_result))
     assert decision.target_price is None
     assert decision.stop_loss is None
     assert decision.expected_return_pct is None

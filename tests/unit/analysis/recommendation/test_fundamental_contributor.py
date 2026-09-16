@@ -181,6 +181,13 @@ def test_negative_debt_to_equity_is_not_meaningful_and_skipped():
     assert not any(s.name == "debt_to_equity" for s in contribution.signals)
 
 
+def test_moderate_debt_to_equity_is_neutral():
+    contribution = _contribute(_result(debt_to_equity=1.5))
+    sig = next(s for s in contribution.signals if s.name == "debt_to_equity")
+    assert sig.direction == SignalDirection.NEUTRAL
+    assert sig.impact == -1.0
+
+
 # --- Valuation (P/E, P/B) -------------------------------------------------
 
 
@@ -201,6 +208,18 @@ def test_negative_pe_is_not_meaningful_and_skipped():
     assert not any(s.name == "price_to_earnings" for s in contribution.signals)
 
 
+def test_moderate_pe_is_neutral():
+    contribution = _contribute(_result(price_to_earnings=20.0))
+    sig = next(s for s in contribution.signals if s.name == "price_to_earnings")
+    assert sig.direction == SignalDirection.NEUTRAL
+    assert sig.impact == 0.0
+
+
+def test_negative_pb_is_not_meaningful_and_skipped():
+    contribution = _contribute(_result(price_to_book=-2.0))
+    assert not any(s.name == "price_to_book" for s in contribution.signals)
+
+
 def test_low_pb_is_bullish():
     contribution = _contribute(_result(price_to_book=1.0))
     sig = next(s for s in contribution.signals if s.name == "price_to_book")
@@ -211,6 +230,13 @@ def test_high_pb_is_bearish():
     contribution = _contribute(_result(price_to_book=5.0))
     sig = next(s for s in contribution.signals if s.name == "price_to_book")
     assert sig.direction == SignalDirection.BEARISH
+
+
+def test_moderate_pb_is_neutral():
+    contribution = _contribute(_result(price_to_book=2.0))
+    sig = next(s for s in contribution.signals if s.name == "price_to_book")
+    assert sig.direction == SignalDirection.NEUTRAL
+    assert sig.impact == 0.0
 
 
 # --- Growth ----------------------------------------------------------------
