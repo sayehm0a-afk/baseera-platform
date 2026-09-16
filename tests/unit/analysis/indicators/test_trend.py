@@ -133,13 +133,14 @@ def _reference_adx(df, period):
             abs(lows[i] - closes[i - 1]),
         )
 
-    def wilder(values):
+    def wilder(values, seed_start=1):
         result = [float("nan")] * len(values)
-        if len(values) <= period:
+        seed_index = seed_start + period - 1
+        if seed_index >= len(values):
             return result
-        window = [v for v in values[1 : period + 1] if v == v]  # skip NaN, like np.nanmean
-        result[period] = sum(window) / len(window) if window else float("nan")
-        for i in range(period + 1, len(values)):
+        window = values[seed_start : seed_start + period]
+        result[seed_index] = sum(window) / len(window)
+        for i in range(seed_index + 1, len(values)):
             result[i] = (result[i - 1] * (period - 1) + values[i]) / period
         return result
 
@@ -157,7 +158,7 @@ def _reference_adx(df, period):
         di_sum = plus_di + minus_di
         dx[i] = 100 * abs(plus_di - minus_di) / di_sum if di_sum != 0 else 0.0
 
-    return wilder(dx)
+    return wilder(dx, seed_start=period)
 
 
 def test_adx_matches_independent_reference_loop():
@@ -165,6 +166,22 @@ def test_adx_matches_independent_reference_loop():
     expected = _reference_adx(df, 14)
     result = adx(df, 14)
     np.testing.assert_allclose(result.to_numpy(), expected, rtol=1e-6, atol=1e-9, equal_nan=True)
+
+
+def test_adx_first_valid_value_is_at_2period_minus_1_not_period():
+    # 2026-09-16 audit finding: DX (the series ADX itself smooths) is
+    # undefined until index `period` because it depends on the already-
+    # smoothed ATR/+DM/-DM series -- Wilder's seed for the final
+    # DX->ADX pass must average `period` real DX values starting there
+    # (first landing at index 2*period-1), not silently average
+    # whatever single value np.nanmean finds when seeded a `period`
+    # bars too early. Before the fix, adx(df, 14) produced a (wrong)
+    # value at index 14 instead of NaN.
+    period = 14
+    df = _make_ohlcv(period * 3, seed=5)
+    result = adx(df, period)
+    assert result.iloc[: 2 * period - 1].isna().all()
+    assert result.iloc[2 * period - 1 :].notna().all()
 
 
 def test_adx_bounded_zero_to_hundred():

@@ -112,9 +112,21 @@ def _directional_pnl_pct(outcome: EvaluationOutcome) -> Optional[float]:
     """The P&L % implied by acting on this call, signed so a correct
     call is positive regardless of direction -- e.g. a SELL call
     followed by a price decline is a *positive* directional P&L. `None`
-    for HOLD (no position implied) or when the forward return itself
-    is unknown."""
+    for HOLD (no position implied), when the forward return itself is
+    unknown, or when both the target and stop were touched somewhere
+    within the evaluation window: with only OHLC bars there is no way
+    to tell which happened first, so the return realized at the fixed
+    horizon end can show a sign opposite to what actually happened
+    first (e.g. target hit early, then a later reversal past the stop
+    too) -- excluded from directional win/loss math entirely rather
+    than silently misclassified, the same "ambiguous, not guessed"
+    treatment Decision V2's own same-bar tie already gets (see
+    src.ai_evolution.decision_v2_outcome_evaluation). 2026-09-16 audit
+    finding: without this, a call that genuinely hit its own stated
+    target could be recorded as a loss, or vice versa."""
     if outcome.forward_return_pct is None:
+        return None
+    if outcome.hit_target and outcome.hit_stop_loss:
         return None
     if _is_bullish(outcome.recommendation):
         return outcome.forward_return_pct
@@ -124,7 +136,7 @@ def _directional_pnl_pct(outcome: EvaluationOutcome) -> Optional[float]:
 
 
 def direction_accuracy(outcomes: List[EvaluationOutcome]) -> Optional[float]:
-    directional = [o for o in outcomes if (_is_bullish(o.recommendation) or _is_bearish(o.recommendation)) and o.forward_return_pct is not None]
+    directional = [o for o in outcomes if _directional_pnl_pct(o) is not None]
     if not directional:
         return None
     correct = sum(1 for o in directional if _directional_pnl_pct(o) > 0)
@@ -263,10 +275,7 @@ def confidence_buckets(outcomes: List[EvaluationOutcome]) -> List[Dict]:
     bands and reports each band's realized direction accuracy --
     the raw material for calibration_error() and for a human to eyeball
     "does 80%+ confidence actually mean ~80% right"."""
-    directional = [
-        o for o in outcomes
-        if (_is_bullish(o.recommendation) or _is_bearish(o.recommendation)) and o.forward_return_pct is not None
-    ]
+    directional = [o for o in outcomes if _directional_pnl_pct(o) is not None]
     buckets = []
     for low, high in zip(_CONFIDENCE_BUCKET_EDGES[:-1], _CONFIDENCE_BUCKET_EDGES[1:]):
         in_bucket = [o for o in directional if low <= o.confidence < high or (high == 100 and o.confidence == 100)]
@@ -335,10 +344,7 @@ def brier_score(outcomes: List[EvaluationOutcome]) -> Optional[float]:
     only see confidence through 5 coarse buckets), Brier score uses
     every call's exact stated confidence, so it can move even when no
     bucket's aggregate accuracy does."""
-    directional = [
-        o for o in outcomes
-        if (_is_bullish(o.recommendation) or _is_bearish(o.recommendation)) and o.forward_return_pct is not None
-    ]
+    directional = [o for o in outcomes if _directional_pnl_pct(o) is not None]
     if not directional:
         return None
     squared_errors = [

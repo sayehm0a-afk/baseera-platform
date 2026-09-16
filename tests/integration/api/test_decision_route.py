@@ -124,10 +124,18 @@ def test_decision_with_both_legs_available(client, db_session):
     assert isinstance(body["reasons"], list) and len(body["reasons"]) > 0
     assert any("2222" in r for r in body["reasons"])
 
-    # a real price was ingested/quoted -> target price and stop loss should be present.
-    assert body["target_price"] is not None
-    assert body["stop_loss"] is not None
-    assert body["expected_return_pct"] is not None
+    # A real price was ingested/quoted -> target price and stop loss
+    # should be present for a directional call. A HOLD has no
+    # direction to size a target/stop against (2026-09-16 audit fix:
+    # these must be None, not a leftover bullish/bearish-style pair).
+    if body["recommendation"] == "HOLD":
+        assert body["target_price"] is None
+        assert body["stop_loss"] is None
+        assert body["expected_return_pct"] is None
+    else:
+        assert body["target_price"] is not None
+        assert body["stop_loss"] is not None
+        assert body["expected_return_pct"] is not None
 
     categories = {b["category"] for b in body["breakdown"]}
     assert categories == {
@@ -169,8 +177,10 @@ def test_decision_with_only_technical_leg_available(client, db_session):
     body = response.json()
     fundamental_contribution = next(b for b in body["breakdown"] if b["category"] == "Fundamental Analysis")
     assert fundamental_contribution["available"] is False
-    # a live Dev quote is still available -> target price should still be computed.
-    assert body["target_price"] is not None
+    # a live Dev quote is still available -> target price should still
+    # be computed for a directional call (None for HOLD, see above).
+    if body["recommendation"] != "HOLD":
+        assert body["target_price"] is not None
 
 
 def test_decision_degrades_when_provider_is_down_but_technical_data_exists(client, db_session):

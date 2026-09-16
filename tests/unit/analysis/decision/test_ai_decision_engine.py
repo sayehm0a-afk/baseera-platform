@@ -289,6 +289,34 @@ def test_hold_recommendation_gets_no_position():
     assert decision.position_size == PositionSize.NONE
 
 
+# --- HOLD target/stop leak (2026-09-16 audit finding) ----------------------
+
+
+def test_hold_recommendation_has_no_target_or_stop_loss_below_the_internal_fifty_split():
+    # _compute_price_targets derives its own bullish/bearish direction
+    # purely from final_score >= 50, independent of the actual
+    # recommendation band (sell_threshold=40, buy_threshold=60) -- a
+    # HOLD with a score of 45 used to leak a bearish-style stop-above/
+    # target-below pair as if this were a short setup.
+    engine = _engine([_FakeContributor("technical", score=45.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0))
+    assert decision.recommendation == Recommendation.HOLD
+    assert decision.target_price is None
+    assert decision.stop_loss is None
+    assert decision.expected_return_pct is None
+    assert decision.risk_reward_ratio is None
+
+
+def test_hold_recommendation_has_no_target_or_stop_loss_at_or_above_the_internal_fifty_split():
+    # The mirror case: a HOLD with a score of 55 used to leak a
+    # bullish-style target-above/stop-below pair instead.
+    engine = _engine([_FakeContributor("technical", score=55.0, weight=1.0)])
+    decision = engine.decide(_context(latest_price=100.0))
+    assert decision.recommendation == Recommendation.HOLD
+    assert decision.target_price is None
+    assert decision.stop_loss is None
+
+
 def test_strong_buy_with_high_confidence_and_low_risk_gets_large_position():
     engine = _engine(
         [

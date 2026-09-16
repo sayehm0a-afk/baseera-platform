@@ -102,6 +102,27 @@ def test_roe_moderate_is_neutral():
     assert sig.impact == 3.0
 
 
+def test_roe_positive_from_double_negative_equity_is_not_meaningful_and_skipped():
+    # 2026-09-16 audit finding: a lossmaking company with negative
+    # equity (net_income=-20, total_equity=-100) produces roe=+0.20,
+    # indistinguishable by sign alone from a genuinely healthy 20% ROE.
+    # net_profit_margin<0 (net_income is negative regardless of
+    # revenue, which can't be negative) combined with roe>0 can only
+    # happen from this double-negative case, and must be skipped
+    # rather than scored bullish.
+    contribution = _contribute(_result(return_on_equity=0.20, net_profit_margin=-0.05))
+    assert not any(s.name == "return_on_equity" for s in contribution.signals)
+
+
+def test_roe_positive_with_positive_margin_is_still_scored_normally():
+    # Guards against an overly broad fix: a genuinely healthy company
+    # (positive net margin, positive ROE) must not be accidentally
+    # caught by the negative-equity check above.
+    contribution = _contribute(_result(return_on_equity=0.20, net_profit_margin=0.05))
+    sig = next(s for s in contribution.signals if s.name == "return_on_equity")
+    assert sig.direction == SignalDirection.BULLISH
+
+
 # --- Net profit margin ---------------------------------------------------
 
 
@@ -149,6 +170,15 @@ def test_high_debt_to_equity_is_bearish():
     sig = next(s for s in contribution.signals if s.name == "debt_to_equity")
     assert sig.direction == SignalDirection.BEARISH
     assert sig.impact == -8.0
+
+
+def test_negative_debt_to_equity_is_not_meaningful_and_skipped():
+    # 2026-09-16 audit finding: total_debt can't be negative, so a
+    # negative ratio can only come from negative total_equity -- the
+    # worst possible leverage profile, not "conservative" (which the
+    # old `ratio <= 1.0` branch mislabeled it as).
+    contribution = _contribute(_result(debt_to_equity=-1.0))
+    assert not any(s.name == "debt_to_equity" for s in contribution.signals)
 
 
 # --- Valuation (P/E, P/B) -------------------------------------------------

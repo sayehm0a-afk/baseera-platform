@@ -607,6 +607,18 @@ class AIDecisionEngine:
         target_price, stop_loss, expected_return_pct, level_notes, stop_loss_basis, target_price_basis = (
             _compute_price_targets(result.final_score, price, atr_value, self._tuning, support_resistance)
         )
+        if result.recommendation is Recommendation.HOLD:
+            # 2026-09-16 audit finding: _compute_price_targets derives
+            # its own direction purely from final_score>=50, never from
+            # the actual recommendation -- RecommendationTuning's HOLD
+            # band straddles that 50 split (e.g. (40, 60]), so a HOLD
+            # with final_score in (40, 50) got a bearish-style stop-
+            # above/target-below pair, and one in [50, 60) got a
+            # bullish-style pair, either way presented as a trade plan
+            # attached to a "do nothing" call. A HOLD has no direction
+            # to size a target/stop against.
+            target_price, stop_loss, expected_return_pct = None, None, None
+            level_notes = []
 
         risk_reward_ratio = None
         if target_price is not None and stop_loss is not None and price is not None:

@@ -129,6 +129,64 @@ def test_profit_factor_none_with_no_directional_data():
     assert profit_factor([_outcome(recommendation="HOLD", forward_return_pct=5.0)]) is None
 
 
+# --- ambiguous both-target-and-stop-hit outcomes (2026-09-16 audit finding) -
+
+
+def test_win_rate_excludes_a_call_that_hit_target_then_reversed_past_stop():
+    # A real target hit (the entire point of stating one) must never be
+    # recorded as a loss just because price kept moving and also
+    # touched the stop level later in the same evaluation window --
+    # with only OHLC bars there's no way to know it happened later
+    # rather than first, so this must be excluded, not guessed.
+    outcomes = [
+        _outcome(recommendation="BUY", forward_return_pct=10.0, hit_target=True, hit_stop_loss=False),
+        _outcome(
+            recommendation="BUY", forward_return_pct=-30.0, hit_target=True, hit_stop_loss=True,
+            evaluated_at=date(2026, 1, 2),
+        ),
+    ]
+    assert win_rate(outcomes) == pytest.approx(1.0)
+    assert profit_factor(outcomes) is None  # the one decisive call has no loss to divide by
+
+
+def test_win_rate_excludes_a_call_that_hit_stop_then_recovered_past_target():
+    # The mirror case: a real stop hit must never be recorded as a win.
+    outcomes = [
+        _outcome(recommendation="BUY", forward_return_pct=-10.0, hit_target=False, hit_stop_loss=True),
+        _outcome(
+            recommendation="BUY", forward_return_pct=30.0, hit_target=True, hit_stop_loss=True,
+            evaluated_at=date(2026, 1, 2),
+        ),
+    ]
+    assert win_rate(outcomes) == pytest.approx(0.0)
+
+
+def test_direction_accuracy_excludes_ambiguous_both_hit_outcome():
+    outcomes = [
+        _outcome(recommendation="BUY", forward_return_pct=10.0, hit_target=False, hit_stop_loss=False),
+        _outcome(
+            recommendation="BUY", forward_return_pct=-5.0, hit_target=True, hit_stop_loss=True,
+            evaluated_at=date(2026, 1, 2),
+        ),
+    ]
+    assert direction_accuracy(outcomes) == pytest.approx(1.0)
+
+
+def test_confidence_buckets_and_brier_score_do_not_crash_on_ambiguous_outcome():
+    # Regression guard: these previously called `_directional_pnl_pct(o)
+    # > 0` on a filtered list that didn't exclude the ambiguous case,
+    # which would raise a TypeError once that function started
+    # returning None for it.
+    outcomes = [
+        _outcome(
+            recommendation="BUY", confidence=70.0, forward_return_pct=-5.0,
+            hit_target=True, hit_stop_loss=True,
+        ),
+    ]
+    assert confidence_buckets(outcomes) == []
+    assert brier_score(outcomes) is None
+
+
 # --- max drawdown --------------------------------------------------------
 
 

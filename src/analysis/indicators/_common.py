@@ -20,16 +20,29 @@ def true_range(df: pd.DataFrame) -> pd.Series:
     return ranges.max(axis=1)
 
 
-def wilder_smooth(series: pd.Series, period: int) -> pd.Series:
-    """Wilder's smoothing: seed with the simple mean of values[1:period+1],
-    then recursively smoothed[i] = (smoothed[i-1] * (period - 1) + value[i]) / period.
+def wilder_smooth(series: pd.Series, period: int, seed_start: int = 1) -> pd.Series:
+    """Wilder's smoothing: seed with the simple mean of
+    values[seed_start:seed_start+period], then recursively
+    smoothed[i] = (smoothed[i-1] * (period - 1) + value[i]) / period.
+
+    `seed_start` is the index of the first value eligible for the seed
+    average -- defaults to 1, Wilder's original convention for a
+    diff-derived series (true range, +DM/-DM) whose only undefined
+    value is index 0. A series that is itself only valid starting
+    later (e.g. DX, undefined until index `period` because it depends
+    on two already-smoothed series) must pass `seed_start=period` so
+    the seed genuinely averages `period` real values -- otherwise
+    `np.nanmean` silently ignores the leading NaNs and seeds from a
+    single value, producing a materially wrong result for roughly the
+    next `period` bars (2026-09-16 audit finding, ADX).
     """
     values = series.to_numpy(dtype="float64")
     result = np.full(len(values), np.nan)
-    if len(values) <= period:
+    seed_index = seed_start + period - 1
+    if seed_index >= len(values):
         return pd.Series(result, index=series.index)
-    result[period] = np.nanmean(values[1 : period + 1])
-    for i in range(period + 1, len(values)):
+    result[seed_index] = np.nanmean(values[seed_start : seed_start + period])
+    for i in range(seed_index + 1, len(values)):
         result[i] = (result[i - 1] * (period - 1) + values[i]) / period
     return pd.Series(result, index=series.index)
 
