@@ -1,6 +1,8 @@
 """Unit tests for src.auth.mfa_totp -- the crypto/TOTP primitives behind
 optional staff 2FA (governance audit 2026-09-11, item 7)."""
 
+import datetime
+
 import pyotp
 import pytest
 
@@ -73,6 +75,37 @@ def test_verify_totp_code_never_raises_on_malformed_input():
     secret = mfa_totp.generate_totp_secret()
     assert mfa_totp.verify_totp_code(secret, "not-a-digit-code") is False
     assert mfa_totp.verify_totp_code(secret, "") is False
+
+
+def test_get_matching_totp_step_returns_the_current_step_for_the_current_code():
+    secret = mfa_totp.generate_totp_secret()
+    totp = pyotp.TOTP(secret)
+    current_code = totp.now()
+    step = mfa_totp.get_matching_totp_step(secret, current_code)
+    assert step == totp.timecode(datetime.datetime.now())
+
+
+def test_get_matching_totp_step_returns_none_for_a_wrong_code():
+    secret = mfa_totp.generate_totp_secret()
+    assert mfa_totp.get_matching_totp_step(secret, "000000") is None
+
+
+def test_get_matching_totp_step_distinguishes_adjacent_steps():
+    secret = mfa_totp.generate_totp_secret()
+    totp = pyotp.TOTP(secret)
+    now = datetime.datetime.now()
+    current_step = totp.timecode(now)
+
+    assert mfa_totp.get_matching_totp_step(secret, totp.at(now, -1)) == current_step - 1
+    assert mfa_totp.get_matching_totp_step(secret, totp.at(now, 0)) == current_step
+    assert mfa_totp.get_matching_totp_step(secret, totp.at(now, 1)) == current_step + 1
+
+
+def test_get_matching_totp_step_rejects_a_code_outside_the_valid_window():
+    secret = mfa_totp.generate_totp_secret()
+    totp = pyotp.TOTP(secret)
+    now = datetime.datetime.now()
+    assert mfa_totp.get_matching_totp_step(secret, totp.at(now, 2)) is None
 
 
 def test_generate_backup_codes_returns_the_requested_count_all_unique():

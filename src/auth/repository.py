@@ -140,9 +140,18 @@ class AuthRepository:
                 "mfa_secret_encrypted": None,
                 "mfa_pending_secret_encrypted": None,
                 "mfa_enabled_at": None,
+                "mfa_last_used_totp_step": None,
             }
         )
         session.query(MfaBackupCode).filter_by(user_id=user_id).delete()
+        session.commit()
+
+    def record_mfa_totp_step(self, session: Session, user_id: int, step: int) -> None:
+        """Persists the TOTP counter step just accepted (enrollment
+        confirmation or login), so a later code whose step is <= this
+        one is rejected as a replay -- see User.mfa_last_used_totp_step's
+        own docstring."""
+        session.query(User).filter_by(id=user_id).update({"mfa_last_used_totp_step": step})
         session.commit()
 
     def replace_backup_codes(self, session: Session, user_id: int, code_hashes: List[str]) -> None:

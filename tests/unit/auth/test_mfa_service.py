@@ -1,6 +1,8 @@
 """Unit tests for src.auth.mfa_service -- the business rules behind
 optional staff TOTP 2FA (governance audit 2026-09-11, item 7)."""
 
+import datetime
+
 import pyotp
 import pytest
 from sqlalchemy import create_engine
@@ -48,6 +50,15 @@ def owner(session):
 
 def _current_code(secret: str) -> str:
     return pyotp.TOTP(secret).now()
+
+
+def _code_at_offset(secret: str, offset: int) -> str:
+    """A code for a step `offset` ticks away from now -- still within
+    verify_totp_code's own +/-1 step drift window when offset is -1, 0,
+    or 1, but a DIFFERENT step than `_current_code`'s (offset 0), so
+    tests can exercise the replay guard without waiting 30 real
+    seconds for the step to actually advance."""
+    return pyotp.TOTP(secret).at(datetime.datetime.now(), offset)
 
 
 def test_start_enrollment_stores_a_pending_secret_without_enabling_mfa(session, owner):
@@ -103,9 +114,42 @@ def test_confirm_enrollment_with_correct_code_activates_and_returns_backup_codes
 
 def test_verify_login_code_accepts_a_real_totp_code(session, owner):
     secret, _ = mfa_service.start_enrollment(session, owner)
-    mfa_service.confirm_enrollment(session, owner, _current_code(secret))
+    # confirm_enrollment consumes offset -1's step; login uses offset 0's
+    # step (a later, distinct step) so this isn't itself a replay case.
+    mfa_service.confirm_enrollment(session, owner, _code_at_offset(secret, -1))
 
-    assert mfa_service.verify_login_code(session, owner, _current_code(secret)) is True
+    assert mfa_service.verify_login_code(session, owner, _code_at_offset(secret, 0)) is True
+
+
+def test_verify_login_code_rejects_replay_of_the_confirmation_code(session, owner):
+    # 2026-09-16 audit finding: a code is valid for +/-1 step (~90s), but
+    # nothing previously stopped the exact same code from being accepted
+    # twice within that window -- once to confirm enrollment, then again
+    # immediately for login.
+    secret, _ = mfa_service.start_enrollment(session, owner)
+    code = _current_code(secret)
+    mfa_service.confirm_enrollment(session, owner, code)
+
+    assert mfa_service.verify_login_code(session, owner, code) is False
+
+
+def test_verify_login_code_rejects_replay_of_a_previously_accepted_login_code(session, owner):
+    secret, _ = mfa_service.start_enrollment(session, owner)
+    mfa_service.confirm_enrollment(session, owner, _code_at_offset(secret, -1))
+
+    login_code = _code_at_offset(secret, 0)
+    assert mfa_service.verify_login_code(session, owner, login_code) is True
+    # Still within its own +/-1 step window, but already used -- must
+    # not be accepted a second time.
+    assert mfa_service.verify_login_code(session, owner, login_code) is False
+
+
+def test_verify_login_code_accepts_a_later_step_after_a_previous_login(session, owner):
+    secret, _ = mfa_service.start_enrollment(session, owner)
+    mfa_service.confirm_enrollment(session, owner, _code_at_offset(secret, -1))
+
+    assert mfa_service.verify_login_code(session, owner, _code_at_offset(secret, 0)) is True
+    assert mfa_service.verify_login_code(session, owner, _code_at_offset(secret, 1)) is True
 
 
 def test_verify_login_code_rejects_a_wrong_code(session, owner):

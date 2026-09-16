@@ -25,8 +25,9 @@ hands out nothing usable.
 """
 
 import base64
+import datetime
 import secrets
-from typing import List
+from typing import List, Optional
 
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
@@ -95,6 +96,25 @@ def verify_totp_code(raw_secret: str, code: str) -> bool:
     handles a non-digit/wrong-length string as simply "not valid" rather
     than raising, so no extra validation is needed here."""
     return pyotp.TOTP(raw_secret).verify(code, valid_window=_VALID_WINDOW)
+
+
+def get_matching_totp_step(raw_secret: str, code: str) -> Optional[int]:
+    """Like `verify_totp_code`, but returns the counter step `code`
+    matched within the +/-`_VALID_WINDOW` range instead of a bare bool
+    (or None if it matched nothing). RFC 6238 itself doesn't mandate
+    replay protection, but every step is valid for up to
+    2 * _VALID_WINDOW + 1 time windows (~90s here), so without tracking
+    "the last step this account has already used," a code captured in
+    transit, shoulder-surfed, or read from a compromised authenticator
+    app screenshot could be replayed more than once during that window.
+    Callers persist the returned step (User.mfa_last_used_totp_step) and
+    reject any code whose step is <= that value."""
+    totp = pyotp.TOTP(raw_secret)
+    now = datetime.datetime.now()
+    for offset in range(-_VALID_WINDOW, _VALID_WINDOW + 1):
+        if pyotp.utils.strings_equal(str(code), totp.at(now, offset)):
+            return totp.timecode(now) + offset
+    return None
 
 
 def generate_backup_codes(count: int = _BACKUP_CODE_COUNT) -> List[str]:
