@@ -186,7 +186,8 @@ class SahmkQuotaReservedForLiveScanError(SahmkRateLimitExceededError):
 
 
 class SahmkQuotaReservedForMarketScanError(SahmkRateLimitExceededError):
-    """PROPOSED (2026-09-10, NOT YET APPLIED). Raised instead of
+    """APPLIED (2026-09-10 finding; PR #148, merged and deployed to
+    production 2026-09-11). Raised instead of
     SahmkRateLimitExceededError when a priority=BACKGROUND caller's
     request would dip into the portion of today's daily quota reserved
     for priority=MARKET_SCAN callers (MarketIntelligenceScheduler's
@@ -283,7 +284,8 @@ class SahmkRateLimiter:
     `reserved_for_critical + reserved_for_live_scan` must not exceed
     `max_per_day`.
 
-    PROPOSED (2026-09-10, NOT YET APPLIED): `reserved_for_market_scan`
+    APPLIED (2026-09-10 finding; PR #148, merged and deployed to
+    production 2026-09-11): `reserved_for_market_scan`
     carves out a further reserve immediately below the live-scan
     reserve, for priority=MARKET_SCAN (and priority=CRITICAL/LIVE_SCAN)
     callers only: once `day_count >= max_per_day - reserved_for_critical
@@ -846,9 +848,8 @@ class SahmkRateLimiter:
             if critical_cutoff is not None
             else None
         )
-        # PROPOSED (2026-09-10, NOT YET APPLIED): market_scan_cutoff sits
-        # strictly inside live_scan_cutoff, the same way live_scan_cutoff
-        # sits strictly inside critical_cutoff.
+        # market_scan_cutoff sits strictly inside live_scan_cutoff, the
+        # same way live_scan_cutoff sits strictly inside critical_cutoff.
         market_scan_cutoff = (
             max(0, live_scan_cutoff - self._reserved_for_market_scan)
             if live_scan_cutoff is not None
@@ -868,7 +869,7 @@ class SahmkRateLimiter:
         # live_scan_reserve today since both tiers currently share that
         # same cutoff) and `remaining_today_for_background_after_market_
         # scan_reserve` (the new, deeper true-BACKGROUND ceiling) are the
-        # PROPOSED additions.
+        # applied 2026-09-10 additions (PR #148).
         remaining_background = (
             max(0, critical_cutoff - self._day_count) if critical_cutoff is not None else None
         )
@@ -926,7 +927,7 @@ class SahmkRateLimiter:
             "remaining_today_for_background_after_live_scan_reserve": (
                 remaining_background_after_live_scan_reserve
             ),
-            # PROPOSED (2026-09-10, NOT YET APPLIED) additions.
+            # Applied 2026-09-10 additions (PR #148).
             "remaining_today_for_market_scan": remaining_market_scan,
             "remaining_today_for_background_after_market_scan_reserve": (
                 remaining_background_after_market_scan_reserve
@@ -974,8 +975,7 @@ class SahmkRateLimiter:
         return remaining is None or remaining >= estimated_cost
 
     def can_run_market_scan_cycle(self, estimated_cost: int) -> bool:
-        """PROPOSED (2026-09-10, NOT YET APPLIED): mirrors
-        can_run_live_scan_cycle exactly, one tier down -- True iff
+        """Mirrors can_run_live_scan_cycle exactly, one tier down -- True iff
         `estimated_cost` more priority=MARKET_SCAN requests would all be
         accepted right now, i.e. the market-scan reserve (not just a
         single request) can cover a whole regular-scan cycle. The
@@ -992,9 +992,8 @@ class SahmkRateLimiter:
     def can_run_background_request(self) -> bool:
         """True iff a priority=BACKGROUND acquire() would not
         immediately raise for quota reasons right now -- accounts for
-        the critical reserve, the live-scan reserve, and (PROPOSED,
-        2026-09-10, NOT YET APPLIED) the market-scan reserve, i.e. the
-        smaller, more precise
+        the critical reserve, the live-scan reserve, and the
+        market-scan reserve, i.e. the smaller, more precise
         remaining_today_for_background_after_market_scan_reserve),
         unlike the legacy `remaining_today_for_background` status field
         kept for backward compatibility."""
