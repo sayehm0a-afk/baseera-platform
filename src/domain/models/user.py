@@ -17,7 +17,7 @@ trail, billing history) the way a hard delete would.
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, Integer, String, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Enum, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -63,6 +63,17 @@ class User(Base):
     mfa_secret_encrypted = Column(String(255), nullable=True)
     mfa_pending_secret_encrypted = Column(String(255), nullable=True)
     mfa_enabled_at = Column(DateTime(timezone=True), nullable=True)
+
+    # 2026-09-16 audit finding: verify_totp_code's valid_window=1 accepts
+    # a code for ~90s, but nothing recorded "this account already used
+    # this step" -- a code captured in transit/shoulder-surfed/leaked
+    # from a compromised authenticator screenshot could be replayed more
+    # than once within that window. Set to the matched counter step
+    # (src.auth.mfa_totp.get_matching_totp_step) on every accepted TOTP
+    # use (enrollment confirmation and login); a later code whose step is
+    # <= this value is rejected as a replay even though it's still
+    # numerically "valid" per RFC 6238's own step math.
+    mfa_last_used_totp_step = Column(BigInteger, nullable=True)
 
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 

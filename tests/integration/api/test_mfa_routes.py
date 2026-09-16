@@ -62,11 +62,18 @@ def _register_verify_login_as_owner(client: TestClient, db_session, email: str) 
 
 
 def _enroll_and_activate(client: TestClient) -> tuple:
+    import datetime
+
     setup_response = client.post("/api/v1/auth/mfa/setup", headers=_csrf_headers(client))
     assert setup_response.status_code == 200, setup_response.text
     secret = setup_response.json()["secret"]
 
-    code = pyotp.TOTP(secret).now()
+    # Consumes the step ONE BEFORE "now" (still within verify's own
+    # +/-1 step drift window) -- the confirmation code and a subsequent
+    # login's `pyotp.TOTP(secret).now()` code must land on different
+    # steps, or the new TOTP replay guard (User.mfa_last_used_totp_step)
+    # would correctly reject the second use as a replay of the first.
+    code = pyotp.TOTP(secret).at(datetime.datetime.now(), -1)
     activate_response = client.post(
         "/api/v1/auth/mfa/activate", json={"code": code}, headers=_csrf_headers(client)
     )
@@ -156,6 +163,40 @@ def test_login_verify_with_correct_totp_code_completes_login(client: TestClient,
 
     me = client.get("/api/v1/auth/me")
     assert me.status_code == 200
+
+
+def test_login_verify_rejects_replay_of_an_already_used_totp_code(client: TestClient, db_session):
+    """2026-09-16 audit finding: a TOTP code stays numerically valid for
+    +/-1 step (~90s), so a code captured in transit/observed once must
+    not be usable to complete a SECOND, independent login (e.g. from a
+    different device/session, its own fresh mfa_token) within that same
+    window."""
+    _register_verify_login_as_owner(client, db_session, "owner5b@example.com")
+    secret, _backup_codes = _enroll_and_activate(client)
+
+    client.cookies.clear()
+    first_login = client.post(
+        "/api/v1/auth/login", json={"email": "owner5b@example.com", "password": _PASSWORD}
+    )
+    code = pyotp.TOTP(secret).now()
+    first_verify = client.post(
+        "/api/v1/auth/mfa/login-verify", json={"mfa_token": first_login.json()["mfa_token"], "code": code}
+    )
+    assert first_verify.status_code == 200, first_verify.text
+
+    # A second, independent login attempt (its own mfa_token) replaying
+    # the exact same code must be rejected even though the code is still
+    # within its own validity window.
+    client.cookies.clear()
+    second_login = client.post(
+        "/api/v1/auth/login", json={"email": "owner5b@example.com", "password": _PASSWORD}
+    )
+    replay_response = client.post(
+        "/api/v1/auth/mfa/login-verify",
+        json={"mfa_token": second_login.json()["mfa_token"], "code": code},
+    )
+    assert replay_response.status_code == 401
+    assert replay_response.json()["error"]["code"] == "invalid_mfa_code"
 
 
 def test_login_verify_with_a_backup_code_completes_login_exactly_once(client: TestClient, db_session):

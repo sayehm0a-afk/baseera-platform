@@ -55,12 +55,17 @@ def confirm_enrollment(session: Session, user: User, code: str) -> List[str]:
         raise MfaSetupNotStartedError("No MFA enrollment is in progress. Call /mfa/setup first.")
 
     pending_secret = mfa_totp.decrypt_secret(user.mfa_pending_secret_encrypted)
-    if not mfa_totp.verify_totp_code(pending_secret, code):
+    step = mfa_totp.get_matching_totp_step(pending_secret, code)
+    if step is None:
         raise InvalidMfaCodeError("The code did not match. Check your authenticator app and try again.")
 
     backup_codes = mfa_totp.generate_backup_codes()
     _repository.replace_backup_codes(session, user.id, [hash_token(c) for c in backup_codes])
     _repository.activate_mfa(session, user.id, user.mfa_pending_secret_encrypted)
+    # Record the step the confirmation code itself used -- otherwise the
+    # same code (still within its +/-1 step window) could immediately be
+    # replayed against /mfa/login-verify right after enrollment.
+    _repository.record_mfa_totp_step(session, user.id, step)
     return backup_codes
 
 
@@ -90,10 +95,14 @@ def verify_login_code(session: Session, user: User, code: str) -> bool:
     """Tries the code as a TOTP code first, then as a one-time backup
     code -- the client never has to say which kind it is. A matched
     backup code is marked used (never deleted, never reusable) before
-    returning True."""
+    returning True. A TOTP code whose matched step was already accepted
+    before (User.mfa_last_used_totp_step) is rejected as a replay even
+    though it's still within its own +/-1 step drift window."""
     if user.mfa_secret_encrypted:
         secret = mfa_totp.decrypt_secret(user.mfa_secret_encrypted)
-        if mfa_totp.verify_totp_code(secret, code):
+        step = mfa_totp.get_matching_totp_step(secret, code)
+        if step is not None and (user.mfa_last_used_totp_step is None or step > user.mfa_last_used_totp_step):
+            _repository.record_mfa_totp_step(session, user.id, step)
             return True
 
     code_hash = hash_token(code)
