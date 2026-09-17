@@ -22,6 +22,8 @@ function opportunity(
     id?: number;
     is_decision_fresh?: boolean;
     decision_freshness_status?: "LIVE" | "LAST_SESSION" | "STALE" | "UNKNOWN";
+    classification?: RadarOpportunitySummary["classification"];
+    classification_label_ar?: string;
   } = {}
 ): RadarOpportunitySummary {
   return {
@@ -29,8 +31,8 @@ function opportunity(
     symbol,
     company_name_ar: null,
     company_name_en: `Company ${symbol}`,
-    classification: "BUY_CANDIDATE" as const,
-    classification_label_ar: "شراء",
+    classification: overrides.classification ?? "BUY_CANDIDATE",
+    classification_label_ar: overrides.classification_label_ar ?? "شراء",
     confidence_score: 80,
     confidence_disclaimer_ar: "درجة الثقة تقيس قوة واتساق الأدلة المتاحة، وليست احتمال ربح مضمون.",
     basirah_score: 84.0,
@@ -120,7 +122,7 @@ describe("RadarPage", () => {
     render(<RadarPage />);
 
     expect(await screen.findByText("2222")).toBeInTheDocument();
-    expect(screen.getByText("الفرص الحية (1)")).toBeInTheDocument();
+    expect(screen.getByText("توصيات الشراء (1)")).toBeInTheDocument();
     expect(
       screen.getByText("نسبة الإشارات الإيجابية 50% من أصل 20 سهمًا تم فحصها.")
     ).toBeInTheDocument();
@@ -170,7 +172,7 @@ describe("RadarPage", () => {
     render(<RadarPage />);
 
     // Only the one still-actionable opportunity counts toward "current live".
-    expect(await screen.findByText("الفرص الحية (1)")).toBeInTheDocument();
+    expect(await screen.findByText("توصيات الشراء (1)")).toBeInTheDocument();
     // The missed-entry one is not deleted -- it appears in its own section.
     expect(screen.getByText("فرص فاتت نقطة الدخول (1)")).toBeInTheDocument();
     expect(screen.getByText("2222")).toBeInTheDocument();
@@ -197,13 +199,54 @@ describe("RadarPage", () => {
 
     render(<RadarPage />);
 
-    // Only the fresh decision counts as "الفرص الحية".
-    expect(await screen.findByText("الفرص الحية (1)")).toBeInTheDocument();
+    // Only the fresh decision counts as "توصيات الشراء".
+    expect(await screen.findByText("توصيات الشراء (1)")).toBeInTheDocument();
     // The stale one is not deleted or silently shown as current -- it
     // gets its own clearly-labeled section.
     expect(screen.getByText("تحليل قديم — يحتاج إعادة تقييم (1)")).toBeInTheDocument();
     expect(screen.getByText("2222")).toBeInTheDocument();
     expect(screen.getByText("6060")).toBeInTheDocument();
+  });
+
+  it("never counts a HOLD/non-actionable decision as a buy recommendation, and moves it to its own clearly-labeled section (real production evidence: a live scan produced zero BUY_CANDIDATE but the screen still showed HOLD cards as 'الفرص الحية')", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(
+      summary({
+        live_opportunity_count: 2,
+        live_by_classification: { BUY_CANDIDATE: 1, HOLD: 1 },
+        average_confidence: 80,
+        top_opportunities: [
+          opportunity("2222", { id: 1 }),
+          opportunity("1060", { id: 2, classification: "HOLD", classification_label_ar: "احتفاظ" }),
+        ],
+      })
+    );
+
+    render(<RadarPage />);
+
+    // Only the real buy candidate counts as a buy recommendation.
+    expect(await screen.findByText("توصيات الشراء (1)")).toBeInTheDocument();
+    // The HOLD one is not deleted or shown as a recommendation -- it
+    // appears in its own, explicitly non-actionable section.
+    expect(screen.getByText("أسهم قيد المتابعة (1)")).toBeInTheDocument();
+    expect(screen.getByText(/هذه ليست توصية شراء/)).toBeInTheDocument();
+    expect(screen.getByText("2222")).toBeInTheDocument();
+    expect(screen.getByText("1060")).toBeInTheDocument();
+  });
+
+  it("shows the buy-recommendation empty state (not a fabricated one) when every live opportunity is non-actionable", async () => {
+    vi.mocked(getRadarSummary).mockResolvedValue(
+      summary({
+        live_opportunity_count: 1,
+        live_by_classification: { HOLD: 1 },
+        average_confidence: 71,
+        top_opportunities: [opportunity("1060", { classification: "HOLD", classification_label_ar: "احتفاظ" })],
+      })
+    );
+
+    render(<RadarPage />);
+
+    expect(await screen.findByText("لا توجد توصية شراء حاليًا")).toBeInTheDocument();
+    expect(screen.getByText("أسهم قيد المتابعة (1)")).toBeInTheDocument();
   });
 
   it("re-reads the same read-only endpoint on button press", async () => {

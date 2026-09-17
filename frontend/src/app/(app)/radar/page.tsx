@@ -286,6 +286,25 @@ export default function RadarPage() {
             const currentOpportunities = data.summary.top_opportunities.filter(
               (o) => !isEntryMissed(o.entry_status) && o.is_decision_fresh
             );
+            // Honesty fix (2026-09-17): "الفرص الحية" previously counted
+            // and rendered every classification RadarOpportunity tracks
+            // (HOLD/REDUCE/WATCH/WAIT_FOR_ENTRY/INSUFFICIENT_DATA
+            // included), not just actual buy candidates -- a beginner
+            // trader could reasonably read a card ranked "#1" under
+            // "Live Opportunities" as a pick to act on even when its own
+            // badge read "احتفاظ" (HOLD). Real production evidence: a
+            // live scan under the new confidence floor produced zero
+            // BUY_CANDIDATE decisions, yet the screen still showed five
+            // HOLD-classified cards as the top "opportunities." Only
+            // STRONG_BUY_CANDIDATE/BUY_CANDIDATE are ever actionable
+            // (see src.analysis.decision_v2.types.Decision) -- everything
+            // else now renders in its own, clearly-labeled section below.
+            const actionableOpportunities = currentOpportunities.filter(
+              (o) => o.classification === "STRONG_BUY_CANDIDATE" || o.classification === "BUY_CANDIDATE"
+            );
+            const nonActionableOpportunities = currentOpportunities.filter(
+              (o) => o.classification !== "STRONG_BUY_CANDIDATE" && o.classification !== "BUY_CANDIDATE"
+            );
             const staleOpportunities = data.summary.top_opportunities.filter(
               (o) => !isEntryMissed(o.entry_status) && !o.is_decision_fresh
             );
@@ -295,7 +314,7 @@ export default function RadarPage() {
                 <section className="flex flex-col gap-bsr-4">
                   <div className="flex items-center justify-between">
                     <h2 className="text-base font-semibold text-bsr-text-primary">
-                      الفرص الحية ({currentOpportunities.length})
+                      توصيات الشراء ({actionableOpportunities.length})
                     </h2>
                     {data.summary.average_confidence != null ? (
                       <span className="text-sm text-bsr-text-secondary">
@@ -306,19 +325,35 @@ export default function RadarPage() {
                       </span>
                     ) : null}
                   </div>
-                  {currentOpportunities.length === 0 ? (
+                  {actionableOpportunities.length === 0 ? (
                     <EmptyState
-                      title="لا توجد فرصة دخول حالية"
-                      description="جميع الفرص المرصودة تجاوز سعرها نطاق الدخول الموصى به، أو أصبح تحليلها قديمًا. انظر أدناه للفرص السابقة."
+                      title="لا توجد توصية شراء حاليًا"
+                      description="لم يرصد الرادار الذكي أي فرصة حقيقية تستوفي معايير الجودة في آخر مسح للسوق. راجع الأسهم قيد المتابعة أدناه للاطلاع على التحليل، دون أنها توصية شراء."
                     />
                   ) : (
                     <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
-                      {currentOpportunities.map((opportunity) => (
+                      {actionableOpportunities.map((opportunity) => (
                         <RadarOpportunityCard key={opportunity.id} opportunity={opportunity} />
                       ))}
                     </div>
                   )}
                 </section>
+
+                {nonActionableOpportunities.length > 0 ? (
+                  <section className="flex flex-col gap-bsr-4">
+                    <h2 className="text-base font-semibold text-bsr-text-secondary">
+                      أسهم قيد المتابعة ({nonActionableOpportunities.length})
+                    </h2>
+                    <p className="text-xs text-bsr-text-secondary">
+                      هذه ليست توصية شراء -- تحليل حالة أسهم يتابعها الرادار حاليًا (احتفاظ/تخفيف/انتظار دخول/بيانات غير كافية). راجع شارة الحالة على كل بطاقة.
+                    </p>
+                    <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
+                      {nonActionableOpportunities.map((opportunity) => (
+                        <RadarOpportunityCard key={opportunity.id} opportunity={opportunity} />
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
 
                 {staleOpportunities.length > 0 ? (
                   <section className="flex flex-col gap-bsr-4">
