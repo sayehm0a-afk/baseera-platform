@@ -43,15 +43,18 @@ def test_stage1_threshold_defaults_match_documented_values():
     assert config.get_radar_stage2_candidate_cap() == 15
 
 
-def test_min_calibrated_success_probability_default_is_70_percent():
-    """2026-09-16 explicit product decision: raised from 0.35 (which
-    filtered out nothing against real calibrated outputs clustering in
-    the mid-50s-to-low-60s%) to 0.70 -- deliberately severe, so most
-    days publish zero BUY/SELL candidates rather than a weak one."""
-    assert config.get_min_calibrated_success_probability() == 0.70
+def test_min_calibrated_success_probability_default_is_60_percent():
+    """2026-09-17 explicit product decision: lowered from 0.70 (raised
+    2026-09-16 from 0.35, which filtered out nothing) after real
+    production evidence the next trading day showed 0.70 published zero
+    BUY/SELL candidates all day against a real calibrated-confidence
+    distribution clustering at 54-61%. 0.60 is the real middle ground:
+    a genuinely raised bar over 0.35, while still letting the upper end
+    of that real distribution publish."""
+    assert config.get_min_calibrated_success_probability() == 0.60
 
 
 def test_min_calibrated_success_probability_reads_env_at_call_time():
     with mock.patch.dict(os.environ, {"MARKET_MIN_CALIBRATED_SUCCESS_PROBABILITY": "0.5"}):
         assert config.get_min_calibrated_success_probability() == 0.5
-    assert config.get_min_calibrated_success_probability() == 0.70
+    assert config.get_min_calibrated_success_probability() == 0.60

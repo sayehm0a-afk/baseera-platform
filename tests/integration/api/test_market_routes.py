@@ -511,8 +511,8 @@ def _seed_publishable_buy(session_factory, symbol="7777"):
 def _seed_active_calibration_model_mapping_everything_near_zero(session_factory):
     """A real, ACTIVE Platt-scaling model whose (coef=0, intercept=-10)
     parameters map every raw confidence to sigmoid(-10) ~= 0.000045 --
-    far below get_min_calibrated_success_probability()'s default 0.35,
-    so any symbol this model is applied to must fail the
+    far below get_min_calibrated_success_probability()'s default (0.60
+    as of 2026-09-17), so any symbol this model is applied to must fail the
     confidence_calibration gate regardless of its raw confidence."""
     session = session_factory()
     session.add(
@@ -528,9 +528,10 @@ def _seed_active_calibration_model_mapping_everything_near_zero(session_factory)
 
 def _seed_active_calibration_model_mapping_everything_to_point_nine(session_factory):
     """coef=0, intercept=ln(9) -> sigmoid(ln(9)) == 0.9 exactly for every
-    raw confidence -- well above the 0.70 gate threshold (2026-09-16: raised
-    from 0.35, so this fixture's constant was raised from 0.5 to 0.9 to
-    stay above the new floor and keep clearing every category), used to
+    raw confidence -- well above the 0.60 gate threshold (2026-09-16:
+    raised from 0.35 to 0.70, then lowered to 0.60 on 2026-09-17; this
+    fixture's constant was raised from 0.5 to 0.9 to stay above either
+    floor and keep clearing every category), used to
     prove the calibrated number itself now reaches the API response rather
     than being discarded after gating (2026-09-15 audit finding)."""
     session = session_factory()
