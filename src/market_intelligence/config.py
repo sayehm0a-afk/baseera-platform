@@ -273,10 +273,22 @@ def get_min_calibrated_success_probability() -> float:
     Raised from 0.35 to 0.70 (2026-09-16, explicit product decision):
     the live model's real calibrated outputs that day clustered in the
     mid-50s-to-low-60s%, meaning 0.35 filtered out nothing in
-    practice. The 0.70 bar is deliberately severe -- on most days it
-    will publish zero BUY/SELL candidates rather than a weak one, by
-    design (one certain call beats several unreliable ones)."""
-    return float(os.getenv("MARKET_MIN_CALIBRATED_SUCCESS_PROBABILITY", "0.70"))
+    practice. The 0.70 bar was deliberately severe by design (one
+    certain call beats several unreliable ones), but real production
+    evidence the very next trading day (2026-09-17) confirmed it: the
+    first live scan under the 0.70 floor published zero BUY/SELL
+    candidates, against a real calibrated-confidence distribution still
+    clustering at 54-61%.
+
+    Lowered from 0.70 to 0.60 (2026-09-17, explicit product decision,
+    made with that live-zero-candidates evidence in hand): a real
+    middle ground between the old 0.35 (which filtered nothing) and
+    0.70 (which filtered everything that day) -- high enough to be a
+    genuine, meaningfully-raised bar over 0.35, while still letting the
+    upper end of the real 54-61% distribution (the 60-61% cases)
+    publish, rather than showing a beginner trader an empty feed for
+    days at a time."""
+    return float(os.getenv("MARKET_MIN_CALIBRATED_SUCCESS_PROBABILITY", "0.60"))
 
 
 def get_min_risk_reward_ratio() -> float:

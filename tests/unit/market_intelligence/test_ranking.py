@@ -252,8 +252,9 @@ def test_zero_price_outcome_is_excluded_from_every_ranking_category_not_just_gat
 def test_calibrated_confidences_excludes_a_below_threshold_symbol_from_gated_categories():
     # Recommendation-engine hardening: a symbol whose raw confidence
     # looks fine but whose real calibrated success probability is below
-    # get_min_calibrated_success_probability() (0.70, raised from 0.35
-    # on 2026-09-16) must be excluded from every is_publishable()-gated
+    # get_min_calibrated_success_probability() (0.60, raised from 0.35
+    # on 2026-09-16, lowered from a briefly-tried 0.70 on 2026-09-17)
+    # must be excluded from every is_publishable()-gated
     # category, not just written-but-ignored on the historical
     # RecommendationSnapshot.
     outcomes = [
