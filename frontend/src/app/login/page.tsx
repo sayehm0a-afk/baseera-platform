@@ -55,6 +55,11 @@ export default function LoginPage() {
             <span className="text-xl font-semibold text-bsr-white">بصيرة</span>
             <span className="text-xl font-semibold text-bsr-teal-500">AI</span>
           </div>
+          {/* 2026-09-17: matches the same short tagline on /register --
+           * brand consistency across both auth entry points. */}
+          <p className="text-center text-sm text-bsr-text-secondary">
+            الذكاء الاصطناعي يحلل السوق السعودي، وأنت تقرر.
+          </p>
         </div>
 
         <form className="flex flex-col gap-bsr-4" onSubmit={handleSubmit} noValidate>

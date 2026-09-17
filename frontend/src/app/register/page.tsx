@@ -48,6 +48,16 @@ export default function RegisterPage() {
             <span className="text-xl font-semibold text-bsr-white">بصيرة</span>
             <span className="text-xl font-semibold text-bsr-teal-500">AI</span>
           </div>
+          {/* 2026-09-17: short, honest value-prop above the signup form
+           * -- a first-time visitor previously landed on a bare form
+           * with no explanation of what the product does. Deliberately
+           * avoids any profit-guarantee language (matches this app's
+           * existing confidence_disclaimer_ar tone throughout). */}
+          <p className="text-center text-sm leading-6 text-bsr-text-secondary">
+            بصيرة يحلل السوق السعودي بالذكاء الاصطناعي ويعطيك توصية واضحة
+            (دخول، هدف، ووقف خسارة) مع درجة ثقة حقيقية لكل سهم. ما تحتاج خبرة
+            مسبقة — القرار النهائي دائمًا لك.
+          </p>
         </div>
 
         {isRegistered ? (
