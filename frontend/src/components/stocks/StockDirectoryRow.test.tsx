@@ -19,6 +19,8 @@ function buildItem(overrides: Partial<StockDirectoryItem> = {}): StockDirectoryI
     latest_decision_label_ar: null,
     latest_confidence_score: null,
     latest_target_1: null,
+    market: "TADAWUL",
+    currency: "SAR",
     ...overrides,
   };
 }
@@ -59,5 +61,20 @@ describe("StockDirectoryRow", () => {
 
     expect(screen.getByText("مراقبة")).toBeInTheDocument();
     expect(screen.queryByText(/هدف/)).not.toBeInTheDocument();
+  });
+
+  it("shows no currency badge for a Tadawul (default-market) row", () => {
+    render(<StockDirectoryRow item={buildItem()} />);
+    expect(screen.queryByText("SAR")).not.toBeInTheDocument();
+  });
+
+  it("shows a currency badge for a US-market row", () => {
+    render(
+      <StockDirectoryRow
+        item={buildItem({ symbol: "AAPL", name_en: "Apple Inc.", market: "US", currency: "USD" })}
+      />
+    );
+    expect(screen.getByText("USD")).toBeInTheDocument();
+    expect(screen.getByText("AAPL")).toBeInTheDocument();
   });
 });

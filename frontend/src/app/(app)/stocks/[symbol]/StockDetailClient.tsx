@@ -265,7 +265,11 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <div>
             <h1 className="text-lg font-semibold text-bsr-text-primary">{displayName}</h1>
             <p className="bsr-numeric text-sm text-bsr-text-secondary">
-              {stockData.symbol}
+              {/* A Latin ticker (e.g. "AAPL") is a strong-LTR run inside
+               * this RTL page -- <bdi> isolates it so it can never
+               * visually reorder against the Arabic sector text that
+               * follows. A no-op for every existing Tadawul symbol. */}
+              <bdi dir="ltr">{stockData.symbol}</bdi>
               {sectorAr ? ` · ${sectorAr}` : stockData.sector ? ` · ${stockData.sector}` : ""}
             </p>
           </div>
@@ -291,9 +295,9 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
 
         {quote.status === "ready" ? (
           <div className="flex flex-wrap items-baseline gap-bsr-3">
-            <span className="bsr-numeric text-2xl font-bold text-bsr-text-primary">
+            <bdi dir="ltr" className="bsr-numeric text-2xl font-bold text-bsr-text-primary">
               {quote.data.close.toFixed(2)}
-            </span>
+            </bdi>
             <span className="text-sm text-bsr-text-secondary">{stockData.currency}</span>
             {quote.data.is_synthetic ? (
               <span className="rounded-bsr-full bg-bsr-action-watch/15 px-bsr-3 py-bsr-1 text-xs text-bsr-action-watch">

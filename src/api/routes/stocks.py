@@ -408,6 +408,8 @@ def get_stock_directory(
                     if latest_decision and latest_decision.target_1 is not None
                     else None
                 ),
+                market=stock.market.value,
+                currency=stock.currency,
             )
         )
 
