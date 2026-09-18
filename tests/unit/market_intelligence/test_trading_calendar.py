@@ -1,13 +1,15 @@
-"""Unit tests for the Tadawul trading calendar -- pure datetime math,
-no I/O. Uses fixed, reviewable calendar dates (2026-07-28 is a
+"""Unit tests for the per-market trading calendar -- pure datetime
+math, no I/O. Uses fixed, reviewable calendar dates (2026-07-28 is a
 Tuesday) rather than `datetime.now()`, so results never depend on
 when the suite runs.
 """
 
 from datetime import datetime, timezone
 
+from src.domain.models.stock import Market
 from src.market_intelligence.trading_calendar import (
     TADAWUL_TIMEZONE,
+    US_TIMEZONE,
     is_market_open,
     seconds_until_close,
     seconds_until_next_ohlcv_sync,
@@ -18,6 +20,10 @@ from src.market_intelligence.trading_calendar import (
 
 def _tadawul(year, month, day, hour=0, minute=0):
     return datetime(year, month, day, hour, minute, tzinfo=TADAWUL_TIMEZONE)
+
+
+def _us(year, month, day, hour=0, minute=0):
+    return datetime(year, month, day, hour, minute, tzinfo=US_TIMEZONE)
 
 
 class TestIsMarketOpen:
@@ -149,3 +155,100 @@ class TestTimezoneConversion:
     def test_utc_input_is_converted_to_tadawul_local_time(self):
         # 07:00 UTC == 10:00 AST -- exactly market open.
         assert is_market_open(datetime(2026, 7, 28, 7, 0, tzinfo=timezone.utc)) is True
+
+
+class TestDefaultMarketIsTadawulForEveryExistingCallSite:
+    """Every call site written before Market.US existed calls these
+    functions with no `market` argument -- their exact prior behavior
+    must be unchanged."""
+
+    def test_is_market_open_defaults_to_tadawul(self):
+        assert is_market_open(_tadawul(2026, 7, 28, 12, 0)) == is_market_open(
+            _tadawul(2026, 7, 28, 12, 0), market=Market.TADAWUL
+        )
+
+    def test_to_tadawul_time_defaults_to_tadawul(self):
+        naive = datetime(2026, 7, 28, 7, 0, tzinfo=timezone.utc)
+        assert to_tadawul_time(naive) == to_tadawul_time(naive, market=Market.TADAWUL)
+
+
+class TestUsMarketIsMarketOpen:
+    def test_open_mid_session_on_a_trading_day(self):
+        # 2026-07-28 is a Tuesday -- a US trading day.
+        assert is_market_open(_us(2026, 7, 28, 12, 0), market=Market.US) is True
+
+    def test_open_at_the_exact_opening_moment(self):
+        assert is_market_open(_us(2026, 7, 28, 9, 30), market=Market.US) is True
+
+    def test_closed_one_minute_before_open(self):
+        assert is_market_open(_us(2026, 7, 28, 9, 29), market=Market.US) is False
+
+    def test_closed_at_the_exact_closing_moment(self):
+        assert is_market_open(_us(2026, 7, 28, 16, 0), market=Market.US) is False
+
+    def test_closed_after_hours_on_a_trading_day(self):
+        assert is_market_open(_us(2026, 7, 28, 20, 0), market=Market.US) is False
+
+    def test_closed_on_saturday(self):
+        # 2026-08-01 is a Saturday.
+        assert is_market_open(_us(2026, 8, 1, 12, 0), market=Market.US) is False
+
+    def test_closed_on_sunday(self):
+        # 2026-08-02 is a Sunday -- unlike Tadawul, the US market does not trade Sunday.
+        assert is_market_open(_us(2026, 8, 2, 12, 0), market=Market.US) is False
+
+    def test_a_naive_datetime_is_treated_as_utc(self):
+        # 13:30 UTC == 09:30 EDT (July is daylight saving) -- exactly market open.
+        assert is_market_open(datetime(2026, 7, 28, 13, 30), market=Market.US) is True
+        # 20:00 UTC == 16:00 EDT -- exactly market close, so closed.
+        assert is_market_open(datetime(2026, 7, 28, 20, 0), market=Market.US) is False
+
+    def test_a_real_tadawul_open_moment_is_not_a_us_open_moment(self):
+        """The two markets' schedules never get confused with each
+        other -- Tadawul's Sunday session is closed for the US, and
+        each market's own weekday set is independently enforced."""
+        assert is_market_open(_us(2026, 8, 2, 11, 0), market=Market.US) is False
+        assert is_market_open(_tadawul(2026, 8, 2, 11, 0), market=Market.TADAWUL) is True
+
+
+class TestUsMarketSecondsUntilNextOpen:
+    def test_zero_when_already_open(self):
+        assert seconds_until_next_open(_us(2026, 7, 28, 12, 0), market=Market.US) == 0.0
+
+    def test_same_day_before_open(self):
+        # Tuesday 05:00 -> Tuesday 09:30 == 4.5 hours.
+        assert seconds_until_next_open(_us(2026, 7, 28, 5, 0), market=Market.US) == 4.5 * 3600
+
+    def test_friday_evening_skips_the_weekend_to_monday(self):
+        given = _us(2026, 7, 31, 20, 0)  # Friday 20:00
+        expected_open = _us(2026, 8, 3, 9, 30)  # Monday 09:30
+        result = seconds_until_next_open(given, market=Market.US)
+        assert result == (expected_open - given).total_seconds()
+
+
+class TestUsMarketSecondsUntilClose:
+    def test_none_when_market_is_closed(self):
+        assert seconds_until_close(_us(2026, 8, 1, 12, 0), market=Market.US) is None
+
+    def test_remaining_seconds_mid_session(self):
+        # Tuesday 12:00 -> close at 16:00 == 4 hours.
+        assert seconds_until_close(_us(2026, 7, 28, 12, 0), market=Market.US) == 4 * 3600
+
+
+class TestUsMarketSecondsUntilNextOhlcvSync:
+    def test_mid_session_targets_todays_close_plus_buffer(self):
+        # Tuesday 12:00 -> close 16:00 + 30min buffer == 16:30, 4.5h away.
+        result = seconds_until_next_ohlcv_sync(_us(2026, 7, 28, 12, 0), market=Market.US)
+        assert result == 4.5 * 3600
+
+    def test_thursday_evening_rolls_to_friday(self):
+        given = _us(2026, 7, 30, 20, 0)  # Thursday 20:00 (past Thursday's window)
+        expected_sync_at = _us(2026, 7, 31, 16, 30)  # Friday 16:30
+        result = seconds_until_next_ohlcv_sync(given, market=Market.US)
+        assert result == (expected_sync_at - given).total_seconds()
+
+
+class TestUsMarketToTadawulTime:
+    def test_converts_utc_to_us_local(self):
+        result = to_tadawul_time(datetime(2026, 7, 28, 13, 30, tzinfo=timezone.utc), market=Market.US)
+        assert result == _us(2026, 7, 28, 9, 30)
