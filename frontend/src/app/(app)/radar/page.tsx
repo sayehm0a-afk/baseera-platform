@@ -4,9 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
+import { buildRadarDayOptions, RadarDaySelector } from "@/components/radar/RadarDaySelector";
 import { RadarOpportunityCard } from "@/components/radar/RadarOpportunityCard";
-import { getRadarSummary, triggerRadarScanNow } from "@/lib/api/radar";
-import type { RadarHomeSummary } from "@/lib/api/radar-types";
+import { getRadarHistoryDay, getRadarSummary, triggerRadarScanNow } from "@/lib/api/radar";
+import type { RadarHistoryDay, RadarHomeSummary } from "@/lib/api/radar-types";
 import { formatArabicDateTime, formatRelativeAgeAr, isEntryMissed } from "@/lib/format/freshness";
 
 // On-demand consumer scan mandate (2026-09-11): honest Arabic text for
@@ -144,9 +145,46 @@ type ScanNowState =
   | { phase: "loading" }
   | { phase: "done"; executed: boolean; messageAr: string };
 
+type HistoryDayState =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "ready"; day: RadarHistoryDay };
+
+/** Product decision 2026-09-18: lets the user browse a real past day's
+ * picks (see RadarDaySelector's own docstring) -- fetched only when a
+ * non-today day is actually selected, never on the default (today)
+ * view, so this adds zero extra requests to the existing live-radar
+ * page load. */
+function useRadarHistoryDay(date: string | null) {
+  const [state, setState] = useState<HistoryDayState>({ status: "loading" });
+
+  useEffect(() => {
+    if (date == null) return;
+    let cancelled = false;
+    setState({ status: "loading" });
+    getRadarHistoryDay(date)
+      .then((day) => {
+        if (!cancelled) setState({ status: "ready", day });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [date]);
+
+  return state;
+}
+
 export default function RadarPage() {
   const { data, reload } = useRadarData();
   const [scanNow, setScanNow] = useState<ScanNowState>({ phase: "idle" });
+  const dayOptions = useState(() => buildRadarDayOptions())[0];
+  const todayDate = dayOptions[dayOptions.length - 1].date;
+  const [selectedDate, setSelectedDate] = useState(todayDate);
+  const isToday = selectedDate === todayDate;
+  const historyDay = useRadarHistoryDay(isToday ? null : selectedDate);
 
   const handleScanNow = useCallback(async () => {
     setScanNow({ phase: "loading" });
@@ -228,9 +266,47 @@ export default function RadarPage() {
         ) : null}
       </section>
 
-      {data.status === "loading" ? <LoadingScreen /> : null}
+      <RadarDaySelector value={selectedDate} onChange={setSelectedDate} options={dayOptions} />
 
-      {data.status === "error" ? (
+      {!isToday ? (
+        <>
+          {historyDay.status === "loading" ? <LoadingScreen /> : null}
+          {historyDay.status === "error" ? (
+            <EmptyState
+              title="تعذّر تحميل رادار هذا اليوم"
+              description="تأكد من اتصال الخادم وحاول مرة أخرى."
+            />
+          ) : null}
+          {historyDay.status === "ready" && !historyDay.day.has_scan ? (
+            <EmptyState
+              title="لا توجد بيانات لهذا اليوم"
+              description="لم يُجرَ فحص رادار مكتمل في هذا اليوم (قد يكون يوم عطلة للسوق أو خارج نطاق البيانات المتوفرة)."
+            />
+          ) : null}
+          {historyDay.status === "ready" && historyDay.day.has_scan && historyDay.day.opportunities.length === 0 ? (
+            <EmptyState
+              title="لا توجد توصية شراء في هذا اليوم"
+              description="أجرى الرادار الذكي فحصًا في هذا اليوم لكن لم يرصد أي فرصة شراء تستوفي معايير الجودة."
+            />
+          ) : null}
+          {historyDay.status === "ready" && historyDay.day.opportunities.length > 0 ? (
+            <section className="flex flex-col gap-bsr-4">
+              <h2 className="text-base font-semibold text-bsr-text-primary">
+                توصيات الشراء ({historyDay.day.opportunities.length})
+              </h2>
+              <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
+                {historyDay.day.opportunities.map((opportunity) => (
+                  <RadarOpportunityCard key={opportunity.id} opportunity={opportunity} />
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </>
+      ) : (
+        <>
+          {data.status === "loading" ? <LoadingScreen /> : null}
+
+          {data.status === "error" ? (
         <EmptyState
           title="تعذّر تحميل الرادار الذكي"
           description="تأكد من اتصال الخادم وحاول مرة أخرى."
@@ -372,6 +448,8 @@ export default function RadarPage() {
             );
           })()
         : null}
+        </>
+      )}
     </div>
   );
 }

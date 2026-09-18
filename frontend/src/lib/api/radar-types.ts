@@ -184,6 +184,17 @@ export interface RadarHomeSummary {
   last_full_scan_at: string | null;
 }
 
+/** Matches RadarHistoryDayOut (src/api/schemas/market_intelligence.py)
+ * -- product decision 2026-09-18. `has_scan` distinguishes a real
+ * "Radar V2 ran but found zero buy candidates that day" from "no scan
+ * data exists for this day at all"; `opportunities` is always
+ * filtered to actionable BUY classifications. */
+export interface RadarHistoryDay {
+  date: string;
+  has_scan: boolean;
+  opportunities: RadarOpportunitySummary[];
+}
+
 /** Matches RadarScanNowOut (src/api/schemas/radar.py) -- the response
  * to POST /api/v1/radar/scan-now. `executed=false` always means no
  * scan ran and no SAHMK quota was spent; `stop_reason` says why
