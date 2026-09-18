@@ -65,11 +65,12 @@ describe("RadarOpportunityCard", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows a placeholder rather than fabricating a missing price", () => {
+  it("omits a missing second/third target entirely rather than fabricating or showing a bare placeholder (2026-09-18: large, focused trade-parameters block)", () => {
     render(<RadarOpportunityCard opportunity={buildOpportunity({ target_2: null, target_3: null })} />);
 
-    const dashes = screen.getAllByText("--");
-    expect(dashes.length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText("الهدف الثاني")).not.toBeInTheDocument();
+    expect(screen.queryByText("الهدف الثالث")).not.toBeInTheDocument();
+    expect(screen.getByText("الهدف الأول")).toBeInTheDocument();
   });
 
   it("shows a placeholder rather than fabricating a missing Basirah Score", () => {

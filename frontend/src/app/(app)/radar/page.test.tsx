@@ -208,7 +208,7 @@ describe("RadarPage", () => {
     expect(screen.getByText("6060")).toBeInTheDocument();
   });
 
-  it("never counts a HOLD/non-actionable decision as a buy recommendation, and moves it to its own clearly-labeled section (real production evidence: a live scan produced zero BUY_CANDIDATE but the screen still showed HOLD cards as 'الفرص الحية')", async () => {
+  it("never renders a HOLD/non-actionable decision anywhere on this screen (real production evidence: a live scan produced zero BUY_CANDIDATE but the screen still showed HOLD cards as 'الفرص الحية') -- product decision 2026-09-18: this screen is buy-recommendations only, full analysis of every stock lives on /stocks instead", async () => {
     vi.mocked(getRadarSummary).mockResolvedValue(
       summary({
         live_opportunity_count: 2,
@@ -225,15 +225,14 @@ describe("RadarPage", () => {
 
     // Only the real buy candidate counts as a buy recommendation.
     expect(await screen.findByText("توصيات الشراء (1)")).toBeInTheDocument();
-    // The HOLD one is not deleted or shown as a recommendation -- it
-    // appears in its own, explicitly non-actionable section.
-    expect(screen.getByText("أسهم قيد المتابعة (1)")).toBeInTheDocument();
-    expect(screen.getByText(/هذه ليست توصية شراء/)).toBeInTheDocument();
     expect(screen.getByText("2222")).toBeInTheDocument();
-    expect(screen.getByText("1060")).toBeInTheDocument();
+    // The HOLD one is not shown anywhere on this screen at all -- no
+    // "under review" section, no leftover text about it.
+    expect(screen.queryByText("1060")).not.toBeInTheDocument();
+    expect(screen.queryByText(/أسهم قيد المتابعة/)).not.toBeInTheDocument();
   });
 
-  it("shows the buy-recommendation empty state (not a fabricated one) when every live opportunity is non-actionable", async () => {
+  it("shows the honest buy-recommendation empty state when every live opportunity is non-actionable, without rendering the HOLD stock at all", async () => {
     vi.mocked(getRadarSummary).mockResolvedValue(
       summary({
         live_opportunity_count: 1,
@@ -246,7 +245,7 @@ describe("RadarPage", () => {
     render(<RadarPage />);
 
     expect(await screen.findByText("لا توجد توصية شراء حاليًا")).toBeInTheDocument();
-    expect(screen.getByText("أسهم قيد المتابعة (1)")).toBeInTheDocument();
+    expect(screen.queryByText("1060")).not.toBeInTheDocument();
   });
 
   it("re-reads the same read-only endpoint on button press", async () => {

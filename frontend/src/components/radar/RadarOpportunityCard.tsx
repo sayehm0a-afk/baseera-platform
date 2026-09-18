@@ -148,32 +148,39 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-bsr-2 text-sm">
+      {/* Product decision (2026-09-18, explicit owner direction): entry/
+       * target/stop-loss are the single most important numbers on this
+       * card -- "واجهات ... بخط كبير واحترافي" -- so they get their own
+       * high-contrast block with much larger numerals, instead of
+       * competing visually with secondary metadata (Basirah score,
+       * confidence, risk level) above. */}
+      <div className="grid grid-cols-2 gap-bsr-3 rounded-bsr-lg bg-bsr-surface-base p-bsr-3 sm:grid-cols-4">
         <div>
-          <p className="text-xs text-bsr-text-secondary">الدخول</p>
-          <p className="bsr-numeric font-semibold text-bsr-text-primary">
-            {priceLabel(o.entry_zone_low)} – {priceLabel(o.entry_zone_high)}
+          <p className="text-xs font-semibold text-bsr-text-secondary">الدخول</p>
+          <p className="bsr-numeric text-xl font-bold leading-tight text-bsr-text-primary">
+            {priceLabel(o.entry_zone_low)}–{priceLabel(o.entry_zone_high)}
           </p>
         </div>
         <div>
-          <p className="text-xs text-bsr-text-secondary">وقف الخسارة</p>
-          <p className="bsr-numeric font-semibold text-bsr-market-down">{priceLabel(o.stop_loss)}</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-bsr-2 text-sm sm:grid-cols-3">
-        <div>
-          <p className="text-xs text-bsr-text-secondary">الهدف الأول</p>
-          <p className="bsr-numeric font-semibold text-bsr-market-up">{priceLabel(o.target_1)}</p>
+          <p className="text-xs font-semibold text-bsr-text-secondary">وقف الخسارة</p>
+          <p className="bsr-numeric text-xl font-bold leading-tight text-bsr-market-down">{priceLabel(o.stop_loss)}</p>
         </div>
         <div>
-          <p className="text-xs text-bsr-text-secondary">الهدف الثاني</p>
-          <p className="bsr-numeric font-semibold text-bsr-market-up">{priceLabel(o.target_2)}</p>
+          <p className="text-xs font-semibold text-bsr-text-secondary">الهدف الأول</p>
+          <p className="bsr-numeric text-xl font-bold leading-tight text-bsr-market-up">{priceLabel(o.target_1)}</p>
         </div>
-        <div>
-          <p className="text-xs text-bsr-text-secondary">الهدف الثالث</p>
-          <p className="bsr-numeric font-semibold text-bsr-market-up">{priceLabel(o.target_3)}</p>
-        </div>
+        {o.target_2 != null ? (
+          <div>
+            <p className="text-xs font-semibold text-bsr-text-secondary">الهدف الثاني</p>
+            <p className="bsr-numeric text-xl font-bold leading-tight text-bsr-market-up">{priceLabel(o.target_2)}</p>
+          </div>
+        ) : null}
+        {o.target_3 != null ? (
+          <div>
+            <p className="text-xs font-semibold text-bsr-text-secondary">الهدف الثالث</p>
+            <p className="bsr-numeric text-xl font-bold leading-tight text-bsr-market-up">{priceLabel(o.target_3)}</p>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex items-center justify-between text-sm">
