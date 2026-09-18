@@ -299,3 +299,38 @@ def get_sahmk_reserved_for_market_scan_requests_per_day() -> Optional[int]:
         return None
     value = int(raw)
     return value if value > 0 else None
+
+
+POLYGON_DEFAULT_BASE_URL = "https://api.polygon.io"
+
+
+def get_polygon_api_key() -> str:
+    """Returns the configured Polygon.io API key, or "" if unset.
+
+    Never raises and never invents a value -- callers that require a
+    key (PolygonClient) are responsible for deciding what "" means for
+    them, mirroring get_sahmk_api_key()'s exact contract."""
+    return os.getenv("POLYGON_API_KEY", "")
+
+
+def get_polygon_base_url() -> str:
+    """Returns the configured Polygon.io API base URL, defaulting to
+    Polygon's own published base URL if POLYGON_BASE_URL is unset."""
+    return os.getenv("POLYGON_BASE_URL", POLYGON_DEFAULT_BASE_URL) or POLYGON_DEFAULT_BASE_URL
+
+
+def has_polygon_credentials() -> bool:
+    """True iff a non-empty POLYGON_API_KEY is configured."""
+    return bool(get_polygon_api_key())
+
+
+def get_polygon_max_requests_per_minute() -> int:
+    """Ceiling on Polygon.io requests per rolling 60s window, shared by
+    every PolygonClient in this process
+    (src.market_data.polygon.rate_limiter) -- Polygon's quota is per API
+    key, not per client instance. Default 5/minute is Polygon's own
+    documented real Free-tier limit (not a guess, unlike SAHMK's
+    equivalent default) -- override with
+    POLYGON_MAX_REQUESTS_PER_MINUTE once/if a paid tier with a higher
+    limit is used."""
+    return int(os.getenv("POLYGON_MAX_REQUESTS_PER_MINUTE", "5"))
