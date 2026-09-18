@@ -49,6 +49,7 @@ from src.domain.models.announcement import Announcement, AnnouncementSeverity
 from src.domain.models.global_setting import GlobalSetting
 from src.domain.models.notification import Notification, NotificationType
 from src.domain.models.user_watchlist import UserWatchlist, UserWatchlistItem
+from src.domain.models.user_followed_signal import UserFollowedSignal
 from src.domain.models.user_setting import UserSetting
 from src.domain.models.feedback import Feedback, FeedbackCategory
 from src.domain.models.support_ticket import SupportTicket, SupportTicketStatus
@@ -145,6 +146,7 @@ __all__ = [
     "NotificationType",
     "UserWatchlist",
     "UserWatchlistItem",
+    "UserFollowedSignal",
     "UserSetting",
     "Feedback",
     "FeedbackCategory",

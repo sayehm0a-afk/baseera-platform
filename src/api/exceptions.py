@@ -174,6 +174,31 @@ class WatchlistItemNotFoundError(APIError):
     code = "watchlist_item_not_found"
 
 
+class SignalSnapshotNotFoundError(APIError):
+    """No DecisionV2Snapshot exists with the given id."""
+
+    status_code = 404
+    code = "signal_snapshot_not_found"
+
+
+class SignalNotActionableError(APIError):
+    """The referenced decision is not a real BUY call (e.g. WATCH/HOLD/
+    WAIT_FOR_ENTRY) -- product decision 2026-09-18: users can only
+    follow real, actionable buy recommendations, matching the same
+    BUY-only bias already enforced on /radar."""
+
+    status_code = 422
+    code = "signal_not_actionable"
+
+
+class SignalAlreadyFollowedError(APIError):
+    """The requesting user already follows this exact decision snapshot
+    -- a client-correctable 409, not a server failure."""
+
+    status_code = 409
+    code = "signal_already_followed"
+
+
 class PortfolioHoldingNotFoundError(APIError):
     """No PortfolioHolding row matches this (portfolio, holding) pair
     for the requesting user's portfolio."""

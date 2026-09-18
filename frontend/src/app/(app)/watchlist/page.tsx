@@ -1,6 +1,8 @@
 "use client";
 
+import { FollowedSignalsPanel } from "@/components/watchlist/FollowedSignalsPanel";
 import { MyWatchlistPanel } from "@/components/watchlist/MyWatchlistPanel";
+import { PersonalPerformancePanel } from "@/components/watchlist/PersonalPerformancePanel";
 import { WatchlistNewsAlertsSection } from "@/components/watchlist/WatchlistNewsAlertsSection";
 
 // 2026-09-16 simplification: this screen used to also offer 9 market-
@@ -23,6 +25,22 @@ export default function WatchlistPage() {
 
       <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-2 md:p-bsr-4">
         <MyWatchlistPanel />
+      </section>
+
+      {/* "متابعة هذه الإشارة" (product decision 2026-09-18): the same
+       * "متابعة" (follow-up) concept as the symbol watchlist above,
+       * just for specific followed BUY recommendations instead of
+       * whole symbols -- kept on this existing screen rather than a
+       * fifth primary nav item, per the RADAR-C simplification mandate
+       * (see nav-items.ts). */}
+      <section className="flex flex-col gap-bsr-3 rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-2 md:p-bsr-4">
+        <h2 className="text-base font-semibold text-bsr-text-primary">أداؤك مقابل أداء الخوارزمية</h2>
+        <PersonalPerformancePanel />
+      </section>
+
+      <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-2 md:p-bsr-4">
+        <h2 className="mb-bsr-2 px-bsr-2 text-base font-semibold text-bsr-text-primary">الإشارات التي تتابعها</h2>
+        <FollowedSignalsPanel />
       </section>
 
       <WatchlistNewsAlertsSection />

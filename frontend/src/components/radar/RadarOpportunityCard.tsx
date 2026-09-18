@@ -1,7 +1,12 @@
+"use client";
+
+import { useState } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
+import { ApiError } from "@/lib/api/client";
 import type { RadarOpportunitySummary } from "@/lib/api/radar-types";
+import { followSignal } from "@/lib/api/signals";
 import {
   decisionFreshnessLabelAr,
   FRESHNESS_LABELS_AR,
@@ -33,8 +38,32 @@ const RELIABILITY_COLOR: Record<string, string> = {
  * PersonalOpportunityCard's layout so both product surfaces read
  * consistently, but sourced from RadarOpportunity/Decision V2 data
  * instead of the personal-scan simplification. */
+const ACTIONABLE_CLASSIFICATIONS = new Set(["STRONG_BUY_CANDIDATE", "BUY_CANDIDATE"]);
+
+type FollowState = "idle" | "following" | "followed" | "error";
+
 export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardProps) {
   const entryMissed = isEntryMissed(o.entry_status);
+  const [followState, setFollowState] = useState<FollowState>("idle");
+  const canFollow = ACTIONABLE_CLASSIFICATIONS.has(o.classification);
+
+  async function handleFollow() {
+    setFollowState("following");
+    try {
+      await followSignal(o.decision_v2_snapshot_id);
+      setFollowState("followed");
+    } catch (err) {
+      // Already following this exact signal from an earlier visit --
+      // show the same success state rather than an error, since the
+      // real underlying fact (the user follows this signal) is true.
+      if (err instanceof ApiError && err.code === "signal_already_followed") {
+        setFollowState("followed");
+      } else {
+        setFollowState("error");
+      }
+    }
+  }
+
   return (
     <div
       className={`flex flex-col gap-bsr-3 rounded-bsr-lg border p-bsr-4 ${
@@ -182,6 +211,34 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
           </div>
         ) : null}
       </div>
+
+      {/* "متابعة هذه الإشارة" (product decision 2026-09-18): a one-tap
+       * commitment to this exact recommendation, so its real outcome
+       * (already tracked by DecisionV2Outcome, never recomputed here)
+       * can later be counted as one of the user's own calls on
+       * /performance instead of only ever seeing the algorithm's
+       * aggregate track record. */}
+      {canFollow ? (
+        <button
+          type="button"
+          onClick={handleFollow}
+          disabled={followState === "following" || followState === "followed"}
+          className={`rounded-bsr-md px-bsr-3 py-bsr-2 text-sm font-semibold transition-colors ${
+            followState === "followed"
+              ? "bg-bsr-market-up/15 text-bsr-market-up"
+              : "bg-bsr-gold-500 text-bsr-navy-950 hover:bg-bsr-gold-400 disabled:opacity-50"
+          }`}
+        >
+          {followState === "followed"
+            ? "✓ تتم متابعة هذه الإشارة"
+            : followState === "following"
+              ? "جارٍ المتابعة..."
+              : "متابعة هذه الإشارة"}
+        </button>
+      ) : null}
+      {followState === "error" ? (
+        <p className="text-xs text-bsr-market-down">تعذّرت متابعة هذه الإشارة. حاول مرة أخرى.</p>
+      ) : null}
 
       <div className="flex items-center justify-between text-sm">
         <span className="text-bsr-text-secondary">
