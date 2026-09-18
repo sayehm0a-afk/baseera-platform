@@ -1040,6 +1040,23 @@ class RadarOpportunitySummaryOut(BaseModel):
     recent_negative_outcome_return_pct: Optional[float] = None
 
 
+class RadarHistoryDayOut(BaseModel):
+    """GET /api/v1/radar/history?date=YYYY-MM-DD (product decision
+    2026-09-18): the real, already-persisted actionable BUY
+    opportunities Radar V2 emitted on one past Tadawul-local calendar
+    day -- read-only, no scan/scoring/ranking logic touched. `has_scan`
+    is true whenever ANY RadarOpportunity row (of any classification)
+    was emitted that day, distinguishing "a scan ran but found no real
+    buy candidates" from "no scan data exists for this day at all";
+    `opportunities` itself is always filtered to actionable
+    (STRONG_BUY_CANDIDATE/BUY_CANDIDATE) classifications only, matching
+    /radar's own buy-only display."""
+
+    date: str
+    has_scan: bool
+    opportunities: List[RadarOpportunitySummaryOut] = Field(default_factory=list)
+
+
 class RadarOpportunityDetailOut(RadarOpportunitySummaryOut):
     """GET .../radar-v2/opportunities/{id} -- adds Stage 1's full
     evidence breakdown, the linked decision's reasoning/risk-flags, and

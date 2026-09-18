@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import RadarPage from "./page";
+import { buildRadarDayOptions } from "@/components/radar/RadarDaySelector";
 import type { RadarHomeSummary, RadarOpportunitySummary } from "@/lib/api/radar-types";
 
 /** GET /api/v1/radar/summary is a read-only, zero-SAHMK-cost view over
@@ -10,9 +11,10 @@ import type { RadarHomeSummary, RadarOpportunitySummary } from "@/lib/api/radar-
 vi.mock("@/lib/api/radar", () => ({
   getRadarSummary: vi.fn(),
   triggerRadarScanNow: vi.fn(),
+  getRadarHistoryDay: vi.fn(),
 }));
 
-import { getRadarSummary, triggerRadarScanNow } from "@/lib/api/radar";
+import { getRadarHistoryDay, getRadarSummary, triggerRadarScanNow } from "@/lib/api/radar";
 
 function opportunity(
   symbol: string,
@@ -338,5 +340,89 @@ describe("RadarPage", () => {
     expect(
       await screen.findByText(/رصيد بيانات السوق الحي منخفض حاليًا، فتم تأجيل هذا الفحص لحماية الفحوصات المجدولة\./)
     ).toBeInTheDocument();
+  });
+
+  // --- day browsing (product decision 2026-09-18) -------------------------
+
+  describe("day browsing", () => {
+    // Real "now" (never frozen -- React Testing Library's async
+    // findBy* utilities rely on real timers). Days are looked up via
+    // the same buildRadarDayOptions() the page itself uses, so the
+    // test stays correct on any real calendar date it happens to run.
+    const days = buildRadarDayOptions();
+    const yesterday = days[days.length - 2];
+    const twoDaysAgo = days[days.length - 3];
+
+    function clickDayTab(dayOfMonth: string) {
+      fireEvent.click(screen.getByRole("tab", { name: new RegExp(`${dayOfMonth}$`) }));
+    }
+
+    beforeEach(() => {
+      vi.mocked(getRadarSummary).mockReset();
+      vi.mocked(getRadarHistoryDay).mockReset();
+    });
+
+    it("never calls the history endpoint on the default (today) view", async () => {
+      vi.mocked(getRadarSummary).mockResolvedValue(summary());
+
+      render(<RadarPage />);
+
+      expect(await screen.findByText("لا توجد فرص مرصودة حاليًا")).toBeInTheDocument();
+      expect(getRadarHistoryDay).not.toHaveBeenCalled();
+    });
+
+    it("fetches and shows a real past day's opportunities when its tab is selected", async () => {
+      vi.mocked(getRadarSummary).mockResolvedValue(summary());
+      vi.mocked(getRadarHistoryDay).mockResolvedValue({
+        date: yesterday.date,
+        has_scan: true,
+        opportunities: [opportunity("2222")],
+      });
+
+      render(<RadarPage />);
+      await screen.findByText("لا توجد فرص مرصودة حاليًا");
+
+      clickDayTab(yesterday.dayOfMonth);
+
+      expect(getRadarHistoryDay).toHaveBeenCalledWith(yesterday.date);
+      expect(await screen.findByText("2222")).toBeInTheDocument();
+    });
+
+    it("distinguishes a real 'no scan that day' from 'scan ran, zero buy candidates'", async () => {
+      vi.mocked(getRadarSummary).mockResolvedValue(summary());
+      vi.mocked(getRadarHistoryDay).mockResolvedValue({
+        date: twoDaysAgo.date,
+        has_scan: false,
+        opportunities: [],
+      });
+
+      render(<RadarPage />);
+      await screen.findByText("لا توجد فرص مرصودة حاليًا");
+
+      clickDayTab(twoDaysAgo.dayOfMonth);
+
+      expect(await screen.findByText("لا توجد بيانات لهذا اليوم")).toBeInTheDocument();
+    });
+
+    it("returns to the live today view when اليوم is selected again", async () => {
+      vi.mocked(getRadarSummary).mockResolvedValue(
+        summary({ live_opportunity_count: 1, top_opportunities: [opportunity("1120")] })
+      );
+      vi.mocked(getRadarHistoryDay).mockResolvedValue({
+        date: yesterday.date,
+        has_scan: false,
+        opportunities: [],
+      });
+
+      render(<RadarPage />);
+      await screen.findByText("1120");
+
+      clickDayTab(yesterday.dayOfMonth);
+      await screen.findByText("لا توجد بيانات لهذا اليوم");
+
+      fireEvent.click(screen.getByRole("tab", { name: /اليوم/ }));
+
+      expect(await screen.findByText("1120")).toBeInTheDocument();
+    });
   });
 });

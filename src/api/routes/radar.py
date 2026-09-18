@@ -49,7 +49,7 @@ new caller of an already-tested pipeline.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -63,7 +63,11 @@ from src.api.routes.admin.market_intelligence import (
     radar_summary_out,
     run_one_bounded_background_cycle,
 )
-from src.api.schemas.market_intelligence import RadarOpportunityDetailOut, RadarOpportunitySummaryOut
+from src.api.schemas.market_intelligence import (
+    RadarHistoryDayOut,
+    RadarOpportunityDetailOut,
+    RadarOpportunitySummaryOut,
+)
 from src.api.schemas.radar import RadarHomeSummaryOut, RadarScanNowOut
 from src.auth.rbac import require_active_subscription
 from src.auth.token_store import get_redis_client
@@ -71,8 +75,10 @@ from src.core.db.database import get_db
 from src.domain.models import DecisionV2Outcome, RadarOpportunity, User
 from src.market_data.sahmk.operation_scope import CONSUMER_SCAN_NOW
 from src.market_intelligence.config import get_radar_scan_now_cooldown_seconds, get_radar_stage2_candidate_cap
+from src.ai_evolution.decision_v2_outcome_evaluation import is_actionable_buy_decision
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status, market_status_label_ar
 from src.market_intelligence.radar_v2 import list_live_opportunities, run_radar_v2_cycle
+from src.market_intelligence.trading_calendar import TADAWUL_TIMEZONE
 from src.market_intelligence.recent_symbol_outcome import compute_recent_negative_outcome_by_symbol
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.sector_reliability import compute_sector_reliability_by_arabic_label
@@ -233,6 +239,55 @@ def get_radar_opportunity(
     sector_reliability_by_ar = compute_sector_reliability_by_arabic_label(session)
     recent_negative_outcome_by_symbol = compute_recent_negative_outcome_by_symbol(session, [opportunity.symbol])
     return radar_detail_out(opportunity, outcome, sector_reliability_by_ar, recent_negative_outcome_by_symbol)
+
+
+@router.get("/history", response_model=RadarHistoryDayOut)
+@limiter.limit("30/minute")
+def get_radar_history_day(
+    request: Request,
+    date: str = Query(..., description="ISO calendar date (YYYY-MM-DD), Tadawul-local (UTC+3)."),
+    session: Session = Depends(get_db),
+    _current_user: User = Depends(require_active_subscription()),
+) -> RadarHistoryDayOut:
+    """Product decision 2026-09-18: lets a subscriber browse a past
+    day's real Smart Radar picks, not only today's -- purely a read
+    over already-persisted `RadarOpportunity` rows, no scan/scoring/
+    ranking logic touched. `opportunities` is always filtered to
+    actionable BUY classifications, matching /radar's own buy-only
+    display; `has_scan` distinguishes a real "zero buy candidates that
+    day" from "no data for this day at all" (see RadarHistoryDayOut's
+    own docstring)."""
+    try:
+        day = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="التاريخ غير صالح -- استخدم الصيغة YYYY-MM-DD.") from exc
+
+    day_start = datetime.combine(day, datetime.min.time(), tzinfo=TADAWUL_TIMEZONE)
+    day_end = day_start + timedelta(days=1)
+
+    day_rows = (
+        session.query(RadarOpportunity)
+        .filter(RadarOpportunity.emitted_at >= day_start, RadarOpportunity.emitted_at < day_end)
+        .all()
+    )
+    has_scan = len(day_rows) > 0
+    actionable = sorted(
+        (o for o in day_rows if is_actionable_buy_decision(o.classification)),
+        key=lambda o: (o.stage1_rank is None, o.stage1_rank),
+    )
+
+    sector_reliability_by_ar = compute_sector_reliability_by_arabic_label(session) if actionable else {}
+    recent_negative_outcome_by_symbol = (
+        compute_recent_negative_outcome_by_symbol(session, (o.symbol for o in actionable)) if actionable else {}
+    )
+
+    return RadarHistoryDayOut(
+        date=date,
+        has_scan=has_scan,
+        opportunities=[
+            radar_summary_out(o, sector_reliability_by_ar, recent_negative_outcome_by_symbol) for o in actionable
+        ],
+    )
 
 
 @router.post("/scan-now", response_model=RadarScanNowOut)

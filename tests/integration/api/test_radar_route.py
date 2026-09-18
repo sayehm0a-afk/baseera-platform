@@ -803,3 +803,91 @@ def test_consumer_routes_never_call_the_market_data_provider(
     assert client.get(_SUMMARY_ROUTE).status_code == 200
     assert client.get(_OPPORTUNITIES_ROUTE).status_code == 200
     assert client.get(_detail_route(opportunity.id)).status_code == 200
+
+
+# --- GET /history (product decision 2026-09-18) ----------------------------
+
+
+def _history_route(date: str) -> str:
+    return f"/api/v1/radar/history?date={date}"
+
+
+def test_history_requires_authentication(client):
+    response = client.get(_history_route("2026-09-18"))
+    assert response.status_code == 401
+
+
+def test_history_requires_active_subscription(client, customer):
+    _as(customer)
+    response = client.get(_history_route("2026-09-18"))
+    assert response.status_code == 402
+
+
+def test_history_rejects_a_malformed_date(client, authenticated_as_staff):
+    response = client.get(_history_route("18-09-2026"))
+    assert response.status_code == 422
+
+
+def test_history_is_honest_about_a_day_with_no_scan_data_at_all(client, authenticated_as_staff):
+    response = client.get(_history_route("2026-01-01"))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["date"] == "2026-01-01"
+    assert body["has_scan"] is False
+    assert body["opportunities"] == []
+
+
+def test_history_distinguishes_zero_buy_candidates_from_no_scan_at_all(client, db_session, authenticated_as_staff):
+    """A day where Radar V2 ran and emitted only non-actionable
+    (e.g. WATCH) candidates must read as has_scan=True with an empty
+    opportunities list -- never conflated with a day with no data."""
+    stock = _make_stock(db_session, "2222")
+    snapshot = _make_snapshot(db_session, stock, decision="WATCH", decision_label_ar="مراقبة")
+    day = datetime(2026, 6, 15, 10, 0, tzinfo=timezone(timedelta(hours=3)))
+    _make_opportunity(db_session, stock, snapshot, emitted_at=day)
+
+    response = client.get(_history_route("2026-06-15"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_scan"] is True
+    assert body["opportunities"] == []
+
+
+def test_history_returns_only_actionable_opportunities_emitted_that_day(client, db_session, authenticated_as_staff):
+    stock = _make_stock(db_session, "2222")
+    snapshot = _make_snapshot(db_session, stock, decision="STRONG_BUY_CANDIDATE", decision_label_ar="شراء قوي")
+    target_day = datetime(2026, 6, 15, 10, 0, tzinfo=timezone(timedelta(hours=3)))
+    _make_opportunity(db_session, stock, snapshot, emitted_at=target_day)
+
+    other_stock = _make_stock(db_session, "1120")
+    other_snapshot = _make_snapshot(db_session, other_stock, decision="BUY_CANDIDATE", decision_label_ar="شراء")
+    other_day = datetime(2026, 6, 16, 10, 0, tzinfo=timezone(timedelta(hours=3)))
+    _make_opportunity(db_session, other_stock, other_snapshot, emitted_at=other_day)
+
+    response = client.get(_history_route("2026-06-15"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_scan"] is True
+    symbols = [o["symbol"] for o in body["opportunities"]]
+    assert symbols == ["2222"]
+
+
+def test_history_respects_tadawul_local_day_boundaries(client, db_session, authenticated_as_staff):
+    """A bar emitted at 23:30 Tadawul-local time on 2026-06-15 is still
+    2026-06-15 in Tadawul's own UTC+3 calendar, even though its UTC
+    timestamp already reads as 2026-06-15T20:30Z -- never misfiled into
+    the next day by comparing against naive UTC-midnight boundaries."""
+    stock = _make_stock(db_session, "2222")
+    snapshot = _make_snapshot(db_session, stock, decision="BUY_CANDIDATE", decision_label_ar="شراء")
+    late_in_day = datetime(2026, 6, 15, 23, 30, tzinfo=timezone(timedelta(hours=3)))
+    _make_opportunity(db_session, stock, snapshot, emitted_at=late_in_day)
+
+    response = client.get(_history_route("2026-06-15"))
+
+    assert response.status_code == 200
+    assert len(response.json()["opportunities"]) == 1
+
+    next_day_response = client.get(_history_route("2026-06-16"))
+    assert next_day_response.json()["opportunities"] == []

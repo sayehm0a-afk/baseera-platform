@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import type {
+  RadarHistoryDay,
   RadarHomeSummary,
   RadarOpportunityDetail,
   RadarOpportunitySummary,
@@ -43,6 +44,13 @@ export async function getRadarOpportunityBySymbol(
 ): Promise<RadarOpportunitySummary | null> {
   const opportunities = await getRadarOpportunities({ limit: 200 });
   return opportunities.find((o) => o.symbol === symbol) ?? null;
+}
+
+/** Product decision 2026-09-18: browse a past day's real Smart Radar
+ * picks. `date` must be "YYYY-MM-DD" (Tadawul-local). Read-only, zero
+ * SAHMK cost -- see src/api/routes/radar.py's own docstring. */
+export function getRadarHistoryDay(date: string): Promise<RadarHistoryDay> {
+  return apiFetch<RadarHistoryDay>(`/api/v1/radar/history?date=${encodeURIComponent(date)}`);
 }
 
 /** On-demand consumer scan mandate (2026-09-11): claims one turn of
