@@ -29,6 +29,11 @@ function changeLabel(item: StockDirectoryItem): { text: string; colorClass: stri
 export function StockDirectoryRow({ item }: { item: StockDirectoryItem }) {
   const change = changeLabel(item);
   const hasDecision = item.latest_decision != null && item.latest_decision_label_ar != null;
+  // Every existing row is TADAWUL/SAR -- this stays false for all of
+  // them, so their rendering is byte-identical to before this field
+  // existed. Only a real non-Tadawul row (Market.US) renders anything
+  // extra here.
+  const isNonTadawul = item.market !== "TADAWUL";
   return (
     <Link
       href={`/stocks/${encodeURIComponent(item.symbol)}`}
@@ -39,8 +44,18 @@ export function StockDirectoryRow({ item }: { item: StockDirectoryItem }) {
           {item.name_ar ?? item.name_en}
         </span>
         <span className="bsr-numeric text-xs text-bsr-text-secondary">
-          {item.symbol}
+          {/* A Latin ticker (e.g. "AAPL") is a strong-LTR run embedded in
+           * this RTL row -- <bdi> isolates it so it can never visually
+           * reorder against the Arabic sector text that follows it. A
+           * 4-digit Tadawul code has no directionality of its own, so
+           * this is a no-op for every existing row. */}
+          <bdi dir="ltr">{item.symbol}</bdi>
           {item.sector_ar ? ` · ${item.sector_ar}` : ""}
+          {isNonTadawul ? (
+            <span className="ms-1 rounded-bsr-sm border border-bsr-border-subtle px-1 text-[10px] text-bsr-text-secondary">
+              {item.currency}
+            </span>
+          ) : null}
         </span>
         {/* 2026-09-18: compact classification hint right in the list
          * row -- real data only (see StockDirectoryItemOut's own
@@ -51,9 +66,9 @@ export function StockDirectoryRow({ item }: { item: StockDirectoryItem }) {
         ) : null}
       </div>
       <div className="flex shrink-0 flex-col items-end gap-0.5">
-        <span className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
+        <bdi dir="ltr" className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
           {priceLabel(item.current_price)}
-        </span>
+        </bdi>
         <span className={`bsr-numeric text-xs font-semibold ${change.colorClass}`}>{change.text}</span>
         {hasDecision && item.latest_target_1 != null && ACTIONABLE_CLASSIFICATIONS.has(item.latest_decision!) ? (
           <span className="bsr-numeric text-xs text-bsr-market-up">هدف {priceLabel(item.latest_target_1)}</span>

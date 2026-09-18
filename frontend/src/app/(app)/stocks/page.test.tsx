@@ -30,6 +30,8 @@ function item(overrides: Partial<StockDirectoryItem> = {}): StockDirectoryItem {
     latest_decision_label_ar: null,
     latest_confidence_score: null,
     latest_target_1: null,
+    market: "TADAWUL",
+    currency: "SAR",
     ...overrides,
   };
 }
@@ -70,7 +72,13 @@ describe("StocksDirectoryPage", () => {
     await flushDebounce();
 
     expect(screen.getByText("أرامكو السعودية")).toBeInTheDocument();
-    expect(screen.getByText("2222 · الطاقة")).toBeInTheDocument();
+    // The symbol is wrapped in a <bdi dir="ltr"> for correct bidi
+    // rendering (see StockDirectoryRow), splitting it from the sector
+    // text across two DOM nodes -- match on the row's full text content
+    // instead of a single exact string.
+    expect(
+      screen.getByText((_, element) => element?.tagName === "SPAN" && element.textContent === "2222 · الطاقة")
+    ).toBeInTheDocument();
     expect(getStockDirectory).toHaveBeenCalledWith({ q: undefined, limit: 30, offset: 0 });
   });
 

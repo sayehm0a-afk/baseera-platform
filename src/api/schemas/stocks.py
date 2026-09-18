@@ -24,6 +24,7 @@ class StockOut(BaseModel):
     sector: Optional[str] = None
     sector_ar: Optional[str] = None
     currency: str
+    market: str
     is_active: bool
 
     @model_validator(mode="after")
@@ -77,6 +78,15 @@ class StockDirectoryItemOut(BaseModel):
     change_pct: Optional[float] = None
     price_as_of: Optional[datetime] = None
     freshness_label_ar: str
+
+    # 2026-09-18 (multi-market expansion Phase 4): which market this
+    # stock trades on and its trading currency -- both default to
+    # Tadawul/SAR at the ORM level (src.domain.models.stock.Stock), so
+    # every existing row keeps returning exactly what it does today.
+    # Lets the frontend show a currency/market indicator only for a
+    # non-Tadawul row, without a second endpoint or a schema break.
+    market: str = "TADAWUL"
+    currency: str = "SAR"
 
     # 2026-09-18: the most recent real DecisionV2Snapshot for this
     # symbol, if one has ever been computed -- lets the directory list

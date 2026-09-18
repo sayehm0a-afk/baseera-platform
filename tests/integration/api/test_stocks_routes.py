@@ -144,6 +144,8 @@ def test_get_stock_returns_registered_stock(client, db_session):
     assert body["symbol"] == "2222"
     assert body["name_en"] == "Saudi Aramco"
     assert body["sector"] == "Energy"
+    assert body["market"] == "TADAWUL"
+    assert body["currency"] == "SAR"
 
 
 def test_get_stock_404_for_unknown_symbol(client, db_session):
@@ -697,6 +699,26 @@ def test_directory_has_no_latest_decision_fields_when_none_computed_yet(client, 
     row = response.json()["results"][0]
     assert row["latest_decision"] is None
     assert row["latest_decision_label_ar"] is None
+
+
+def test_directory_exposes_market_and_currency_defaulting_to_tadawul_sar(client, db_session):
+    _make_stock(db_session)
+    response = client.get("/api/v1/stocks/directory")
+    row = response.json()["results"][0]
+    assert row["market"] == "TADAWUL"
+    assert row["currency"] == "SAR"
+
+
+def test_directory_exposes_a_us_stocks_real_market_and_currency(client, db_session):
+    from src.domain.models.stock import Market
+
+    db_session.add(Stock(symbol="AAPL", name_en="Apple Inc.", currency="USD", market=Market.US))
+    db_session.commit()
+    response = client.get("/api/v1/stocks/directory")
+    row = response.json()["results"][0]
+    assert row["symbol"] == "AAPL"
+    assert row["market"] == "US"
+    assert row["currency"] == "USD"
     assert row["latest_confidence_score"] is None
     assert row["latest_target_1"] is None
 

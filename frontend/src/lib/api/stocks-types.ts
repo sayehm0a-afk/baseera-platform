@@ -1,5 +1,7 @@
 /** Mirrors src/api/schemas/stocks.py. */
 
+export type Market = "TADAWUL" | "US";
+
 export interface Stock {
   symbol: string;
   name_en: string;
@@ -7,6 +9,7 @@ export interface Stock {
   sector: string | null;
   sector_ar: string | null;
   currency: string;
+  market: Market;
   is_active: boolean;
 }
 
@@ -430,6 +433,12 @@ export interface StockDirectoryItem {
   latest_decision_label_ar: string | null;
   latest_confidence_score: number | null;
   latest_target_1: number | null;
+
+  // 2026-09-18 (multi-market expansion Phase 4): default to TADAWUL/SAR
+  // at the API layer for every row that predates this field, so an
+  // existing Tadawul row's rendering is untouched by adding this.
+  market: Market;
+  currency: string;
 }
 
 export interface StockDirectory {

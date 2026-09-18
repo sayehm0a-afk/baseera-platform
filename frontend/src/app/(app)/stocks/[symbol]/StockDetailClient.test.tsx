@@ -189,6 +189,7 @@ describe("StockDetailClient", () => {
       sector: "Commercial & Professional Svc",
       sector_ar: "الخدمات التجارية والمهنية",
       currency: "SAR",
+      market: "TADAWUL",
       is_active: true,
     });
     vi.mocked(getQuote).mockImplementation(providerUnavailable);
@@ -225,6 +226,7 @@ describe("StockDetailClient", () => {
       sector: null,
       sector_ar: null,
       currency: "SAR",
+      market: "TADAWUL",
       is_active: true,
     });
     vi.mocked(getQuote).mockImplementation(providerUnavailable);
@@ -252,6 +254,7 @@ describe("StockDetailClient", () => {
       sector: "Energy",
       sector_ar: "الطاقة",
       currency: "SAR",
+      market: "TADAWUL",
       is_active: true,
     });
     vi.mocked(getQuote).mockImplementation(providerUnavailable);
@@ -295,7 +298,7 @@ describe("StockDetailClient", () => {
 
     vi.mocked(getStock).mockResolvedValue({
       symbol: "2222", name_en: "Saudi Aramco", name_ar: "أرامكو السعودية",
-      sector: "Energy", sector_ar: "الطاقة", currency: "SAR", is_active: true,
+      sector: "Energy", sector_ar: "الطاقة", currency: "SAR", market: "TADAWUL", is_active: true,
     });
     vi.mocked(getQuote).mockImplementation(providerUnavailable);
     vi.mocked(getDecisionV2).mockResolvedValue(buildDecisionV2());
