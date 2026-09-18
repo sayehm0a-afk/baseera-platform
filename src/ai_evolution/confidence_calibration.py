@@ -42,9 +42,11 @@ from src.domain.models import (
     DecisionV2Outcome,
     DecisionV2OutcomeStatus,
     DecisionV2Snapshot,
+    Market,
     RecommendationOutcome,
     RecommendationOutcomeStatus,
     RecommendationSnapshot,
+    Stock,
 )
 
 # Below this many labeled (confidence, success/failure) pairs, a fitted
@@ -149,6 +151,7 @@ def _load_training_pairs_decision_v2(
     session: Session,
     training_period_start: date,
     training_period_end: date,
+    market: Market = Market.TADAWUL,
 ) -> List[Tuple[float, int]]:
     """Decision V2 / Radar V2's own ledger (`decision_v2_snapshots` +
     `decision_v2_outcomes`) -- distinct from `_load_training_pairs`
@@ -157,11 +160,20 @@ def _load_training_pairs_decision_v2(
     evaluated_at` (when the outcome actually resolved, not when the
     snapshot was issued -- the same "judge it once real forward data
     exists" timing `_load_training_pairs` uses via `evaluated_at`
-    above)."""
+    above).
+
+    2026-09-18 (multi-market expansion Phase 5): also joins `Stock` to
+    filter by `market`, so a US-cohort training pass can never pull in
+    a Tadawul decision's outcome pair, or vice versa -- `market`
+    defaults to `Market.TADAWUL`, preserving every pre-existing caller's
+    exact behavior (every real decision in this ledger today is
+    Tadawul-only)."""
     rows = (
         session.query(DecisionV2Snapshot.confidence_score, DecisionV2Outcome.status)
         .join(DecisionV2Outcome, DecisionV2Outcome.decision_v2_snapshot_id == DecisionV2Snapshot.id)
+        .join(Stock, Stock.id == DecisionV2Snapshot.stock_id)
         .filter(
+            Stock.market == market,
             DecisionV2Outcome.status.in_([*_DECISION_V2_SUCCESS_STATUSES, _DECISION_V2_FAILURE_STATUS]),
             DecisionV2Outcome.evaluated_at >= training_period_start,
             DecisionV2Outcome.evaluated_at <= training_period_end,
@@ -224,7 +236,10 @@ def apply_calibration(model_row: ConfidenceCalibrationModel, raw_confidence: flo
 
 
 def get_effective_confidence(
-    session: Session, raw_confidence: float, source: str = TRAINING_SOURCE_LEGACY_V1
+    session: Session,
+    raw_confidence: float,
+    source: str = TRAINING_SOURCE_LEGACY_V1,
+    market: Market = Market.TADAWUL,
 ) -> Tuple[Optional[float], Optional[str]]:
     """The one real integration point between this engine and the live
     recommendation pipeline: looks up whichever ConfidenceCalibrationModel
@@ -246,15 +261,24 @@ def get_effective_confidence(
     row is persisted (`src.api.routes.stocks`'s `/decision-v2` route
     and `MarketIntelligenceRepository.save_symbol_records`'s Decision
     V2 block) with `source=TRAINING_SOURCE_DECISION_V2` (RADAR-C).
+
+    2026-09-18 (multi-market expansion Phase 5): `market` (default
+    `Market.TADAWUL`) scopes which ACTIVE model is looked up, so a
+    decision on a US stock is never calibrated by a Tadawul-trained
+    model, or vice versa -- both write call sites already have the
+    symbol's real `Stock.market` in scope and pass it through.
     """
-    active_model = ConfidenceCalibrationEngine().get_active_model(session, source=source)
+    active_model = ConfidenceCalibrationEngine().get_active_model(session, source=source, market=market)
     if active_model is None:
         return None, None
     return apply_calibration(active_model, raw_confidence), active_model.version
 
 
 def compute_calibrated_confidences(
-    session: Session, raw_confidences: Dict[str, float], source: str = TRAINING_SOURCE_LEGACY_V1
+    session: Session,
+    raw_confidences: Dict[str, float],
+    source: str = TRAINING_SOURCE_LEGACY_V1,
+    market: Market = Market.TADAWUL,
 ) -> Dict[str, float]:
     """The batch counterpart to `get_effective_confidence()`, for
     read-time callers that evaluate many symbols per request
@@ -273,8 +297,16 @@ def compute_calibrated_confidences(
     `get_effective_confidence`'s own `(None, None)` return represents
     for the single-symbol write path; a caller checking `symbol in
     result` gets the correct answer either way.
+
+    2026-09-18 (multi-market expansion Phase 5): `market` (default
+    `Market.TADAWUL`) scopes the ACTIVE model the same way
+    `get_effective_confidence` does -- every real caller today
+    (RankingEngine/WatchlistEngine, `source=TRAINING_SOURCE_LEGACY_V1`)
+    evaluates a Tadawul-only symbol universe, so the default preserves
+    exact prior behavior; a future mixed-market ranking pass would need
+    to call this once per market rather than pass a mixed symbol dict.
     """
-    active_model = ConfidenceCalibrationEngine().get_active_model(session, source=source)
+    active_model = ConfidenceCalibrationEngine().get_active_model(session, source=source, market=market)
     if active_model is None:
         return {}
     return {
@@ -286,11 +318,15 @@ def compute_calibrated_confidences(
 
 class ConfidenceCalibrationEngine:
     def get_active_model(
-        self, session: Session, source: str = TRAINING_SOURCE_LEGACY_V1
+        self, session: Session, source: str = TRAINING_SOURCE_LEGACY_V1, market: Market = Market.TADAWUL
     ) -> Optional[ConfidenceCalibrationModel]:
+        # 2026-09-18 (multi-market expansion Phase 5): "at most one
+        # ACTIVE row" is enforced per (training_source, market) pair,
+        # not per training_source alone -- see ConfidenceCalibrationModel's
+        # own docstring for why.
         return (
             session.query(ConfidenceCalibrationModel)
-            .filter_by(status=ConfidenceCalibrationStatus.ACTIVE, training_source=source)
+            .filter_by(status=ConfidenceCalibrationStatus.ACTIVE, training_source=source, market=market)
             .one_or_none()
         )
 
@@ -301,6 +337,7 @@ class ConfidenceCalibrationEngine:
         training_period_end: date,
         reference_horizon_days: int = DEFAULT_REFERENCE_HORIZON_DAYS,
         source: str = TRAINING_SOURCE_LEGACY_V1,
+        market: Market = Market.TADAWUL,
         min_sample_size: int = DEFAULT_MIN_SAMPLE_SIZE,
         isotonic_threshold: int = ISOTONIC_SAMPLE_SIZE_THRESHOLD,
         notes: Optional[str] = None,
@@ -311,8 +348,14 @@ class ConfidenceCalibrationEngine:
             # docstring) -- reference_horizon_days is a legacy_v1-only
             # parameter, silently unused here rather than threaded
             # through a loader that has nothing to filter on.
-            pairs = _load_training_pairs_decision_v2(session, training_period_start, training_period_end)
+            pairs = _load_training_pairs_decision_v2(session, training_period_start, training_period_end, market)
         else:
+            # legacy_v1's ledger (RecommendationSnapshot/
+            # RecommendationOutcome) has no per-row symbol->Stock join
+            # in _load_training_pairs today, and every real legacy_v1
+            # decision is Tadawul-only in practice -- `market` is not
+            # threaded into this branch (see this module's own Phase 5
+            # notes); the row below still records it for consistency.
             pairs = _load_training_pairs(
                 session, training_period_start, training_period_end, reference_horizon_days
             )
@@ -333,6 +376,7 @@ class ConfidenceCalibrationEngine:
             status=ConfidenceCalibrationStatus.DRAFT,
             method=method,
             training_source=source,
+            market=market,
             model_params=model_params,
             training_period_start=training_period_start,
             training_period_end=training_period_end,
@@ -376,7 +420,11 @@ class ConfidenceCalibrationEngine:
         if row.status != ConfidenceCalibrationStatus.VALIDATED:
             raise ValueError(f"Confidence calibration {version!r} must be VALIDATED to activate (currently {row.status}).")
 
-        current_active = self.get_active_model(session, source=row.training_source)
+        # 2026-09-18 (multi-market expansion Phase 5): supersede scoped
+        # by (training_source, market) -- activating a newly-trained US
+        # model must never supersede/deactivate the still-current
+        # Tadawul ACTIVE row for the same source, or vice versa.
+        current_active = self.get_active_model(session, source=row.training_source, market=row.market)
         if current_active is not None:
             current_active.status = ConfidenceCalibrationStatus.SUPERSEDED
             current_active.deactivated_at = datetime.now(timezone.utc)
@@ -387,9 +435,13 @@ class ConfidenceCalibrationEngine:
         return row
 
     def rollback(
-        self, session: Session, to_version: Optional[str] = None, source: str = TRAINING_SOURCE_LEGACY_V1
+        self,
+        session: Session,
+        to_version: Optional[str] = None,
+        source: str = TRAINING_SOURCE_LEGACY_V1,
+        market: Market = Market.TADAWUL,
     ) -> Optional[ConfidenceCalibrationModel]:
-        current_active = self.get_active_model(session, source=source)
+        current_active = self.get_active_model(session, source=source, market=market)
         if current_active is not None:
             current_active.status = ConfidenceCalibrationStatus.ROLLED_BACK
             current_active.deactivated_at = datetime.now(timezone.utc)
