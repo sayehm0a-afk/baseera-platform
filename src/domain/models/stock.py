@@ -1,16 +1,37 @@
 """Stock reference-data model."""
 
+import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Enum, Integer, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from src.core.db.database import Base
 
 
+class Market(str, enum.Enum):
+    """Which exchange/market a Stock belongs to -- product decision
+    2026-09-18 (multi-market expansion, Phase 1): Basirah's real,
+    already-shipped analysis engine (Decision Engine V2, technical/
+    fundamental scoring) has no Saudi-specific assumptions baked into
+    its logic -- confirmed by direct code audit before this change --
+    so a second market is a data/validation-layer addition, not an
+    analysis-engine rewrite. TADAWUL is the only market with real data
+    flowing through the app today; US support is added incrementally
+    behind this column with zero behavior change to the existing
+    Tadawul flow until a real US data provider is wired in (see
+    src.market_data.providers -- follows the exact same "inert until a
+    real API key is configured" convention SAHMK_API_KEY already uses).
+    """
+
+    TADAWUL = "TADAWUL"
+    US = "US"
+
+
 class Stock(Base):
-    """A Tadawul-listed company.
+    """A listed company on one of Basirah's supported markets (see
+    `Market`).
 
     Reference data only -- no price history (see PriceBar) and no
     fundamentals (a later milestone's concern per the approved M2
@@ -21,6 +42,11 @@ class Stock(Base):
 
     id = Column(Integer, primary_key=True)
     symbol = Column(String(16), nullable=False, unique=True, index=True)
+    # Real values only: TADAWUL for every stock ingested before this
+    # column existed and every stock ingested via SAHMK today (server
+    # default preserves that for any insert that bypasses the ORM);
+    # US only once a real US data provider actually ingests one.
+    market = Column(Enum(Market), nullable=False, default=Market.TADAWUL, server_default="TADAWUL", index=True)
     name_en = Column(String(255), nullable=False)
     name_ar = Column(String(255), nullable=True)
     sector = Column(String(128), nullable=True)
