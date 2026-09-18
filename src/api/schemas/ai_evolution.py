@@ -310,12 +310,17 @@ class ConfidenceCalibrationCreateRequest(BaseModel):
     outcome ledger to train on ('legacy_v1', the default, or
     'decision_v2'); `reference_horizon_days` is silently unused for
     'decision_v2' (that ledger has no fixed-horizon concept -- see
+    propose()'s own comment). `market` ('TADAWUL', the default, or
+    'US' -- multi-market expansion Phase 5) scopes which market's
+    decisions this model trains on and applies to; only meaningful for
+    'decision_v2' (legacy_v1's ledger is Tadawul-only in practice, see
     propose()'s own comment)."""
 
     training_period_start: date
     training_period_end: date
     reference_horizon_days: Optional[int] = None
     source: Optional[str] = None
+    market: Optional[str] = None
     min_sample_size: Optional[int] = None
     notes: Optional[str] = None
 
@@ -333,6 +338,7 @@ class ConfidenceCalibrationModelOut(BaseModel):
     status: str
     method: str
     training_source: str
+    market: str = "TADAWUL"
     model_params: Dict[str, Any]
     training_period_start: Optional[date] = None
     training_period_end: Optional[date] = None

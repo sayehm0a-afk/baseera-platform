@@ -25,6 +25,7 @@ from sqlalchemy import JSON, Column, Date, DateTime, Enum, Integer, Numeric, Str
 from sqlalchemy.sql import func
 
 from src.core.db.database import Base
+from src.domain.models.stock import Market
 
 
 class ConfidenceCalibrationStatus(str, enum.Enum):
@@ -56,6 +57,16 @@ class ConfidenceCalibrationModel(Base):
     # "At most one ACTIVE row" is enforced per source, not globally --
     # the two pipelines calibrate independently.
     training_source = Column(String(32), nullable=False, default="legacy_v1", server_default="legacy_v1")
+
+    # 2026-09-18 (multi-market expansion Phase 5): which market this
+    # model was trained on and applies to -- "at most one ACTIVE row"
+    # is enforced per (training_source, market) pair, not per
+    # training_source alone, so a data-rich US cohort can never dilute
+    # or distort the still-immature Saudi cohort's calibration, or vice
+    # versa, once real US decisions exist. Defaults to TADAWUL for
+    # every row created before this column existed -- the same
+    # backward-compatible default `Stock.market` itself uses.
+    market = Column(Enum(Market), nullable=False, default=Market.TADAWUL, server_default="TADAWUL", index=True)
 
     # Platt: {"coef": float, "intercept": float} (a fitted logistic
     # regression, applied as sigmoid(coef * confidence + intercept)).

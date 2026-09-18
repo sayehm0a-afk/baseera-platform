@@ -28,6 +28,7 @@ from src.domain.models import (
     DecisionV2Outcome,
     DecisionV2OutcomeStatus,
     DecisionV2Snapshot,
+    Market,
     Stock,
 )
 
@@ -46,6 +47,14 @@ def session():
 @pytest.fixture
 def stock(session):
     row = Stock(symbol="2222", name_en="Stock 2222", sector="Energy")
+    session.add(row)
+    session.commit()
+    return row
+
+
+@pytest.fixture
+def us_stock(session):
+    row = Stock(symbol="AAPL", name_en="Apple Inc.", currency="USD", market=Market.US)
     session.add(row)
     session.commit()
     return row
@@ -154,3 +163,87 @@ class TestDecisionV2TrainingSource:
         legacy_probability, legacy_version = get_effective_confidence(session, 85.0)
         assert legacy_probability is None
         assert legacy_version is None
+
+
+class TestMarketScopedDecisionV2Calibration:
+    """Multi-market expansion Phase 5: a data-rich US cohort must never
+    dilute or distort the still-immature Tadawul cohort's calibration,
+    or vice versa -- proven here with real DB fixtures per market,
+    mirroring TestDecisionV2TrainingSource's own per-source isolation
+    tests exactly, one dimension over."""
+
+    def test_propose_with_us_market_only_reads_us_market_outcomes(self, session, stock, us_stock):
+        _seed_decision_v2_overconfident_dataset(session, stock, n=60)
+        _seed_decision_v2_overconfident_dataset(session, us_stock, n=45)
+
+        engine = ConfidenceCalibrationEngine()
+        row = engine.propose(
+            session, date(2026, 1, 1), date(2026, 12, 31),
+            min_sample_size=30, source=TRAINING_SOURCE_DECISION_V2, market=Market.US,
+        )
+
+        assert row.market == Market.US
+        assert row.training_sample_size == 45  # only the US stock's outcomes, never the Tadawul stock's 60
+
+    def test_default_market_is_tadawul_and_ignores_us_only_data(self, session, us_stock):
+        # Seeding only US-market outcomes must not satisfy a
+        # default-market (TADAWUL) propose() call.
+        _seed_decision_v2_overconfident_dataset(session, us_stock, n=60)
+
+        engine = ConfidenceCalibrationEngine()
+        with pytest.raises(ValueError, match="Insufficient outcome history"):
+            engine.propose(
+                session, date(2026, 1, 1), date(2026, 12, 31),
+                min_sample_size=30, source=TRAINING_SOURCE_DECISION_V2,
+            )
+
+    def test_active_models_are_scoped_independently_per_market(self, session, stock, us_stock):
+        _seed_decision_v2_overconfident_dataset(session, stock, n=60)
+        _seed_decision_v2_overconfident_dataset(session, us_stock, n=45)
+        engine = ConfidenceCalibrationEngine()
+
+        tadawul_row = engine.propose(
+            session, date(2026, 1, 1), date(2026, 12, 31),
+            min_sample_size=30, source=TRAINING_SOURCE_DECISION_V2,
+        )
+        engine.test(session, tadawul_row.version)
+        engine.activate(session, tadawul_row.version)
+
+        us_row = engine.propose(
+            session, date(2026, 1, 1), date(2026, 12, 31),
+            min_sample_size=30, source=TRAINING_SOURCE_DECISION_V2, market=Market.US,
+        )
+        engine.test(session, us_row.version)
+        engine.activate(session, us_row.version)
+
+        # Activating the US model must never supersede/deactivate the
+        # already-ACTIVE Tadawul model for the exact same source.
+        active_tadawul = engine.get_active_model(session, source=TRAINING_SOURCE_DECISION_V2)
+        active_us = engine.get_active_model(session, source=TRAINING_SOURCE_DECISION_V2, market=Market.US)
+        assert active_tadawul is not None and active_tadawul.version == tadawul_row.version
+        assert active_us is not None and active_us.version == us_row.version
+
+    def test_get_effective_confidence_never_applies_the_wrong_markets_model(self, session, stock, us_stock):
+        _seed_decision_v2_overconfident_dataset(session, us_stock, n=60)
+        engine = ConfidenceCalibrationEngine()
+        us_row = engine.propose(
+            session, date(2026, 1, 1), date(2026, 12, 31),
+            min_sample_size=30, source=TRAINING_SOURCE_DECISION_V2, market=Market.US,
+        )
+        engine.test(session, us_row.version)
+        engine.activate(session, us_row.version)
+
+        us_probability, us_version = get_effective_confidence(
+            session, 85.0, source=TRAINING_SOURCE_DECISION_V2, market=Market.US
+        )
+        assert us_probability is not None
+        assert us_version == us_row.version
+
+        # A Tadawul-market lookup for the same source must stay
+        # uncalibrated -- the active US model must never be applied to
+        # a Tadawul decision.
+        tadawul_probability, tadawul_version = get_effective_confidence(
+            session, 85.0, source=TRAINING_SOURCE_DECISION_V2
+        )
+        assert tadawul_probability is None
+        assert tadawul_version is None

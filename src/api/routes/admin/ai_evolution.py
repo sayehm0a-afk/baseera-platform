@@ -74,6 +74,7 @@ from src.domain.models import (
     DecisionV2Outcome,
     DecisionV2Snapshot,
     DiscoveredPattern,
+    Market,
     ReflectionReport,
     StaffRole,
     User,
@@ -149,6 +150,7 @@ def _to_confidence_calibration_out(row: ConfidenceCalibrationModel) -> Confidenc
         status=row.status.value,
         method=row.method.value,
         training_source=row.training_source,
+        market=row.market.value,
         model_params=row.model_params,
         training_period_start=row.training_period_start,
         training_period_end=row.training_period_end,
@@ -187,6 +189,7 @@ def create_confidence_calibration(
             training_period_end=request.training_period_end,
             reference_horizon_days=request.reference_horizon_days or DEFAULT_REFERENCE_HORIZON_DAYS,
             source=request.source or TRAINING_SOURCE_LEGACY_V1,
+            market=Market(request.market) if request.market else Market.TADAWUL,
             min_sample_size=request.min_sample_size or DEFAULT_MIN_SAMPLE_SIZE,
             notes=request.notes,
         )
@@ -198,12 +201,15 @@ def create_confidence_calibration(
 @router.get("/confidence-calibrations", response_model=ConfidenceCalibrationListOut)
 def list_confidence_calibrations(
     source: Optional[str] = Query(None, description="Filter by training_source; omit to return every model."),
+    market: Optional[str] = Query(None, description="Filter by market ('TADAWUL'/'US'); omit to return every market."),
     session: Session = Depends(get_db),
     _current_user: User = Depends(require_staff_role(StaffRole.ADMIN)),
 ) -> ConfidenceCalibrationListOut:
     query = session.query(ConfidenceCalibrationModel)
     if source is not None:
         query = query.filter_by(training_source=source)
+    if market is not None:
+        query = query.filter_by(market=Market(market))
     rows = query.order_by(ConfidenceCalibrationModel.created_at.desc()).all()
     return ConfidenceCalibrationListOut(models=[_to_confidence_calibration_out(row) for row in rows])
 
@@ -270,7 +276,9 @@ def rollback_confidence_calibration(
     /api/v1/calibrations/{version}/rollback's exact convention."""
     row = _get_confidence_calibration_or_404(session, version)
     try:
-        result = ConfidenceCalibrationEngine().rollback(session, to_version=version, source=row.training_source)
+        result = ConfidenceCalibrationEngine().rollback(
+            session, to_version=version, source=row.training_source, market=row.market
+        )
     except ValueError as exc:
         raise InvalidConfidenceCalibrationTransitionError(str(exc)) from exc
     if result is None:  # pragma: no cover -- unreachable: to_version=version always resolves to this row

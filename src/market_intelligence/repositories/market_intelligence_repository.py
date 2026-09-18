@@ -41,6 +41,7 @@ from src.domain.models import (
     AlertSeverity as DomainAlertSeverity,
     AlertType as DomainAlertType,
     DecisionV2Snapshot,
+    Market,
     MarketAlert,
     MarketChangeEvent,
     MarketScanRun,
@@ -419,10 +420,17 @@ class MarketIntelligenceRepository:
     # --- symbol intelligence records -----------------------------------
 
     async def save_symbol_records(self, session: Session, run_id: int, outcomes: List[SymbolScanOutcome]) -> None:
-        symbol_to_stock_id = {
-            row.symbol: row.id
-            for row in session.query(Stock.symbol, Stock.id).filter(Stock.symbol.in_([o.symbol for o in outcomes])).all()
-        }
+        stock_rows = session.query(Stock.symbol, Stock.id, Stock.market).filter(
+            Stock.symbol.in_([o.symbol for o in outcomes])
+        ).all()
+        symbol_to_stock_id = {row.symbol: row.id for row in stock_rows}
+        # 2026-09-18 (multi-market expansion Phase 5): each symbol's
+        # real market, so the decision_v2 calibration lookup below
+        # never applies a Tadawul-trained model to a US decision or
+        # vice versa. Defaults to TADAWUL for a symbol this query
+        # somehow didn't return (never expected in practice -- every
+        # outcome's symbol was already resolved to a Stock row above).
+        symbol_to_market = {row.symbol: row.market for row in stock_rows}
 
         # M10: is this scan running under an explicit, bounded
         # validation session right now? None for the overwhelming
@@ -451,6 +459,7 @@ class MarketIntelligenceRepository:
             stock_id = symbol_to_stock_id.get(outcome.symbol)
             if stock_id is None:
                 continue
+            market = symbol_to_market.get(outcome.symbol, Market.TADAWUL)
             decision = outcome.report.decision
             recommendation_label = RecommendationLabel(decision.recommendation.value)
             session.add(
@@ -585,7 +594,7 @@ class MarketIntelligenceRepository:
                 try:
                     result = outcome.decision_v2
                     decision_v2_calibrated_probability, decision_v2_calibration_version = get_effective_confidence(
-                        session, result.confidence_score, source=TRAINING_SOURCE_DECISION_V2
+                        session, result.confidence_score, source=TRAINING_SOURCE_DECISION_V2, market=market
                     )
                     decision_v2_snapshot = DecisionV2Snapshot(
                         stock_id=stock_id,

@@ -869,7 +869,7 @@ async def get_decision_v2(
         # and activate one; this never modifies `result.confidence_score`
         # itself, only adds a disclosed companion figure.
         calibrated_probability, calibration_version = get_effective_confidence(
-            session, result.confidence_score, source=TRAINING_SOURCE_DECISION_V2
+            session, result.confidence_score, source=TRAINING_SOURCE_DECISION_V2, market=stock.market
         )
         snapshot = DecisionV2Snapshot(
             stock_id=stock.id,
