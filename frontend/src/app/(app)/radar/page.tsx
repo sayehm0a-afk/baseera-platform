@@ -283,32 +283,30 @@ export default function RadarPage() {
             // missed-entry opportunities get their own clearly-labeled
             // section instead of being silently dropped or silently shown
             // as current.
-            const currentOpportunities = data.summary.top_opportunities.filter(
-              (o) => !isEntryMissed(o.entry_status) && o.is_decision_fresh
-            );
-            // Honesty fix (2026-09-17): "الفرص الحية" previously counted
-            // and rendered every classification RadarOpportunity tracks
-            // (HOLD/REDUCE/WATCH/WAIT_FOR_ENTRY/INSUFFICIENT_DATA
-            // included), not just actual buy candidates -- a beginner
-            // trader could reasonably read a card ranked "#1" under
-            // "Live Opportunities" as a pick to act on even when its own
-            // badge read "احتفاظ" (HOLD). Real production evidence: a
-            // live scan under the new confidence floor produced zero
-            // BUY_CANDIDATE decisions, yet the screen still showed five
-            // HOLD-classified cards as the top "opportunities." Only
-            // STRONG_BUY_CANDIDATE/BUY_CANDIDATE are ever actionable
-            // (see src.analysis.decision_v2.types.Decision) -- everything
-            // else now renders in its own, clearly-labeled section below.
-            const actionableOpportunities = currentOpportunities.filter(
+            // Product decision (2026-09-18, explicit owner direction): this
+            // screen is the app's single daily-recommendations surface, and
+            // it must show real, actionable BUY calls ONLY -- entry, target,
+            // stop-loss, nothing else. Real production evidence motivated
+            // this: a live scan under the new confidence floor produced
+            // zero BUY_CANDIDATE decisions, yet the screen still showed
+            // HOLD-classified cards as "opportunities." Non-actionable
+            // classifications (HOLD/REDUCE/WATCH/WAIT_FOR_ENTRY/
+            // INSUFFICIENT_DATA) are no longer rendered here at all --
+            // every stock's full analysis, whatever its classification,
+            // lives on /stocks instead. Filtering to actionable
+            // classifications happens first, before splitting by
+            // freshness/entry-status, so every section below only ever
+            // contains real buy candidates.
+            const actionableAll = data.summary.top_opportunities.filter(
               (o) => o.classification === "STRONG_BUY_CANDIDATE" || o.classification === "BUY_CANDIDATE"
             );
-            const nonActionableOpportunities = currentOpportunities.filter(
-              (o) => o.classification !== "STRONG_BUY_CANDIDATE" && o.classification !== "BUY_CANDIDATE"
+            const actionableOpportunities = actionableAll.filter(
+              (o) => !isEntryMissed(o.entry_status) && o.is_decision_fresh
             );
-            const staleOpportunities = data.summary.top_opportunities.filter(
+            const staleOpportunities = actionableAll.filter(
               (o) => !isEntryMissed(o.entry_status) && !o.is_decision_fresh
             );
-            const missedEntryOpportunities = data.summary.top_opportunities.filter((o) => isEntryMissed(o.entry_status));
+            const missedEntryOpportunities = actionableAll.filter((o) => isEntryMissed(o.entry_status));
             return (
               <>
                 <section className="flex flex-col gap-bsr-4">
@@ -328,7 +326,7 @@ export default function RadarPage() {
                   {actionableOpportunities.length === 0 ? (
                     <EmptyState
                       title="لا توجد توصية شراء حاليًا"
-                      description="لم يرصد الرادار الذكي أي فرصة حقيقية تستوفي معايير الجودة في آخر مسح للسوق. راجع الأسهم قيد المتابعة أدناه للاطلاع على التحليل، دون أنها توصية شراء."
+                      description="لم يرصد الرادار الذكي أي فرصة حقيقية تستوفي معايير الجودة في آخر مسح للسوق. يمكنك تصفح تحليل أي سهم من شاشة جميع الأسهم."
                     />
                   ) : (
                     <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
@@ -338,22 +336,6 @@ export default function RadarPage() {
                     </div>
                   )}
                 </section>
-
-                {nonActionableOpportunities.length > 0 ? (
-                  <section className="flex flex-col gap-bsr-4">
-                    <h2 className="text-base font-semibold text-bsr-text-secondary">
-                      أسهم قيد المتابعة ({nonActionableOpportunities.length})
-                    </h2>
-                    <p className="text-xs text-bsr-text-secondary">
-                      هذه ليست توصية شراء -- تحليل حالة أسهم يتابعها الرادار حاليًا (احتفاظ/تخفيف/انتظار دخول/بيانات غير كافية). راجع شارة الحالة على كل بطاقة.
-                    </p>
-                    <div className="grid grid-cols-1 gap-bsr-4 md:grid-cols-2">
-                      {nonActionableOpportunities.map((opportunity) => (
-                        <RadarOpportunityCard key={opportunity.id} opportunity={opportunity} />
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
 
                 {staleOpportunities.length > 0 ? (
                   <section className="flex flex-col gap-bsr-4">
