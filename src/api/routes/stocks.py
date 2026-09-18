@@ -59,7 +59,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from src.analysis.analyst.analyst_engine_factory import get_analyst_engine
 from src.analysis.analyst.output_formatter import OutputFormatter
@@ -340,6 +340,35 @@ def get_stock_directory(
         for row in rows:
             latest_by_stock_id.setdefault(row.stock_id, []).append(row)
 
+    # 2026-09-18: the same single-windowed-query pattern as the price-
+    # bar lookup above (never one query per symbol) to get each
+    # symbol's single most recent DecisionV2Snapshot, if any -- the
+    # directory row's compact classification/target hint, real data
+    # only, never a live decision-engine run inside a list-browsing route.
+    latest_decision_by_stock_id: Dict[int, DecisionV2Snapshot] = {}
+    if stock_ids:
+        ranked_decisions = (
+            session.query(
+                DecisionV2Snapshot,
+                func.row_number()
+                .over(
+                    partition_by=DecisionV2Snapshot.stock_id,
+                    order_by=DecisionV2Snapshot.decision_timestamp.desc(),
+                )
+                .label("rn"),
+            )
+            .filter(DecisionV2Snapshot.stock_id.in_(stock_ids))
+            .subquery()
+        )
+        decision_alias = aliased(DecisionV2Snapshot, ranked_decisions)
+        decision_rows = (
+            session.query(decision_alias)
+            .filter(ranked_decisions.c.rn == 1)
+            .all()
+        )
+        for snapshot in decision_rows:
+            latest_decision_by_stock_id[snapshot.stock_id] = snapshot
+
     results = []
     for stock in page:
         bars = sorted(latest_by_stock_id.get(stock.id, []), key=lambda r: r.rn)
@@ -357,6 +386,7 @@ def get_stock_directory(
                 if previous_close > 0:
                     change_amount = round(current_price - previous_close, 4)
                     change_pct = round((current_price - previous_close) / previous_close * 100.0, 4)
+        latest_decision = latest_decision_by_stock_id.get(stock.id)
         results.append(
             StockDirectoryItemOut(
                 symbol=stock.symbol,
@@ -368,6 +398,16 @@ def get_stock_directory(
                 change_pct=change_pct,
                 price_as_of=price_as_of,
                 freshness_label_ar=freshness_label_ar,
+                latest_decision=latest_decision.decision if latest_decision else None,
+                latest_decision_label_ar=latest_decision.decision_label_ar if latest_decision else None,
+                latest_confidence_score=(
+                    float(latest_decision.confidence_score) if latest_decision else None
+                ),
+                latest_target_1=(
+                    float(latest_decision.target_1)
+                    if latest_decision and latest_decision.target_1 is not None
+                    else None
+                ),
             )
         )
 

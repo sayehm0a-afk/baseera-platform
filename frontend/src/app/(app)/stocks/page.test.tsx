@@ -26,6 +26,10 @@ function item(overrides: Partial<StockDirectoryItem> = {}): StockDirectoryItem {
     change_pct: 1.67,
     price_as_of: "2026-08-17T00:00:00Z",
     freshness_label_ar: "آخر جلسة",
+    latest_decision: null,
+    latest_decision_label_ar: null,
+    latest_confidence_score: null,
+    latest_target_1: null,
     ...overrides,
   };
 }

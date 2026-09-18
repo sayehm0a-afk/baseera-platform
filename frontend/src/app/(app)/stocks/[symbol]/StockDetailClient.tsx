@@ -5,6 +5,7 @@ import { AnalystReportView } from "@/components/ai/AnalystReportView";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import { RecommendationBadge, type RecommendationValue } from "@/components/badges/RecommendationBadge";
+import { ChartRangeTabs, rangeCutoffDate, type ChartRange } from "@/components/charts/ChartRangeTabs";
 import { PriceChart, type MovingAverageOverlay, type PriceLevel } from "@/components/charts/PriceChart";
 import { CommitteePanel } from "@/components/committee/CommitteePanel";
 import { BeginnerSummaryCard } from "@/components/decision/BeginnerSummaryCard";
@@ -97,6 +98,7 @@ const RATIO_LABELS: Record<string, string> = {
 export function StockDetailClient({ symbol }: { symbol: string }) {
   const [tab, setTab] = useState<Tab>("overview");
   const [beginnerMode, setBeginnerMode] = useState(false);
+  const [chartRange, setChartRange] = useState<ChartRange>("3M");
 
   const stock = useResource(symbol, getStock);
   const quote = useResource(symbol, getQuote);
@@ -197,6 +199,30 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
       }))
       .filter((overlay) => overlay.points.length > 0);
   }, [technical]);
+
+  // 2026-09-18: matches the competitor time-range-tab pattern the owner
+  // asked for -- filters the already-fetched real bars client-side
+  // (never a separate fetch per range, never fabricated intraday data
+  // this codebase's daily-bar pipeline doesn't have; see
+  // ChartRangeTabs's own docstring for why "اليوم" is never an option).
+  const visibleBars = useMemo(() => {
+    if (history.status !== "ready") return [];
+    const sorted = [...history.data.bars].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    if (sorted.length === 0) return sorted;
+    const latest = new Date(sorted[sorted.length - 1].timestamp);
+    const cutoff = rangeCutoffDate(chartRange, latest);
+    return cutoff == null ? sorted : sorted.filter((bar) => new Date(bar.timestamp) >= cutoff);
+  }, [history, chartRange]);
+
+  const chartRangeChangePct = useMemo(() => {
+    if (visibleBars.length < 2) return null;
+    const first = visibleBars[0].open;
+    const last = visibleBars[visibleBars.length - 1].close;
+    if (first === 0) return null;
+    return ((last - first) / first) * 100;
+  }, [visibleBars]);
 
   if (stock.status === "loading" || quote.status === "loading") {
     return <LoadingScreen />;
@@ -348,7 +374,22 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           history.data.bars.length === 0 ? (
             <EmptyState title="لا تتوفر بيانات تاريخية بعد لهذا السهم" />
           ) : (
-            <PriceChart bars={history.data.bars} levels={priceLevels} movingAverages={movingAverages} />
+            <>
+              <div className="mb-bsr-3 flex flex-wrap items-center justify-between gap-bsr-2">
+                <ChartRangeTabs value={chartRange} onChange={setChartRange} />
+                {chartRangeChangePct != null ? (
+                  <span
+                    className={`bsr-numeric text-sm font-semibold ${
+                      chartRangeChangePct >= 0 ? "text-bsr-market-up" : "text-bsr-market-down"
+                    }`}
+                  >
+                    {chartRangeChangePct >= 0 ? "+" : ""}
+                    {chartRangeChangePct.toFixed(2)}%
+                  </span>
+                ) : null}
+              </div>
+              <PriceChart bars={visibleBars} levels={priceLevels} movingAverages={movingAverages} />
+            </>
           )
         ) : null}
       </div>

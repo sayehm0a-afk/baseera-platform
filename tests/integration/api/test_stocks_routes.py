@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
-from src.domain.models import FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
+from src.domain.models import DecisionV2Snapshot, FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe
 from src.market_data.providers.market_data_provider import IMarketDataProvider, ProviderHealth
 
 
@@ -73,6 +73,39 @@ def _add_bars(session: Session, stock: Stock, count: int) -> None:
             )
         )
     session.commit()
+
+
+def _add_decision_v2(
+    session: Session,
+    stock: Stock,
+    decision: str = "BUY_CANDIDATE",
+    confidence: float = 75.0,
+    target_1: str = "32.0",
+    decision_timestamp: datetime | None = None,
+) -> DecisionV2Snapshot:
+    snapshot = DecisionV2Snapshot(
+        stock_id=stock.id,
+        symbol=stock.symbol,
+        company_name_en=stock.name_en,
+        company_name_ar=stock.name_ar,
+        sector_ar=stock.sector,
+        decision=decision,
+        decision_label_ar="شراء",
+        confidence_score=Decimal(str(confidence)),
+        opportunity_quality_score=Decimal("60"),
+        risk_score=Decimal("40"),
+        data_quality_score=Decimal("90"),
+        data_freshness_status="LIVE",
+        current_price=Decimal("30.5"),
+        target_1=Decimal(target_1),
+        market_status="OPEN",
+        decision_timestamp=decision_timestamp or datetime.now(timezone.utc),
+        analysis_version="2.0.0",
+        data_source="SAHMK_REAL",
+    )
+    session.add(snapshot)
+    session.commit()
+    return snapshot
 
 
 def _add_fundamentals(
@@ -656,6 +689,50 @@ def test_directory_single_bar_has_price_but_no_change(client, db_session):
     assert row["current_price"] == pytest.approx(30.5)
     assert row["change_amount"] is None
     assert row["change_pct"] is None
+
+
+def test_directory_has_no_latest_decision_fields_when_none_computed_yet(client, db_session):
+    _make_stock(db_session)
+    response = client.get("/api/v1/stocks/directory")
+    row = response.json()["results"][0]
+    assert row["latest_decision"] is None
+    assert row["latest_decision_label_ar"] is None
+    assert row["latest_confidence_score"] is None
+    assert row["latest_target_1"] is None
+
+
+def test_directory_includes_the_real_latest_decision_v2_snapshot(client, db_session):
+    stock = _make_stock(db_session)
+    _add_decision_v2(db_session, stock, decision="STRONG_BUY_CANDIDATE", confidence=82.5, target_1="34.0")
+
+    response = client.get("/api/v1/stocks/directory")
+
+    row = response.json()["results"][0]
+    assert row["latest_decision"] == "STRONG_BUY_CANDIDATE"
+    assert row["latest_decision_label_ar"] == "شراء"
+    assert row["latest_confidence_score"] == pytest.approx(82.5)
+    assert row["latest_target_1"] == pytest.approx(34.0)
+
+
+def test_directory_uses_only_the_most_recent_decision_v2_snapshot(client, db_session):
+    """A symbol re-decided many times a day (insert-only log, see
+    DecisionV2Snapshot's own docstring) must show only its single most
+    recent call in the directory, never an older superseded one."""
+    stock = _make_stock(db_session)
+    _add_decision_v2(
+        db_session, stock, decision="WATCH", confidence=40.0,
+        decision_timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    _add_decision_v2(
+        db_session, stock, decision="BUY_CANDIDATE", confidence=70.0,
+        decision_timestamp=datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+
+    response = client.get("/api/v1/stocks/directory")
+
+    row = response.json()["results"][0]
+    assert row["latest_decision"] == "BUY_CANDIDATE"
+    assert row["latest_confidence_score"] == pytest.approx(70.0)
 
 
 def test_directory_excludes_inactive_stocks(client, db_session):

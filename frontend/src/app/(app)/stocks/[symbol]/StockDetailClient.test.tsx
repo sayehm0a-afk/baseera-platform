@@ -26,6 +26,17 @@ vi.mock("@/lib/api/radar", () => ({
   getRadarOpportunityBySymbol: vi.fn(),
 }));
 
+// lightweight-charts draws to a real <canvas> 2D context jsdom does not
+// implement (see PriceChart.test.tsx's own mock of the library for the
+// same reason) -- mocked here one level up so these range-tab tests can
+// assert on exactly which real bars StockDetailClient passed down,
+// without re-testing PriceChart's own charting-library wiring.
+vi.mock("@/components/charts/PriceChart", () => ({
+  PriceChart: ({ bars }: { bars: { timestamp: string }[] }) => (
+    <div data-testid="price-chart-bar-count">{bars.length}</div>
+  ),
+}));
+
 import { ApiError } from "@/lib/api/client";
 import { getRadarOpportunityBySymbol } from "@/lib/api/radar";
 import {
@@ -271,5 +282,41 @@ describe("StockDetailClient", () => {
     fireEvent.click(screen.getByText("التحليل الكامل والشفافية"));
 
     expect(await screen.findByText("صاعد — معتدل")).toBeInTheDocument();
+  });
+
+  it("2026-09-18: filters the real chart bars by the selected time range, never fabricating an اليوم/intraday option for daily bars", async () => {
+    const latest = new Date("2026-09-18T00:00:00Z");
+    const dayOffsets = [400, 200, 100, 80, 45, 20, 5, 0];
+    const bars = dayOffsets.map((offset, i) => {
+      const timestamp = new Date(latest);
+      timestamp.setDate(timestamp.getDate() - offset);
+      return { timestamp: timestamp.toISOString(), open: 20 + i, high: 21 + i, low: 19 + i, close: 20.5 + i, volume: 1000 };
+    });
+
+    vi.mocked(getStock).mockResolvedValue({
+      symbol: "2222", name_en: "Saudi Aramco", name_ar: "أرامكو السعودية",
+      sector: "Energy", sector_ar: "الطاقة", currency: "SAR", is_active: true,
+    });
+    vi.mocked(getQuote).mockImplementation(providerUnavailable);
+    vi.mocked(getDecisionV2).mockResolvedValue(buildDecisionV2());
+    vi.mocked(getDecision).mockImplementation(insufficientData);
+    vi.mocked(getHistory).mockResolvedValue({ symbol: "2222", timeframe: "ONE_DAY", bars });
+    vi.mocked(getTechnicalAnalysis).mockImplementation(insufficientData);
+    vi.mocked(getFundamentalAnalysis).mockImplementation(insufficientData);
+    vi.mocked(getAnalystReport).mockImplementation(insufficientData);
+    vi.mocked(getRadarOpportunityBySymbol).mockResolvedValue(null);
+
+    render(<StockDetailClient symbol="2222" />);
+
+    // Default range is 3M (90 days) -- offsets <= 90: 80,45,20,5,0.
+    expect(await screen.findByTestId("price-chart-bar-count")).toHaveTextContent("5");
+    expect(screen.queryByRole("tab", { name: "اليوم" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "سنة" }));
+    // 1Y (365 days) -- offsets <= 365: 200,100,80,45,20,5,0.
+    expect(await screen.findByTestId("price-chart-bar-count")).toHaveTextContent("7");
+
+    fireEvent.click(screen.getByRole("tab", { name: "الكل" }));
+    expect(await screen.findByTestId("price-chart-bar-count")).toHaveTextContent("8");
   });
 });
