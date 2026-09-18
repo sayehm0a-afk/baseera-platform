@@ -78,6 +78,19 @@ class StockDirectoryItemOut(BaseModel):
     price_as_of: Optional[datetime] = None
     freshness_label_ar: str
 
+    # 2026-09-18: the most recent real DecisionV2Snapshot for this
+    # symbol, if one has ever been computed -- lets the directory list
+    # show a compact classification/target hint per row without a
+    # click-through, same real data WatchlistItemOut's latest_* fields
+    # already expose, never a live decision-engine run inside this
+    # list-browsing route. All fields None together when no snapshot
+    # exists yet for this symbol -- a real "not yet analyzed" state,
+    # never a fabricated one.
+    latest_decision: Optional[str] = None
+    latest_decision_label_ar: Optional[str] = None
+    latest_confidence_score: Optional[float] = None
+    latest_target_1: Optional[float] = None
+
     @model_validator(mode="after")
     def _fill_sector_ar(self) -> "StockDirectoryItemOut":
         if self.sector_ar is None:

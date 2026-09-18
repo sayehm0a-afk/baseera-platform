@@ -421,6 +421,15 @@ export interface StockDirectoryItem {
   change_pct: number | null;
   price_as_of: string | null;
   freshness_label_ar: string;
+
+  // 2026-09-18: the most recent real DecisionV2Snapshot for this
+  // symbol, if one has ever been computed -- all four null together
+  // when none exists yet (a real "not yet analyzed" state, never
+  // fabricated). See src/api/schemas/stocks.py's StockDirectoryItemOut.
+  latest_decision: DecisionV2Value | null;
+  latest_decision_label_ar: string | null;
+  latest_confidence_score: number | null;
+  latest_target_1: number | null;
 }
 
 export interface StockDirectory {
