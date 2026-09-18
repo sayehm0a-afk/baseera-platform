@@ -6,7 +6,7 @@ this package is enough to register every model's table on Base.metadata
 to see all tables.
 """
 
-from src.domain.models.stock import Stock
+from src.domain.models.stock import Stock, Market
 from src.domain.models.price_bar import PriceBar, Timeframe
 from src.domain.models.market_snapshot import MarketSnapshot
 from src.domain.models.fundamental_snapshot import FundamentalSnapshot, PeriodType
@@ -85,6 +85,7 @@ from src.domain.models.basirah_brain_shadow_decision import BasirahBrainShadowDe
 
 __all__ = [
     "Stock",
+    "Market",
     "PriceBar",
     "Timeframe",
     "MarketSnapshot",
