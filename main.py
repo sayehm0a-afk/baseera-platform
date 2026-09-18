@@ -38,6 +38,7 @@ from src.api.routes.notifications import router as notifications_router  # noqa:
 from src.api.routes.portfolio import router as portfolio_router  # noqa: E402
 from src.api.routes.radar import router as radar_router  # noqa: E402
 from src.api.routes.recommendation_history import router as recommendation_history_router  # noqa: E402
+from src.api.routes.signals import router as signals_router  # noqa: E402
 from src.api.routes.stocks import router as stocks_router  # noqa: E402
 from src.api.routes.subscriptions import router as subscriptions_router  # noqa: E402
 from src.api.routes.watchlist import router as watchlist_router  # noqa: E402
@@ -144,6 +145,7 @@ app.include_router(subscriptions_router)
 app.include_router(watchlist_router)
 app.include_router(recommendation_history_router)
 app.include_router(radar_router)
+app.include_router(signals_router)
 
 # Global runtime kernel
 kernel = None

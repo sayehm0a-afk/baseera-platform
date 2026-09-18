@@ -1,7 +1,14 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { RadarOpportunityCard } from "./RadarOpportunityCard";
+import { ApiError } from "@/lib/api/client";
 import type { RadarOpportunitySummary } from "@/lib/api/radar-types";
+
+vi.mock("@/lib/api/signals", () => ({
+  followSignal: vi.fn(),
+}));
+
+import { followSignal } from "@/lib/api/signals";
 
 function buildOpportunity(overrides: Partial<RadarOpportunitySummary> = {}): RadarOpportunitySummary {
   return {
@@ -183,5 +190,60 @@ describe("RadarOpportunityCard", () => {
       />
     );
     expect(screen.getByText(/آخر إشارة لهذا السهم اخترقت وقف الخسارة/)).toBeInTheDocument();
+  });
+
+  it("shows a follow button for an actionable BUY card and calls the real API on click (2026-09-18: متابعة هذه الإشارة)", async () => {
+    vi.mocked(followSignal).mockResolvedValue({
+      id: 1,
+      decision_v2_snapshot_id: 100,
+      symbol: "2222",
+      company_name_ar: "أرامكو السعودية",
+      followed_at: "2026-09-18T09:00:00Z",
+      decision: "BUY_CANDIDATE",
+      decision_label_ar: "شراء",
+      entry_zone_low: 30.0,
+      entry_zone_high: 30.6,
+      stop_loss: 29.0,
+      target_1: 32.0,
+      target_2: null,
+      target_3: null,
+      outcome_status: null,
+      outcome_status_label_ar: null,
+      outcome_return_pct: null,
+    });
+
+    render(<RadarOpportunityCard opportunity={buildOpportunity()} />);
+    fireEvent.click(screen.getByRole("button", { name: "متابعة هذه الإشارة" }));
+
+    expect(await screen.findByRole("button", { name: "✓ تتم متابعة هذه الإشارة" })).toBeDisabled();
+    expect(followSignal).toHaveBeenCalledWith(100);
+  });
+
+  it("treats an already-followed signal as success, not an error", async () => {
+    vi.mocked(followSignal).mockRejectedValue(new ApiError(409, "signal_already_followed", "already following"));
+
+    render(<RadarOpportunityCard opportunity={buildOpportunity()} />);
+    fireEvent.click(screen.getByRole("button", { name: "متابعة هذه الإشارة" }));
+
+    expect(await screen.findByRole("button", { name: "✓ تتم متابعة هذه الإشارة" })).toBeInTheDocument();
+    expect(screen.queryByText(/تعذّرت متابعة/)).not.toBeInTheDocument();
+  });
+
+  it("shows a real error message on genuine follow failure", async () => {
+    vi.mocked(followSignal).mockRejectedValue(new ApiError(500, "internal_error", "boom"));
+
+    render(<RadarOpportunityCard opportunity={buildOpportunity()} />);
+    fireEvent.click(screen.getByRole("button", { name: "متابعة هذه الإشارة" }));
+
+    await waitFor(() => expect(screen.getByText(/تعذّرت متابعة/)).toBeInTheDocument());
+  });
+
+  it("never shows a follow button for a non-actionable classification", () => {
+    render(
+      <RadarOpportunityCard
+        opportunity={buildOpportunity({ classification: "WATCH", classification_label_ar: "مراقبة" })}
+      />
+    );
+    expect(screen.queryByRole("button", { name: "متابعة هذه الإشارة" })).not.toBeInTheDocument();
   });
 });
