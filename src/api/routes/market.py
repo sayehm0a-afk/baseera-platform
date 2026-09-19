@@ -280,7 +280,7 @@ async def get_market_session_status(
 
 
 @router.post("/scan", response_model=MarketScanRunOut)
-async def create_scan(
+def create_scan(
     request: MarketScanRequest,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_db),

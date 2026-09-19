@@ -103,7 +103,7 @@ def _get_run_or_404(session: Session, run_id: int, current_user: User) -> Backte
 
 
 @router.post("", response_model=BacktestRunOut)
-async def create_backtest(
+def create_backtest(
     request: BacktestCreateRequest,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_db),
