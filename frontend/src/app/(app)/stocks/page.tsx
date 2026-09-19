@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { StockDirectoryRow } from "@/components/stocks/StockDirectoryRow";
@@ -25,10 +25,17 @@ export default function StocksDirectoryPage() {
   const [state, setState] = useState<DirectoryState>({ status: "loading" });
   const [loadingMore, setLoadingMore] = useState(false);
 
+  // A newer query's response can resolve before an older, slower one --
+  // without this guard, the stale response would land last and silently
+  // overwrite the results for whatever the user is now actually typing.
+  const latestRequestId = useRef(0);
+
   const load = useCallback((q: string, offset: number, append: boolean) => {
+    const requestId = ++latestRequestId.current;
     if (append) setLoadingMore(true);
     getStockDirectory({ q: q || undefined, limit: PAGE_SIZE, offset })
       .then((result) => {
+        if (requestId !== latestRequestId.current) return;
         setState((prev) => {
           const previousItems = append && prev.status === "ready" ? prev.items : [];
           const items = [...previousItems, ...result.results];
@@ -40,8 +47,12 @@ export default function StocksDirectoryPage() {
           };
         });
       })
-      .catch(() => setState({ status: "error" }))
+      .catch(() => {
+        if (requestId !== latestRequestId.current) return;
+        setState({ status: "error" });
+      })
       .finally(() => {
+        if (requestId !== latestRequestId.current) return;
         if (append) setLoadingMore(false);
       });
   }, []);
