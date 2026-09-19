@@ -640,7 +640,7 @@ async def metrics():
     from fastapi import Response
 
     from src.auth.repository import AuthRepository
-    from src.core.db.database import get_session_factory
+    from src.core.db.database import get_engine, get_session_factory
     from src.core.monitoring.prometheus_metrics import get_metrics
 
     session_factory = get_session_factory()
@@ -655,6 +655,16 @@ async def metrics():
         logger.error(f"Failed to refresh active_sessions gauge: {e}")
     finally:
         db_session.close()
+
+    try:
+        # Same scrape-time-recompute pattern as active_sessions above:
+        # read the live SQLAlchemy pool's own counters rather than
+        # tracking them incrementally, so the gauge can never drift
+        # from the engine's actual state.
+        db_pool = get_engine().pool
+        get_metrics().set_db_pool_metrics(pool_size=db_pool.size(), available=db_pool.checkedin())
+    except Exception as e:
+        logger.error(f"Failed to refresh db_pool metrics: {e}")
 
     return Response(content=get_metrics().get_metrics(), media_type="text/plain; version=0.0.4; charset=utf-8")
 

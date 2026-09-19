@@ -25,7 +25,19 @@ export function TopBar() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<StockSearchResult[]>([]);
   const [open, setOpen] = useState(false);
+  // Mobile-only: the search input is hidden below `md` by default (see
+  // the form's own className below) with no other way to reach it --
+  // this toggles it into view inline, expanding within the TopBar the
+  // same way the desktop search already sits, instead of a separate
+  // page or dead end. Desktop is unaffected: its search stays
+  // permanently visible regardless of this flag.
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const mobileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (mobileSearchOpen) mobileInputRef.current?.focus();
+  }, [mobileSearchOpen]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -66,7 +78,15 @@ export function TopBar() {
     setOpen(false);
     setQuery("");
     setResults([]);
+    setMobileSearchOpen(false);
     router.push(`/stocks/${encodeURIComponent(trimmed)}`);
+  }
+
+  function closeMobileSearch() {
+    setMobileSearchOpen(false);
+    setOpen(false);
+    setQuery("");
+    setResults([]);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -80,17 +100,21 @@ export function TopBar() {
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-bsr-4 border-b border-bsr-border-subtle bg-bsr-surface-base px-bsr-4 md:px-bsr-6">
-      <div className="flex items-center gap-bsr-2">
+      <div className={`${mobileSearchOpen ? "hidden md:flex" : "flex"} items-center gap-bsr-2`}>
         <AiStar size="lg" label="بصيرة" />
         <span className="text-lg font-semibold text-bsr-white">بصيرة</span>
         <span className="text-lg font-semibold text-bsr-teal-500">AI</span>
       </div>
 
-      <form onSubmit={handleSubmit} className="hidden flex-1 items-center md:flex">
+      <form
+        onSubmit={handleSubmit}
+        className={`${mobileSearchOpen ? "flex" : "hidden md:flex"} flex-1 items-center gap-bsr-2`}
+      >
         <div ref={containerRef} className="relative w-full max-w-md">
           <label>
             <span className="sr-only">ابحث برمز السهم أو اسم الشركة</span>
             <input
+              ref={mobileInputRef}
               type="search"
               value={query}
               onChange={(event) => {
@@ -129,9 +153,37 @@ export function TopBar() {
             </ul>
           ) : null}
         </div>
+
+        {/* Only meaningful on mobile -- the desktop search (always
+         * visible via `md:flex` above) needs no way to dismiss it. */}
+        <button
+          type="button"
+          aria-label="إغلاق البحث"
+          onClick={closeMobileSearch}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-bsr-full text-bsr-text-secondary hover:bg-bsr-surface-raised md:hidden"
+        >
+          <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} aria-hidden>
+            <path d="M6 6 18 18M18 6 6 18" strokeLinecap="round" />
+          </svg>
+        </button>
       </form>
 
-      <div className="ms-auto flex items-center gap-bsr-3">
+      <div className={`${mobileSearchOpen ? "hidden md:flex" : "flex"} ms-auto items-center gap-bsr-3`}>
+        {/* Mobile-only entry point to the search above -- mirrors the
+         * bell/settings icon-button convention (h-9 w-9, rounded-full,
+         * text-secondary) rather than inventing a new one. Desktop
+         * never needs it since its search is already always visible. */}
+        <button
+          type="button"
+          aria-label="بحث"
+          onClick={() => setMobileSearchOpen(true)}
+          className="flex h-9 w-9 items-center justify-center rounded-bsr-full text-bsr-text-secondary hover:bg-bsr-surface-raised md:hidden"
+        >
+          <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} aria-hidden>
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" strokeLinecap="round" />
+          </svg>
+        </button>
         <NotificationBell />
         {/* RADAR-C/E: primary nav no longer carries a Settings item
          * (nav-items.ts) -- account/settings remain reachable here,

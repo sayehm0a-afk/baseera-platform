@@ -1,12 +1,28 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { AnalystReportView } from "@/components/ai/AnalystReportView";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import { RecommendationBadge, type RecommendationValue } from "@/components/badges/RecommendationBadge";
 import { ChartRangeTabs, rangeCutoffDate, type ChartRange } from "@/components/charts/ChartRangeTabs";
-import { PriceChart, type MovingAverageOverlay, type PriceLevel } from "@/components/charts/PriceChart";
+import type { MovingAverageOverlay, PriceLevel } from "@/components/charts/PriceChart";
+
+// lightweight-charts (the candlestick/volume rendering library) touches
+// `window`/canvas and is otherwise pulled into the stock-detail page's
+// main bundle even though the chart is only one section of the page --
+// loaded on demand instead, client-side only, matching this codebase's
+// existing skeleton-placeholder convention (see the decision-badge
+// placeholder above) rather than the full-page LoadingScreen, since the
+// chart occupies only its own card while the rest of the page is
+// already interactive.
+const PriceChart = dynamic(() => import("@/components/charts/PriceChart").then((mod) => mod.PriceChart), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[360px] w-full animate-pulse rounded-bsr-md bg-bsr-surface-overlay sm:h-[440px]" />
+  ),
+});
 import { CommitteePanel } from "@/components/committee/CommitteePanel";
 import { BeginnerSummaryCard } from "@/components/decision/BeginnerSummaryCard";
 import { DecisionTransparencyPanel } from "@/components/decision/DecisionTransparencyPanel";
