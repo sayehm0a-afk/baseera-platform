@@ -238,7 +238,9 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
         </button>
       ) : null}
       {followState === "error" ? (
-        <p className="text-xs text-bsr-market-down">تعذّرت متابعة هذه الإشارة. حاول مرة أخرى.</p>
+        <p role="alert" className="text-xs text-bsr-market-down">
+          تعذّرت متابعة هذه الإشارة. حاول مرة أخرى.
+        </p>
       ) : null}
 
       <div className="flex items-center justify-between text-sm">

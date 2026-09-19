@@ -200,7 +200,7 @@ function RadarV2PageInner() {
           <p className="text-xs text-bsr-text-secondary">لا توجد فرصة حية حاليًا -- لم يُصدر الرادار أي فرصة بعد في هذا المسح.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-right text-sm">
+            <table className="w-full text-start text-sm">
               <thead>
                 <tr className="text-[11px] text-bsr-text-secondary">
                   <th className="p-1">الترتيب</th>
