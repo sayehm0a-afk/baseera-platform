@@ -6,6 +6,7 @@ anywhere.
 
 import pytest
 
+from src.api.middleware.rate_limiting import limiter
 from src.api.routes.stocks import _directory_search_cache
 from src.market_intelligence.sector_reliability import _sector_reliability_cache
 
@@ -37,3 +38,21 @@ def _reset_directory_search_cache():
     _directory_search_cache.clear()
     yield
     _directory_search_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter_storage():
+    """`limiter` (src/api/middleware/rate_limiting.py) is Redis-backed
+    so its budget is consistent across gunicorn workers in production
+    -- but that same shared, process-external storage means every
+    call any test makes to a `@limiter.limit(...)`-decorated route
+    accumulates against the same real Redis keys across the whole
+    pytest session (get_remote_address always returns the same
+    TestClient IP), not per-test. Without this reset, a route-heavy
+    test file exercising a real limit dozens of times (e.g.
+    test_backtests_routes.py's ~29 POSTs) would start hitting 429s
+    partway through on tests that have nothing to do with rate
+    limiting."""
+    limiter.reset()
+    yield
+    limiter.reset()

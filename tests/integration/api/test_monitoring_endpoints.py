@@ -11,6 +11,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+from src.core.config.settings import settings as app_settings
+
+_TEST_METRICS_TOKEN = "test-metrics-token"
 
 
 def _redis_available() -> bool:
@@ -47,19 +50,32 @@ def client():
     return TestClient(main.app)
 
 
+@pytest.fixture(autouse=True)
+def _configure_metrics_token(monkeypatch):
+    """2026-09-19 security review fix: /metrics is gated behind
+    METRICS_TOKEN (see main.py's own docstring on that route) --
+    without a configured token every request 404s by design."""
+    monkeypatch.setattr(app_settings, "metrics_token", _TEST_METRICS_TOKEN)
+
+
 def test_metrics_is_served_as_real_prometheus_exposition_format_not_json(client):
     # Regression test: a plain `str` return value from a FastAPI route
     # is auto-JSON-encoded (quoted, with escaped newlines) unless
     # explicitly wrapped in a Response -- Prometheus can't scrape that.
-    response = client.get("/metrics")
+    response = client.get("/metrics", headers={"X-Metrics-Token": _TEST_METRICS_TOKEN})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
     assert response.text.startswith("# HELP")
     assert '\\n' not in response.text.splitlines()[0]
 
 
+def test_metrics_requires_a_valid_token(client):
+    assert client.get("/metrics").status_code == 404
+    assert client.get("/metrics", headers={"X-Metrics-Token": "wrong"}).status_code == 404
+
+
 def test_metrics_reflects_the_new_phase_10_metric_names(client):
-    response = client.get("/metrics")
+    response = client.get("/metrics", headers={"X-Metrics-Token": _TEST_METRICS_TOKEN})
     body = response.text
     for metric_name in (
         "basirah_logins_total",
