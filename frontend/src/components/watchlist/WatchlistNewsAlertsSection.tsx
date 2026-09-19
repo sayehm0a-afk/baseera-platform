@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
+import { SymbolText } from "@/components/shared/SymbolText";
 import { getWatchlistNewsAlerts, refreshWatchlistNewsAlerts } from "@/lib/api/watchlist";
 import type { WatchlistNewsAlert } from "@/lib/api/watchlist-types";
 import { PORTFOLIO_ALERT_TYPE_LABELS, alertSeverityColorClass } from "@/lib/news-labels";
@@ -76,7 +77,7 @@ export function WatchlistNewsAlertsSection() {
             <li key={alert.id} className="flex flex-col gap-bsr-1 py-bsr-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-bsr-2">
-                  <span className="bsr-numeric font-semibold text-bsr-text-primary">{alert.symbol}</span>
+                  <span className="bsr-numeric font-semibold text-bsr-text-primary"><SymbolText>{alert.symbol}</SymbolText></span>
                   <span
                     className={`rounded-bsr-full px-bsr-3 py-1 text-xs font-medium ${alertSeverityColorClass(alert.severity)}`}
                   >

@@ -17,7 +17,24 @@ export function formatIndicatorValue(value: unknown): string {
   return String(value ?? "—");
 }
 
-export function formatRatioValue(value: unknown): string {
-  if (typeof value === "number") return value.toFixed(2);
-  return String(value ?? "—");
+// Ratio keys src/analysis/fundamental/ratios/{profitability,growth,valuation}.py
+// return as a raw fraction (e.g. 0.174 for a real 17.4% ROE) -- every other
+// ratio key (current_ratio, debt_to_equity, price_to_earnings, market_cap,
+// ...) is a genuine multiple/currency value, never a percentage, and must
+// never be scaled here.
+const PERCENTAGE_RATIO_KEYS = new Set([
+  "net_profit_margin",
+  "gross_profit_margin",
+  "return_on_equity",
+  "return_on_assets",
+  "dividend_yield",
+  "revenue_growth",
+  "net_income_growth",
+  "eps_growth",
+]);
+
+export function formatRatioValue(name: string, value: unknown): string {
+  if (typeof value !== "number") return String(value ?? "—");
+  if (PERCENTAGE_RATIO_KEYS.has(name)) return `${(value * 100).toFixed(2)}%`;
+  return value.toFixed(2);
 }

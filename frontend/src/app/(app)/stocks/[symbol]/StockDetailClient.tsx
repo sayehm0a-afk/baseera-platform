@@ -506,7 +506,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
                 <div key={name} className="flex items-center justify-between border-b border-bsr-border-subtle py-bsr-2 last:border-0">
                   <span className="text-sm text-bsr-text-secondary">{RATIO_LABELS[name] ?? name}</span>
                   <span className="bsr-numeric text-sm font-medium text-bsr-text-primary">
-                    {formatRatioValue(value)}
+                    {formatRatioValue(name, value)}
                   </span>
                 </div>
               ))}

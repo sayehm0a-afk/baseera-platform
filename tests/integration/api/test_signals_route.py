@@ -18,9 +18,33 @@ from src.domain.models import (
     DecisionV2OutcomeStatus,
     DecisionV2Snapshot,
     Stock,
+    Subscription,
+    SubscriptionPlan,
+    SubscriptionStatus,
     User,
     UserFollowedSignal,
 )
+
+
+def _give_active_trial(db_session, user):
+    # 2026-09-19 (full-platform audit): every route in this file now
+    # requires require_active_subscription() (matching src.api.routes.
+    # stocks/radar/watchlist's own convention) since `follow`/
+    # `get_followed` return the same paid-tier fields those routes
+    # already gate. A real registered user always has exactly this row
+    # via src.auth.user_service.register's provision_trial_subscription.
+    future = datetime.now(timezone.utc) + timedelta(days=14)
+    db_session.add(
+        Subscription(
+            user_id=user.id,
+            plan=SubscriptionPlan.TRIAL,
+            status=SubscriptionStatus.TRIALING,
+            trial_ends_at=future,
+            current_period_start=datetime.now(timezone.utc),
+            current_period_end=future,
+        )
+    )
+    db_session.commit()
 
 
 @pytest.fixture
@@ -28,6 +52,7 @@ def as_user(db_session):
     user = User(email="user@example.com", password_hash="hashed", is_staff=False)
     db_session.add(user)
     db_session.commit()
+    _give_active_trial(db_session, user)
     main.app.dependency_overrides[get_current_user] = lambda: user
     yield user
 
@@ -37,7 +62,21 @@ def other_user(db_session):
     user = User(email="other@example.com", password_hash="hashed", is_staff=False)
     db_session.add(user)
     db_session.commit()
+    _give_active_trial(db_session, user)
     return user
+
+
+@pytest.fixture
+def as_unsubscribed_user(db_session):
+    """A real, authenticated user with NO Subscription row at all --
+    should not happen for a normally-registered user (see
+    get_effective_subscription's own docstring), but must still be
+    rejected cleanly rather than granted premium access by omission."""
+    user = User(email="unsubscribed@example.com", password_hash="hashed", is_staff=False)
+    db_session.add(user)
+    db_session.commit()
+    main.app.dependency_overrides[get_current_user] = lambda: user
+    yield user
 
 
 def _make_stock(db_session, symbol="2222", name_ar="أرامكو السعودية", sector="الطاقة"):
@@ -108,6 +147,28 @@ def test_get_followed_requires_authentication(client, db_session):
 def test_get_performance_requires_authentication(client, db_session):
     response = client.get("/api/v1/signals/performance")
     assert response.status_code == 401
+
+
+# --- subscription gating (full-platform audit, 2026-09-19) --------------
+# Every route here returns the same paid-tier entry-zone/target/stop-loss
+# fields src.api.routes.stocks/radar already gate behind an active
+# subscription -- an authenticated-but-unsubscribed account must be
+# rejected here too, never able to reach paid data via /signals instead.
+
+
+def test_follow_requires_active_subscription(client, db_session, as_unsubscribed_user):
+    response = client.post("/api/v1/signals/follow", json={"decision_v2_snapshot_id": 1})
+    assert response.status_code == 402
+
+
+def test_get_followed_requires_active_subscription(client, db_session, as_unsubscribed_user):
+    response = client.get("/api/v1/signals/followed")
+    assert response.status_code == 402
+
+
+def test_get_performance_requires_active_subscription(client, db_session, as_unsubscribed_user):
+    response = client.get("/api/v1/signals/performance")
+    assert response.status_code == 402
 
 
 # --- POST /follow -------------------------------------------------------
@@ -260,6 +321,27 @@ def test_performance_counts_only_the_users_own_followed_resolved_outcomes(client
     assert body["algorithm_resolved_sample_size"] == 2
     assert body["algorithm_win_rate_pct"] == pytest.approx(50.0)
     assert body["personal_small_sample_warning"] is True  # 1 < MIN_RESOLVED_SAMPLE_SIZE
+    assert body["algorithm_small_sample_warning"] is True  # 2 < ALGORITHM_MIN_RESOLVED_SAMPLE_SIZE (30)
+
+
+def test_performance_algorithm_win_rate_loses_its_small_sample_warning_at_the_real_platform_floor(
+    client, db_session, as_user
+):
+    """The algorithm-wide win rate is a platform-level track-record
+    claim -- it must clear the SAME 30-outcome floor
+    src.api.routes.recommendation_history already enforces for exactly
+    that kind of claim, not the lower 10-outcome per-user bar."""
+    _make_stock(db_session, "2222")
+    for _ in range(30):
+        decision = _add_decision_v2(db_session, "2222")
+        _add_outcome(db_session, decision, DecisionV2OutcomeStatus.TARGET_1_HIT)
+
+    response = client.get("/api/v1/signals/performance")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["algorithm_resolved_sample_size"] == 30
+    assert body["algorithm_small_sample_warning"] is False
 
 
 def test_performance_excludes_pending_and_partial_outcomes_from_win_rate(client, db_session, as_user):

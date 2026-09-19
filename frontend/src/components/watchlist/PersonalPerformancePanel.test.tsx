@@ -17,6 +17,7 @@ function buildComparison(overrides: Partial<PersonalPerformanceComparison> = {})
     personal_small_sample_warning: false,
     algorithm_resolved_sample_size: 200,
     algorithm_win_rate_pct: 58.5,
+    algorithm_small_sample_warning: false,
     insufficient_data_message_ar: null,
     ...overrides,
   };
@@ -58,6 +59,21 @@ describe("PersonalPerformancePanel", () => {
     render(<PersonalPerformancePanel />);
 
     expect(await screen.findByText(/عينة صغيرة/)).toBeInTheDocument();
+  });
+
+  it("shows a preliminary-sample warning on the algorithm side, without hiding the real number", async () => {
+    // 2026-09-19 (full-platform audit): the algorithm-wide win rate is
+    // a platform-level track-record claim -- it must be flagged below
+    // the 30-outcome floor this platform enforces everywhere else for
+    // that kind of claim, not shown as an unqualified headline number.
+    vi.mocked(getPersonalPerformance).mockResolvedValue(
+      buildComparison({ algorithm_resolved_sample_size: 2, algorithm_small_sample_warning: true })
+    );
+
+    render(<PersonalPerformancePanel />);
+
+    expect(await screen.findByText(/عينة أولية/)).toBeInTheDocument();
+    expect(screen.getByText("59%")).toBeInTheDocument(); // the real number is never hidden
   });
 
   it("shows an error state on a genuine load failure", async () => {

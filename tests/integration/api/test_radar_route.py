@@ -874,6 +874,52 @@ def test_history_returns_only_actionable_opportunities_emitted_that_day(client, 
     assert symbols == ["2222"]
 
 
+def test_history_dedups_a_symbol_emitted_more_than_once_the_same_day(client, db_session, authenticated_as_staff):
+    """emit_radar_opportunities supersedes a symbol's prior row whenever
+    its classification/confidence/score materially changes during Live
+    Market Mode's polling -- a symbol emitted twice in one day must
+    appear once in that day's history (its latest call), never twice."""
+    stock = _make_stock(db_session, "2222")
+    snapshot_1 = _make_snapshot(db_session, stock, decision="BUY_CANDIDATE", decision_label_ar="شراء")
+    snapshot_2 = _make_snapshot(db_session, stock, decision="STRONG_BUY_CANDIDATE", decision_label_ar="شراء قوي")
+    day = timezone(timedelta(hours=3))
+    earlier = _make_opportunity(db_session, stock, snapshot_1, emitted_at=datetime(2026, 6, 15, 10, 0, tzinfo=day))
+    later = _make_opportunity(db_session, stock, snapshot_2, emitted_at=datetime(2026, 6, 15, 14, 0, tzinfo=day))
+    earlier.superseded_by_id = later.id
+    db_session.commit()
+
+    response = client.get(_history_route("2026-06-15"))
+
+    assert response.status_code == 200
+    body = response.json()
+    symbols = [o["symbol"] for o in body["opportunities"]]
+    assert symbols == ["2222"]  # once, not twice
+
+
+def test_history_still_shows_a_symbols_call_even_when_a_later_days_row_superseded_it(
+    client, db_session, authenticated_as_staff
+):
+    """The live view's own `superseded_by_id IS NULL` filter is the
+    wrong tool for a PAST day's history: a row emitted on 2026-06-15 can
+    legitimately be superseded by a fresh emission on 2026-06-16 (the
+    next trading day) -- that must never make 2026-06-15's own history
+    show zero opportunities for a symbol that genuinely had one that
+    day."""
+    stock = _make_stock(db_session, "2222")
+    snapshot_1 = _make_snapshot(db_session, stock, decision="STRONG_BUY_CANDIDATE", decision_label_ar="شراء قوي")
+    snapshot_2 = _make_snapshot(db_session, stock, decision="STRONG_BUY_CANDIDATE", decision_label_ar="شراء قوي")
+    day = timezone(timedelta(hours=3))
+    day_one = _make_opportunity(db_session, stock, snapshot_1, emitted_at=datetime(2026, 6, 15, 10, 0, tzinfo=day))
+    day_two = _make_opportunity(db_session, stock, snapshot_2, emitted_at=datetime(2026, 6, 16, 10, 0, tzinfo=day))
+    day_one.superseded_by_id = day_two.id
+    db_session.commit()
+
+    response = client.get(_history_route("2026-06-15"))
+
+    assert response.status_code == 200
+    assert [o["symbol"] for o in response.json()["opportunities"]] == ["2222"]
+
+
 def test_history_respects_tadawul_local_day_boundaries(client, db_session, authenticated_as_staff):
     """A bar emitted at 23:30 Tadawul-local time on 2026-06-15 is still
     2026-06-15 in Tadawul's own UTC+3 calendar, even though its UTC

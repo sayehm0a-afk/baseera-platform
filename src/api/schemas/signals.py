@@ -52,5 +52,6 @@ class PersonalPerformanceComparisonOut(BaseModel):
 
     algorithm_resolved_sample_size: int
     algorithm_win_rate_pct: Optional[float] = None
+    algorithm_small_sample_warning: bool
 
     insufficient_data_message_ar: Optional[str] = None

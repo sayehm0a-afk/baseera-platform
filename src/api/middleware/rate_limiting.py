@@ -107,6 +107,18 @@ def auth_target_key(request: Request) -> str:
     if isinstance(token, str) and token:
         return f"tok:{hash_token(token)}"
 
+    # 2026-09-19 (full-platform audit): `POST /auth/mfa/login-verify`
+    # (`MfaLoginVerifyRequest`) names this field `mfa_token`, not
+    # `token` -- without this branch, every request to that route fell
+    # through to the `net:` fallback below, silently collapsing its
+    # per-account/token TOTP/backup-code brute-force limit into the
+    # same shared-by-everyone-behind-one-IP bucket `enforce_network_
+    # ceiling` already covers independently, defeating the point of
+    # having two separate, both-must-pass gates on that route.
+    mfa_token = body.get("mfa_token")
+    if isinstance(mfa_token, str) and mfa_token:
+        return f"tok:{hash_token(mfa_token)}"
+
     refresh_cookie = request.cookies.get("refresh_token")
     if refresh_cookie:
         return f"tok:{hash_token(refresh_cookie)}"

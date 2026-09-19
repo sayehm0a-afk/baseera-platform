@@ -39,6 +39,7 @@ export interface PersonalPerformanceComparison {
 
   algorithm_resolved_sample_size: number;
   algorithm_win_rate_pct: number | null;
+  algorithm_small_sample_warning: boolean;
 
   insufficient_data_message_ar: string | null;
 }

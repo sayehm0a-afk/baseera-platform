@@ -345,6 +345,15 @@ class PolygonClient:
                 break
             parsed = urlparse(str(next_url))
             query_params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            # 2026-09-19 (full-platform audit): Polygon's own `next_url`
+            # embeds `apiKey=<key>` in its query string -- reusing every
+            # param verbatim would send the key a second time as part of
+            # the request URL (exposed to any URL-logging intermediary:
+            # proxies, APM, aiohttp tracing) even though `_send()`
+            # already authenticates via the `Authorization` header alone.
+            # Case-insensitive since Polygon's own casing isn't a
+            # documented guarantee.
+            query_params = {k: v for k, v in query_params.items() if k.lower() != "apikey"}
             if not query_params:
                 # A `next_url` with no parseable query string can't be
                 # followed via the params-only client method -- stop

@@ -5,6 +5,7 @@ import { AiStar } from "@/components/ai/AiStar";
 import { AiSignalCard } from "@/components/patterns/AiSignalCard";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
+import { SymbolText } from "@/components/shared/SymbolText";
 import {
   RecommendationBadge,
   type RecommendationValue,
@@ -103,7 +104,7 @@ function NewsAlertsSection({ portfolioId }: { portfolioId: number }) {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-bsr-2">
                   <span className="bsr-numeric font-semibold text-bsr-text-primary">
-                    {alert.symbol}
+                    <SymbolText>{alert.symbol}</SymbolText>
                   </span>
                   <span
                     className={`rounded-bsr-full px-bsr-3 py-1 text-xs font-medium ${alertSeverityColorClass(alert.severity)}`}
@@ -195,7 +196,7 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
                 {analysis.holdings.map((holding) => (
                   <tr key={holding.symbol} className="border-b border-bsr-border-subtle last:border-0">
                     <td className="bsr-numeric px-bsr-2 py-bsr-2 font-semibold text-bsr-text-primary">
-                      {holding.symbol}
+                      <SymbolText>{holding.symbol}</SymbolText>
                       {!holding.available ? (
                         <span className="ms-bsr-2 text-xs text-bsr-text-muted">(لا تتوفر بيانات)</span>
                       ) : null}
@@ -332,7 +333,7 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
               <li key={action.symbol} className="flex flex-col gap-bsr-1 py-bsr-3">
                 <div className="flex items-center justify-between">
                   <span className="bsr-numeric font-semibold text-bsr-text-primary">
-                    {action.symbol}
+                    <SymbolText>{action.symbol}</SymbolText>
                   </span>
                   <span className="rounded-bsr-full bg-bsr-surface-overlay px-bsr-3 py-1 text-xs text-bsr-text-primary">
                     {POSITION_ACTION_LABELS[action.action] ?? action.action}

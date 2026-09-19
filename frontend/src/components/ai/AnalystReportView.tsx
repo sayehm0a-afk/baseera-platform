@@ -1,5 +1,6 @@
 import { AiStar } from "@/components/ai/AiStar";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
+import { SymbolText } from "@/components/shared/SymbolText";
 import {
   RecommendationBadge,
   type RecommendationValue,
@@ -56,7 +57,7 @@ export function AnalystReportView({ report }: { report: AnalystReport }) {
         <div className="mb-bsr-4 flex flex-wrap items-center justify-between gap-bsr-3">
           <div className="flex items-center gap-bsr-3">
             <span className="bsr-numeric text-2xl font-semibold text-bsr-text-primary">
-              {report.symbol}
+              <SymbolText>{report.symbol}</SymbolText>
             </span>
             <RecommendationBadge value={report.recommendation as RecommendationValue} />
           </div>
