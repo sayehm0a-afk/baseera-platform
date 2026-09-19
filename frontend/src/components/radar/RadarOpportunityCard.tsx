@@ -154,7 +154,7 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
           </div>
         </div>
         <div>
-          <p className="text-xs text-bsr-text-secondary">الثقة</p>
+          <p className="text-xs text-bsr-text-secondary">درجة الثقة</p>
           <div className="flex items-center gap-bsr-2">
             <span className="bsr-numeric font-semibold text-bsr-teal-500">
               {Math.round(o.confidence_score)}%

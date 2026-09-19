@@ -179,7 +179,7 @@ export function AnalystReportView({ report }: { report: AnalystReport }) {
       </div>
 
       <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-3">
-        <Section title="تفسير نسبة الثقة">
+        <Section title="تفسير درجة الثقة">
           <p className="text-sm leading-7 text-bsr-text-secondary">{report.confidence_explanation}</p>
           {report.confidence_calibration_notes.length > 0 ? (
             <ul className="mt-bsr-2 flex flex-col gap-bsr-1">
