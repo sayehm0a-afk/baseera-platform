@@ -91,7 +91,11 @@ class RadarOpportunity(Base):
     # run that produced it -- see src.market_intelligence.
     # stage1_local_scan.Stage1SymbolResult, whose fields these mirror.
     stage1_rank = Column(Integer, nullable=True)
-    stage1_ranking_score = Column(Numeric(6, 2), nullable=True)
+    # Indexed (2026-09-19 audit): this is the sort key for the live
+    # radar list (`order_by(stage1_ranking_score.desc().nullslast())`
+    # in src.market_intelligence.radar_v2.list_live_opportunities),
+    # which had no supporting index before.
+    stage1_ranking_score = Column(Numeric(6, 2), nullable=True, index=True)
     stage1_component_scores = Column(JSON, nullable=True)
     stage1_signals = Column(JSON, nullable=True)
     stage1_risk_reward_ratio = Column(Numeric(9, 4), nullable=True)

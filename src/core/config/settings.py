@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     redis_port: int = Field(default=6379, alias="REDIS_PORT")
     redis_password: Optional[str] = Field(default=None, alias="REDIS_PASSWORD")
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    # SQLAlchemy engine connection pool (src/core/db/database.py's
+    # init_engine()). 2026-09-19 audit: Starlette's default sync-route
+    # thread pool allows up to 40 concurrent threads per worker, while
+    # this pool previously hardcoded a 30-connection ceiling
+    # (pool_size + max_overflow = 10 + 20) -- under load, sync
+    # DB-bound requests could exceed the pool and stall waiting for a
+    # connection. max_overflow's new default (30, was 20) raises total
+    # capacity to 40, matching that thread-pool ceiling; pool_size's
+    # default (10) is unchanged. Both stay overridable per deployment.
+    db_pool_size: int = Field(default=10, alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=30, alias="DB_MAX_OVERFLOW")
     # Set by CI/CD at deploy time (e.g. `DEPLOYMENT_COMMIT=$(git rev-parse
     # HEAD)`) -- None in any environment that hasn't set it, never a
     # fabricated value, so the admin dashboard-summary endpoint (P13.4)

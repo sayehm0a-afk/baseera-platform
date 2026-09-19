@@ -17,7 +17,7 @@ duplicating that lookup-or-create logic.
 from typing import List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from src.domain.models import Portfolio, PortfolioAnalysisSnapshot, PortfolioHolding
 from src.market_data.ingestion._common import get_or_create_stock
@@ -106,9 +106,17 @@ class PortfolioRepository:
         """The ORM rows themselves (not the `Holding` dataclass
         `get_holdings` returns) -- for the RADAR-C Phase H per-holding
         CRUD routes, which need each row's own `id`/`stock_id`, not
-        just its symbol/quantity/cost."""
+        just its symbol/quantity/cost.
+
+        `joinedload(PortfolioHolding.stock)` (2026-09-19 audit fix):
+        `src.api.routes.portfolio._holding_detail` accesses
+        `holding.stock` for every row it formats, which without eager
+        loading is one lazy-loaded `Stock` query per holding (N+1) on
+        top of this one. A single LEFT OUTER JOIN here fetches every
+        holding's `Stock` alongside it instead."""
         return (
             session.query(PortfolioHolding)
+            .options(joinedload(PortfolioHolding.stock))
             .filter_by(portfolio_id=portfolio_id)
             .order_by(PortfolioHolding.symbol)
             .all()

@@ -12,7 +12,7 @@ from typing import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -176,6 +176,69 @@ def test_get_holdings_on_a_freshly_created_portfolio_is_an_honest_empty_list(cli
     assert body["total_invested_cost"] == 0
     assert body["total_current_value"] == 0
     assert body["total_value_with_cash"] == 1000.0
+
+
+def _count_queries_during(engine, fn):
+    """Number of SQL statements actually sent to `engine` while `fn()`
+    runs -- used below to prove GET .../holdings eager-loads each
+    holding's `Stock` (2026-09-19 N+1 fix), instead of one lazy-loaded
+    query per holding."""
+    count = 0
+
+    def _before_cursor_execute(*args, **kwargs):
+        nonlocal count
+        count += 1
+
+    event.listen(engine, "before_cursor_execute", _before_cursor_execute)
+    try:
+        fn()
+    finally:
+        event.remove(engine, "before_cursor_execute", _before_cursor_execute)
+    return count
+
+
+def test_get_holdings_does_not_add_a_query_per_holding_for_its_stock(client, db_session):
+    """Before the 2026-09-19 fix, `PortfolioHolding.stock` had no
+    eager-loading and `_holding_detail` accessed `holding.stock` once
+    per row -- an N+1: every extra holding added one lazy-loaded
+    `Stock` query. `list_holding_rows()` now eager-loads `stock` via
+    `joinedload`, so (with every other per-holding lookup in this route
+    already batched -- prices/decisions via `stock_id.in_(...)`) adding
+    more holdings must add zero extra queries to GET .../holdings."""
+    engine = db_session.get_bind()
+    portfolio_id = client.post("/api/v1/portfolio", json={"name": "P"}).json()["id"]
+
+    def _add_holding(symbol):
+        stock = _make_stock(db_session, symbol=symbol, name_ar=f"شركة {symbol}")
+        _add_bars(db_session, stock, [30.0])
+        response = client.post(
+            f"/api/v1/portfolio/{portfolio_id}/holdings",
+            json={"symbol": symbol, "quantity": 10, "average_cost": 25.0},
+        )
+        assert response.status_code == 201
+
+    _add_holding("1111")
+    one_holding_query_count = _count_queries_during(
+        engine, lambda: client.get(f"/api/v1/portfolio/{portfolio_id}/holdings")
+    )
+
+    for symbol in ["2222", "3333", "4444"]:
+        _add_holding(symbol)
+    four_holding_query_count = _count_queries_during(
+        engine, lambda: client.get(f"/api/v1/portfolio/{portfolio_id}/holdings")
+    )
+
+    assert four_holding_query_count - one_holding_query_count == 0
+
+    # Functional regression: every holding's real Stock-derived fields
+    # still come back correctly once eager-loaded.
+    body = client.get(f"/api/v1/portfolio/{portfolio_id}/holdings").json()
+    assert len(body["holdings"]) == 4
+    by_symbol = {h["symbol"]: h for h in body["holdings"]}
+    assert set(by_symbol) == {"1111", "2222", "3333", "4444"}
+    for symbol, holding in by_symbol.items():
+        assert holding["name_ar"] == f"شركة {symbol}"
+        assert holding["current_price"] == 30.0
 
 
 def test_add_holding_computes_real_pnl_from_persisted_price_bars(client, db_session):

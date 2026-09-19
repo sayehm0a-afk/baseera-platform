@@ -36,6 +36,29 @@ from src.ai_evolution.personal_performance import (
 )
 from src.backtesting.metrics import breakdown_by
 from src.domain.sector_labels import sector_label_ar
+from src.market_data.caching.ttl_cache import _MISSING, TTLCache
+
+# `fetch_live_outcomes` runs an unbounded 3-way join with no LIMIT, and
+# every call into this module re-runs it from scratch -- expensive, and
+# unnecessary, since this is a market-wide aggregate (no per-user/
+# per-request parameter -- see the function signature below) that in
+# practice changes at most once per trading day, as new
+# `RecommendationOutcome` rows resolve. 10 minutes is comfortably inside
+# that refresh window and well above this codebase's own short-lived
+# live-quote TTLs (`QUOTE_CACHE_TTL_SECONDS`/`MARKET_STATUS_CACHE_TTL_
+# SECONDS` = 15s in src.market_data.polygon/sahmk.service), matching
+# this data's much slower true rate of change -- the same reasoning
+# those TTLs use, applied to a slower-moving signal.
+#
+# 2026-09-19 audit: this was invoked on every `GET /api/v1/radar` (list)
+# and `GET /api/v1/radar/opportunities/{id}` call. `TTLCache`'s plain
+# sync `get`/`set` are used here (not the async single-flight
+# `get_or_compute`) since every caller of this function is a sync route
+# handler; the rare race between two concurrent cache-miss requests
+# both recomputing is harmless (same eventual value), unlike the
+# metered-vendor-call case `get_or_compute` protects elsewhere.
+_SECTOR_RELIABILITY_CACHE_TTL_SECONDS = 600.0
+_sector_reliability_cache = TTLCache(default_ttl_seconds=_SECTOR_RELIABILITY_CACHE_TTL_SECONDS)
 
 RELIABILITY_HIGH = "HIGH"
 RELIABILITY_MODERATE = "MODERATE"
@@ -94,7 +117,27 @@ def compute_sector_reliability_by_arabic_label(
     data, keyed by the Arabic sector label (`sector_label_ar(Stock.sector)`)
     so a caller can look it up directly against a `DecisionV2Snapshot.
     sector_ar` value -- the two are produced from the same translation
-    table and therefore always agree for any sector SAHMK reports."""
+    table and therefore always agree for any sector SAHMK reports.
+
+    Cached for `_SECTOR_RELIABILITY_CACHE_TTL_SECONDS` (module docstring
+    above) -- this is a market-wide aggregate with no per-user/
+    per-request input, so the cache key is `evaluation_horizon_days`
+    alone."""
+    cache_key = ("sector_reliability_by_arabic_label", evaluation_horizon_days)
+    cached = _sector_reliability_cache.get(cache_key)
+    if cached is not _MISSING:
+        return cached
+
+    result = _compute_sector_reliability_by_arabic_label(session, evaluation_horizon_days)
+    _sector_reliability_cache.set(cache_key, result)
+    return result
+
+
+def _compute_sector_reliability_by_arabic_label(
+    session: Session, evaluation_horizon_days: int
+) -> Dict[str, SectorReliability]:
+    """The real (uncached) computation -- see the public,
+    cache-wrapping `compute_sector_reliability_by_arabic_label` above."""
     rows = fetch_live_outcomes(session, evaluation_horizon_days)
     terminal_rows = [row for row in rows if row[0].status in TERMINAL_OUTCOME_STATUSES]
     evaluation_outcomes = [to_evaluation_outcome(o, s, stock) for o, s, stock in terminal_rows]

@@ -6,6 +6,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.orm import declarative_base
 
+from src.core.config.settings import settings
+
 logger = logging.getLogger(__name__)
 
 # Use synchronous PostgreSQL connection for production
@@ -36,8 +38,14 @@ def init_engine(database_url: Optional[str] = None) -> Engine:
         engine = create_engine(
             url,
             poolclass=pool.QueuePool,
-            pool_size=10,
-            max_overflow=20,
+            # Configurable via DB_POOL_SIZE/DB_MAX_OVERFLOW (see
+            # src.core.config.settings) -- 2026-09-19 audit: the total
+            # (pool_size + max_overflow) should comfortably cover
+            # Starlette's default 40-thread-per-worker sync-route
+            # ceiling, so sync DB-bound requests under load don't stall
+            # waiting for a pooled connection.
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
             pool_pre_ping=True,  # Verify connections before using them
             echo=False,  # Set to True for debugging
         )
