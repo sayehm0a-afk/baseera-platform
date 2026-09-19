@@ -148,6 +148,12 @@ export default function PortfolioPage() {
         <h1 className="text-lg font-semibold text-bsr-text-primary">محفظتي الذكية</h1>
       </div>
 
+      {data.has_mixed_currencies ? (
+        <p className="rounded-bsr-md bg-bsr-action-watch/15 px-bsr-3 py-bsr-2 text-xs text-bsr-action-watch">
+          محفظتك تضم أسهمًا بعملات مختلفة -- الأرقام أدناه مجموع مباشر بلا تحويل عملة، وليست قيمة إجمالية حقيقية بعملة واحدة.
+        </p>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-bsr-3 md:grid-cols-4">
         <div className="flex flex-col gap-bsr-1 rounded-bsr-md bg-bsr-surface-overlay px-bsr-4 py-bsr-3">
           <span className="text-xs text-bsr-text-secondary">التكلفة المستثمرة</span>

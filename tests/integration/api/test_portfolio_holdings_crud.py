@@ -196,11 +196,48 @@ def test_add_holding_computes_real_pnl_from_persisted_price_bars(client, db_sess
     assert holding["current_value"] == 3300.0
     assert holding["unrealized_pnl"] == 300.0
     assert round(holding["unrealized_pnl_pct"], 2) == 10.0
+    assert holding["currency"] == "SAR"
 
     listed = client.get(f"/api/v1/portfolio/{portfolio_id}/holdings").json()
     assert listed["total_invested_cost"] == 3000.0
     assert listed["total_current_value"] == 3300.0
     assert listed["total_unrealized_pnl"] == 300.0
+    assert listed["has_mixed_currencies"] is False
+
+
+def test_holding_currency_reflects_a_real_us_stocks_currency(client, db_session):
+    """2026-09-19 (full-platform audit): a portfolio holding search
+    already reaches the multi-market symbol universe (Phase 4) -- a
+    US-market holding's currency must read as real "USD", never the
+    SAR default."""
+    from src.domain.models import Market
+
+    portfolio_id = client.post("/api/v1/portfolio", json={"name": "P"}).json()["id"]
+    us_stock = Stock(symbol="AAPL", name_en="Apple Inc.", currency="USD", market=Market.US)
+    db_session.add(us_stock)
+    db_session.commit()
+
+    response = client.post(
+        f"/api/v1/portfolio/{portfolio_id}/holdings", json={"symbol": "AAPL", "quantity": 10}
+    )
+    assert response.status_code == 201
+    assert response.json()["currency"] == "USD"
+
+
+def test_has_mixed_currencies_is_true_when_holdings_span_two_currencies(client, db_session):
+    from src.domain.models import Market
+
+    portfolio_id = client.post("/api/v1/portfolio", json={"name": "P"}).json()["id"]
+    sar_stock = _make_stock(db_session, symbol="2222")
+    us_stock = Stock(symbol="AAPL", name_en="Apple Inc.", currency="USD", market=Market.US)
+    db_session.add(us_stock)
+    db_session.commit()
+
+    client.post(f"/api/v1/portfolio/{portfolio_id}/holdings", json={"symbol": sar_stock.symbol, "quantity": 10})
+    client.post(f"/api/v1/portfolio/{portfolio_id}/holdings", json={"symbol": "AAPL", "quantity": 5})
+
+    listed = client.get(f"/api/v1/portfolio/{portfolio_id}/holdings").json()
+    assert listed["has_mixed_currencies"] is True
 
 
 def test_add_holding_never_calls_the_market_data_provider(client, db_session):

@@ -216,6 +216,10 @@ export interface PortfolioHoldingDetail {
   sector: string | null;
   sector_ar: string | null;
 
+  // 2026-09-19 (full-platform audit): defaults to "SAR" server-side --
+  // every amount on this holding is in THIS currency, never converted.
+  currency: string;
+
   quantity: number;
   average_cost: number | null;
 
@@ -251,6 +255,12 @@ export interface PortfolioHoldings {
   total_unrealized_pnl: number | null;
   total_unrealized_pnl_pct: number | null;
   total_value_with_cash: number;
+
+  // 2026-09-19 (full-platform audit): True the moment two holdings
+  // carry different currencies -- every total_* figure above sums raw
+  // amounts with NO currency conversion, so it is not a real single-
+  // currency total when this is true.
+  has_mixed_currencies: boolean;
 }
 
 export interface PortfolioCreateInput {

@@ -295,6 +295,7 @@ def _holding_detail(
         name_ar=stock.name_ar if stock else None,
         name_en=stock.name_en if stock else holding.symbol,
         sector=stock.sector if stock else None,
+        currency=stock.currency if stock else "SAR",
         quantity=quantity,
         average_cost=average_cost,
         current_price=current_price,
@@ -358,6 +359,7 @@ def get_portfolio_holdings(
         total_unrealized_pnl=total_unrealized_pnl,
         total_unrealized_pnl_pct=total_unrealized_pnl_pct,
         total_value_with_cash=round(total_current_value + float(portfolio.cash_balance), 4),
+        has_mixed_currencies=len({h.currency for h in holdings}) > 1,
     )
 
 

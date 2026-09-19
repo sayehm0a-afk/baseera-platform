@@ -52,6 +52,7 @@ function holding(overrides: Partial<PortfolioHoldingDetail> = {}): PortfolioHold
     name_en: "Saudi Aramco",
     sector: "Energy",
     sector_ar: "الطاقة",
+    currency: "SAR",
     quantity: 100,
     average_cost: 30,
     current_price: 33,
@@ -83,6 +84,7 @@ function holdings(overrides: Partial<PortfolioHoldings> = {}): PortfolioHoldings
     total_unrealized_pnl: 300,
     total_unrealized_pnl_pct: 10,
     total_value_with_cash: 3800,
+    has_mixed_currencies: false,
     ...overrides,
   };
 }
@@ -145,6 +147,37 @@ describe("PortfolioPage", () => {
     // are expected, not a bug to work around.
     expect(screen.getAllByText("3300.00").length).toBe(2);
     expect(screen.getByText("3800.00")).toBeInTheDocument();
+  });
+
+  it("shows no mixed-currency warning and no currency suffix for an all-SAR portfolio", async () => {
+    vi.mocked(listMyPortfolios).mockResolvedValue({ portfolios: [summary()] });
+    vi.mocked(getPortfolioHoldings).mockResolvedValue(holdings());
+
+    render(<PortfolioPage />);
+
+    await screen.findByText("أرامكو السعودية");
+    expect(screen.queryByText(/محفظتك تضم أسهمًا بعملات مختلفة/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/USD/)).not.toBeInTheDocument();
+  });
+
+  it("shows a real currency suffix for a non-SAR holding and the mixed-currency warning", async () => {
+    // 2026-09-19 (full-platform audit): a portfolio holding search
+    // already reaches the multi-market symbol universe -- a mixed
+    // SAR+USD portfolio must disclose that its totals are a raw sum
+    // with no currency conversion, never a silent blended figure.
+    vi.mocked(listMyPortfolios).mockResolvedValue({ portfolios: [summary()] });
+    vi.mocked(getPortfolioHoldings).mockResolvedValue(
+      holdings({
+        holdings: [holding({ symbol: "AAPL", name_ar: null, name_en: "Apple Inc.", currency: "USD" })],
+        has_mixed_currencies: true,
+      })
+    );
+
+    render(<PortfolioPage />);
+
+    await screen.findByText("Apple Inc.");
+    expect(screen.getByText(/محفظتك تضم أسهمًا بعملات مختلفة/)).toBeInTheDocument();
+    expect(screen.getAllByText(/USD/).length).toBeGreaterThan(0);
   });
 
   it("shows the holder guidance badge from the backend, distinct from a fresh buy recommendation", async () => {
