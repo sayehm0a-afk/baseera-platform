@@ -202,6 +202,13 @@ export default function StrategiesPage() {
         </section>
       ) : null}
 
+      {status === "idle" && run && run.status === "SUCCESS" && !report ? (
+        <EmptyState
+          title="تعذّر عرض نتائج الاختبار"
+          description="اكتمل التشغيل لكن تعذّر عرض النتائج بالتنسيق المتوقع. حاول تشغيل الاختبار مرة أخرى."
+        />
+      ) : null}
+
       {status === "idle" && !run ? (
         <EmptyState
           title="اختبر استراتيجية على بيانات تاريخية"

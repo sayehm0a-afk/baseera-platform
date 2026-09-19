@@ -20,7 +20,21 @@ export function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [actionError, setActionError] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const actionErrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (actionErrorTimeoutRef.current) clearTimeout(actionErrorTimeoutRef.current);
+    };
+  }, []);
+
+  function flashActionError() {
+    setActionError(true);
+    if (actionErrorTimeoutRef.current) clearTimeout(actionErrorTimeoutRef.current);
+    actionErrorTimeoutRef.current = setTimeout(() => setActionError(false), 4000);
+  }
 
   function refresh() {
     listNotifications()
@@ -65,7 +79,9 @@ export function NotificationBell() {
         setUnreadCount((count) => Math.max(0, count - 1));
       })
       .catch(() => {
-        // no-op -- the item simply stays unread, safe to retry on next open
+        // The item simply stays unread, safe to retry on next open --
+        // but surface it so a repeated failure isn't completely silent.
+        flashActionError();
       });
   }
 
@@ -77,7 +93,7 @@ export function NotificationBell() {
         setUnreadCount(0);
       })
       .catch(() => {
-        // no-op
+        flashActionError();
       });
   }
 
@@ -114,6 +130,12 @@ export function NotificationBell() {
               </button>
             ) : null}
           </div>
+
+          {actionError ? (
+            <p className="border-b border-bsr-border-subtle bg-bsr-market-down/10 px-bsr-4 py-bsr-2 text-xs text-bsr-market-down">
+              تعذّر التحديث، حاول مرة أخرى
+            </p>
+          ) : null}
 
           <div className="max-h-96 overflow-y-auto">
             {!loaded ? (

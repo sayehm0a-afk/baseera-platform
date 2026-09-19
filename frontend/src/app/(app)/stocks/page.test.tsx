@@ -127,6 +127,41 @@ describe("StocksDirectoryPage", () => {
     expect(screen.queryByText("تحميل المزيد")).not.toBeInTheDocument();
   });
 
+  it("disables load-more and shows a loading label while the append request is in flight", async () => {
+    vi.mocked(getStockDirectory).mockResolvedValueOnce(
+      directory({ total: 2, results: [item({ symbol: "2222" })] })
+    );
+    render(<StocksDirectoryPage />);
+    await flushDebounce();
+
+    let resolveSecondPage: (value: StockDirectory) => void = () => {};
+    vi.mocked(getStockDirectory).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSecondPage = resolve;
+      })
+    );
+
+    const loadMore = screen.getByText("تحميل المزيد");
+    fireEvent.click(loadMore);
+    await flushMicrotasks();
+
+    const pendingButton = screen.getByText("جارٍ التحميل...");
+    expect(pendingButton).toBeDisabled();
+
+    // A second click while pending must not issue a duplicate request.
+    fireEvent.click(pendingButton);
+    await flushMicrotasks();
+    expect(getStockDirectory).toHaveBeenCalledTimes(2);
+
+    resolveSecondPage(
+      directory({ total: 2, offset: 1, results: [item({ symbol: "1120", name_ar: "الراجحي" })] })
+    );
+    await flushMicrotasks();
+
+    expect(screen.getByText("الراجحي")).toBeInTheDocument();
+    expect(screen.queryByText("جارٍ التحميل...")).not.toBeInTheDocument();
+  });
+
   it("shows the error state when the request fails, not a silently empty list", async () => {
     vi.mocked(getStockDirectory).mockRejectedValue(new Error("network error"));
 
