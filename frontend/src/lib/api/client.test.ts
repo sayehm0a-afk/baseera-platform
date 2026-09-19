@@ -178,4 +178,37 @@ describe("apiFetch", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("aborts and throws a request_timeout ApiError if the backend never responds", async () => {
+    vi.useFakeTimers();
+    let capturedSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_path, init: RequestInit) => {
+        capturedSignal = init.signal ?? undefined;
+        return new Promise((_resolve, reject) => {
+          capturedSignal?.addEventListener("abort", () => {
+            const err = new Error("The operation was aborted.");
+            err.name = "AbortError";
+            reject(err);
+          });
+        });
+      })
+    );
+
+    const pending = apiFetch("/api/v1/whatever");
+    const assertion = expect(pending).rejects.toMatchObject({
+      code: "request_timeout",
+    });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    vi.useRealTimers();
+  });
+
+  it("propagates a genuine network failure unchanged, not as a timeout", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+    await expect(apiFetch("/api/v1/whatever")).rejects.toThrow("Failed to fetch");
+  });
 });

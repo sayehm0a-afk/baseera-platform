@@ -14,6 +14,17 @@ const AUTH_BOOTSTRAP_PATHS = new Set([
   "/api/v1/auth/reset-password",
 ]);
 
+// next.config.ts's own rewrite proxy already bounds every request to
+// 120s (see its own `proxyTimeout` comment for why that ceiling exists
+// and isn't unbounded). Without a client-side cutoff of our own, a
+// hung backend/proxy left `fetch` waiting indefinitely -- no spinner
+// ever resolves, no error is ever shown, and it looks identical to a
+// process that's simply broken. Deliberately set a few seconds above
+// the proxy's own 120s ceiling so this never fires first and steals
+// the (more specific) proxy timeout's own error -- this is a last-
+// resort backstop, not the primary timeout.
+const DEFAULT_TIMEOUT_MS = 130_000;
+
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
@@ -80,18 +91,37 @@ export async function apiFetch<T>(
   path: string,
   init?: RequestInit & { _isRetry?: boolean }
 ): Promise<T> {
-  const { _isRetry, ...rest } = init ?? {};
+  const { _isRetry, signal: callerSignal, ...rest } = init ?? {};
 
-  const response = await fetch(path, {
-    ...rest,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...csrfHeaders(),
-      ...rest.headers,
-    },
-    cache: "no-store",
-  });
+  // Respect a caller-supplied signal (none currently exist, but never
+  // silently override one a future caller adds) -- otherwise apply the
+  // default backstop timeout above.
+  const controller = callerSignal ? null : new AbortController();
+  const timeoutId = controller
+    ? setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
+    : null;
+
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...rest,
+      signal: callerSignal ?? controller?.signal,
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...csrfHeaders(),
+        ...rest.headers,
+      },
+      cache: "no-store",
+    });
+  } catch (err) {
+    if (controller?.signal.aborted) {
+      throw new ApiError(0, "request_timeout", "انتهت مهلة الاتصال بالخادم.");
+    }
+    throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 
   if (
     response.status === 401 &&
