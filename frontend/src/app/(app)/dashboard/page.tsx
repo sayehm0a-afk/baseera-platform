@@ -216,6 +216,8 @@ export default function DashboardPage() {
                 symbol={entry.symbol}
                 sector={entry.sector_ar ?? entry.sector}
                 recommendation={(entry.recommendation as RecommendationValue) ?? "HOLD"}
+                decision={entry.decision}
+                decisionLabelAr={entry.decision_label_ar}
                 confidence={entry.confidence}
                 calibratedConfidence={entry.calibrated_confidence}
                 currentPrice={entry.current_price}

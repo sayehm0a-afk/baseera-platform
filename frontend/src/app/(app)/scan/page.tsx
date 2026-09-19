@@ -85,6 +85,8 @@ export default function ScanPage() {
                   recommendation={
                     (entry.recommendation as RecommendationValue) ?? undefined
                   }
+                  decision={entry.decision}
+                  decisionLabelAr={entry.decision_label_ar}
                   confidence={entry.confidence}
                   href={`/stocks/${encodeURIComponent(entry.symbol)}`}
                 />

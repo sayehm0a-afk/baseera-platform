@@ -1,6 +1,7 @@
 import { AiStar } from "@/components/ai/AiStar";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { SymbolText } from "@/components/shared/SymbolText";
+import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import {
   RecommendationBadge,
   type RecommendationValue,
@@ -59,7 +60,17 @@ export function AnalystReportView({ report }: { report: AnalystReport }) {
             <span className="bsr-numeric text-2xl font-semibold text-bsr-text-primary">
               <SymbolText>{report.symbol}</SymbolText>
             </span>
-            <RecommendationBadge value={report.recommendation as RecommendationValue} />
+            {/* Decision Engine V2's gate-checked verdict wins over the
+             * legacy `recommendation` field whenever both are present,
+             * exactly as on the stock detail page (StockDetailClient):
+             * V2 is gate-checked and carries the backend's own Arabic
+             * label, so it must never be shown alongside or after the
+             * legacy badge, only in its place. */}
+            {report.decision && report.decision_label_ar ? (
+              <DecisionBadge value={report.decision} labelAr={report.decision_label_ar} />
+            ) : (
+              <RecommendationBadge value={report.recommendation as RecommendationValue} />
+            )}
           </div>
           <span className="text-xs text-bsr-text-muted">
             {new Date(report.generated_at).toLocaleString("ar-SA", { calendar: "gregory" })}

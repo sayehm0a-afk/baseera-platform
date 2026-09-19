@@ -168,6 +168,8 @@ function LiveTestPageInner() {
                 symbol={entry.symbol}
                 sector={entry.sector}
                 recommendation={(entry.recommendation as RecommendationValue) ?? "HOLD"}
+                decision={entry.decision}
+                decisionLabelAr={entry.decision_label_ar}
                 confidence={entry.confidence}
                 currentPrice={entry.current_price}
                 targetPrice={entry.target_price}
