@@ -242,6 +242,15 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
       <EmptyState
         title="تعذّر تحميل بيانات السهم"
         description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+        action={
+          <button
+            type="button"
+            onClick={stock.reload}
+            className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+          >
+            إعادة المحاولة
+          </button>
+        }
       />
     );
   }
@@ -352,11 +361,29 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
         <EmptyState
           title="تعذّر تحميل قرار الذكاء الاصطناعي"
           description="مزود بيانات السوق غير متاح حالياً، ويتوقف محرك القرار عن إصدار توصيات جديدة إلى حين استعادة الاتصال به. هذا لا يعني عدم كفاية البيانات التاريخية لهذا السهم."
+          action={
+            <button
+              type="button"
+              onClick={decisionV2.reload}
+              className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+            >
+              إعادة المحاولة
+            </button>
+          }
         />
       ) : (
         <EmptyState
           title="تعذّر تحميل قرار الذكاء الاصطناعي"
           description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+          action={
+            <button
+              type="button"
+              onClick={decisionV2.reload}
+              className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+            >
+              إعادة المحاولة
+            </button>
+          }
         />
       )}
 
@@ -372,7 +399,19 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           />
         ) : null}
         {history.status === "unavailable" || history.status === "error" ? (
-          <EmptyState title="تعذّر تحميل الرسم البياني" description="حاول مرة أخرى بعد قليل." />
+          <EmptyState
+            title="تعذّر تحميل الرسم البياني"
+            description="حاول مرة أخرى بعد قليل."
+            action={
+              <button
+                type="button"
+                onClick={history.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
+          />
         ) : null}
         {history.status === "ready" ? (
           history.data.bars.length === 0 ? (
@@ -455,11 +494,29 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <EmptyState
             title="تعذّر تحميل التوصية الآلية"
             description="مزود بيانات السوق غير متاح حالياً. حاول مرة أخرى بعد استعادة الاتصال."
+            action={
+              <button
+                type="button"
+                onClick={decision.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
           />
         ) : (
           <EmptyState
             title="تعذّر تحميل التوصية الآلية"
             description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+            action={
+              <button
+                type="button"
+                onClick={decision.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
           />
         )
       ) : null}
@@ -484,11 +541,29 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <EmptyState
             title="تعذّر تحميل المؤشرات الفنية"
             description="مزود بيانات السوق غير متاح حالياً. حاول مرة أخرى بعد استعادة الاتصال."
+            action={
+              <button
+                type="button"
+                onClick={technical.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
           />
         ) : (
           <EmptyState
             title="تعذّر تحميل المؤشرات الفنية"
             description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+            action={
+              <button
+                type="button"
+                onClick={technical.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
           />
         )
       ) : null}
@@ -520,11 +595,29 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <EmptyState
             title="تعذّر تحميل البيانات المالية"
             description="مزود بيانات السوق غير متاح حالياً. حاول مرة أخرى بعد استعادة الاتصال."
+            action={
+              <button
+                type="button"
+                onClick={fundamentals.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
           />
         ) : (
           <EmptyState
             title="تعذّر تحميل البيانات المالية"
             description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+            action={
+              <button
+                type="button"
+                onClick={fundamentals.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
           />
         )
       ) : null}
@@ -540,11 +633,29 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <EmptyState
             title="تعذّر تحميل تقرير الذكاء الاصطناعي"
             description="مزود بيانات السوق غير متاح حالياً. حاول مرة أخرى بعد استعادة الاتصال."
+            action={
+              <button
+                type="button"
+                onClick={analystReport.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
           />
         ) : (
           <EmptyState
             title="تعذّر تحميل تقرير الذكاء الاصطناعي"
             description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+            action={
+              <button
+                type="button"
+                onClick={analystReport.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
           />
         )
       ) : null}

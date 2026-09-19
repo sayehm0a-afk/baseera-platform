@@ -135,4 +135,19 @@ describe("StocksDirectoryPage", () => {
 
     expect(screen.getByText("تعذّر تحميل قائمة الأسهم")).toBeInTheDocument();
   });
+
+  it("offers a real retry button on the error state that re-fetches and can recover", async () => {
+    vi.mocked(getStockDirectory).mockRejectedValueOnce(new Error("network error"));
+
+    render(<StocksDirectoryPage />);
+    await flushDebounce();
+    expect(screen.getByText("تعذّر تحميل قائمة الأسهم")).toBeInTheDocument();
+
+    vi.mocked(getStockDirectory).mockResolvedValueOnce(directory());
+    fireEvent.click(screen.getByText("إعادة المحاولة"));
+    await flushMicrotasks();
+
+    expect(screen.getByText("أرامكو السعودية")).toBeInTheDocument();
+    expect(getStockDirectory).toHaveBeenCalledTimes(2);
+  });
 });

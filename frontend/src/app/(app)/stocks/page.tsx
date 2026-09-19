@@ -74,6 +74,18 @@ export default function StocksDirectoryPage() {
         <EmptyState
           title="تعذّر تحميل قائمة الأسهم"
           description="تأكد من اتصال الخادم وحاول مرة أخرى."
+          action={
+            <button
+              type="button"
+              onClick={() => {
+                setState({ status: "loading" });
+                load(query.trim(), 0, false);
+              }}
+              className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+            >
+              إعادة المحاولة
+            </button>
+          }
         />
       ) : null}
 

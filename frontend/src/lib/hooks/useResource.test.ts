@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api/client";
 import { useResource } from "./useResource";
@@ -6,7 +6,7 @@ import { useResource } from "./useResource";
 describe("useResource", () => {
   it("starts in loading state", () => {
     const { result } = renderHook(() => useResource("2222", () => new Promise(() => {})));
-    expect(result.current).toEqual({ status: "loading" });
+    expect(result.current.status).toBe("loading");
   });
 
   it("resolves to ready with the fetched data", async () => {
@@ -76,5 +76,24 @@ describe("useResource", () => {
     resolveFirst({ symbol: "2222" });
     await new Promise((r) => setTimeout(r, 10));
     expect(result.current).toMatchObject({ status: "ready", data: { symbol: "1120" } });
+  });
+
+  it("reload() re-runs the fetch for the current key and goes back to loading first", async () => {
+    const fetcher = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network error"))
+      .mockImplementationOnce(async (key: string) => ({ symbol: key }));
+
+    const { result } = renderHook(() => useResource("2222", fetcher));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+
+    act(() => {
+      result.current.reload();
+    });
+    expect(result.current.status).toBe("loading");
+
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current).toMatchObject({ status: "ready", data: { symbol: "2222" } });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });

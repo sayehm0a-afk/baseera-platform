@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { AiSignalCard } from "@/components/patterns/AiSignalCard";
@@ -40,45 +40,50 @@ type DashboardData =
 // end-to-end with a real login. Matches the same client-side pattern
 // already used (and already working) by /scan, /watchlist, and the
 // stock-detail page.
-function useDashboardData(): DashboardData {
+async function fetchDashboardData(): Promise<DashboardData> {
+  try {
+    const [summary, sectors, alerts, rankings] = await Promise.all([
+      getMarketSummary(),
+      getSectors(),
+      getAlerts({ limit: 8 }),
+      getRankings("TOP_BUY"),
+    ]);
+    const run = summary.scan_run_id != null ? await getScanRun(summary.scan_run_id) : null;
+    return {
+      status: "ready",
+      summary,
+      sectors: sectors.sectors,
+      alerts: alerts.alerts,
+      topBuy: rankings.rankings[0]?.entries.slice(0, 4) ?? [],
+      run,
+    };
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "no_market_scan_data") {
+      return { status: "unavailable" };
+    }
+    return { status: "error" };
+  }
+}
+
+function useDashboardData() {
   const [data, setData] = useState<DashboardData>({ status: "loading" });
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      try {
-        const [summary, sectors, alerts, rankings] = await Promise.all([
-          getMarketSummary(),
-          getSectors(),
-          getAlerts({ limit: 8 }),
-          getRankings("TOP_BUY"),
-        ]);
-        const run = summary.scan_run_id != null ? await getScanRun(summary.scan_run_id) : null;
-        if (cancelled) return;
-        setData({
-          status: "ready",
-          summary,
-          sectors: sectors.sectors,
-          alerts: alerts.alerts,
-          topBuy: rankings.rankings[0]?.entries.slice(0, 4) ?? [],
-          run,
-        });
-      } catch (error) {
-        if (cancelled) return;
-        if (error instanceof ApiError && error.code === "no_market_scan_data") {
-          setData({ status: "unavailable" });
-        } else {
-          setData({ status: "error" });
-        }
-      }
-    }
-    load();
+    fetchDashboardData().then((result) => {
+      if (!cancelled) setData(result);
+    });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  return data;
+  const reload = useCallback(() => {
+    setData({ status: "loading" });
+    fetchDashboardData().then(setData);
+  }, []);
+
+  return { data, reload };
 }
 
 function StatTile({ label, value }: { label: string; value: string }) {
@@ -93,7 +98,7 @@ function StatTile({ label, value }: { label: string; value: string }) {
 }
 
 export default function DashboardPage() {
-  const data = useDashboardData();
+  const { data, reload } = useDashboardData();
 
   if (data.status === "loading") {
     return <LoadingScreen />;
@@ -104,6 +109,15 @@ export default function DashboardPage() {
       <EmptyState
         title="تعذّر تحميل نظرة السوق"
         description="تأكد من اتصال الخادم وحاول مرة أخرى."
+        action={
+          <button
+            type="button"
+            onClick={reload}
+            className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+          >
+            إعادة المحاولة
+          </button>
+        }
       />
     );
   }
@@ -113,7 +127,7 @@ export default function DashboardPage() {
       <EmptyState
         title="لا توجد بيانات مسح للسوق بعد"
         description="شغّل أول مسح ذكي للسوق للحصول على نظرة عامة، توزيع القطاعات، والتنبيهات."
-        action={<RunScanButton />}
+        action={<RunScanButton onScanComplete={reload} />}
       />
     );
   }

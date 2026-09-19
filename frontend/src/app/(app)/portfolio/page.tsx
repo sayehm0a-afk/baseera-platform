@@ -69,6 +69,11 @@ export default function PortfolioPage() {
     };
   }, [bootstrap]);
 
+  const reload = useCallback(() => {
+    setState({ status: "loading" });
+    bootstrap().then(setState);
+  }, [bootstrap]);
+
   async function handleAdd(symbol: string, quantity: number, averageCost: number | undefined) {
     if (state.status !== "ready") return;
     try {
@@ -127,6 +132,15 @@ export default function PortfolioPage() {
       <EmptyState
         title="تعذّر تحميل محفظتك"
         description="حدث خطأ أثناء الاتصال بالخادم. حاول مرة أخرى بعد قليل."
+        action={
+          <button
+            type="button"
+            onClick={reload}
+            className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+          >
+            إعادة المحاولة
+          </button>
+        }
       />
     );
   }
