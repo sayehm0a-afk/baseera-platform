@@ -40,7 +40,13 @@ function pct(value: number | null): string {
 }
 
 function num(value: number | null, digits = 2): string {
-  return value != null ? value.toFixed(digits) : "—";
+  if (value == null || !Number.isFinite(value)) {
+    // profit_factor (gross profit / gross loss) is +Infinity whenever a
+    // backtest has zero losing trades -- render the mathematical symbol
+    // instead of the literal string "Infinity".
+    return value === Infinity ? "∞" : value === -Infinity ? "-∞" : "—";
+  }
+  return value.toFixed(digits);
 }
 
 export default function StrategiesPage() {
@@ -67,6 +73,12 @@ export default function StrategiesPage() {
 
     if (symbolList.length === 0) {
       setError("أدخل رمز سهم واحد على الأقل.");
+      setStatus("idle");
+      return;
+    }
+
+    if (startDate > endDate) {
+      setError("تاريخ البداية يجب أن يسبق تاريخ النهاية.");
       setStatus("idle");
       return;
     }
@@ -189,7 +201,12 @@ export default function StrategiesPage() {
             <MetricTile label="معامل الربح" value={num(report.overall.profit_factor)} />
             <MetricTile
               label="متوسط العائد المتوقع"
-              value={report.overall.average_forward_return_pct != null ? `${report.overall.average_forward_return_pct.toFixed(2)}%` : "—"}
+              value={
+                report.overall.average_forward_return_pct != null &&
+                Number.isFinite(report.overall.average_forward_return_pct)
+                  ? `${report.overall.average_forward_return_pct.toFixed(2)}%`
+                  : "—"
+              }
             />
             <MetricTile label="أقصى انخفاض" value={pct(report.overall.max_drawdown)} />
             <MetricTile label="نسبة شارب" value={num(report.overall.sharpe_ratio)} />

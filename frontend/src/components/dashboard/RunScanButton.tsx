@@ -23,18 +23,28 @@ export function RunScanButton({
   label,
   onScanComplete,
 }: { label?: string; onScanComplete?: () => void } = {}) {
-  const [status, setStatus] = useState<"idle" | "running" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "running" | "error" | "timeout">("idle");
 
   async function handleClick() {
     setStatus("running");
     try {
       const run = await triggerScan();
+      let finished = false;
       for (let i = 0; i < MAX_POLLS; i++) {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
         const polled = await getScanRun(run.id);
         if (polled.status === "SUCCESS" || polled.status === "FAILED") {
+          finished = true;
           break;
         }
+      }
+      if (!finished) {
+        // The scan is still PENDING/RUNNING server-side after MAX_POLLS --
+        // reporting success here would be false: the caller would reload
+        // into the same stale/empty data with no indication anything
+        // timed out. Surface it distinctly instead of silently going idle.
+        setStatus("timeout");
+        return;
       }
       setStatus("idle");
       onScanComplete?.();
@@ -53,12 +63,20 @@ export function RunScanButton({
       >
         {status === "running" ? "جارٍ المسح..." : (label ?? "تشغيل مسح السوق الآن")}
       </button>
-      {status === "error" ? (
-        <p className="text-sm text-bsr-market-down">
-          تعذّر تشغيل المسح -- قد يكون هناك مسح آخر قيد التنفيذ بالفعل، أو تعذّر الاتصال بالخادم. حاول
-          مرة أخرى بعد قليل.
-        </p>
-      ) : null}
+      <div aria-live="polite" className="contents">
+        {status === "error" ? (
+          <p className="text-sm text-bsr-market-down">
+            تعذّر تشغيل المسح -- قد يكون هناك مسح آخر قيد التنفيذ بالفعل، أو تعذّر الاتصال بالخادم. حاول
+            مرة أخرى بعد قليل.
+          </p>
+        ) : null}
+        {status === "timeout" ? (
+          <p className="text-sm text-bsr-text-secondary">
+            المسح ما زال قيد التنفيذ في الخادم -- يستغرق وقتًا أطول من المعتاد. يمكنك الانتظار قليلاً ثم
+            تحديث الصفحة لعرض النتائج عند اكتمالها.
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }

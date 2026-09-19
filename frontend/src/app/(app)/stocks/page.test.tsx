@@ -171,6 +171,33 @@ describe("StocksDirectoryPage", () => {
     expect(screen.getByText("تعذّر تحميل قائمة الأسهم")).toBeInTheDocument();
   });
 
+  it("keeps the newer query's results even if an older, slower request resolves last", async () => {
+    let resolveFirstQuery: (value: StockDirectory) => void = () => {};
+    vi.mocked(getStockDirectory).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirstQuery = resolve;
+      })
+    );
+    render(<StocksDirectoryPage />);
+    await flushDebounce();
+
+    const input = screen.getByPlaceholderText("ابحث برمز السهم أو اسم الشركة...");
+    fireEvent.change(input, { target: { value: "ارامكو" } });
+    vi.mocked(getStockDirectory).mockResolvedValueOnce(
+      directory({ results: [item({ symbol: "1120", name_ar: "الراجحي" })] })
+    );
+    await flushDebounce();
+
+    // The slower first (empty-query) request finally resolves after the
+    // second (typed-query) one already landed -- it must not overwrite
+    // what the user is now actually looking at.
+    resolveFirstQuery(directory({ results: [item({ symbol: "2030", name_ar: "قديم" })] }));
+    await flushMicrotasks();
+
+    expect(screen.getByText("الراجحي")).toBeInTheDocument();
+    expect(screen.queryByText("قديم")).not.toBeInTheDocument();
+  });
+
   it("offers a real retry button on the error state that re-fetches and can recover", async () => {
     vi.mocked(getStockDirectory).mockRejectedValueOnce(new Error("network error"));
 
