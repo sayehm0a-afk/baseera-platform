@@ -102,6 +102,14 @@ body {
   font-family: var(--font-latin);
 }
 
+/* Brand-consistent keyboard focus ring -- the browser default outline
+   clashes with the dark navy/gold palette and is otherwise undefined
+   anywhere in this file. */
+:focus-visible {
+  outline: 2px solid var(--color-bsr-gold-500);
+  outline-offset: 2px;
+}
+
 /* Financial data is always set in Western digits + tabular figures,
    regardless of surrounding language (DS typography rule). */
 .bsr-numeric {

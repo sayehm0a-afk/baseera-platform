@@ -164,8 +164,31 @@ describe("MyWatchlistPanel", () => {
     await screen.findByText("2222");
 
     fireEvent.click(screen.getByRole("button", { name: "إزالة" }));
+    expect(removeFromWatchlist).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "نعم، احذف" }));
 
     await waitFor(() => expect(screen.queryByText("2222")).not.toBeInTheDocument());
     expect(removeFromWatchlist).toHaveBeenCalledWith("2222");
+  });
+
+  it("requires inline confirmation before removing a watchlist symbol -- cancel keeps it", async () => {
+    vi.mocked(getMyWatchlist).mockResolvedValue({
+      generated_at: "2026-08-01T00:00:00Z",
+      items: [buildItem()],
+    });
+
+    render(<MyWatchlistPanel />);
+    await screen.findByText("2222");
+    vi.mocked(removeFromWatchlist).mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "إزالة" }));
+    expect(await screen.findByText("تأكيد الحذف؟")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "تراجع" }));
+
+    expect(screen.queryByText("تأكيد الحذف؟")).not.toBeInTheDocument();
+    expect(screen.getByText("2222")).toBeInTheDocument();
+    expect(removeFromWatchlist).not.toHaveBeenCalled();
   });
 });

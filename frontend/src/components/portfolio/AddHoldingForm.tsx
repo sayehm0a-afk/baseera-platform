@@ -79,8 +79,8 @@ export function AddHoldingForm({
       setQuantity("");
       setAverageCost("");
       setSuggestions([]);
-    } catch {
-      setError("تعذّرت إضافة السهم. تحقق من الرمز وحاول مرة أخرى.");
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "تعذّرت إضافة السهم. تحقق من الرمز وحاول مرة أخرى.");
     } finally {
       setSubmitting(false);
     }

@@ -1,25 +1,39 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useCallback, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { AiStar } from "@/components/ai/AiStar";
 import { AnalystReportView } from "@/components/ai/AnalystReportView";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
+import { ApiError } from "@/lib/api/client";
 import { getAnalystReport } from "@/lib/api/stocks";
 import { useCategoryFetch } from "@/lib/hooks/useCategoryFetch";
 import type { AnalystReport } from "@/lib/api/stocks-types";
-
-async function fetchReport(symbol: string): Promise<AnalystReport[]> {
-  if (!symbol) return [];
-  const report = await getAnalystReport(symbol);
-  return [report];
-}
 
 export function AiScreenClient() {
   const searchParams = useSearchParams();
   const [symbol, setSymbol] = useState(searchParams.get("symbol") ?? "");
   const [query, setQuery] = useState(searchParams.get("symbol") ?? "");
+  // Tracks whether the most recent fetch failure was specifically the
+  // backend's stock_not_found (bad/unknown symbol) -- distinct from any
+  // other failure (network/server/insufficient-data), which must never
+  // be reported to the user as "check your symbol" (that is actively
+  // misleading when e.g. the API is simply unreachable).
+  const [symbolNotFound, setSymbolNotFound] = useState(false);
+
+  const fetchReport = useCallback(async (sym: string): Promise<AnalystReport[]> => {
+    if (!sym) return [];
+    try {
+      const report = await getAnalystReport(sym);
+      setSymbolNotFound(false);
+      return [report];
+    } catch (error) {
+      setSymbolNotFound(error instanceof ApiError && error.code === "stock_not_found");
+      throw error;
+    }
+  }, []);
+
   const state = useCategoryFetch(query, fetchReport);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -62,10 +76,17 @@ export function AiScreenClient() {
         <EmptyState title="لا تتوفر بيانات كافية لتحليل هذا السهم" />
       ) : null}
 
-      {query !== "" && state.status === "error" ? (
+      {query !== "" && state.status === "error" && symbolNotFound ? (
         <EmptyState
           title="تعذّر إيجاد هذا الرمز"
           description="تحقق من رمز السهم وحاول مرة أخرى."
+        />
+      ) : null}
+
+      {query !== "" && state.status === "error" && !symbolNotFound ? (
+        <EmptyState
+          title="تعذّر تحميل التحليل"
+          description="تحقق من اتصالك وحاول مرة أخرى."
         />
       ) : null}
 

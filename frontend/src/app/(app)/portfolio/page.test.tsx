@@ -274,6 +274,25 @@ describe("PortfolioPage", () => {
     expect(await screen.findByText("لم تتم إضافة أي سهم بعد")).toBeInTheDocument();
   });
 
+  it("shows an inline error and re-enables confirm-delete when the delete request fails", async () => {
+    vi.mocked(listMyPortfolios).mockResolvedValue({ portfolios: [summary()] });
+    vi.mocked(getPortfolioHoldings).mockResolvedValue(holdings());
+    vi.mocked(deletePortfolioHolding).mockRejectedValue(new Error("network error"));
+
+    render(<PortfolioPage />);
+    await screen.findByText("أرامكو السعودية");
+
+    fireEvent.click(screen.getByText("حذف"));
+    await act(async () => {
+      fireEvent.click(screen.getByText("نعم، احذف"));
+    });
+
+    expect(await screen.findByText("تعذّر حذف السهم. حاول مرة أخرى.")).toBeInTheDocument();
+    // The holding is still there and the confirm buttons are usable again.
+    expect(screen.getByText("أرامكو السعودية")).toBeInTheDocument();
+    expect(screen.getByText("نعم، احذف")).not.toBeDisabled();
+  });
+
   it("keeps the full multi-engine analysis collapsed behind an explicit opt-in button", async () => {
     vi.mocked(listMyPortfolios).mockResolvedValue({ portfolios: [summary()] });
     vi.mocked(getPortfolioHoldings).mockResolvedValue(holdings());
