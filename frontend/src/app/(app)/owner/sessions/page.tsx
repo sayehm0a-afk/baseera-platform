@@ -103,7 +103,7 @@ function SessionsPageInner() {
         <div className="overflow-x-auto rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised">
           <table className="w-full min-w-[720px] text-sm">
             <thead>
-              <tr className="border-b border-bsr-border-subtle text-right text-xs text-bsr-text-muted">
+              <tr className="border-b border-bsr-border-subtle text-start text-xs text-bsr-text-muted">
                 <th className="p-bsr-3 font-medium">معرّف المستخدم</th>
                 <th className="p-bsr-3 font-medium">الجهاز</th>
                 <th className="p-bsr-3 font-medium">عنوان IP</th>

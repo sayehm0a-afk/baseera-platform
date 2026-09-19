@@ -88,24 +88,36 @@ export function HoldingRow({
           {holding.name_ar ?? holding.name_en} (<SymbolText>{holding.symbol}</SymbolText>)
         </span>
         <div className="grid grid-cols-2 gap-bsr-2 sm:grid-cols-4">
-          <input
-            type="number"
-            min={0}
-            step="1"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            placeholder="الكمية"
-            className="bsr-numeric rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-2 py-bsr-1.5 text-sm text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
-          />
-          <input
-            type="number"
-            min={0}
-            step="0.01"
-            value={averageCost}
-            onChange={(e) => setAverageCost(e.target.value)}
-            placeholder="متوسط التكلفة"
-            className="bsr-numeric rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-2 py-bsr-1.5 text-sm text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
-          />
+          <div>
+            <label className="sr-only" htmlFor={`holding-${holding.symbol}-quantity`}>
+              الكمية
+            </label>
+            <input
+              id={`holding-${holding.symbol}-quantity`}
+              type="number"
+              min={0}
+              step="1"
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+              placeholder="الكمية"
+              className="bsr-numeric w-full rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-2 py-bsr-1.5 text-sm text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="sr-only" htmlFor={`holding-${holding.symbol}-average-cost`}>
+              متوسط التكلفة
+            </label>
+            <input
+              id={`holding-${holding.symbol}-average-cost`}
+              type="number"
+              min={0}
+              step="0.01"
+              value={averageCost}
+              onChange={(e) => setAverageCost(e.target.value)}
+              placeholder="متوسط التكلفة"
+              className="bsr-numeric w-full rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-2 py-bsr-1.5 text-sm text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
+            />
+          </div>
           <button
             type="button"
             onClick={handleSave}
@@ -122,7 +134,11 @@ export function HoldingRow({
             إلغاء
           </button>
         </div>
-        {error ? <p className="text-xs text-bsr-market-down">{error}</p> : null}
+        {error ? (
+          <p role="alert" className="text-xs text-bsr-market-down">
+            {error}
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -234,7 +250,11 @@ export function HoldingRow({
           </button>
         )}
       </div>
-      {deleteError ? <p className="text-xs text-bsr-market-down">{deleteError}</p> : null}
+      {deleteError ? (
+        <p role="alert" className="text-xs text-bsr-market-down">
+          {deleteError}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -148,6 +148,35 @@ describe("NotificationBell", () => {
     expect(await screen.findByText("تعذّر التحديث، حاول مرة أخرى")).toBeInTheDocument();
   });
 
+  it("closes on Escape and returns focus to the bell button", async () => {
+    vi.mocked(listNotifications).mockResolvedValue({
+      notifications: [notification()],
+      unread_count: 1,
+    });
+
+    render(<NotificationBell />);
+    const trigger = screen.getByRole("button", { name: "التنبيهات" });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("dialog", { name: "التنبيهات" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("moves focus into the dropdown panel when it opens", async () => {
+    vi.mocked(listNotifications).mockResolvedValue({
+      notifications: [notification()],
+      unread_count: 1,
+    });
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole("button", { name: "التنبيهات" }));
+
+    expect(await screen.findByRole("dialog", { name: "التنبيهات" })).toHaveFocus();
+  });
+
   it("marks all notifications read via the bulk action", async () => {
     vi.mocked(listNotifications).mockResolvedValue({
       notifications: [notification(), notification({ id: 2 })],

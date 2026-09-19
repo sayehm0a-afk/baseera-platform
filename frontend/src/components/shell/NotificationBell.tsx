@@ -22,6 +22,8 @@ export function NotificationBell() {
   const [loaded, setLoaded] = useState(false);
   const [actionError, setActionError] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const actionErrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -62,6 +64,23 @@ export function NotificationBell() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Keyboard-only users need an Escape to close the dropdown and a place
+  // for focus to land inside it -- without this, opening it via keyboard
+  // left focus on the bell button with no way to dismiss short of
+  // tabbing far away.
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current?.focus();
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
+
   function handleToggle() {
     setOpen((wasOpen) => {
       if (!wasOpen) refresh();
@@ -100,8 +119,10 @@ export function NotificationBell() {
   return (
     <div ref={containerRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         aria-label="التنبيهات"
+        aria-expanded={open}
         onClick={handleToggle}
         className="relative flex h-9 w-9 items-center justify-center rounded-bsr-full text-bsr-text-secondary hover:bg-bsr-surface-raised"
       >
@@ -117,7 +138,12 @@ export function NotificationBell() {
       </button>
 
       {open ? (
-        <div className="absolute end-0 top-full z-30 mt-bsr-2 w-80 max-w-[90vw] rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised shadow-lg">
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-label="التنبيهات"
+          tabIndex={-1}
+          className="absolute end-0 top-full z-30 mt-bsr-2 w-80 max-w-[90vw] rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised shadow-lg focus:outline-none">
           <div className="flex items-center justify-between border-b border-bsr-border-subtle px-bsr-4 py-bsr-2">
             <span className="text-sm font-semibold text-bsr-text-primary">التنبيهات</span>
             {unreadCount > 0 ? (
@@ -132,7 +158,10 @@ export function NotificationBell() {
           </div>
 
           {actionError ? (
-            <p className="border-b border-bsr-border-subtle bg-bsr-market-down/10 px-bsr-4 py-bsr-2 text-xs text-bsr-market-down">
+            <p
+              role="alert"
+              className="border-b border-bsr-border-subtle bg-bsr-market-down/10 px-bsr-4 py-bsr-2 text-xs text-bsr-market-down"
+            >
               تعذّر التحديث، حاول مرة أخرى
             </p>
           ) : null}
@@ -155,7 +184,10 @@ export function NotificationBell() {
                     >
                       <span className="flex items-center gap-bsr-2">
                         {!notification.read_at ? (
-                          <span className="h-1.5 w-1.5 shrink-0 rounded-bsr-full bg-bsr-gold-500" aria-hidden />
+                          <>
+                            <span className="h-1.5 w-1.5 shrink-0 rounded-bsr-full bg-bsr-gold-500" aria-hidden />
+                            <span className="sr-only">(غير مقروء)</span>
+                          </>
                         ) : null}
                         <span className="text-sm font-semibold text-bsr-text-primary">
                           {notification.title_ar ?? notification.title}

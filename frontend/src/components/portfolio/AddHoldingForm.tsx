@@ -94,7 +94,11 @@ export function AddHoldingForm({
       <span className="text-sm font-semibold text-bsr-text-primary">إضافة سهم إلى المحفظة</span>
       <div className="grid grid-cols-1 gap-bsr-2 sm:grid-cols-[1.2fr_1fr_1fr_auto]">
         <div ref={containerRef} className="relative">
+          <label className="sr-only" htmlFor="add-holding-symbol">
+            رمز السهم أو اسم الشركة
+          </label>
           <input
+            id="add-holding-symbol"
             placeholder="رمز السهم أو اسم الشركة"
             value={symbol}
             onChange={(e) => {
@@ -124,24 +128,36 @@ export function AddHoldingForm({
             </ul>
           ) : null}
         </div>
-        <input
-          type="number"
-          min={0}
-          step="1"
-          placeholder="الكمية"
-          value={quantity}
-          onChange={(e) => setQuantity(e.target.value)}
-          className="bsr-numeric rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-3 py-bsr-2 text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
-        />
-        <input
-          type="number"
-          min={0}
-          step="0.01"
-          placeholder="متوسط سعر الشراء"
-          value={averageCost}
-          onChange={(e) => setAverageCost(e.target.value)}
-          className="bsr-numeric rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-3 py-bsr-2 text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
-        />
+        <div>
+          <label className="sr-only" htmlFor="add-holding-quantity">
+            الكمية
+          </label>
+          <input
+            id="add-holding-quantity"
+            type="number"
+            min={0}
+            step="1"
+            placeholder="الكمية"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            className="bsr-numeric w-full rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-3 py-bsr-2 text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="sr-only" htmlFor="add-holding-average-cost">
+            متوسط سعر الشراء
+          </label>
+          <input
+            id="add-holding-average-cost"
+            type="number"
+            min={0}
+            step="0.01"
+            placeholder="متوسط سعر الشراء"
+            value={averageCost}
+            onChange={(e) => setAverageCost(e.target.value)}
+            className="bsr-numeric w-full rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-3 py-bsr-2 text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
+          />
+        </div>
         <button
           type="submit"
           disabled={submitting}
@@ -150,7 +166,11 @@ export function AddHoldingForm({
           {submitting ? "جارٍ الإضافة..." : "إضافة"}
         </button>
       </div>
-      {error ? <p className="text-sm text-bsr-market-down">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="text-sm text-bsr-market-down">
+          {error}
+        </p>
+      ) : null}
     </form>
   );
 }
