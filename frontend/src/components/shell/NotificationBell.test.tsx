@@ -118,6 +118,36 @@ describe("NotificationBell", () => {
     expect(screen.getByText("Legacy English body")).toBeInTheDocument();
   });
 
+  it("shows an inline error when marking a notification read fails, instead of failing silently", async () => {
+    vi.mocked(listNotifications).mockResolvedValue({
+      notifications: [notification()],
+      unread_count: 1,
+    });
+    vi.mocked(markNotificationRead).mockRejectedValue(new Error("network error"));
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole("button", { name: "التنبيهات" }));
+    fireEvent.click(await screen.findByText("تنبيه 2222"));
+
+    expect(await screen.findByText("تعذّر التحديث، حاول مرة أخرى")).toBeInTheDocument();
+    // The unread count is untouched since the request never succeeded.
+    expect(screen.getByText("1")).toBeInTheDocument();
+  });
+
+  it("shows an inline error when mark-all-read fails, instead of failing silently", async () => {
+    vi.mocked(listNotifications).mockResolvedValue({
+      notifications: [notification(), notification({ id: 2 })],
+      unread_count: 2,
+    });
+    vi.mocked(markAllNotificationsRead).mockRejectedValue(new Error("network error"));
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole("button", { name: "التنبيهات" }));
+    fireEvent.click(await screen.findByText("تعليم الكل كمقروء"));
+
+    expect(await screen.findByText("تعذّر التحديث، حاول مرة أخرى")).toBeInTheDocument();
+  });
+
   it("marks all notifications read via the bulk action", async () => {
     vi.mocked(listNotifications).mockResolvedValue({
       notifications: [notification(), notification({ id: 2 })],

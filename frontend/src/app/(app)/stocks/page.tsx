@@ -23,8 +23,10 @@ type DirectoryState =
 export default function StocksDirectoryPage() {
   const [query, setQuery] = useState("");
   const [state, setState] = useState<DirectoryState>({ status: "loading" });
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const load = useCallback((q: string, offset: number, append: boolean) => {
+    if (append) setLoadingMore(true);
     getStockDirectory({ q: q || undefined, limit: PAGE_SIZE, offset })
       .then((result) => {
         setState((prev) => {
@@ -38,7 +40,10 @@ export default function StocksDirectoryPage() {
           };
         });
       })
-      .catch(() => setState({ status: "error" }));
+      .catch(() => setState({ status: "error" }))
+      .finally(() => {
+        if (append) setLoadingMore(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -105,9 +110,10 @@ export default function StocksDirectoryPage() {
             <button
               type="button"
               onClick={() => load(query.trim(), state.items.length, true)}
-              className="mt-bsr-2 rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary transition-colors hover:border-bsr-gold-500/40"
+              disabled={loadingMore}
+              className="mt-bsr-2 rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary transition-colors hover:border-bsr-gold-500/40 disabled:opacity-60"
             >
-              تحميل المزيد
+              {loadingMore ? "جارٍ التحميل..." : "تحميل المزيد"}
             </button>
           ) : null}
         </div>
