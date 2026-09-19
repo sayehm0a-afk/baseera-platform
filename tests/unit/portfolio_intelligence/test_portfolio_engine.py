@@ -110,6 +110,51 @@ async def test_holding_analyzer_isolates_one_symbols_failure(factory, monkeypatc
     assert by_symbol["1010"].error == "boom"
 
 
+# --- Decision Engine V2 read-back --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_holding_analyzer_populates_decision_v2_fields_when_available(factory):
+    _seed_stock_with_bars(factory, "2222")
+    session = factory()
+    analyzer = HoldingAnalyzer(session, DevMarketDataProvider())
+    results = await analyzer.analyze([Holding(symbol="2222", quantity=10, average_cost=20.0)])
+    session.close()
+
+    holding = results[0]
+    assert holding.report is not None
+    # Phase 3A-style presentation parity: Decision Engine V2 is computed
+    # alongside V1 from the exact same InvestmentDecision, not a second/
+    # duplicated pipeline -- see HoldingAnalyzer._build_decision_v2.
+    assert holding.decision is not None
+    assert holding.decision_label_ar is not None
+
+
+@pytest.mark.asyncio
+async def test_holding_analyzer_decision_v2_failure_is_swallowed(factory, monkeypatch):
+    """Best-effort: a Decision Engine V2 computation failure for one
+    holding must never fail the holding's own V1 report, and must
+    leave the new fields honestly None rather than fabricated."""
+    from src.analysis.decision_v2.engine import DecisionEngineV2
+
+    _seed_stock_with_bars(factory, "2222")
+    session = factory()
+    analyzer = HoldingAnalyzer(session, DevMarketDataProvider())
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(DecisionEngineV2, "decide", _raise)
+
+    results = await analyzer.analyze([Holding(symbol="2222", quantity=10, average_cost=20.0)])
+    session.close()
+
+    holding = results[0]
+    assert holding.report is not None
+    assert holding.decision is None
+    assert holding.decision_label_ar is None
+
+
 # --- PortfolioEngine --------------------------------------------------------
 
 

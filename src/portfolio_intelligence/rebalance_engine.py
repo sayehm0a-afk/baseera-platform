@@ -19,7 +19,7 @@ from typing import List
 from sqlalchemy.orm import Session
 
 from src.market_intelligence.ranking import RankingEngine
-from src.market_intelligence.read_model import outcome_from_record
+from src.market_intelligence.read_model import decision_v2_snapshots_by_symbol, outcome_from_record
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.types import RankingCategory
 from src.portfolio_intelligence.config import get_max_new_buy_opportunities
@@ -72,6 +72,7 @@ class RebalanceEngine:
         records = self._repository.get_symbol_records_by_symbol(self._session, run.id)
         outcomes = [outcome_from_record(r) for r in records.values()]
         rankings = self._ranking_engine.rank(outcomes)
+        decision_v2_by_symbol = decision_v2_snapshots_by_symbol(self._session, run.id, list(records.keys()))
 
         held_symbols = {h.symbol for h in holdings}
         max_opportunities = get_max_new_buy_opportunities()
@@ -83,6 +84,7 @@ class RebalanceEngine:
                 if entry.symbol in held_symbols or entry.symbol in seen:
                     continue
                 seen.add(entry.symbol)
+                decision_v2 = decision_v2_by_symbol.get(entry.symbol)
                 opportunities.append(
                     NewBuyOpportunity(
                         symbol=entry.symbol,
@@ -90,6 +92,8 @@ class RebalanceEngine:
                         recommendation=entry.recommendation,
                         confidence=entry.confidence,
                         final_score=entry.final_score,
+                        decision=decision_v2.decision if decision_v2 is not None else None,
+                        decision_label_ar=decision_v2.decision_label_ar if decision_v2 is not None else None,
                         rationale=(
                             f"Ranked {category.value.replace('_', ' ').title()} in market scan #{run.id} "
                             f"(final score {entry.final_score:.1f}/100, confidence "

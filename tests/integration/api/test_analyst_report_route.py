@@ -200,3 +200,44 @@ def test_analyst_report_never_exposes_credentials(client, db_session):
     body_text = response.text.lower()
     assert "sahmk_api_key" not in body_text
     assert "shmk_" not in body_text
+
+
+# --- Decision Engine V2 read-back --------------------------------------------
+
+
+def test_analyst_report_includes_decision_v2_fields_when_available(client, db_session):
+    """Presentation-layer parity with /decision-v2 and /radar:
+    Decision Engine V2 is computed from the exact same AnalysisContext/
+    InvestmentDecision this report already builds, not a second/
+    duplicated pipeline."""
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    response = client.get("/api/v1/stocks/2222/analyst-report")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] is not None
+    assert body["decision_label_ar"] is not None
+
+
+def test_analyst_report_decision_v2_fields_are_none_when_computation_fails(client, db_session, monkeypatch):
+    """Best-effort: a Decision Engine V2 computation failure must never
+    fail this otherwise-successful analyst-report response -- the new
+    fields degrade to None instead."""
+
+    stock = _make_stock(db_session)
+    _add_bars(db_session, stock, count=60)
+    _add_fundamentals(db_session, stock)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("src.api.routes.stocks.DecisionEngineV2.decide", _raise)
+
+    response = client.get("/api/v1/stocks/2222/analyst-report")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recommendation"] in _VALID_RECOMMENDATIONS  # V1 report unaffected
+    assert body["decision"] is None
+    assert body["decision_label_ar"] is None

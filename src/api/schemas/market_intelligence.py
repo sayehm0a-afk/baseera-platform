@@ -86,6 +86,15 @@ class RankingEntryOut(BaseModel):
     # whenever no calibration model was active/applicable, never
     # fabricated. See RankingEntry.calibrated_confidence.
     calibrated_confidence: Optional[float] = None
+    # Decision Engine V2 read-back (presentation-layer parity with
+    # /stocks/{symbol}/decision-v2 and /radar): the gate-checked action
+    # (e.g. STRONG_BUY_CANDIDATE/WAIT_FOR_ENTRY), read back from the
+    # DecisionV2Snapshot MarketScanner already computed and persisted
+    # for this scan run -- never a second, independently-computed
+    # value. `None` whenever no V2 snapshot exists for this symbol in
+    # this run, never fabricated.
+    decision: Optional[str] = None
+    decision_label_ar: Optional[str] = None
 
 
 class RankingListOut(BaseModel):

@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from src.analysis.decision.types import RiskLevel
 from src.core.db.database import Base
-from src.domain.models import MarketScanStatus, RecommendationLabel, Stock
+from src.domain.models import DecisionV2Snapshot, MarketScanStatus, RecommendationLabel, Stock
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.portfolio_intelligence.rebalance_engine import RebalanceEngine
 from src.portfolio_intelligence.types import PortfolioRiskProfile
@@ -172,3 +172,43 @@ def test_new_buy_opportunities_respects_max_count(session, monkeypatch):
     plan = RebalanceEngine(session).plan(holdings, _risk_profile(), [])
 
     assert len(plan.new_buy_opportunities) == 1
+
+
+# --- Decision Engine V2 read-back --------------------------------------------
+
+
+def test_new_buy_opportunities_include_decision_v2_fields_when_a_snapshot_exists(session):
+    run = _seed_market_scan(session, [("2222", "STRONG_BUY")])
+    session.add(
+        DecisionV2Snapshot(
+            stock_id=session.query(Stock).filter_by(symbol="2222").one().id,
+            symbol="2222", company_name_en="Stock 2222", decision="BUY_CANDIDATE", decision_label_ar="مرشح شراء",
+            confidence_score=Decimal("80.0"), opportunity_quality_score=Decimal("75.0"), risk_score=Decimal("20.0"),
+            data_quality_score=Decimal("90.0"), data_freshness_status="FRESH", market_status="OPEN",
+            decision_timestamp=datetime.now(timezone.utc), analysis_version="2.0.0", data_source="DEV_SYNTHETIC",
+            scan_run_id=run.id,
+        )
+    )
+    session.commit()
+    holdings = [make_holding_analysis(symbol="9999", decision=make_decision(symbol="9999"))]
+
+    plan = RebalanceEngine(session).plan(holdings, _risk_profile(), [])
+
+    opportunity = next(o for o in plan.new_buy_opportunities if o.symbol == "2222")
+    assert opportunity.decision == "BUY_CANDIDATE"
+    assert opportunity.decision_label_ar == "مرشح شراء"
+
+
+def test_new_buy_opportunities_decision_v2_fields_are_none_without_a_snapshot(session):
+    """Honest-absence contract: a run with no DecisionV2Snapshot for
+    this symbol (e.g. it predates Phase 3A, or V2 computation failed
+    for it) must leave these fields None, never fabricate them, and
+    never fail the rest of the opportunity."""
+    _seed_market_scan(session, [("2222", "STRONG_BUY")])
+    holdings = [make_holding_analysis(symbol="9999", decision=make_decision(symbol="9999"))]
+
+    plan = RebalanceEngine(session).plan(holdings, _risk_profile(), [])
+
+    opportunity = next(o for o in plan.new_buy_opportunities if o.symbol == "2222")
+    assert opportunity.decision is None
+    assert opportunity.decision_label_ar is None

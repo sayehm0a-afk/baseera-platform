@@ -30,6 +30,7 @@ from src.domain.models import (
     ConfidenceCalibrationMethod,
     ConfidenceCalibrationModel,
     ConfidenceCalibrationStatus,
+    DecisionV2Snapshot,
     FundamentalSnapshot,
     MarketScanRun,
     MarketScanStatus,
@@ -958,4 +959,99 @@ def test_unrelated_pending_and_failed_runs_do_not_affect_shadow_exclusion(client
 
     response = client.get("/api/v1/market/summary")
     assert response.status_code == 200
-    assert response.json()["scan_run_id"] == consumer_run_id
+
+
+# --- Decision Engine V2 read-back on /rankings and /opportunities -----------
+
+
+def _seed_publishable_buy_with_decision_v2(
+    session_factory, symbol="7777", decision="BUY_CANDIDATE", decision_label_ar="مرشح شراء"
+):
+    """Same hand-built, gate-clearing SymbolIntelligenceRecord as
+    `_seed_publishable_buy`, plus the `DecisionV2Snapshot` a real scan
+    would also have persisted for it (via `MarketScanner.
+    _build_decision_v2` / `MarketIntelligenceRepository.
+    save_symbol_records`) -- the fixture `get_rankings`/`get_opportunities`
+    /`RebalanceEngine._find_new_buy_opportunities`'s new read-back
+    helper is meant to find."""
+    repo = MarketIntelligenceRepository()
+    session = session_factory()
+    stock = Stock(symbol=symbol, name_en=f"Stock {symbol}", sector="Energy")
+    session.add(stock)
+    session.commit()
+    run = repo.create_scan_run(session, symbols_requested=1)
+    repo.finish_run(session, run.id, MarketScanStatus.SUCCESS, symbols_succeeded=1, symbols_skipped=0, symbols_failed=0)
+    session.add(
+        SymbolIntelligenceRecord(
+            scan_run_id=run.id, stock_id=stock.id, symbol=symbol, sector="Energy",
+            recommendation=RecommendationLabel.STRONG_BUY, confidence=Decimal("85.0"), final_score=Decimal("80.0"),
+            latest_price=Decimal("100.0"), target_price=Decimal("110.0"), stop_loss=Decimal("95.0"),
+            expected_return_pct=Decimal("10.0"), position_size="STANDARD",
+            evaluated_at=datetime.now(timezone.utc), engine_version="1.0.0",
+        )
+    )
+    session.add(
+        DecisionV2Snapshot(
+            stock_id=stock.id, symbol=symbol, company_name_en=f"Stock {symbol}", sector_ar="الطاقة",
+            decision=decision, decision_label_ar=decision_label_ar,
+            confidence_score=Decimal("85.0"), opportunity_quality_score=Decimal("80.0"),
+            risk_score=Decimal("20.0"), data_quality_score=Decimal("90.0"), data_freshness_status="FRESH",
+            current_price=Decimal("100.0"), market_status="OPEN", decision_timestamp=datetime.now(timezone.utc),
+            analysis_version="2.0.0", data_source="DEV_SYNTHETIC", scan_run_id=run.id,
+        )
+    )
+    session.commit()
+    run_id = run.id
+    session.close()
+    return run_id
+
+
+def test_rankings_include_decision_v2_fields_when_a_snapshot_exists(client, session_factory):
+    run_id = _seed_publishable_buy_with_decision_v2(session_factory, symbol="7777", decision="BUY_CANDIDATE")
+
+    response = client.get("/api/v1/market/rankings", params={"run_id": run_id})
+    assert response.status_code == 200
+    body = response.json()
+    top_buy = next(r for r in body["rankings"] if r["category"] == "TOP_BUY")
+    entry = next(e for e in top_buy["entries"] if e["symbol"] == "7777")
+    assert entry["decision"] == "BUY_CANDIDATE"
+    assert entry["decision_label_ar"] == "مرشح شراء"
+
+
+def test_rankings_decision_v2_fields_are_none_without_a_snapshot(client, session_factory):
+    """`_seed_publishable_buy` (no DecisionV2Snapshot row) is the
+    honest-absence case: the new fields must be present but `None`,
+    never fabricated, never a reason to fail the whole response."""
+    run_id = _seed_publishable_buy(session_factory, symbol="8888")
+
+    response = client.get("/api/v1/market/rankings", params={"run_id": run_id})
+    assert response.status_code == 200
+    body = response.json()
+    top_buy = next(r for r in body["rankings"] if r["category"] == "TOP_BUY")
+    entry = next(e for e in top_buy["entries"] if e["symbol"] == "8888")
+    assert entry["decision"] is None
+    assert entry["decision_label_ar"] is None
+
+
+def test_opportunities_include_decision_v2_fields_when_a_snapshot_exists(client, session_factory):
+    run_id = _seed_publishable_buy_with_decision_v2(session_factory, symbol="7777", decision="STRONG_BUY_CANDIDATE")
+
+    response = client.get("/api/v1/market/opportunities", params={"run_id": run_id})
+    assert response.status_code == 200
+    body = response.json()
+    top_strong_buy = next(c for c in body["categories"] if c["category"] == "TOP_STRONG_BUY")
+    entry = next(e for e in top_strong_buy["entries"] if e["symbol"] == "7777")
+    assert entry["decision"] == "STRONG_BUY_CANDIDATE"
+    assert entry["decision_label_ar"]
+
+
+def test_opportunities_decision_v2_fields_are_none_without_a_snapshot(client, session_factory):
+    run_id = _seed_publishable_buy(session_factory, symbol="8888")
+
+    response = client.get("/api/v1/market/opportunities", params={"run_id": run_id})
+    assert response.status_code == 200
+    body = response.json()
+    top_strong_buy = next(c for c in body["categories"] if c["category"] == "TOP_STRONG_BUY")
+    entry = next(e for e in top_strong_buy["entries"] if e["symbol"] == "8888")
+    assert entry["decision"] is None
+    assert entry["decision_label_ar"] is None

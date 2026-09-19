@@ -64,6 +64,7 @@ from sqlalchemy.orm import Session, aliased
 from src.analysis.analyst.analyst_engine_factory import get_analyst_engine
 from src.analysis.analyst.output_formatter import OutputFormatter
 from src.analysis.context_builder import build_analysis_context
+from src.analysis.decision.types import InvestmentDecision
 from src.analysis.decision_pipeline import compute_investment_decision
 from src.analysis.decision_v2.decision_freshness import classify_decision_freshness, is_decision_fresh
 from src.analysis.decision_v2.engine import DecisionEngineV2
@@ -151,6 +152,53 @@ def _latest_market_breadth(session: Session):
         return _market_repository.get_market_breadth(session, run.id)
     except Exception as exc:  # noqa: BLE001 -- a breadth-read failure must never break /decision-v2
         logger.info("Could not read latest market breadth: %s", exc)
+        return None
+
+
+def _compute_decision_v2_best_effort(
+    session: Session,
+    stock: Stock,
+    context: AnalysisContext,
+    investment_decision: InvestmentDecision,
+):
+    """Presentation-layer parity with /decision-v2 and /radar for
+    `GET /analyst-report`: computes the same `DecisionResult` `/decision-
+    v2` would for this symbol, from the exact `AnalysisContext`/
+    `InvestmentDecision` this route already built -- the identical
+    inputs and sector-reliability lookup `get_decision_v2` (above) uses,
+    mirrored here rather than shared, since that route additionally
+    persists a `DecisionV2Snapshot` audit row and runs the AI Investment
+    Committee, neither of which this read-only narrative endpoint needs.
+    Best-effort, matching `MarketScanner._build_decision_v2`'s own
+    docstring: a V2 computation failure here must never fail this
+    otherwise-successful analyst-report response -- it degrades to
+    `None`."""
+    try:
+        quote_info = context.extra.get("quote", {})
+        market_info = get_market_status()
+        sector_ar = sector_label_ar(stock.sector)
+        sector_reliability = reliability_for_sector(compute_sector_reliability_by_arabic_label(session), sector_ar)
+        return DecisionEngineV2().decide(
+            context,
+            investment_decision,
+            company_name_ar=stock.name_ar,
+            company_name_en=stock.name_en,
+            sector=stock.sector,
+            sector_ar=sector_ar,
+            is_synthetic=quote_info.get("is_synthetic"),
+            data_source=quote_info.get("source") or "unknown",
+            quote_timestamp=parse_quote_timestamp(quote_info.get("timestamp")),
+            market_status=market_info.status.value,
+            market_is_open=market_info.status == MarketSessionStatus.OPEN,
+            market_breadth=_latest_market_breadth(session),
+            sector_reliability_win_rate_pct=sector_reliability.win_rate_pct,
+            sector_reliability_sample_size=sector_reliability.sample_size,
+        )
+    except Exception:  # noqa: BLE001 -- best-effort: see docstring above.
+        logger.warning(
+            "Decision Engine V2 computation failed for '%s' analyst report -- response continues with V1 only.",
+            stock.symbol, exc_info=True,
+        )
         return None
 
 
@@ -1180,6 +1228,8 @@ async def get_analyst_report(
 
     decision = report.decision
     explanation = report.explanation
+    stock = _get_stock_or_404(session, symbol)
+    decision_v2 = _compute_decision_v2_best_effort(session, stock, context, decision)
     return AnalystReportOut(
         symbol=report.symbol,
         recommendation=decision.recommendation.value,
@@ -1211,4 +1261,6 @@ async def get_analyst_report(
         stop_loss_basis=decision.stop_loss_basis,
         target_price_basis=decision.target_price_basis,
         confidence_calibration_notes=decision.confidence_calibration_notes,
+        decision=decision_v2.decision.value if decision_v2 is not None else None,
+        decision_label_ar=decision_v2.decision_label_ar if decision_v2 is not None else None,
     )

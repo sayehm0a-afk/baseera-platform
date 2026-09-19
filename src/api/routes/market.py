@@ -80,7 +80,7 @@ from src.market_intelligence.sector_reliability import (
     reliability_for_sector,
 )
 from src.market_intelligence.ranking import RankingEngine
-from src.market_intelligence.read_model import outcome_from_record
+from src.market_intelligence.read_model import decision_v2_snapshots_by_symbol, outcome_from_record
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.services.scan_job_runner import run_market_scan_job
 from src.market_intelligence.symbol_selector import SymbolSelector
@@ -427,6 +427,7 @@ def get_rankings(
     run = _resolve_run(session, run_id)
     records = _repository.get_symbol_records_by_symbol(session, run.id)
     outcomes = [outcome_from_record(r) for r in records.values()]
+    decision_v2_by_symbol = decision_v2_snapshots_by_symbol(session, run.id, list(records.keys()))
 
     previous_run = _repository.get_latest_consumer_visible_run(session, before_run_id=run.id)
     _, change_rows = _repository.get_change_events(session, limit=1000, offset=0, run_id=run.id)
@@ -454,6 +455,10 @@ def get_rankings(
                         current_price=e.current_price, stop_loss=e.stop_loss,
                         risk_reward_ratio=e.risk_reward_ratio, time_horizon=e.time_horizon,
                         calibrated_confidence=e.calibrated_confidence,
+                        decision=decision_v2_by_symbol[e.symbol].decision if e.symbol in decision_v2_by_symbol else None,
+                        decision_label_ar=(
+                            decision_v2_by_symbol[e.symbol].decision_label_ar if e.symbol in decision_v2_by_symbol else None
+                        ),
                     )
                     for e in ranking_list.entries
                 ],
@@ -481,6 +486,7 @@ def get_opportunities(
     run = _resolve_run(session, run_id)
     records = _repository.get_symbol_records_by_symbol(session, run.id)
     outcomes = [outcome_from_record(r) for r in records.values()]
+    decision_v2_by_symbol = decision_v2_snapshots_by_symbol(session, run.id, list(records.keys()))
 
     previous_run = _repository.get_latest_consumer_visible_run(session, before_run_id=run.id)
     _, change_rows = _repository.get_change_events(session, limit=1000, offset=0, run_id=run.id)
@@ -510,6 +516,10 @@ def get_opportunities(
                         current_price=e.current_price, stop_loss=e.stop_loss,
                         risk_reward_ratio=e.risk_reward_ratio, time_horizon=e.time_horizon,
                         calibrated_confidence=e.calibrated_confidence,
+                        decision=decision_v2_by_symbol[e.symbol].decision if e.symbol in decision_v2_by_symbol else None,
+                        decision_label_ar=(
+                            decision_v2_by_symbol[e.symbol].decision_label_ar if e.symbol in decision_v2_by_symbol else None
+                        ),
                     )
                     for e in entry.ranking_list.entries
                 ],

@@ -1,10 +1,17 @@
-"""Unit tests for read_model.outcome_from_record."""
+"""Unit tests for read_model.outcome_from_record and
+read_model.decision_v2_snapshots_by_symbol."""
 
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from src.domain.models import RecommendationLabel, SymbolIntelligenceRecord
-from src.market_intelligence.read_model import outcome_from_record
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from src.core.db.database import Base
+from src.domain.models import DecisionV2Snapshot, RecommendationLabel, SymbolIntelligenceRecord
+from src.market_intelligence.read_model import decision_v2_snapshots_by_symbol, outcome_from_record
 
 
 def _record(**overrides):
@@ -65,3 +72,84 @@ def test_handles_missing_optional_fields_gracefully():
     assert outcome.rsi is None
     assert outcome.dividend_yield is None
     assert outcome.technical_snapshot is None
+
+
+# --- decision_v2_snapshots_by_symbol ----------------------------------------
+
+
+@pytest.fixture
+def session():
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    factory = sessionmaker(bind=engine)
+    db = factory()
+    yield db
+    db.close()
+    Base.metadata.drop_all(bind=engine)
+
+
+def _snapshot(**overrides):
+    defaults = dict(
+        stock_id=1, symbol="2222", company_name_en="Stock 2222",
+        decision="BUY_CANDIDATE", decision_label_ar="مرشح شراء",
+        confidence_score=Decimal("80.0"), opportunity_quality_score=Decimal("75.0"),
+        risk_score=Decimal("20.0"), data_quality_score=Decimal("90.0"),
+        data_freshness_status="FRESH", market_status="OPEN",
+        decision_timestamp=datetime.now(timezone.utc), analysis_version="2.0.0",
+        data_source="DEV_SYNTHETIC", scan_run_id=1,
+    )
+    defaults.update(overrides)
+    return DecisionV2Snapshot(**defaults)
+
+
+def test_decision_v2_snapshots_by_symbol_returns_empty_dict_for_no_symbols(session):
+    assert decision_v2_snapshots_by_symbol(session, 1, []) == {}
+
+
+def test_decision_v2_snapshots_by_symbol_keys_by_symbol_for_the_matching_run(session):
+    session.add(_snapshot(symbol="2222", scan_run_id=1))
+    session.add(_snapshot(symbol="1010", scan_run_id=1, stock_id=2))
+    session.commit()
+
+    result = decision_v2_snapshots_by_symbol(session, 1, ["2222", "1010"])
+
+    assert set(result.keys()) == {"2222", "1010"}
+    assert result["2222"].decision == "BUY_CANDIDATE"
+    assert result["2222"].decision_label_ar == "مرشح شراء"
+
+
+def test_decision_v2_snapshots_by_symbol_excludes_a_different_scan_run(session):
+    session.add(_snapshot(symbol="2222", scan_run_id=1, decision="BUY_CANDIDATE"))
+    session.add(_snapshot(symbol="2222", scan_run_id=2, decision="WATCH"))
+    session.commit()
+
+    result = decision_v2_snapshots_by_symbol(session, 1, ["2222"])
+
+    assert result["2222"].decision == "BUY_CANDIDATE"
+
+
+def test_decision_v2_snapshots_by_symbol_omits_a_symbol_with_no_snapshot(session):
+    """Honest-absence contract: a symbol never scored by Decision Engine
+    V2 for this run is simply absent, never a fabricated entry."""
+    session.add(_snapshot(symbol="2222", scan_run_id=1))
+    session.commit()
+
+    result = decision_v2_snapshots_by_symbol(session, 1, ["2222", "9999"])
+
+    assert "9999" not in result
+    assert "2222" in result
+
+
+def test_decision_v2_snapshots_by_symbol_picks_the_latest_row_per_symbol(session):
+    """`decision_v2_snapshots` is insert-only with no unique constraint
+    on (scan_run_id, symbol) -- the windowed-latest-per-key read must
+    pick the most recent decision_timestamp, not an arbitrary row."""
+    older = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    session.add(_snapshot(symbol="2222", scan_run_id=1, decision="WATCH", decision_timestamp=older))
+    session.add(_snapshot(symbol="2222", scan_run_id=1, decision="BUY_CANDIDATE", decision_timestamp=newer))
+    session.commit()
+
+    result = decision_v2_snapshots_by_symbol(session, 1, ["2222"])
+
+    assert result["2222"].decision == "BUY_CANDIDATE"

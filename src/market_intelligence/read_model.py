@@ -18,7 +18,10 @@ call `GET /analyst-report/{symbol}` instead, which always re-runs
 `AnalystEngine` live rather than reading a persisted summary.
 """
 
-from typing import Optional
+from typing import Dict, List, Optional
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session, aliased
 
 from src.analysis.analyst.types import AnalystReport, Explanation
 from src.analysis.decision.ai_decision_engine import CATEGORY_LABELS
@@ -30,7 +33,7 @@ from src.analysis.decision.types import (
     TimeHorizon,
 )
 from src.analysis.recommendation.types import Recommendation
-from src.domain.models import SymbolIntelligenceRecord
+from src.domain.models import DecisionV2Snapshot, SymbolIntelligenceRecord
 from src.market_intelligence.types import SymbolScanOutcome
 
 
@@ -122,3 +125,45 @@ def outcome_from_record(record: SymbolIntelligenceRecord) -> SymbolScanOutcome:
         fundamental_snapshot=_fundamental_snapshot(record),
         scanned_at=record.evaluated_at,
     )
+
+
+def decision_v2_snapshots_by_symbol(
+    session: Session, scan_run_id: int, symbols: List[str]
+) -> Dict[str, DecisionV2Snapshot]:
+    """Reads back the `DecisionV2Snapshot` rows `MarketScanner.
+    _build_decision_v2` already computed and `MarketIntelligenceRepository.
+    save_symbol_records` already persisted for this `scan_run_id` --
+    zero extra computation, just the read-back `outcome_from_record()`
+    above never does (it only reconstructs the legacy `SymbolIntelligenceRecord`
+    side, leaving V2 entirely unrepresented).
+
+    Keyed by symbol, one row per symbol. `decision_v2_snapshots` carries
+    no unique constraint on `(scan_run_id, symbol)` -- it is an
+    insert-only audit table (see that model's own docstring) -- so this
+    defensively applies the same `func.row_number().over(partition_by=...,
+    order_by=...desc())` + `aliased()` "latest row per key" pattern
+    `src.api.routes.radar`/`watchlist` already use for this exact table,
+    picking each symbol's most recent row within this run rather than
+    assuming exactly one was ever written.
+
+    A symbol with no `DecisionV2Snapshot` for this run (V2 computation
+    failed for it, or this run predates Phase 3A) is simply absent from
+    the returned dict -- every caller must treat that as "V2 unavailable
+    for this symbol" and leave its decision fields `None`, never
+    fabricate one.
+    """
+    if not symbols:
+        return {}
+    ranked = (
+        session.query(
+            DecisionV2Snapshot,
+            func.row_number()
+            .over(partition_by=DecisionV2Snapshot.symbol, order_by=DecisionV2Snapshot.decision_timestamp.desc())
+            .label("rn"),
+        )
+        .filter(DecisionV2Snapshot.scan_run_id == scan_run_id, DecisionV2Snapshot.symbol.in_(symbols))
+        .subquery()
+    )
+    snapshot_alias = aliased(DecisionV2Snapshot, ranked)
+    rows = session.query(snapshot_alias).filter(ranked.c.rn == 1).all()
+    return {row.symbol: row for row in rows}

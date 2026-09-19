@@ -222,6 +222,8 @@ def _serialize_holding(holding: HoldingAnalysis) -> dict:
         "confidence": holding.confidence,
         "risk_level": holding.risk_level.value if holding.risk_level else None,
         "position_size": holding.position_size.value if holding.position_size else None,
+        "decision": holding.decision,
+        "decision_label_ar": holding.decision_label_ar,
         "target_price": holding.report.decision.target_price if holding.report else None,
         "error": holding.error,
     }
@@ -305,6 +307,7 @@ def serialize_portfolio_analysis(analysis: PortfolioAnalysis) -> dict:
                 {
                     "symbol": o.symbol, "sector": o.sector, "recommendation": o.recommendation,
                     "confidence": o.confidence, "final_score": o.final_score, "rationale": o.rationale,
+                    "decision": o.decision, "decision_label_ar": o.decision_label_ar,
                 }
                 for o in analysis.recommendations.new_buy_opportunities
             ],

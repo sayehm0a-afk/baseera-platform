@@ -531,3 +531,13 @@ class AnalystReportOut(BaseModel):
     stop_loss_basis: str = "atr"
     target_price_basis: str = "atr"
     confidence_calibration_notes: List[str] = []
+
+    # Decision Engine V2 read-back (presentation-layer parity with
+    # /stocks/{symbol}/decision-v2 and /radar): the gate-checked action
+    # (e.g. STRONG_BUY_CANDIDATE/WAIT_FOR_ENTRY), computed from the
+    # exact same InvestmentDecision/AnalysisContext this report already
+    # built -- never a second, independently-derived recommendation.
+    # `None` whenever V2 computation itself failed (best-effort), never
+    # fabricated.
+    decision: Optional[str] = None
+    decision_label_ar: Optional[str] = None
