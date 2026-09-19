@@ -74,6 +74,16 @@ class HoldingAnalysis:
     unrealized_pnl_pct: Optional[float]
     report: Optional[AnalystReport]
     error: Optional[str] = None
+    # Decision Engine V2 (presentation-layer parity with
+    # /stocks/{symbol}/decision-v2 and /radar): computed by
+    # HoldingAnalyzer._analyze_one from the exact same AnalysisContext/
+    # InvestmentDecision this holding's `report` already carries --
+    # zero extra indicators, zero extra I/O beyond a best-effort market
+    # breadth/sector reliability read shared across all of a
+    # portfolio's holdings. `None` whenever the holding is unavailable
+    # or V2 computation itself failed (best-effort), never fabricated.
+    decision: Optional[str] = None
+    decision_label_ar: Optional[str] = None
 
     @property
     def available(self) -> bool:
@@ -201,6 +211,14 @@ class NewBuyOpportunity:
     confidence: Optional[float]
     final_score: Optional[float]
     rationale: str
+    # Decision Engine V2 read-back (presentation-layer parity with
+    # /stocks/{symbol}/decision-v2 and /radar): read from the
+    # DecisionV2Snapshot the originating market scan already computed
+    # and persisted for this symbol -- never a second, independently
+    # computed value. `None` whenever no V2 snapshot exists for it,
+    # never fabricated.
+    decision: Optional[str] = None
+    decision_label_ar: Optional[str] = None
 
 
 @dataclass(frozen=True)

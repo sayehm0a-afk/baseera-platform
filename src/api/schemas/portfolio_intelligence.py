@@ -56,6 +56,11 @@ class HoldingAnalysisOut(BaseModel):
     position_size: Optional[str] = None
     target_price: Optional[float] = None
     error: Optional[str] = None
+    # Decision Engine V2 read-back (presentation-layer parity with
+    # /stocks/{symbol}/decision-v2 and /radar) -- see HoldingAnalysis's
+    # own docstring. `None` when unavailable, never fabricated.
+    decision: Optional[str] = None
+    decision_label_ar: Optional[str] = None
 
     @model_validator(mode="after")
     def _fill_sector_ar(self) -> "HoldingAnalysisOut":
@@ -156,6 +161,11 @@ class NewBuyOpportunityOut(BaseModel):
     confidence: Optional[float] = None
     final_score: Optional[float] = None
     rationale: str
+    # Decision Engine V2 read-back (presentation-layer parity with
+    # /stocks/{symbol}/decision-v2 and /radar) -- see NewBuyOpportunity's
+    # own docstring. `None` when unavailable, never fabricated.
+    decision: Optional[str] = None
+    decision_label_ar: Optional[str] = None
 
     @model_validator(mode="after")
     def _fill_sector_ar(self) -> "NewBuyOpportunityOut":

@@ -18,14 +18,27 @@ every portfolio-level engine (`AllocationEngine`, `ExposureEngine`,
 import dataclasses
 import logging
 from datetime import datetime, timezone
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
 from src.analysis.analyst.analyst_engine import AnalystEngine
 from src.analysis.context_builder import build_analysis_context
+from src.analysis.decision.types import InvestmentDecision
+from src.analysis.decision_v2.engine import DecisionEngineV2
+from src.analysis.decision_v2.types import DecisionResult, parse_quote_timestamp
+from src.analysis.recommendation.types import AnalysisContext
 from src.domain.models import PeriodType, Stock
+from src.domain.sector_labels import sector_label_ar
 from src.market_data.providers.market_data_provider import IMarketDataProvider
+from src.market_intelligence.market_status import MarketSessionStatus, get_market_status
+from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
+from src.market_intelligence.sector_reliability import (
+    SectorReliability,
+    compute_sector_reliability_by_arabic_label,
+    reliability_for_sector,
+)
+from src.market_intelligence.types import MarketBreadthSummary
 from src.portfolio_intelligence.allocation_engine import AllocationEngine
 from src.portfolio_intelligence.cash_manager import CashManager
 from src.portfolio_intelligence.diversification_engine import DiversificationEngine
@@ -61,9 +74,46 @@ class HoldingAnalyzer:
         self._period_type = period_type
 
     async def analyze(self, holdings: List[Holding]) -> List[HoldingAnalysis]:
-        return [await self._analyze_one(holding) for holding in holdings]
+        # Decision Engine V2 inputs computed once per portfolio analysis
+        # -- not once per holding -- the same "computed once per scan,
+        # not once per symbol" shape MarketIntelligenceEngine.execute_scan
+        # already applies to MarketScanner's own per-symbol V2 calls
+        # (see scanner.py's `_build_decision_v2`). Both best-effort: a
+        # failed read degrades to None/{} rather than breaking this
+        # portfolio's whole analysis.
+        market_breadth = self._latest_market_breadth()
+        sector_reliability_by_ar = self._sector_reliability_by_ar()
+        return [await self._analyze_one(holding, market_breadth, sector_reliability_by_ar) for holding in holdings]
 
-    async def _analyze_one(self, holding: Holding) -> HoldingAnalysis:
+    def _latest_market_breadth(self) -> Optional[MarketBreadthSummary]:
+        """Best-effort, never-raising -- same "no completed run yet, or
+        a transient query error degrades to None" contract as
+        src.api.routes.stocks's `_latest_market_breadth`."""
+        try:
+            repository = MarketIntelligenceRepository()
+            run = repository.get_latest_consumer_visible_run(self._session)
+            if run is None:
+                return None
+            return repository.get_market_breadth(self._session, run.id)
+        except Exception as exc:  # noqa: BLE001 -- a breadth-read failure must never break portfolio analysis
+            logger.info("Could not read latest market breadth for portfolio holding analysis: %s", exc)
+            return None
+
+    def _sector_reliability_by_ar(self) -> Dict[str, SectorReliability]:
+        """Best-effort, never-raising -- same shape as `_latest_market_
+        breadth` above, for the same reason."""
+        try:
+            return compute_sector_reliability_by_arabic_label(self._session)
+        except Exception as exc:  # noqa: BLE001 -- a reliability-read failure must never break portfolio analysis
+            logger.info("Could not compute sector reliability for portfolio holding analysis: %s", exc)
+            return {}
+
+    async def _analyze_one(
+        self,
+        holding: Holding,
+        market_breadth: Optional[MarketBreadthSummary] = None,
+        sector_reliability_by_ar: Optional[Dict[str, SectorReliability]] = None,
+    ) -> HoldingAnalysis:
         stock = self._session.query(Stock).filter(Stock.symbol == holding.symbol).one_or_none()
         if stock is None:
             return self._unavailable(holding, error="symbol not registered")
@@ -92,6 +142,8 @@ class HoldingAnalyzer:
             unrealized_pnl = market_value - cost_basis
             unrealized_pnl_pct = (unrealized_pnl / cost_basis * 100.0) if cost_basis > 0 else None
 
+        decision_v2 = self._build_decision_v2(stock, context, report.decision, market_breadth, sector_reliability_by_ar)
+
         return HoldingAnalysis(
             symbol=holding.symbol,
             sector=stock.sector,
@@ -103,7 +155,57 @@ class HoldingAnalyzer:
             unrealized_pnl=unrealized_pnl,
             unrealized_pnl_pct=unrealized_pnl_pct,
             report=report,
+            decision=decision_v2.decision.value if decision_v2 is not None else None,
+            decision_label_ar=decision_v2.decision_label_ar if decision_v2 is not None else None,
         )
+
+    def _build_decision_v2(
+        self,
+        stock: Stock,
+        context: AnalysisContext,
+        investment_decision: InvestmentDecision,
+        market_breadth: Optional[MarketBreadthSummary],
+        sector_reliability_by_ar: Optional[Dict[str, SectorReliability]],
+    ) -> Optional[DecisionResult]:
+        """Presentation-layer parity with /stocks/{symbol}/decision-v2
+        and /radar: computes the same `DecisionResult` that route would
+        for this symbol, from the exact `InvestmentDecision` this
+        holding's analysis already produced -- zero extra indicators,
+        zero extra per-holding I/O (`DecisionEngineV2.decide()` is pure,
+        synchronous computation over data already in scope here; market
+        breadth/sector reliability are read once for the whole portfolio
+        by `analyze()` above). Best-effort, mirroring `MarketScanner.
+        _build_decision_v2`'s own docstring: a V2 computation failure
+        for one holding must never abort or degrade the rest of this
+        holding's analysis (the existing V1 `report` is unaffected) or
+        the rest of the portfolio."""
+        try:
+            quote_info = context.extra.get("quote", {})
+            market_info = get_market_status()
+            sector_ar = sector_label_ar(stock.sector)
+            sector_reliability = reliability_for_sector(sector_reliability_by_ar or {}, sector_ar)
+            return DecisionEngineV2().decide(
+                context,
+                investment_decision,
+                company_name_ar=stock.name_ar,
+                company_name_en=stock.name_en,
+                sector=stock.sector,
+                sector_ar=sector_ar,
+                is_synthetic=quote_info.get("is_synthetic"),
+                data_source=quote_info.get("source") or "unknown",
+                quote_timestamp=parse_quote_timestamp(quote_info.get("timestamp")),
+                market_status=market_info.status.value,
+                market_is_open=market_info.status == MarketSessionStatus.OPEN,
+                market_breadth=market_breadth,
+                sector_reliability_win_rate_pct=sector_reliability.win_rate_pct,
+                sector_reliability_sample_size=sector_reliability.sample_size,
+            )
+        except Exception:  # noqa: BLE001 -- best-effort: see docstring above.
+            logger.warning(
+                "Decision Engine V2 computation failed for portfolio holding '%s' -- analysis continues with V1 only.",
+                stock.symbol, exc_info=True,
+            )
+            return None
 
     @staticmethod
     def _unavailable(holding: Holding, sector: Optional[str] = None, error: Optional[str] = None) -> HoldingAnalysis:
