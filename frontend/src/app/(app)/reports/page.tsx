@@ -41,10 +41,22 @@ export default function ReportsPage() {
           <EmptyState
             title="لا توجد بيانات مسح للسوق بعد"
             description="شغّل أول مسح ذكي للسوق لعرض تقارير الأسهم الأعلى تقييماً."
-            action={<RunScanButton />}
+            action={<RunScanButton onScanComplete={topSymbols.reload} />}
           />
         ) : topSymbols.status === "error" ? (
-          <EmptyState title="تعذّر تحميل الأسهم المرشحة" description="حاول تحديث الصفحة." />
+          <EmptyState
+            title="تعذّر تحميل الأسهم المرشحة"
+            description="تأكد من اتصال الخادم وحاول مرة أخرى."
+            action={
+              <button
+                type="button"
+                onClick={topSymbols.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
+          />
         ) : topSymbols.entries.length === 0 ? (
           <EmptyState title="لا توجد أسهم مرشحة حالياً" />
         ) : (

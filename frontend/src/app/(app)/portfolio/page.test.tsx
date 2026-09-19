@@ -134,6 +134,21 @@ describe("PortfolioPage", () => {
     expect(await screen.findByText("تعذّر تحميل محفظتك")).toBeInTheDocument();
   });
 
+  it("offers a real retry button on the error state that re-fetches and can recover", async () => {
+    vi.mocked(listMyPortfolios).mockRejectedValueOnce(new Error("network error"));
+
+    render(<PortfolioPage />);
+    expect(await screen.findByText("تعذّر تحميل محفظتك")).toBeInTheDocument();
+
+    vi.mocked(listMyPortfolios).mockResolvedValueOnce({ portfolios: [summary()] });
+    vi.mocked(getPortfolioHoldings).mockResolvedValueOnce(holdings());
+
+    fireEvent.click(screen.getByText("إعادة المحاولة"));
+
+    expect(await screen.findByText("أرامكو السعودية")).toBeInTheDocument();
+    expect(listMyPortfolios).toHaveBeenCalledTimes(2);
+  });
+
   it("renders real totals from the backend, never a client-computed figure", async () => {
     vi.mocked(listMyPortfolios).mockResolvedValue({ portfolios: [summary()] });
     vi.mocked(getPortfolioHoldings).mockResolvedValue(holdings());

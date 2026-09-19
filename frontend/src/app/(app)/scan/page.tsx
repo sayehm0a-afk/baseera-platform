@@ -47,7 +47,7 @@ export default function ScanPage() {
           <EmptyState
             title="لا توجد بيانات مسح للسوق بعد"
             description="شغّل أول مسح ذكي للسوق لعرض النتائج حسب الفئة."
-            action={<RunScanButton />}
+            action={<RunScanButton onScanComplete={state.reload} />}
           />
         ) : null}
 
@@ -55,6 +55,15 @@ export default function ScanPage() {
           <EmptyState
             title="تعذّر تحميل نتائج المسح"
             description="تأكد من اتصال الخادم وحاول مرة أخرى."
+            action={
+              <button
+                type="button"
+                onClick={state.reload}
+                className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+              >
+                إعادة المحاولة
+              </button>
+            }
           />
         ) : null}
 

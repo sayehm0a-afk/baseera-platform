@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "@/lib/api/client";
 
 export type CategoryFetchState<T> =
@@ -14,15 +14,23 @@ export type CategoryFetchState<T> =
  * tagged with the category it belongs to instead of calling setState
  * synchronously inside the effect body (React Compiler's
  * react-hooks/set-state-in-effect rule), and renders "loading"
- * whenever the tag doesn't match the currently selected category. */
+ * whenever the tag doesn't match the currently selected category.
+ *
+ * Also returns `reload`, a stable callback that re-runs the same
+ * fetch for the current `category` -- a pure addition on top of the
+ * existing `CategoryFetchState<T>` shape (every status variant still
+ * narrows exactly as before; `reload` is just an extra property
+ * callers may ignore), for a caller that wants to offer a retry
+ * action on an error EmptyState. */
 export function useCategoryFetch<T>(
   category: string,
   fetcher: (category: string) => Promise<T[]>
-): CategoryFetchState<T> {
+): CategoryFetchState<T> & { reload: () => void } {
   const [result, setResult] = useState<{ category: string } & CategoryFetchState<T>>({
     category: "",
     status: "loading",
   });
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,7 +52,17 @@ export function useCategoryFetch<T>(
     return () => {
       cancelled = true;
     };
-  }, [category, fetcher]);
+  }, [category, fetcher, reloadToken]);
 
-  return result.category === category ? result : { status: "loading" };
+  const reload = useCallback(() => {
+    // Forces the "category mismatch" branch below to loading
+    // immediately (rather than keeping the stale error/entries on
+    // screen until the re-fetch resolves), and bumps reloadToken to
+    // re-run the effect above even though `category` hasn't changed.
+    setResult({ category: "", status: "loading" });
+    setReloadToken((token) => token + 1);
+  }, []);
+
+  const state: CategoryFetchState<T> = result.category === category ? result : { status: "loading" };
+  return { ...state, reload };
 }

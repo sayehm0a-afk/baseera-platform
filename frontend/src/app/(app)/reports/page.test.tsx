@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import ReportsPage from "./page";
 
@@ -79,5 +79,56 @@ describe("ReportsPage", () => {
     render(<ReportsPage />);
 
     expect(await screen.findByText("تعذّر تحميل الأسهم المرشحة")).toBeInTheDocument();
+  });
+
+  it("offers a real retry button on the error state that re-fetches and can recover", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    vi.mocked(getRankings).mockRejectedValueOnce(new ApiError(401, "unauthorized", "no session"));
+
+    render(<ReportsPage />);
+
+    expect(await screen.findByText("تعذّر تحميل الأسهم المرشحة")).toBeInTheDocument();
+    // The old copy asked the user to manually refresh the browser --
+    // this must be gone in favor of a real retry button.
+    expect(screen.queryByText("حاول تحديث الصفحة.")).not.toBeInTheDocument();
+
+    vi.mocked(getRankings).mockResolvedValueOnce({
+      scan_run_id: 81,
+      rankings: [
+        {
+          category: "TOP_BUY",
+          entries: [
+            {
+              symbol: "2222",
+              sector: null,
+              sector_ar: null,
+              recommendation: null,
+              confidence: null,
+              final_score: null,
+              target_price: null,
+              expected_return_pct: null,
+              risk_level: null,
+              rank_value: null,
+              current_price: null,
+              stop_loss: null,
+              risk_reward_ratio: null,
+              time_horizon: null,
+              calibrated_confidence: null,
+            },
+          ],
+          generated_at: "2026-08-06T09:00:00Z",
+        },
+      ],
+    });
+
+    const callsBeforeRetry = vi.mocked(getRankings).mock.calls.length;
+
+    // RecommendationHistoryPanel below also renders its own unrelated
+    // "إعادة المحاولة" button when its own fetch fails -- this test
+    // only exercises the top-buy-symbols section's own retry button.
+    fireEvent.click(screen.getAllByText("إعادة المحاولة")[0]);
+
+    expect(await screen.findByText("2222")).toBeInTheDocument();
+    expect(getRankings).toHaveBeenCalledTimes(callsBeforeRetry + 1);
   });
 });

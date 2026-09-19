@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { RequireStaff } from "@/components/auth/RequireStaff";
 import { OwnerNav } from "@/components/owner/OwnerNav";
 import { AiStar } from "@/components/ai/AiStar";
@@ -70,6 +70,24 @@ function LiveTestPageInner() {
   const [marketStatusLoaded, setMarketStatusLoaded] = useState(false);
   const [topOpportunities, setTopOpportunities] = useState<RankingEntry[] | null>(null);
 
+  const refreshAll = useCallback(async () => {
+    try {
+      const ms = await getMarketStatus();
+      setMarketStatus(ms);
+    } catch {
+      setMarketStatus(null);
+    } finally {
+      setMarketStatusLoaded(true);
+    }
+
+    try {
+      const rankings = await getRankings("TOP_BUY");
+      setTopOpportunities(rankings.rankings[0]?.entries ?? []);
+    } catch {
+      setTopOpportunities([]);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -125,7 +143,7 @@ function LiveTestPageInner() {
           يستخدم هذا الزر نفس مسار المسح الحقيقي الذي يستخدمه الجدول التلقائي، ولا يمكن تشغيل مسحين في
           نفس الوقت.
         </p>
-        <RunScanButton label="بدء مسح حقيقي الآن" />
+        <RunScanButton label="بدء مسح حقيقي الآن" onScanComplete={refreshAll} />
       </section>
 
       <section className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">

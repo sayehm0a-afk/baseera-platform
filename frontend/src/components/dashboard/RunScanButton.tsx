@@ -1,18 +1,28 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { getScanRun, triggerScan } from "@/lib/api/market";
 
 const POLL_INTERVAL_MS = 1500;
 const MAX_POLLS = 40;
 
 /** Triggers a real market scan (POST /api/v1/market/scan), polls the
- * run until it finishes, then refreshes the dashboard so it reads the
- * newly persisted summary -- no scan/ranking logic is duplicated here,
- * this only calls the existing backend job and waits for it. */
-export function RunScanButton({ label }: { label?: string } = {}) {
-  const router = useRouter();
+ * run until it finishes, then calls `onScanComplete` so the caller
+ * re-reads the newly persisted summary -- no scan/ranking logic is
+ * duplicated here, this only calls the existing backend job and waits
+ * for it.
+ *
+ * `onScanComplete` replaces a previous `router.refresh()` call here:
+ * every real consumer of this button (dashboard, scan, opportunities,
+ * reports) is a "use client" page that fetches its data through a
+ * hook's own useEffect/state, not a Server Component, so
+ * `router.refresh()` -- which only re-renders Server Components --
+ * was a silent no-op. The caller now passes its own hook's `reload`
+ * instead. */
+export function RunScanButton({
+  label,
+  onScanComplete,
+}: { label?: string; onScanComplete?: () => void } = {}) {
   const [status, setStatus] = useState<"idle" | "running" | "error">("idle");
 
   async function handleClick() {
@@ -27,7 +37,7 @@ export function RunScanButton({ label }: { label?: string } = {}) {
         }
       }
       setStatus("idle");
-      router.refresh();
+      onScanComplete?.();
     } catch {
       setStatus("error");
     }

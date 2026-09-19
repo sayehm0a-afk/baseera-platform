@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { AiSignalCard } from "@/components/patterns/AiSignalCard";
@@ -29,36 +29,41 @@ type OpportunitiesData =
 // its Arabic label and a transparent scoring-factor description --
 // replacing the previous 8 parallel getRankings(category) calls with
 // one round trip and one server-side source of truth for the labels.
-function useOpportunitiesData(): OpportunitiesData {
+async function fetchOpportunitiesData(): Promise<OpportunitiesData> {
+  try {
+    const result = await getOpportunities();
+    return { status: "ready", sections: result.categories };
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "no_market_scan_data") {
+      return { status: "unavailable" };
+    }
+    return { status: "error" };
+  }
+}
+
+function useOpportunitiesData() {
   const [data, setData] = useState<OpportunitiesData>({ status: "loading" });
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      try {
-        const result = await getOpportunities();
-        if (cancelled) return;
-        setData({ status: "ready", sections: result.categories });
-      } catch (error) {
-        if (cancelled) return;
-        if (error instanceof ApiError && error.code === "no_market_scan_data") {
-          setData({ status: "unavailable" });
-        } else {
-          setData({ status: "error" });
-        }
-      }
-    }
-    load();
+    fetchOpportunitiesData().then((result) => {
+      if (!cancelled) setData(result);
+    });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  return data;
+  const reload = useCallback(() => {
+    setData({ status: "loading" });
+    fetchOpportunitiesData().then(setData);
+  }, []);
+
+  return { data, reload };
 }
 
 export default function OpportunitiesPage() {
-  const data = useOpportunitiesData();
+  const { data, reload } = useOpportunitiesData();
 
   if (data.status === "loading") {
     return <LoadingScreen />;
@@ -69,6 +74,15 @@ export default function OpportunitiesPage() {
       <EmptyState
         title="تعذّر تحميل الفرص الاستثمارية"
         description="تأكد من اتصال الخادم وحاول مرة أخرى."
+        action={
+          <button
+            type="button"
+            onClick={reload}
+            className="rounded-bsr-md border border-bsr-border-subtle px-bsr-4 py-bsr-2 text-sm font-semibold text-bsr-text-primary"
+          >
+            إعادة المحاولة
+          </button>
+        }
       />
     );
   }
@@ -78,7 +92,7 @@ export default function OpportunitiesPage() {
       <EmptyState
         title="لا توجد بيانات مسح للسوق بعد"
         description="شغّل أول مسح ذكي للسوق لعرض الفرص الاستثمارية."
-        action={<RunScanButton />}
+        action={<RunScanButton onScanComplete={reload} />}
       />
     );
   }
