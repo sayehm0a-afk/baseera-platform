@@ -10,6 +10,18 @@ const ERROR_MESSAGES: Record<string, string> = {
   email_already_registered: "يوجد حساب مسجّل بهذا البريد الإلكتروني بالفعل.",
 };
 
+// Mirrors src/api/schemas/auth.py's _validate_password_complexity --
+// shown up front so a user never discovers the rule only after a
+// failed submit (the backend's 422 validation error isn't wrapped in
+// the app's own {"error": {code, message}} shape, so apiFetch can't
+// map it to a specific message -- checking here client-side instead
+// gives an immediate, specific answer without waiting on that).
+const PASSWORD_HINT = "8 أحرف على الأقل، تتضمن حرفًا ورقمًا.";
+
+function passwordMeetsPolicy(value: string): boolean {
+  return value.length >= 8 && /\p{L}/u.test(value) && /\d/.test(value);
+}
+
 export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -21,6 +33,10 @@ export default function RegisterPage() {
     event.preventDefault();
     if (!email.trim() || !password.trim()) {
       setError("يرجى إدخال البريد الإلكتروني وكلمة المرور.");
+      return;
+    }
+    if (!passwordMeetsPolicy(password)) {
+      setError(`كلمة المرور لا تحقق الشروط المطلوبة: ${PASSWORD_HINT}`);
       return;
     }
     setError(null);
@@ -97,6 +113,7 @@ export default function RegisterPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 className="rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-3 py-bsr-2 text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
               />
+              <span className="text-xs text-bsr-text-muted">{PASSWORD_HINT}</span>
             </label>
 
             {error ? (
