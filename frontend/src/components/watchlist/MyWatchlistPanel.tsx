@@ -29,6 +29,7 @@ function formatPrice(value: number | null): string {
  * AddToWatchlistButton); this panel is read + remove. */
 export function MyWatchlistPanel() {
   const [state, setState] = useState<PanelState>({ status: "loading" });
+  const [confirmingSymbol, setConfirmingSymbol] = useState<string | null>(null);
   const [removingSymbol, setRemovingSymbol] = useState<string | null>(null);
   // Bumped to re-trigger the fetch effect below (e.g. after a failed
   // remove, to re-sync with the server's real state) -- matches
@@ -62,6 +63,7 @@ export function MyWatchlistPanel() {
       setReloadToken((token) => token + 1);
     } finally {
       setRemovingSymbol(null);
+      setConfirmingSymbol(null);
     }
   }
 
@@ -93,14 +95,35 @@ export function MyWatchlistPanel() {
                 <span className="text-sm text-bsr-text-secondary">{item.company_name_ar}</span>
               ) : null}
             </Link>
-            <button
-              type="button"
-              onClick={() => handleRemove(item.symbol)}
-              disabled={removingSymbol === item.symbol}
-              className="text-sm text-bsr-action-sell disabled:opacity-50"
-            >
-              {removingSymbol === item.symbol ? "جارٍ الإزالة..." : "إزالة"}
-            </button>
+            {confirmingSymbol === item.symbol ? (
+              <div className="flex shrink-0 items-center gap-bsr-2">
+                <span className="text-xs text-bsr-text-secondary">تأكيد الحذف؟</span>
+                <button
+                  type="button"
+                  onClick={() => handleRemove(item.symbol)}
+                  disabled={removingSymbol === item.symbol}
+                  className="rounded-bsr-md bg-bsr-action-sell/15 px-bsr-3 py-1 text-xs font-semibold text-bsr-action-sell hover:bg-bsr-action-sell/25 disabled:opacity-50"
+                >
+                  {removingSymbol === item.symbol ? "جارٍ الإزالة..." : "نعم، احذف"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingSymbol(null)}
+                  disabled={removingSymbol === item.symbol}
+                  className="rounded-bsr-md px-bsr-3 py-1 text-xs text-bsr-text-secondary hover:bg-bsr-surface-overlay disabled:opacity-50"
+                >
+                  تراجع
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingSymbol(item.symbol)}
+                className="text-sm text-bsr-action-sell"
+              >
+                إزالة
+              </button>
+            )}
           </div>
 
           {item.latest_decision_label_ar ? (

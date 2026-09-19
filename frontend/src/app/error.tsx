@@ -19,7 +19,7 @@ export default function GlobalError({
         تعذّر الاتصال بالخادم
       </p>
       <p className="max-w-sm text-sm text-bsr-text-secondary">
-        تأكد من أن واجهة برمجة التطبيقات تعمل، ثم حاول مرة أخرى.
+        حدث خطأ غير متوقع. حاول مرة أخرى بعد قليل، وإذا استمرت المشكلة تواصل معنا.
       </p>
       <button
         type="button"

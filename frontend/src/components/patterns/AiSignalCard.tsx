@@ -124,7 +124,7 @@ export function AiSignalCard({
       ) : null}
 
       <p className="text-xs leading-4 text-bsr-text-muted">
-        درجة الجودة تعكس قوة الأدلة المتاحة وقت التحليل، ولا تضمن تحقيق الربح.
+        نسبة الثقة تعكس قوة الأدلة المتاحة وقت التحليل، ولا تضمن تحقيق الربح.
       </p>
 
       {href ? (

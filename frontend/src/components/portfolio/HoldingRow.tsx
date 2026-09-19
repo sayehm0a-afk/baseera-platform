@@ -39,6 +39,8 @@ export function HoldingRow({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const pnlColorClass =
     holding.unrealized_pnl == null
@@ -64,6 +66,18 @@ export function HoldingRow({
       setError("تعذّر حفظ التعديل. حاول مرة أخرى.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    setDeleteError(null);
+    setDeleting(true);
+    try {
+      await onDelete();
+    } catch {
+      setDeleteError("تعذّر حذف السهم. حاول مرة أخرى.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -195,15 +209,17 @@ export function HoldingRow({
             <span className="text-xs text-bsr-text-secondary">تأكيد الحذف؟</span>
             <button
               type="button"
-              onClick={onDelete}
-              className="rounded-bsr-md bg-bsr-action-sell/15 px-bsr-3 py-bsr-1 text-xs font-semibold text-bsr-action-sell hover:bg-bsr-action-sell/25"
+              onClick={handleDelete}
+              disabled={deleting}
+              className="rounded-bsr-md bg-bsr-action-sell/15 px-bsr-3 py-bsr-1 text-xs font-semibold text-bsr-action-sell hover:bg-bsr-action-sell/25 disabled:opacity-60"
             >
-              نعم، احذف
+              {deleting ? "جارٍ الحذف..." : "نعم، احذف"}
             </button>
             <button
               type="button"
               onClick={() => setConfirmingDelete(false)}
-              className="rounded-bsr-md px-bsr-3 py-bsr-1 text-xs text-bsr-text-secondary hover:bg-bsr-surface-overlay"
+              disabled={deleting}
+              className="rounded-bsr-md px-bsr-3 py-bsr-1 text-xs text-bsr-text-secondary hover:bg-bsr-surface-overlay disabled:opacity-60"
             >
               تراجع
             </button>
@@ -218,6 +234,7 @@ export function HoldingRow({
           </button>
         )}
       </div>
+      {deleteError ? <p className="text-xs text-bsr-market-down">{deleteError}</p> : null}
     </div>
   );
 }

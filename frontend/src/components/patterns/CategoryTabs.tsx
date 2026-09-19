@@ -14,13 +14,15 @@ export function CategoryTabs({
   onChange,
 }: CategoryTabsProps) {
   return (
-    <div className="flex gap-bsr-2 overflow-x-auto pb-bsr-1">
+    <div className="flex gap-bsr-2 overflow-x-auto pb-bsr-1" role="tablist">
       {categories.map((category) => {
         const isActive = category === active;
         return (
           <button
             key={category}
             type="button"
+            role="tab"
+            aria-selected={isActive}
             onClick={() => onChange(category)}
             className={`shrink-0 rounded-bsr-full px-bsr-4 py-bsr-2 text-sm whitespace-nowrap transition-colors ${
               isActive

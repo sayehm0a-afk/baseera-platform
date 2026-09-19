@@ -90,8 +90,15 @@ export default function PortfolioPage() {
 
   async function handleDelete(holdingId: number) {
     if (state.status !== "ready") return;
-    await deletePortfolioHolding(state.portfolioId, holdingId);
-    await loadHoldings(state.portfolioId);
+    try {
+      await deletePortfolioHolding(state.portfolioId, holdingId);
+      await loadHoldings(state.portfolioId);
+    } catch (error) {
+      // Propagate so HoldingRow's own confirm-delete UI can show a
+      // real error message instead of an unhandled promise rejection
+      // that leaves the confirm buttons silently frozen.
+      throw error;
+    }
   }
 
   async function handleRunFullAnalysis() {
