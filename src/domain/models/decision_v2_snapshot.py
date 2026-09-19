@@ -32,7 +32,7 @@ application code.
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -41,6 +41,22 @@ from src.core.db.database import Base
 
 class DecisionV2Snapshot(Base):
     __tablename__ = "decision_v2_snapshots"
+    __table_args__ = (
+        # Both composite indexes exist because both filter shapes are
+        # hot in this codebase's real query patterns (2026-09-19 audit):
+        # "latest snapshot for symbol X" (src.api.routes.watchlist's
+        # single-item lookup, src.api.routes.admin.investment_committee,
+        # src.market_intelligence.radar_v2/recurrent_live_scan) filters
+        # on `symbol`, while the batched "latest per stock_id across N
+        # rows" window-function lookups (src.api.routes.portfolio/
+        # stocks/watchlist) filter on `stock_id`. Both always order by
+        # `decision_timestamp DESC`, so the single-column indexes this
+        # table already had on each of `symbol`/`stock_id` alone can't
+        # serve the ORDER BY without an extra sort -- these composites
+        # let Postgres satisfy filter + order in one index scan.
+        Index("ix_decision_v2_snapshots_symbol_decision_timestamp", "symbol", "decision_timestamp"),
+        Index("ix_decision_v2_snapshots_stock_id_decision_timestamp", "stock_id", "decision_timestamp"),
+    )
 
     id = Column(Integer, primary_key=True)
     stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False, index=True)

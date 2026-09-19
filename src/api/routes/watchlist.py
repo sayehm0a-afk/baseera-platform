@@ -25,9 +25,11 @@ user's actual access.
 """
 
 from datetime import datetime, timezone
+from typing import Dict, List
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, aliased
 
 from src.analysis.decision_v2.decision_freshness import classify_decision_freshness, is_decision_fresh
 from src.api.exceptions import StockNotFoundError, WatchlistItemAlreadyExistsError, WatchlistItemNotFoundError
@@ -68,6 +70,40 @@ def _get_or_create_watchlist(session: Session, user_id: int) -> UserWatchlist:
     session.add(watchlist)
     session.commit()
     return watchlist
+
+
+def _stocks_by_id(session: Session, stock_ids: List[int]) -> Dict[int, Stock]:
+    """One `Stock.id.in_(...)` query for every watchlist item at once
+    -- the same batch-by-id convention `src.api.routes.portfolio`'s own
+    holdings route uses, instead of one `Stock` lookup per item."""
+    if not stock_ids:
+        return {}
+    rows = session.query(Stock).filter(Stock.id.in_(stock_ids)).all()
+    return {stock.id: stock for stock in rows}
+
+
+def _latest_decisions_by_stock_id(session: Session, stock_ids: List[int]) -> Dict[int, DecisionV2Snapshot]:
+    """Most recent `DecisionV2Snapshot` per stock_id across every
+    watchlist item in one windowed query -- the same
+    `func.row_number().over(partition_by=..., order_by=...desc())` +
+    `aliased()` "latest row per key" pattern already used by
+    `src.api.routes.stocks`'s `/directory` route and
+    `src.api.routes.radar`, instead of one query per item."""
+    if not stock_ids:
+        return {}
+    ranked = (
+        session.query(
+            DecisionV2Snapshot,
+            func.row_number()
+            .over(partition_by=DecisionV2Snapshot.stock_id, order_by=DecisionV2Snapshot.decision_timestamp.desc())
+            .label("rn"),
+        )
+        .filter(DecisionV2Snapshot.stock_id.in_(stock_ids))
+        .subquery()
+    )
+    decision_alias = aliased(DecisionV2Snapshot, ranked)
+    rows = session.query(decision_alias).filter(ranked.c.rn == 1).all()
+    return {row.stock_id: row for row in rows}
 
 
 def _item_out(
@@ -128,15 +164,23 @@ def get_watchlist(
     # exact same session boundary.
     market_status = get_market_status()
 
+    # Batched (2026-09-19 audit fix): was `1 + 3N` queries (a `Stock`
+    # lookup, a latest-`DecisionV2Snapshot` lookup, and a
+    # `current_live_opportunity` call per item). The `Stock` and
+    # `DecisionV2Snapshot` lookups batch cleanly via `stock_id.in_(...)`,
+    # the same convention `src.api.routes.portfolio`'s holdings route
+    # and `src.api.routes.stocks`'s `/directory` route already use.
+    # `current_live_opportunity` has no existing batch variant in this
+    # codebase, so it stays per-item rather than inventing a new
+    # abstraction for it here.
+    stock_ids = [item.stock_id for item in items]
+    stocks_by_id = _stocks_by_id(session, stock_ids)
+    decisions_by_stock_id = _latest_decisions_by_stock_id(session, stock_ids)
+
     out_items = []
     for item in items:
-        stock = session.query(Stock).filter(Stock.id == item.stock_id).first()
-        latest = (
-            session.query(DecisionV2Snapshot)
-            .filter(DecisionV2Snapshot.symbol == item.symbol)
-            .order_by(DecisionV2Snapshot.decision_timestamp.desc())
-            .first()
-        )
+        stock = stocks_by_id.get(item.stock_id)
+        latest = decisions_by_stock_id.get(item.stock_id)
         radar = current_live_opportunity(session, item.symbol)
         out_items.append(_item_out(item, stock, latest, radar, market_status))
 

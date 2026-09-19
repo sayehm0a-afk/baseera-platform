@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import event
 
 import main
 from src.api.dependencies import get_current_user
@@ -134,6 +135,65 @@ def _add_radar_opportunity(db_session, snapshot, stage1_rank=1, ranking_reason_a
     db_session.add(opportunity)
     db_session.commit()
     return opportunity
+
+
+# --- N+1 fix regression (2026-09-19 audit) -------------------------------
+
+
+def _count_queries_during(engine, fn):
+    """Number of SQL statements actually sent to `engine` while `fn()`
+    runs -- used below to prove GET /watchlist's Stock/DecisionV2Snapshot
+    lookups are batched, not repeated once per item."""
+    count = 0
+
+    def _before_cursor_execute(*args, **kwargs):
+        nonlocal count
+        count += 1
+
+    event.listen(engine, "before_cursor_execute", _before_cursor_execute)
+    try:
+        fn()
+    finally:
+        event.remove(engine, "before_cursor_execute", _before_cursor_execute)
+    return count
+
+
+def test_get_watchlist_batches_stock_and_decision_lookups_not_once_per_item(client, db_session, as_user):
+    """Before the 2026-09-19 fix, GET /watchlist ran one `Stock` query
+    and one `DecisionV2Snapshot` query PER item, on top of the
+    per-item `current_live_opportunity` radar lookup (which has no
+    batch variant in this codebase and legitimately stays per-item).
+    So each additional watchlist item used to cost 3 extra queries;
+    after batching the Stock/DecisionV2Snapshot lookups, it must cost
+    exactly 1 (the still-unavoidable radar call)."""
+    engine = db_session.get_bind()
+
+    def _add_item_with_decision(symbol):
+        _make_stock(db_session, symbol=symbol, name_ar=f"شركة {symbol}")
+        _add_decision_v2(db_session, symbol)
+        response = client.post("/api/v1/watchlist/items", json={"symbol": symbol})
+        assert response.status_code == 201
+
+    _add_item_with_decision("1111")
+    one_item_query_count = _count_queries_during(engine, lambda: client.get("/api/v1/watchlist"))
+
+    for symbol in ["2222", "3333", "4444"]:
+        _add_item_with_decision(symbol)
+    four_item_query_count = _count_queries_during(engine, lambda: client.get("/api/v1/watchlist"))
+
+    assert four_item_query_count - one_item_query_count == 3
+
+    # Functional regression: every item's real data still comes back
+    # correctly once batched.
+    response = client.get("/api/v1/watchlist")
+    body = response.json()
+    assert len(body["items"]) == 4
+    by_symbol = {item["symbol"]: item for item in body["items"]}
+    assert set(by_symbol) == {"1111", "2222", "3333", "4444"}
+    for symbol, item in by_symbol.items():
+        assert item["company_name_ar"] == f"شركة {symbol}"
+        assert item["latest_decision"] == "BUY"
+        assert item["latest_confidence_score"] == pytest.approx(75.0)
 
 
 # --- authentication ---------------------------------------------------
