@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from src.core.runtime.reliability_layer.circuit_breaker import CircuitBreakerOpenError
@@ -821,3 +822,108 @@ def test_directory_never_calls_the_market_data_provider(client, db_session, monk
         assert response.status_code == 200
     finally:
         del app.dependency_overrides[get_market_provider]
+
+
+# --- /directory `q`-branch caching (2026-09-19 perf audit) -------------
+
+
+def _count_queries_during(engine, fn):
+    """Number of SQL statements actually sent to `engine` while `fn()`
+    runs -- same helper/pattern as test_watchlist_route.py's own
+    `_count_queries_during`, used below to prove a second, identical
+    `q` search hits the cache instead of re-running the ILIKE query and
+    the normalized-Arabic full-table scan."""
+    count = 0
+
+    def _before_cursor_execute(*args, **kwargs):
+        nonlocal count
+        count += 1
+
+    event.listen(engine, "before_cursor_execute", _before_cursor_execute)
+    try:
+        fn()
+    finally:
+        event.remove(engine, "before_cursor_execute", _before_cursor_execute)
+    return count
+
+
+def test_directory_search_is_cached_and_still_functionally_correct(client, db_session):
+    """(a) Two identical `q` searches return the same, correct results;
+    (b) the second one hits the cache -- it must NOT re-run the ILIKE
+    query or the normalized-Arabic fallback table scan, so it issues
+    strictly fewer SQL statements than the first (cold) request, even
+    though both requests still need the small, ID-bounded PriceBar/
+    DecisionV2Snapshot/Stock-refetch queries for the page itself."""
+    stock = _make_stock(db_session, symbol="2222")
+    stock.name_ar = "أرامكو السعودية"
+    db_session.commit()
+    # A second, non-matching stock so the normalized-Arabic fallback
+    # scan (the actual O(table) cost being cached) has more than one
+    # row to walk.
+    db_session.add(Stock(symbol="1120", name_en="Al Rajhi Bank", sector="Banks"))
+    db_session.commit()
+
+    engine = db_session.get_bind()
+
+    first_count = _count_queries_during(
+        engine, lambda: client.get("/api/v1/stocks/directory", params={"q": "ارامكو"})
+    )
+    response1 = client.get("/api/v1/stocks/directory", params={"q": "ارامكو"})
+    second_count = _count_queries_during(
+        engine, lambda: client.get("/api/v1/stocks/directory", params={"q": "ارامكو"})
+    )
+    response2 = client.get("/api/v1/stocks/directory", params={"q": "ارامكو"})
+
+    # (a) functional correctness, identical on both requests.
+    for response in (response1, response2):
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert len(body["results"]) == 1
+        assert body["results"][0]["symbol"] == "2222"
+
+    # (b) the cached (second) request does strictly less DB work than
+    # the cold (first) one -- the matched-ID computation was skipped
+    # entirely on the cache hit.
+    assert second_count < first_count
+
+
+def test_directory_search_cache_is_keyed_by_sector_too(client, db_session):
+    """A search cached for one `sector` filter must never leak into a
+    request for the same `q` with a *different* `sector` -- the cache
+    key must include every parameter that affects the result set, not
+    `q` alone."""
+    db_session.add(Stock(symbol="2222", name_en="Saudi Aramco", sector="Energy"))
+    db_session.add(Stock(symbol="1120", name_en="Al Rajhi Aramco Holding", sector="Banks"))
+    db_session.commit()
+
+    energy_response = client.get(
+        "/api/v1/stocks/directory", params={"q": "Aramco", "sector": "Energy"}
+    )
+    banks_response = client.get(
+        "/api/v1/stocks/directory", params={"q": "Aramco", "sector": "Banks"}
+    )
+
+    assert [r["symbol"] for r in energy_response.json()["results"]] == ["2222"]
+    assert [r["symbol"] for r in banks_response.json()["results"]] == ["1120"]
+
+
+def test_directory_search_cache_still_paginates_correctly(client, db_session):
+    """The cached value is the full matched/sorted list, re-sliced per
+    request by `offset`/`limit` -- a second page for the same `q` must
+    still return the correct slice, not the first page again."""
+    for i in range(5):
+        db_session.add(Stock(symbol=f"100{i}", name_en=f"Match Stock {i}"))
+    db_session.commit()
+
+    first_page = client.get(
+        "/api/v1/stocks/directory", params={"q": "Match", "limit": 2, "offset": 0}
+    )
+    second_page = client.get(
+        "/api/v1/stocks/directory", params={"q": "Match", "limit": 2, "offset": 2}
+    )
+
+    assert first_page.json()["total"] == 5
+    assert [r["symbol"] for r in first_page.json()["results"]] == ["1000", "1001"]
+    assert second_page.json()["total"] == 5
+    assert [r["symbol"] for r in second_page.json()["results"]] == ["1002", "1003"]
