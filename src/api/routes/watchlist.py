@@ -10,6 +10,18 @@ first add (`UserWatchlist.name` is a fixed, non-user-facing label --
 this route does not expose Basirah's underlying multi-watchlist-per-
 user schema as a product feature, since nothing has asked for named
 watchlists yet).
+
+2026-09-19 (full-platform audit): every route requires
+`require_active_subscription()`, matching `src.api.routes.stocks`/
+`radar`'s own convention exactly -- `get_watchlist` returns the same
+paid-tier `latest_entry_zone_low/high`/`latest_target_1/2/3`/
+`latest_stop_loss` fields those routes already gate, so this route
+must not be reachable by an unsubscribed account either. Staff get an
+unconditional bypass (see `require_active_subscription`'s own
+docstring), and every real user (new or existing) already has an
+active/trialing/grace-period subscription record by default, so this
+closes a real access-control gap without changing any legitimate
+user's actual access.
 """
 
 from datetime import datetime, timezone
@@ -18,7 +30,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from src.analysis.decision_v2.decision_freshness import classify_decision_freshness, is_decision_fresh
-from src.api.dependencies import get_current_user
 from src.api.exceptions import StockNotFoundError, WatchlistItemAlreadyExistsError, WatchlistItemNotFoundError
 from src.api.schemas.auth import MessageOut
 from src.api.schemas.watchlist import (
@@ -28,6 +39,7 @@ from src.api.schemas.watchlist import (
     WatchlistNewsAlertOut,
     WatchlistOut,
 )
+from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
 from src.domain.models import (
     DecisionV2Snapshot,
@@ -101,7 +113,7 @@ def _item_out(
 @router.get("", response_model=WatchlistOut)
 def get_watchlist(
     session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> WatchlistOut:
     watchlist = _get_or_create_watchlist(session, current_user.id)
     items = (
@@ -135,7 +147,7 @@ def get_watchlist(
 def add_watchlist_item(
     body: AddWatchlistItemRequest,
     session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> WatchlistItemOut:
     symbol = body.symbol.strip()
     try:
@@ -175,7 +187,7 @@ def add_watchlist_item(
 def remove_watchlist_item(
     symbol: str,
     session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> MessageOut:
     watchlist = _get_or_create_watchlist(session, current_user.id)
     item = (
@@ -202,7 +214,7 @@ def _news_alert_out(a: WatchlistNewsAlert) -> WatchlistNewsAlertOut:
 @router.get("/news-alerts", response_model=WatchlistNewsAlertListOut)
 def get_watchlist_news_alerts(
     session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> WatchlistNewsAlertListOut:
     """Already-persisted alerts for the caller's own watchlist -- see
     `POST .../news-alerts/refresh` to generate new ones from the
@@ -220,7 +232,7 @@ def get_watchlist_news_alerts(
 @router.post("/news-alerts/refresh", response_model=WatchlistNewsAlertListOut)
 def refresh_watchlist_news_alerts(
     session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> WatchlistNewsAlertListOut:
     """Re-evaluates every symbol on the caller's watchlist against the
     latest analyzed news and persists any new Upgrade/Downgrade/High

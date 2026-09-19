@@ -51,6 +51,18 @@ _STOP_STATUS = DecisionV2OutcomeStatus.STOP_LOSS_HIT
 # convention already used by personal_performance.py/sector_reliability.py.
 MIN_RESOLVED_SAMPLE_SIZE = 10
 
+# 2026-09-19 (full-platform audit): the algorithm-wide win rate is a
+# platform-level track-record claim, not a per-user/per-group figure --
+# it must meet the SAME statistical bar this platform already enforces
+# for exactly that kind of claim (src.api.routes.recommendation_history's
+# `small_sample_warning=terminal_sample_size < 30`), not the lower
+# per-user bar above. Before this, `algorithm_win_rate_pct` was shown as
+# an unqualified headline number even when the platform's own resolved
+# sample was still below the 30-outcome floor it treats as reliable
+# everywhere else -- the exact statistical-honesty gap this platform's
+# own 2026-09-11 audit flagged for the overall success-rate figure.
+ALGORITHM_MIN_RESOLVED_SAMPLE_SIZE = 30
+
 _INSUFFICIENT_DATA_AR = "بيانات غير كافية بعد لعرض هذا المقياس بشكل موثوق"
 
 OUTCOME_STATUS_LABEL_AR = {
@@ -96,6 +108,7 @@ class PersonalPerformanceComparison:
     personal_small_sample_warning: bool
     algorithm_resolved_sample_size: int
     algorithm_win_rate_pct: Optional[float]
+    algorithm_small_sample_warning: bool
     insufficient_data_message_ar: Optional[str]
 
 
@@ -210,5 +223,6 @@ def compute_personal_vs_algorithm_performance(session: Session, user_id: int) ->
         personal_small_sample_warning=personal_sample_size < MIN_RESOLVED_SAMPLE_SIZE,
         algorithm_resolved_sample_size=algorithm_sample_size,
         algorithm_win_rate_pct=algorithm_win_rate,
+        algorithm_small_sample_warning=algorithm_sample_size < ALGORITHM_MIN_RESOLVED_SAMPLE_SIZE,
         insufficient_data_message_ar=insufficient_message,
     )

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { NotificationBell } from "@/components/shell/NotificationBell";
+import { SymbolText } from "@/components/shared/SymbolText";
 import { searchStocks } from "@/lib/api/stocks";
 import type { StockSearchResult } from "@/lib/api/stocks-types";
 
@@ -120,7 +121,7 @@ export function TopBar() {
                       ) : null}
                     </span>
                     <span className="bsr-numeric text-sm font-semibold text-bsr-text-primary">
-                      {result.symbol}
+                      <SymbolText>{result.symbol}</SymbolText>
                     </span>
                   </button>
                 </li>

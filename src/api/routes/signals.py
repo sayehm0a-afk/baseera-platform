@@ -3,6 +3,13 @@ signal) and the personal-vs-algorithm performance comparison, product
 decision 2026-09-18. Every route resolves the target signal strictly
 from `current_user.id` (never from a client-supplied user id), the
 same IDOR defense already used by src.api.routes.watchlist.
+
+2026-09-19 (full-platform audit): every route requires
+`require_active_subscription()`, matching `src.api.routes.stocks`/
+`radar`'s own convention -- `follow`/`get_followed` return the same
+paid-tier entry-zone/target/stop-loss fields those routes already
+gate behind an active subscription, so an unsubscribed account must
+not be able to reach them by following a snapshot ID here instead.
 """
 
 from datetime import datetime, timezone
@@ -10,7 +17,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from src.api.dependencies import get_current_user
 from src.api.schemas.auth import MessageOut
 from src.api.schemas.signals import (
     FollowedSignalListOut,
@@ -18,6 +24,7 @@ from src.api.schemas.signals import (
     FollowSignalRequest,
     PersonalPerformanceComparisonOut,
 )
+from src.auth.rbac import require_active_subscription
 from src.core.db.database import get_db
 from src.domain.models import User
 from src.market_intelligence.followed_signals import (
@@ -55,7 +62,7 @@ def _item_out(record) -> FollowedSignalOut:
 def follow(
     body: FollowSignalRequest,
     session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> FollowedSignalOut:
     row = follow_signal(session, current_user.id, body.decision_v2_snapshot_id)
     records = list_followed_signals(session, current_user.id)
@@ -67,7 +74,7 @@ def follow(
 def unfollow(
     decision_v2_snapshot_id: int,
     session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> MessageOut:
     unfollow_signal(session, current_user.id, decision_v2_snapshot_id)
     return MessageOut(message="تم إلغاء متابعة هذه الإشارة.")
@@ -76,7 +83,7 @@ def unfollow(
 @router.get("/followed", response_model=FollowedSignalListOut)
 def get_followed(
     session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> FollowedSignalListOut:
     records = list_followed_signals(session, current_user.id)
     return FollowedSignalListOut(generated_at=datetime.now(timezone.utc), items=[_item_out(r) for r in records])
@@ -85,7 +92,7 @@ def get_followed(
 @router.get("/performance", response_model=PersonalPerformanceComparisonOut)
 def get_performance(
     session: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription()),
 ) -> PersonalPerformanceComparisonOut:
     comparison = compute_personal_vs_algorithm_performance(session, current_user.id)
     return PersonalPerformanceComparisonOut(
@@ -95,5 +102,6 @@ def get_performance(
         personal_small_sample_warning=comparison.personal_small_sample_warning,
         algorithm_resolved_sample_size=comparison.algorithm_resolved_sample_size,
         algorithm_win_rate_pct=comparison.algorithm_win_rate_pct,
+        algorithm_small_sample_warning=comparison.algorithm_small_sample_warning,
         insufficient_data_message_ar=comparison.insufficient_data_message_ar,
     )

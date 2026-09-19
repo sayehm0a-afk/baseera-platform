@@ -54,7 +54,7 @@ export default function StocksDirectoryPage() {
     <div className="flex flex-col gap-bsr-4">
       <div>
         <h1 className="text-lg font-semibold text-bsr-text-primary">جميع الأسهم</h1>
-        <p className="mt-1 text-sm text-bsr-text-secondary">تصفح وابحث عن أي سهم مدرج في السوق السعودي</p>
+        <p className="mt-1 text-sm text-bsr-text-secondary">تصفح وابحث عن أي سهم مدرج في المنصة</p>
       </div>
 
       <label>

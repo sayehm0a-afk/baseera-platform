@@ -647,6 +647,49 @@ def test_list_confidence_calibrations_filters_by_source(client, admin, session):
     assert [m["version"] for m in filtered.json()["models"]] == ["c-v2"]
 
 
+def test_list_confidence_calibrations_filters_by_market(client, admin, session):
+    from src.domain.models import Market
+
+    session.add(
+        ConfidenceCalibrationModel(
+            version="c-tadawul", status=ConfidenceCalibrationStatus.DRAFT, method=ConfidenceCalibrationMethod.PLATT,
+            training_source="decision_v2", market=Market.TADAWUL,
+            model_params={"coef": 1.0, "intercept": 0.0}, training_sample_size=50,
+        )
+    )
+    session.add(
+        ConfidenceCalibrationModel(
+            version="c-us", status=ConfidenceCalibrationStatus.DRAFT, method=ConfidenceCalibrationMethod.PLATT,
+            training_source="decision_v2", market=Market.US,
+            model_params={"coef": 1.0, "intercept": 0.0}, training_sample_size=50,
+        )
+    )
+    session.commit()
+
+    _as(admin)
+    filtered = client.get("/api/v1/admin/ai-evolution/confidence-calibrations", params={"market": "US"})
+    assert [m["version"] for m in filtered.json()["models"]] == ["c-us"]
+
+
+def test_list_confidence_calibrations_rejects_an_invalid_market_with_a_clean_422(client, admin):
+    """2026-09-19 (full-platform audit): `Market(market)` used to raise
+    a bare, uncaught ValueError for a typo'd `?market=` -- a 500, not a
+    422 -- exactly the way `create_confidence_calibration`'s own
+    `source`-adjacent conversion was already guarded against."""
+    _as(admin)
+    response = client.get("/api/v1/admin/ai-evolution/confidence-calibrations", params={"market": "EGYPT"})
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_market_filter"
+
+
+def test_create_confidence_calibration_rejects_an_invalid_market_with_a_clean_422(client, admin):
+    _as(admin)
+    bad = dict(_PROPOSE_REQUEST, market="EGYPT")
+    response = client.post("/api/v1/admin/ai-evolution/confidence-calibrations", json=bad)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_market_filter"
+
+
 def test_get_confidence_calibration_404(client, admin):
     _as(admin)
     response = client.get("/api/v1/admin/ai-evolution/confidence-calibrations/does-not-exist")

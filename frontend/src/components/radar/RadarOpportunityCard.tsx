@@ -4,6 +4,7 @@ import { useState } from "react";
 import { AiStar } from "@/components/ai/AiStar";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
 import { DecisionBadge } from "@/components/badges/DecisionBadge";
+import { SymbolText } from "@/components/shared/SymbolText";
 import { ApiError } from "@/lib/api/client";
 import type { RadarOpportunitySummary } from "@/lib/api/radar-types";
 import { followSignal } from "@/lib/api/signals";
@@ -80,7 +81,7 @@ export function RadarOpportunityCard({ opportunity: o }: RadarOpportunityCardPro
           <span className="text-base font-semibold text-bsr-text-primary">
             {o.company_name_ar ?? o.company_name_en}
           </span>
-          <span className="bsr-numeric text-sm text-bsr-text-secondary">{o.symbol}</span>
+          <span className="bsr-numeric text-sm text-bsr-text-secondary"><SymbolText>{o.symbol}</SymbolText></span>
         </div>
         <DecisionBadge value={o.classification} labelAr={o.classification_label_ar} />
       </div>

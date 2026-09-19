@@ -71,6 +71,11 @@ export function PersonalPerformancePanel() {
         <p className="text-xs text-bsr-text-secondary">
           من {data.algorithm_resolved_sample_size} إشارة محسومة على مستوى المنصة
         </p>
+        {data.algorithm_small_sample_warning ? (
+          <p className="mt-1 text-xs text-bsr-gold-500">
+            عينة أولية -- العدد الحالي أقل من الحد الأدنى الإحصائي، والرقم قد يتغيّر بشكل ملموس مع تراكم المزيد من النتائج.
+          </p>
+        ) : null}
       </div>
     </div>
   );

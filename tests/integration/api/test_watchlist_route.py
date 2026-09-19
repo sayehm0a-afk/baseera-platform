@@ -7,7 +7,7 @@ UserWatchlist.user_id is a real foreign key, unlike authenticated_as_
 staff's unpersisted in-memory User).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -25,6 +25,9 @@ from src.domain.models import (
     PortfolioAlertType,
     RadarOpportunity,
     Stock,
+    Subscription,
+    SubscriptionPlan,
+    SubscriptionStatus,
     User,
     UserWatchlist,
     UserWatchlistItem,
@@ -32,11 +35,34 @@ from src.domain.models import (
 )
 
 
+def _give_active_trial(db_session, user):
+    # 2026-09-19 (full-platform audit): every route in this file now
+    # requires require_active_subscription() (matching src.api.routes.
+    # stocks/radar's own convention -- this route returns the same
+    # paid-tier entry-zone/target/stop-loss fields those routes already
+    # gate). A real registered user always gets exactly this row via
+    # src.auth.user_service.register's provision_trial_subscription;
+    # these hand-built test users need it created explicitly too.
+    future = datetime.now(timezone.utc) + timedelta(days=14)
+    db_session.add(
+        Subscription(
+            user_id=user.id,
+            plan=SubscriptionPlan.TRIAL,
+            status=SubscriptionStatus.TRIALING,
+            trial_ends_at=future,
+            current_period_start=datetime.now(timezone.utc),
+            current_period_end=future,
+        )
+    )
+    db_session.commit()
+
+
 @pytest.fixture
 def as_user(db_session):
     user = User(email="user@example.com", password_hash="hashed", is_staff=False)
     db_session.add(user)
     db_session.commit()
+    _give_active_trial(db_session, user)
     main.app.dependency_overrides[get_current_user] = lambda: user
     yield user
 
@@ -46,6 +72,7 @@ def other_user(db_session):
     user = User(email="other@example.com", password_hash="hashed", is_staff=False)
     db_session.add(user)
     db_session.commit()
+    _give_active_trial(db_session, user)
     return user
 
 
@@ -120,6 +147,32 @@ def test_get_watchlist_requires_authentication(client, db_session):
 def test_add_watchlist_item_requires_authentication(client, db_session):
     response = client.post("/api/v1/watchlist/items", json={"symbol": "2222"})
     assert response.status_code == 401
+
+
+# --- subscription gating (full-platform audit, 2026-09-19) --------------
+# GET /watchlist returns the same paid-tier latest_entry_zone_low/high,
+# latest_target_1/2/3, latest_stop_loss fields src.api.routes.stocks/
+# radar already gate behind an active subscription -- an authenticated-
+# but-unsubscribed account must be rejected here too.
+
+
+@pytest.fixture
+def as_unsubscribed_user(db_session):
+    user = User(email="unsubscribed@example.com", password_hash="hashed", is_staff=False)
+    db_session.add(user)
+    db_session.commit()
+    main.app.dependency_overrides[get_current_user] = lambda: user
+    yield user
+
+
+def test_get_watchlist_requires_active_subscription(client, db_session, as_unsubscribed_user):
+    response = client.get("/api/v1/watchlist")
+    assert response.status_code == 402
+
+
+def test_add_watchlist_item_requires_active_subscription(client, db_session, as_unsubscribed_user):
+    response = client.post("/api/v1/watchlist/items", json={"symbol": "2222"})
+    assert response.status_code == 402
 
 
 # --- GET ----------------------------------------------------------------

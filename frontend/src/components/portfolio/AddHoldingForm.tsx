@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { SymbolText } from "@/components/shared/SymbolText";
 import { searchStocks } from "@/lib/api/stocks";
 import type { StockSearchResult } from "@/lib/api/stocks-types";
 
@@ -116,7 +117,7 @@ export function AddHoldingForm({
                     className="flex w-full items-center justify-between gap-bsr-2 px-bsr-3 py-bsr-2 text-start text-sm hover:bg-bsr-surface-overlay"
                   >
                     <span className="truncate text-bsr-text-primary">{result.name_ar ?? result.name_en}</span>
-                    <span className="bsr-numeric shrink-0 text-bsr-text-secondary">{result.symbol}</span>
+                    <span className="bsr-numeric shrink-0 text-bsr-text-secondary"><SymbolText>{result.symbol}</SymbolText></span>
                   </button>
                 </li>
               ))}

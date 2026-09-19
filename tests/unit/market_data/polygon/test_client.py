@@ -189,6 +189,35 @@ async def test_get_tickers_follows_next_url_pagination():
 
 
 @pytest.mark.asyncio
+async def test_get_tickers_never_reuses_polygons_own_api_key_from_next_url():
+    """2026-09-19 (full-platform audit): Polygon's real next_url embeds
+    apiKey=<key> in its query string -- reusing it verbatim would send
+    the key a second time as part of the request URL (exposed to any
+    URL-logging intermediary) even though _send() already authenticates
+    via the Authorization header alone. Case-insensitive per the fix's
+    own rationale (Polygon's casing isn't a documented guarantee)."""
+    client, session = _client(
+        [
+            FakeResponse(
+                200,
+                {
+                    "results": [{"ticker": "AAPL"}],
+                    "next_url": (
+                        "https://api.polygon.io/v3/reference/tickers"
+                        "?cursor=abc123&apiKey=super-secret-should-never-travel-in-a-url"
+                    ),
+                },
+            ),
+            FakeResponse(200, {"results": [{"ticker": "MSFT"}]}),
+        ]
+    )
+    await client.get_tickers()
+    assert session.calls[1]["params"] == {"cursor": "abc123"}
+    assert "apiKey" not in session.calls[1]["params"]
+    assert "apikey" not in {k.lower() for k in session.calls[1]["params"]}
+
+
+@pytest.mark.asyncio
 async def test_get_tickers_stops_when_no_next_url():
     client, session = _client([FakeResponse(200, {"results": [{"ticker": "AAPL"}]})])
     await client.get_tickers()

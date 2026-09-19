@@ -53,7 +53,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, aliased
 
 from src.analysis.decision_v2.decision_freshness import is_decision_fresh
 from src.analysis.decision_v2.market_risk import classify_market_risk
@@ -265,11 +266,33 @@ def get_radar_history_day(
     day_start = datetime.combine(day, datetime.min.time(), tzinfo=TADAWUL_TIMEZONE)
     day_end = day_start + timedelta(days=1)
 
-    day_rows = (
-        session.query(RadarOpportunity)
+    # 2026-09-19 (full-platform audit): a symbol can be emitted more
+    # than once within the same day (emit_radar_opportunities supersedes
+    # the prior row whenever a symbol's classification/confidence/score
+    # materially changes during Live Market Mode's polling) -- without
+    # dedup, this day's history would show every intermediate row, not
+    # just the day's final call, double-counting/duplicating cards.
+    # `superseded_by_id IS NULL` (the live view's own filter, see
+    # `list_live_opportunities`) is the wrong tool here: a row can be
+    # superseded by one emitted on a LATER day, which would wrongly hide
+    # this symbol from ITS OWN day's history entirely. What a past day's
+    # history needs is each symbol's most recent row WITHIN that day's
+    # own window -- the same windowed-latest-per-key pattern already
+    # used for PriceBar/DecisionV2Snapshot lookups elsewhere in this
+    # codebase (see src.api.routes.stocks's /directory route).
+    ranked = (
+        session.query(
+            RadarOpportunity,
+            func.row_number()
+            .over(partition_by=RadarOpportunity.symbol, order_by=RadarOpportunity.emitted_at.desc())
+            .label("rn"),
+        )
         .filter(RadarOpportunity.emitted_at >= day_start, RadarOpportunity.emitted_at < day_end)
-        .all()
+        .subquery()
     )
+    opportunity_alias = aliased(RadarOpportunity, ranked)
+    day_rows = session.query(opportunity_alias).filter(ranked.c.rn == 1).all()
+
     has_scan = len(day_rows) > 0
     actionable = sorted(
         (o for o in day_rows if is_actionable_buy_decision(o.classification)),

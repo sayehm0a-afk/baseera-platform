@@ -108,6 +108,16 @@ class InsufficientCalibrationDataError(APIError):
     code = "insufficient_calibration_data"
 
 
+class InvalidMarketFilterError(APIError):
+    """2026-09-19 (full-platform audit): a confidence-calibration
+    `market` value that isn't a real `Market` enum member (e.g. a
+    typo'd query param) -- a clean 422, not an uncaught 500 from
+    `Market(...)` raising `ValueError` straight into the handler."""
+
+    status_code = 422
+    code = "invalid_market_filter"
+
+
 class MarketScanRunNotFoundError(APIError):
     status_code = 404
     code = "market_scan_run_not_found"

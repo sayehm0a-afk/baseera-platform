@@ -42,6 +42,7 @@ from src.api.exceptions import (
     ConfidenceCalibrationNotFoundError,
     InsufficientCalibrationDataError,
     InvalidConfidenceCalibrationTransitionError,
+    InvalidMarketFilterError,
 )
 from src.api.schemas.ai_evolution import (
     CalibrationStatusOut,
@@ -171,6 +172,22 @@ def _get_confidence_calibration_or_404(session: Session, version: str) -> Confid
     return row
 
 
+def _parse_market_filter(value: Optional[str]) -> Optional[Market]:
+    """2026-09-19 (full-platform audit): `Market(value)` raises a bare
+    `ValueError` for an unrecognized string (e.g. a typo'd `?market=`),
+    which `src.api.error_handlers` never catches -- an uncaught 500
+    instead of a clean 422. Centralized here so both routes below fail
+    the same honest way."""
+    if value is None:
+        return None
+    try:
+        return Market(value)
+    except ValueError as exc:
+        raise InvalidMarketFilterError(
+            f"'{value}' is not a valid market -- expected one of: {', '.join(m.value for m in Market)}."
+        ) from exc
+
+
 @router.post("/confidence-calibrations", response_model=ConfidenceCalibrationModelOut)
 def create_confidence_calibration(
     request: ConfidenceCalibrationCreateRequest,
@@ -189,7 +206,7 @@ def create_confidence_calibration(
             training_period_end=request.training_period_end,
             reference_horizon_days=request.reference_horizon_days or DEFAULT_REFERENCE_HORIZON_DAYS,
             source=request.source or TRAINING_SOURCE_LEGACY_V1,
-            market=Market(request.market) if request.market else Market.TADAWUL,
+            market=_parse_market_filter(request.market) or Market.TADAWUL,
             min_sample_size=request.min_sample_size or DEFAULT_MIN_SAMPLE_SIZE,
             notes=request.notes,
         )
@@ -208,8 +225,9 @@ def list_confidence_calibrations(
     query = session.query(ConfidenceCalibrationModel)
     if source is not None:
         query = query.filter_by(training_source=source)
-    if market is not None:
-        query = query.filter_by(market=Market(market))
+    parsed_market = _parse_market_filter(market)
+    if parsed_market is not None:
+        query = query.filter_by(market=parsed_market)
     rows = query.order_by(ConfidenceCalibrationModel.created_at.desc()).all()
     return ConfidenceCalibrationListOut(models=[_to_confidence_calibration_out(row) for row in rows])
 

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AiStar } from "@/components/ai/AiStar";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
+import { SymbolText } from "@/components/shared/SymbolText";
 import { getMyWatchlist, removeFromWatchlist } from "@/lib/api/watchlist";
 import type { WatchlistItem } from "@/lib/api/watchlist-types";
 import {
@@ -87,7 +88,7 @@ export function MyWatchlistPanel() {
         <li key={item.symbol} className="flex flex-col gap-bsr-2 px-bsr-4 py-bsr-3">
           <div className="flex items-center justify-between gap-bsr-3">
             <Link href={`/stocks/${item.symbol}`} className="flex flex-col">
-              <span className="bsr-numeric font-semibold text-bsr-text-primary">{item.symbol}</span>
+              <span className="bsr-numeric font-semibold text-bsr-text-primary"><SymbolText>{item.symbol}</SymbolText></span>
               {item.company_name_ar ? (
                 <span className="text-sm text-bsr-text-secondary">{item.company_name_ar}</span>
               ) : null}

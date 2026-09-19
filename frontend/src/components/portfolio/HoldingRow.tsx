@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { SymbolText } from "@/components/shared/SymbolText";
 import type { PortfolioHoldingDetail } from "@/lib/api/portfolio-types";
 import { decisionFreshnessLabelAr, formatRelativeAgeAr } from "@/lib/format/freshness";
 import { HolderGuidanceBadge } from "./HolderGuidanceBadge";
@@ -70,7 +71,7 @@ export function HoldingRow({
     return (
       <div className="flex flex-col gap-bsr-2 rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-3">
         <span className="text-sm font-semibold text-bsr-text-primary">
-          {holding.name_ar ?? holding.name_en} ({holding.symbol})
+          {holding.name_ar ?? holding.name_en} (<SymbolText>{holding.symbol}</SymbolText>)
         </span>
         <div className="grid grid-cols-2 gap-bsr-2 sm:grid-cols-4">
           <input
@@ -120,7 +121,7 @@ export function HoldingRow({
             {holding.name_ar ?? holding.name_en}
           </span>
           <span className="bsr-numeric text-xs text-bsr-text-secondary">
-            {holding.symbol}
+            <SymbolText>{holding.symbol}</SymbolText>
             {holding.sector_ar ? ` · ${holding.sector_ar}` : ""}
           </span>
         </Link>
