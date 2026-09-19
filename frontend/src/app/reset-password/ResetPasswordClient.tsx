@@ -7,6 +7,17 @@ import { AiStar } from "@/components/ai/AiStar";
 import { ApiError } from "@/lib/api/client";
 import { resetPassword } from "@/lib/auth/auth-service";
 
+// Mirrors src/api/schemas/auth.py's _validate_password_complexity --
+// see register/page.tsx's identical constant/helper for the full
+// rationale (shown up front since the backend's 422 validation error
+// isn't wrapped in {"error": {code, message}}, so it can't be mapped
+// to a specific client-facing message).
+const PASSWORD_HINT = "8 أحرف على الأقل، تتضمن حرفًا ورقمًا.";
+
+function passwordMeetsPolicy(value: string): boolean {
+  return value.length >= 8 && /\p{L}/u.test(value) && /\d/.test(value);
+}
+
 export function ResetPasswordClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -24,6 +35,10 @@ export function ResetPasswordClient() {
     }
     if (!password.trim()) {
       setError("يرجى إدخال كلمة مرور جديدة.");
+      return;
+    }
+    if (!passwordMeetsPolicy(password)) {
+      setError(`كلمة المرور لا تحقق الشروط المطلوبة: ${PASSWORD_HINT}`);
       return;
     }
     setError(null);
@@ -80,6 +95,7 @@ export function ResetPasswordClient() {
                 onChange={(e) => setPassword(e.target.value)}
                 className="rounded-bsr-md border border-bsr-border-subtle bg-bsr-surface-base px-bsr-3 py-bsr-2 text-bsr-text-primary focus:border-bsr-gold-500 focus:outline-none"
               />
+              <span className="text-xs text-bsr-text-muted">{PASSWORD_HINT}</span>
             </label>
 
             {error ? (
