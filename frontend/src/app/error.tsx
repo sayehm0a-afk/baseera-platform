@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import * as Sentry from "@sentry/nextjs";
 
 export default function GlobalError({
   error,
@@ -11,6 +12,11 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error(error);
+    // Next.js does not forward errors caught by this client-side error
+    // boundary to Sentry's own instrumentation hooks, so it needs an
+    // explicit report. This call is a no-op (no network request) when
+    // NEXT_PUBLIC_SENTRY_DSN is unset -- see instrumentation-client.ts.
+    Sentry.captureException(error);
   }, [error]);
 
   return (
