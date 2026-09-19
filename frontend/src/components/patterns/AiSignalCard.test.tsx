@@ -95,4 +95,23 @@ describe("AiSignalCard", () => {
     render(<AiSignalCard symbol="2222" recommendation="BUY" />);
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
+
+  it("renders the Decision Engine V2 badge instead of the legacy recommendation badge when both decision and decision_label_ar are present", () => {
+    render(
+      <AiSignalCard
+        symbol="2222"
+        recommendation="BUY"
+        decision="BUY_CANDIDATE"
+        decisionLabelAr="مرشح للشراء"
+      />
+    );
+    expect(screen.getByText("مرشح للشراء")).toBeInTheDocument();
+    expect(screen.queryByText("شراء")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the legacy recommendation badge when V2 decision data is absent", () => {
+    render(<AiSignalCard symbol="2222" recommendation="BUY" />);
+    expect(screen.getByText("شراء")).toBeInTheDocument();
+    expect(screen.queryByText("مرشح للشراء")).not.toBeInTheDocument();
+  });
 });

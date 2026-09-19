@@ -1,8 +1,10 @@
+import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import {
   RecommendationBadge,
   type RecommendationValue,
 } from "@/components/badges/RecommendationBadge";
 import { AiStar } from "@/components/ai/AiStar";
+import type { DecisionV2Value } from "@/lib/api/stocks-types";
 
 interface InstrumentRowProps {
   symbol: string;
@@ -15,6 +17,13 @@ interface InstrumentRowProps {
   priceKind?: "quote" | "target";
   stopLoss?: number | null;
   recommendation?: RecommendationValue | null;
+  // Decision Engine V2's gate-checked verdict -- when both are present
+  // it wins over the legacy `recommendation` above, exactly as on the
+  // stock detail page (StockDetailClient): V2 is gate-checked and
+  // gives an Arabic label the backend itself wrote, so it must never
+  // be shown alongside or after the legacy badge, only in its place.
+  decision?: DecisionV2Value | null;
+  decisionLabelAr?: string | null;
   confidence?: number | null;
   /** Set when the underlying quote came from a synthetic/dev provider
    * -- surfaced honestly rather than presented as a live price
@@ -36,6 +45,8 @@ export function InstrumentRow({
   priceKind = "quote",
   stopLoss,
   recommendation,
+  decision,
+  decisionLabelAr,
   confidence,
   isSynthetic,
   href,
@@ -94,7 +105,9 @@ export function InstrumentRow({
           </div>
         ) : null}
 
-        {recommendation ? (
+        {decision && decisionLabelAr ? (
+          <DecisionBadge value={decision} labelAr={decisionLabelAr} />
+        ) : recommendation ? (
           <RecommendationBadge value={recommendation} />
         ) : null}
       </div>

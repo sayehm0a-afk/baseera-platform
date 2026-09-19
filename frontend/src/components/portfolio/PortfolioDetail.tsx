@@ -6,6 +6,7 @@ import { AiSignalCard } from "@/components/patterns/AiSignalCard";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { LoadingScreen } from "@/components/patterns/LoadingScreen";
 import { SymbolText } from "@/components/shared/SymbolText";
+import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import {
   RecommendationBadge,
   type RecommendationValue,
@@ -219,7 +220,17 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
                       {holding.unrealized_pnl != null ? holding.unrealized_pnl.toFixed(2) : "—"}
                     </td>
                     <td className="px-bsr-2 py-bsr-2">
-                      {holding.recommendation ? (
+                      {/* Decision Engine V2's gate-checked verdict wins
+                       * over the legacy `recommendation` field whenever
+                       * both are present, exactly as on the stock
+                       * detail page (StockDetailClient): V2 is
+                       * gate-checked and carries the backend's own
+                       * Arabic label, so it must never be shown
+                       * alongside or after the legacy badge, only in
+                       * its place. */}
+                      {holding.decision && holding.decision_label_ar ? (
+                        <DecisionBadge value={holding.decision} labelAr={holding.decision_label_ar} />
+                      ) : holding.recommendation ? (
                         <RecommendationBadge value={holding.recommendation as RecommendationValue} />
                       ) : (
                         "—"
@@ -359,6 +370,8 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
                 symbol={opportunity.symbol}
                 sector={opportunity.sector_ar ?? opportunity.sector}
                 recommendation={opportunity.recommendation as RecommendationValue}
+                decision={opportunity.decision}
+                decisionLabelAr={opportunity.decision_label_ar}
                 confidence={opportunity.confidence}
                 href={`/stocks/${encodeURIComponent(opportunity.symbol)}`}
               />

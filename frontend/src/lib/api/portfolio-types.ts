@@ -1,5 +1,7 @@
 /** Mirrors src/api/schemas/portfolio_intelligence.py. */
 
+import type { DecisionV2Value } from "./stocks-types";
+
 export interface HoldingRequestInput {
   symbol: string;
   quantity: number;
@@ -31,6 +33,11 @@ export interface HoldingAnalysis {
   position_size: string | null;
   target_price: number | null;
   error: string | null;
+  // Decision Engine V2's gate-checked verdict, added alongside the
+  // legacy `recommendation` above -- optional because older cached
+  // analyses and any endpoint not yet backed by V2 still omit it.
+  decision?: DecisionV2Value | null;
+  decision_label_ar?: string | null;
 }
 
 export interface AllocationEntry {
@@ -113,6 +120,11 @@ export interface NewBuyOpportunity {
   confidence: number | null;
   final_score: number | null;
   rationale: string;
+  // Decision Engine V2's gate-checked verdict, added alongside the
+  // legacy `recommendation` above -- optional because older cached
+  // analyses and any endpoint not yet backed by V2 still omit it.
+  decision?: DecisionV2Value | null;
+  decision_label_ar?: string | null;
 }
 
 export interface RebalancePlan {

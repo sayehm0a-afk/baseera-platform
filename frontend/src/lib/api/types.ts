@@ -4,6 +4,8 @@
  * is the single place a backend schema change surfaces as a type error.
  */
 
+import type { DecisionV2Value } from "./stocks-types";
+
 export interface ChangeEvent {
   symbol: string;
   change_type: string;
@@ -80,6 +82,11 @@ export interface RankingEntry {
   risk_reward_ratio: number | null;
   time_horizon: string | null;
   calibrated_confidence: number | null;
+  // Decision Engine V2's gate-checked verdict, added alongside the
+  // legacy `recommendation` above -- optional because older cached
+  // rankings and any endpoint not yet backed by V2 still omit it.
+  decision?: DecisionV2Value | null;
+  decision_label_ar?: string | null;
 }
 
 export interface RankingList {

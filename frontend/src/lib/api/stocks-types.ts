@@ -479,4 +479,9 @@ export interface AnalystReport {
   stop_loss_basis: string;
   target_price_basis: string;
   confidence_calibration_notes: string[];
+  // Decision Engine V2's gate-checked verdict, added alongside the
+  // legacy `recommendation` above -- optional because older cached
+  // reports and any endpoint not yet backed by V2 still omit it.
+  decision?: DecisionV2Value | null;
+  decision_label_ar?: string | null;
 }

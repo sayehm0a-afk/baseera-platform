@@ -1,15 +1,24 @@
 import { AiStar } from "@/components/ai/AiStar";
 import { ConfidenceBar } from "@/components/ai/ConfidenceBar";
+import { DecisionBadge } from "@/components/badges/DecisionBadge";
 import {
   RecommendationBadge,
   type RecommendationValue,
 } from "@/components/badges/RecommendationBadge";
+import type { DecisionV2Value } from "@/lib/api/stocks-types";
 import { RISK_LEVEL_LABELS, TIME_HORIZON_LABELS } from "@/lib/portfolio-labels";
 
 interface AiSignalCardProps {
   symbol: string;
   sector?: string | null;
   recommendation: RecommendationValue;
+  // Decision Engine V2's gate-checked verdict -- when both are present
+  // it wins over the legacy `recommendation` above, exactly as on the
+  // stock detail page (StockDetailClient): V2 is gate-checked and
+  // gives an Arabic label the backend itself wrote, so it must never
+  // be shown alongside or after the legacy badge, only in its place.
+  decision?: DecisionV2Value | null;
+  decisionLabelAr?: string | null;
   confidence?: number | null;
   calibratedConfidence?: number | null;
   currentPrice?: number | null;
@@ -29,6 +38,8 @@ export function AiSignalCard({
   symbol,
   sector,
   recommendation,
+  decision,
+  decisionLabelAr,
   confidence,
   calibratedConfidence,
   currentPrice,
@@ -51,7 +62,11 @@ export function AiSignalCard({
             <span className="text-xs text-bsr-text-secondary">{sector}</span>
           ) : null}
         </div>
-        <RecommendationBadge value={recommendation} />
+        {decision && decisionLabelAr ? (
+          <DecisionBadge value={decision} labelAr={decisionLabelAr} />
+        ) : (
+          <RecommendationBadge value={recommendation} />
+        )}
       </div>
 
       {confidence != null ? (
