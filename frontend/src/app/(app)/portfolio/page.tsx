@@ -19,16 +19,13 @@ import {
   updatePortfolioHolding,
 } from "@/lib/api/portfolio";
 import type { PortfolioAnalysis, PortfolioHoldings } from "@/lib/api/portfolio-types";
+import { formatNumberOrDash as fmt } from "@/lib/format/numbers";
 import { setStoredPortfolioId } from "@/lib/portfolio/local-portfolio";
 
 type State =
   | { status: "loading" }
   | { status: "error" }
   | { status: "ready"; portfolioId: number; holdings: PortfolioHoldings };
-
-function fmt(value: number | null | undefined): string {
-  return value == null ? "—" : value.toFixed(2);
-}
 
 /** RADAR-C Phase H: Smart Portfolio -- real, persisted holdings CRUD
  * (GET/POST/PATCH/DELETE /api/v1/portfolio/{id}/holdings) with

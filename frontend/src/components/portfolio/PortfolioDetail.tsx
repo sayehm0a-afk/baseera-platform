@@ -20,6 +20,7 @@ import {
   healthBandColorClass,
 } from "@/lib/portfolio-labels";
 import { PORTFOLIO_ALERT_TYPE_LABELS, alertSeverityColorClass } from "@/lib/news-labels";
+import { formatArabicDateTime } from "@/lib/format/freshness";
 
 function Stat({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
   return (
@@ -114,7 +115,7 @@ function NewsAlertsSection({ portfolioId }: { portfolioId: number }) {
                   </span>
                 </div>
                 <span className="text-xs text-bsr-text-muted">
-                  {new Date(alert.generated_at).toLocaleString("ar-SA", { calendar: "gregory" })}
+                  {formatArabicDateTime(alert.generated_at)}
                 </span>
               </div>
               <p className="text-sm text-bsr-text-secondary">{alert.message_ar ?? alert.message}</p>
@@ -141,7 +142,7 @@ export function PortfolioDetail({ analysis, onEdit, onReset }: PortfolioDetailPr
         <div>
           <h1 className="text-lg font-semibold text-bsr-text-primary">{analysis.name}</h1>
           <p className="text-sm text-bsr-text-secondary">
-            آخر تحليل: {new Date(analysis.generated_at).toLocaleString("ar-SA", { calendar: "gregory" })}
+            آخر تحليل: {formatArabicDateTime(analysis.generated_at)}
           </p>
         </div>
         <div className="flex gap-bsr-2">

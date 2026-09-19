@@ -5,16 +5,8 @@ import { useState } from "react";
 import { SymbolText } from "@/components/shared/SymbolText";
 import type { PortfolioHoldingDetail } from "@/lib/api/portfolio-types";
 import { decisionFreshnessLabelAr, formatRelativeAgeAr } from "@/lib/format/freshness";
+import { formatNumberOrDash as fmt, formatSignedPercent as fmtPct } from "@/lib/format/numbers";
 import { HolderGuidanceBadge } from "./HolderGuidanceBadge";
-
-function fmt(value: number | null): string {
-  return value == null ? "—" : value.toFixed(2);
-}
-
-function fmtPct(value: number | null): string {
-  if (value == null) return "—";
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
-}
 
 /** RADAR-C Phase H: one real, persisted holding -- quantity/average
  * cost/current price/invested cost/current value/unrealized P&L are
