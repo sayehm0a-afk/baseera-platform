@@ -152,18 +152,23 @@ export function HoldingRow({
           <p className="text-[11px] text-bsr-text-secondary">الكمية × التكلفة</p>
           <p className="bsr-numeric text-sm text-bsr-text-primary">
             {holding.quantity} × {fmt(holding.average_cost)}
+            {holding.currency !== "SAR" ? ` ${holding.currency}` : ""}
           </p>
         </div>
         <div>
           <p className="text-[11px] text-bsr-text-secondary">السعر الحالي</p>
           <p className="bsr-numeric text-sm text-bsr-text-primary">
             {fmt(holding.current_price)}
+            {holding.currency !== "SAR" ? ` ${holding.currency}` : ""}
           </p>
           <p className="text-[10px] text-bsr-text-muted">{holding.freshness_label_ar}</p>
         </div>
         <div>
           <p className="text-[11px] text-bsr-text-secondary">القيمة الحالية</p>
-          <p className="bsr-numeric text-sm text-bsr-text-primary">{fmt(holding.current_value)}</p>
+          <p className="bsr-numeric text-sm text-bsr-text-primary">
+            {fmt(holding.current_value)}
+            {holding.currency !== "SAR" ? ` ${holding.currency}` : ""}
+          </p>
         </div>
         <div>
           <p className="text-[11px] text-bsr-text-secondary">الربح/الخسارة غير المحقق</p>

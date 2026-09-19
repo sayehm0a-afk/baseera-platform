@@ -270,6 +270,14 @@ class PortfolioHoldingDetailOut(BaseModel):
     sector: Optional[str] = None
     sector_ar: Optional[str] = None
 
+    # 2026-09-19 (full-platform audit): this holding's real trading
+    # currency (defaults to "SAR" -- Stock's own default -- for the
+    # rare case its Stock row is missing). A portfolio holding search
+    # already reaches the multi-market symbol universe (Phase 4), so a
+    # holding can genuinely be USD-denominated; every amount below is
+    # in THIS currency, never implicitly converted to SAR.
+    currency: str = "SAR"
+
     quantity: float
     average_cost: Optional[float] = None
 
@@ -318,3 +326,11 @@ class PortfolioHoldingsOut(BaseModel):
     total_unrealized_pnl: Optional[float] = None
     total_unrealized_pnl_pct: Optional[float] = None
     total_value_with_cash: float
+
+    # 2026-09-19 (full-platform audit): True the moment two holdings
+    # carry different currencies -- every total_* figure above sums raw
+    # amounts across holdings with NO currency conversion, so a mixed
+    # portfolio's totals are not a real single-currency figure. Shown
+    # once here rather than requiring the frontend to infer it from
+    # the per-holding `currency` list itself.
+    has_mixed_currencies: bool = False
