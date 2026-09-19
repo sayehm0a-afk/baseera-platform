@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs/config";
 
 const nextConfig: NextConfig = {
   experimental: {
@@ -55,4 +56,21 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Sentry: opt-in only, mirroring ../main.py's `if settings.sentry_dsn:`
+// gate. withSentryConfig() injects build-time behavior (source map
+// upload, its own plugin telemetry) that itself makes network calls
+// unrelated to whether error tracking is actually configured, so it is
+// only applied when NEXT_PUBLIC_SENTRY_DSN is set -- an unconfigured
+// build/dev/CI run gets the plain, unwrapped Next.js config and never
+// talks to Sentry.
+const sentryDsnConfigured = Boolean(process.env.NEXT_PUBLIC_SENTRY_DSN);
+
+export default sentryDsnConfigured
+  ? withSentryConfig(nextConfig, {
+      silent: true,
+      telemetry: false,
+      // Source map upload additionally needs org/project/authToken; leave
+      // it disabled unless a real deployment provides SENTRY_AUTH_TOKEN.
+      sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },
+    })
+  : nextConfig;
