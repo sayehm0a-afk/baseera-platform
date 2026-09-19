@@ -18,6 +18,7 @@ export function ConfidenceBar({ confidence, className }: ConfidenceBarProps) {
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(clamped)}
+      aria-label={`درجة الثقة: ${Math.round(clamped)}%`}
     >
       <div
         className="h-full rounded-bsr-full bg-bsr-teal-500 transition-[width] duration-[var(--duration-bsr-confidence-fill)] ease-out"

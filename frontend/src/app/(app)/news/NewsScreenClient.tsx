@@ -71,7 +71,7 @@ function NewsCard({ event }: { event: NewsEvent }) {
               </span>
             ) : null}
             {event.confidence != null ? (
-              <span>نسبة الثقة: {Math.round(event.confidence)}%</span>
+              <span>درجة الثقة: {Math.round(event.confidence)}%</span>
             ) : null}
           </div>
           {event.explanation ? (

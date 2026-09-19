@@ -59,7 +59,7 @@ export function AiSignalCard({
           <div className="flex items-center justify-between text-xs text-bsr-teal-500">
             <span className="flex items-center gap-1">
               <AiStar size="sm" />
-              نسبة الثقة
+              درجة الثقة
             </span>
             <span className="bsr-numeric">
               {Math.round(confidence)}%
@@ -124,7 +124,7 @@ export function AiSignalCard({
       ) : null}
 
       <p className="text-xs leading-4 text-bsr-text-muted">
-        نسبة الثقة تعكس قوة الأدلة المتاحة وقت التحليل، ولا تضمن تحقيق الربح.
+        درجة الثقة تعكس قوة الأدلة المتاحة وقت التحليل، ولا تضمن تحقيق الربح.
       </p>
 
       {href ? (

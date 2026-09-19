@@ -67,7 +67,7 @@ export function RadarStockSection({ opportunity }: RadarStockSectionProps) {
       </p>
 
       <div className="flex items-center gap-bsr-3">
-        <span className="text-xs text-bsr-text-secondary">الثقة</span>
+        <span className="text-xs text-bsr-text-secondary">درجة الثقة</span>
         <div className="flex-1">
           <ConfidenceBar confidence={o.confidence_score} />
         </div>

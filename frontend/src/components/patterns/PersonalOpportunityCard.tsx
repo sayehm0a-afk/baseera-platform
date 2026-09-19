@@ -65,7 +65,7 @@ export function PersonalOpportunityCard({ opportunity: o }: PersonalOpportunityC
 
       <div className="grid grid-cols-2 gap-bsr-2 text-sm md:grid-cols-4">
         <div>
-          <p className="text-xs text-bsr-text-secondary">الثقة</p>
+          <p className="text-xs text-bsr-text-secondary">درجة الثقة</p>
           <p className="bsr-numeric font-semibold text-bsr-teal-500">{Math.round(o.confidence_score)}%</p>
         </div>
         <div>

@@ -442,7 +442,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           immediate-answer card above deliberately keeps out of the way,
           collapsed by default. */}
       {decisionV2.status === "ready" ? (
-        <ExpandableSection title="التحليل الكامل والشفافية" subtitle="بوابات النشر، تفصيل الثقة، لجنة الذكاء الاصطناعي">
+        <ExpandableSection title="التحليل الكامل والشفافية" subtitle="بوابات النشر، تفصيل درجة الثقة، لجنة الذكاء الاصطناعي">
           <DecisionTransparencyPanel decision={decisionV2.data} />
           <CommitteePanel committee={decisionV2.data.committee} />
           <RadarStockSection opportunity={radar.status === "ready" ? radar.data : null} />
@@ -457,7 +457,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           <p className="text-xs text-bsr-text-muted">تفاصيل إضافية من محرك القرار الأساسي (حجم المركز المقترح).</p>
           <div className="grid grid-cols-2 gap-bsr-3 rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4 sm:grid-cols-4">
             <div>
-              <p className="text-xs text-bsr-text-secondary">الثقة</p>
+              <p className="text-xs text-bsr-text-secondary">درجة الثقة</p>
               <p className="bsr-numeric text-base font-semibold text-bsr-text-primary">
                 {Math.round(decision.data.confidence)}%
               </p>

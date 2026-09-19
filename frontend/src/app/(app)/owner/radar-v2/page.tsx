@@ -206,7 +206,7 @@ function RadarV2PageInner() {
                   <th className="p-1">الترتيب</th>
                   <th className="p-1">الرمز</th>
                   <th className="p-1">التصنيف</th>
-                  <th className="p-1">الثقة</th>
+                  <th className="p-1">درجة الثقة</th>
                   <th className="p-1">حداثة البيانات</th>
                 </tr>
               </thead>
