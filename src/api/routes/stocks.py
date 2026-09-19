@@ -57,6 +57,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session, aliased
@@ -634,7 +635,7 @@ async def get_quote(
             except (SahmkError, CircuitBreakerOpenError) as exc:
                 logger.info("Could not fetch a live quote for '%s': %s", symbol, exc)
 
-        bar: Optional[Dict[str, object]] = _todays_local_daily_bar(session, symbol)
+        bar: Optional[Dict[str, object]] = await run_in_threadpool(_todays_local_daily_bar, session, symbol)
         if bar is None:
             try:
                 bar = await provider.get_stock_data(symbol)
@@ -743,8 +744,8 @@ async def get_fundamental_analysis(
     market_provider: IMarketDataProvider = Depends(get_market_provider),
     _current_user: User = Depends(require_active_subscription()),
 ) -> FundamentalAnalysisOut:
-    stock = _get_stock_or_404(session, symbol)
-    snapshots = load_fundamental_snapshots(session, stock.id, period_type, limit=2)
+    stock = await run_in_threadpool(_get_stock_or_404, session, symbol)
+    snapshots = await run_in_threadpool(load_fundamental_snapshots, session, stock.id, period_type, limit=2)
     if not snapshots:
         raise InsufficientDataError(
             f"No {period_type.value} fundamentals have been ingested yet for '{symbol}'."
@@ -771,15 +772,18 @@ async def get_fundamental_analysis(
     # on FundamentalFacts (the pure-computation shape ratios are computed
     # from) -- read them back from the row load_fundamental_snapshots
     # already queried, by the same identity it queried on.
-    snapshot_row = (
-        session.query(FundamentalSnapshot)
-        .filter_by(
-            stock_id=stock.id,
-            period_type=period_type,
-            fiscal_period_end=latest.fiscal_period_end,
+    def _load_snapshot_row() -> FundamentalSnapshot:
+        return (
+            session.query(FundamentalSnapshot)
+            .filter_by(
+                stock_id=stock.id,
+                period_type=period_type,
+                fiscal_period_end=latest.fiscal_period_end,
+            )
+            .one()
         )
-        .one()
-    )
+
+    snapshot_row = await run_in_threadpool(_load_snapshot_row)
 
     return FundamentalAnalysisOut(
         symbol=symbol,

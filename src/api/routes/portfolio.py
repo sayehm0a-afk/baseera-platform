@@ -43,6 +43,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Request, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -432,13 +433,15 @@ async def analyze_portfolio(
         )
 
     if body.portfolio_id is not None:
-        portfolio = _get_portfolio_or_404(session, body.portfolio_id, current_user.id)
-        _repository.update_cash_balance(session, portfolio.id, body.cash)
+        portfolio = await run_in_threadpool(_get_portfolio_or_404, session, body.portfolio_id, current_user.id)
+        await run_in_threadpool(_repository.update_cash_balance, session, portfolio.id, body.cash)
     else:
-        portfolio = _repository.create_portfolio(session, body.name, body.cash, user_id=current_user.id)
+        portfolio = await run_in_threadpool(
+            _repository.create_portfolio, session, body.name, body.cash, user_id=current_user.id
+        )
 
     holdings = [Holding(symbol=h.symbol, quantity=h.quantity, average_cost=h.average_cost) for h in body.holdings]
-    _repository.replace_holdings(session, portfolio.id, holdings)
+    await run_in_threadpool(_repository.replace_holdings, session, portfolio.id, holdings)
 
     engine = PortfolioEngine(session, market_provider)
     with operation_scope(PORTFOLIO):
@@ -446,7 +449,9 @@ async def analyze_portfolio(
             portfolio_id=portfolio.id, name=portfolio.name, holdings=holdings, cash=body.cash
         )
 
-    _repository.save_analysis_snapshot(session, portfolio.id, analysis, PORTFOLIO_ENGINE_VERSION)
+    await run_in_threadpool(
+        _repository.save_analysis_snapshot, session, portfolio.id, analysis, PORTFOLIO_ENGINE_VERSION
+    )
 
     return PortfolioAnalysisOut(**serialize_portfolio_analysis(analysis))
 
