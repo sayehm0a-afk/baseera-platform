@@ -125,6 +125,7 @@ from src.domain.arabic_text import normalize_arabic
 from src.domain.models import DecisionV2Snapshot, FundamentalSnapshot, PeriodType, PriceBar, Stock, Timeframe, User
 from src.domain.sector_labels import sector_label_ar
 from src.market_intelligence.sector_reliability import compute_sector_reliability_by_arabic_label, reliability_for_sector
+from src.market_data.caching.ttl_cache import _MISSING, TTLCache
 from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
 from src.market_data.sahmk.operation_scope import STOCK_DETAIL, operation_scope
@@ -312,6 +313,88 @@ def search_stocks(
     )
 
 
+# `/directory`'s `q` branch (2026-09-19 perf audit) -- at today's ~250-
+# symbol Tadawul universe this is cheap in absolute terms, but it is a
+# second full-table scan (every active `Stock`, unfiltered by the ILIKE
+# term) that runs `normalize_arabic()` in a Python loop over every row,
+# recomputed identically for the same `(q, sector)` pair across every
+# concurrent caller, with zero caching -- see `_search_matched_stock_
+# ids` below for the actual (uncached) computation this wraps.
+#
+# The stock universe itself changes at most once per trading day (the
+# once-daily post-close OHLCV ingestion job is also the only place new
+# `Stock` rows get created today -- see market_data.ingestion; there is
+# no admin "add a stock" endpoint whose caller would expect the new
+# symbol to be searchable within the same request). A TTL anywhere from
+# a few minutes to `sector_reliability.py`'s 600s reference point would
+# be defensible for that reason alone; 300s (5 minutes) is chosen here
+# instead of matching 600s exactly because, unlike that module's
+# market-wide aggregate, this cache sits directly behind an interactive
+# search box a human is typing into, so a shorter, still-cheap-to-recompute-
+# on-miss window is the more conservative trade-off given no invalidate-
+# after-mutation path exists to hit this eagerly.
+_DIRECTORY_SEARCH_CACHE_TTL_SECONDS = 300.0
+_directory_search_cache = TTLCache(default_ttl_seconds=_DIRECTORY_SEARCH_CACHE_TTL_SECONDS)
+
+
+def _search_matched_stock_ids(session: Session, query: str, sector: Optional[str]) -> List[int]:
+    """The real (uncached) computation behind `_cached_search_matched_
+    stock_ids` below -- resolves a `(query, sector)` pair to the full
+    list of matching active stock IDs, sorted by symbol, *before* any
+    pagination slicing. Exact same semantics as the pre-caching code
+    this replaces: a cheap ILIKE substring match on symbol/name_ar/
+    name_en first, then -- always, unlike `/search`'s early-exit once it
+    has `limit` hits -- the normalized-Arabic fallback scan too, since
+    `/directory` needs the true total match count for pagination
+    regardless of how many ILIKE hits there were. See
+    `get_stock_directory`'s call site for why this whole-list
+    computation is what gets cached, never the paginated slice."""
+    stocks_query = session.query(Stock).filter(Stock.is_active.is_(True))
+    if sector:
+        stocks_query = stocks_query.filter(Stock.sector == sector)
+
+    like = f"%{query}%"
+    matched = (
+        stocks_query.filter(
+            Stock.symbol.ilike(like) | Stock.name_ar.ilike(like) | Stock.name_en.ilike(like)
+        )
+        .order_by(Stock.symbol)
+        .all()
+    )
+    matched_symbols = {s.symbol for s in matched}
+    normalized_query = normalize_arabic(query)
+    if normalized_query:
+        for candidate in stocks_query.order_by(Stock.symbol).all():
+            if candidate.symbol in matched_symbols:
+                continue
+            if candidate.name_ar and normalized_query in normalize_arabic(candidate.name_ar):
+                matched.append(candidate)
+                matched_symbols.add(candidate.symbol)
+    matched.sort(key=lambda s: s.symbol)
+    return [s.id for s in matched]
+
+
+def _cached_search_matched_stock_ids(session: Session, query: str, sector: Optional[str]) -> List[int]:
+    """Cache-checking wrapper around `_search_matched_stock_ids`,
+    following the same module-level-`TTLCache` + thin-wrapper
+    convention as `sector_reliability.compute_sector_reliability_by_
+    arabic_label`. Cache key is `(query, sector)` -- every parameter
+    that can change the matched-ID set for the `q` branch (pagination's
+    `offset`/`limit` deliberately excluded, so the full filtered/sorted
+    list is cached once and re-sliced per page/request, never
+    recomputed per page). Plain sync `get`/`set` (not the async single-
+    flight `get_or_compute`) since this route handler is sync, same
+    reasoning as that module's own choice."""
+    cache_key = ("directory_search_matched_stock_ids", query, sector)
+    cached = _directory_search_cache.get(cache_key)
+    if cached is not _MISSING:
+        return cached
+
+    result = _search_matched_stock_ids(session, query, sector)
+    _directory_search_cache.set(cache_key, result)
+    return result
+
+
 @router.get("/directory", response_model=StockDirectoryOut)
 def get_stock_directory(
     q: Optional[str] = Query(default=None, min_length=1, max_length=64),
@@ -339,33 +422,36 @@ def get_stock_directory(
     from); no separate "list of sectors" endpoint exists yet, so the
     frontend does not offer a sector dropdown in this phase.
     """
-    stocks_query = session.query(Stock).filter(Stock.is_active.is_(True))
-    if sector:
-        stocks_query = stocks_query.filter(Stock.sector == sector)
-
     if q:
         query = q.strip()
-        like = f"%{query}%"
-        matched = (
-            stocks_query.filter(
-                Stock.symbol.ilike(like) | Stock.name_ar.ilike(like) | Stock.name_en.ilike(like)
-            )
-            .order_by(Stock.symbol)
-            .all()
-        )
-        matched_symbols = {s.symbol for s in matched}
-        normalized_query = normalize_arabic(query)
-        if normalized_query:
-            for candidate in stocks_query.order_by(Stock.symbol).all():
-                if candidate.symbol in matched_symbols:
-                    continue
-                if candidate.name_ar and normalized_query in normalize_arabic(candidate.name_ar):
-                    matched.append(candidate)
-                    matched_symbols.add(candidate.symbol)
-        matched.sort(key=lambda s: s.symbol)
-        total = len(matched)
-        page = matched[offset:offset + limit]
+        # The expensive part (ILIKE query + the normalized-Arabic
+        # full-table Python-loop fallback) is cached above by
+        # `(query, sector)` -- see `_cached_search_matched_stock_ids`'s
+        # own docstring. Only the (cheap, ID-only) result is cached,
+        # never live ORM objects, so there is no cross-request/session
+        # staleness risk from caching detached instances.
+        matched_ids = _cached_search_matched_stock_ids(session, query, sector)
+        total = len(matched_ids)
+        page_ids = matched_ids[offset:offset + limit]
+        if page_ids:
+            # Re-fetched fresh from *this* request's session every time
+            # (never cached) and re-filtered by `is_active` here too --
+            # if a stock was deactivated after being cached as a match
+            # but within this cache entry's TTL, it silently drops out
+            # of the page instead of showing stale data.
+            page_by_id = {
+                s.id: s
+                for s in session.query(Stock)
+                .filter(Stock.id.in_(page_ids), Stock.is_active.is_(True))
+                .all()
+            }
+            page = [page_by_id[stock_id] for stock_id in page_ids if stock_id in page_by_id]
+        else:
+            page = []
     else:
+        stocks_query = session.query(Stock).filter(Stock.is_active.is_(True))
+        if sector:
+            stocks_query = stocks_query.filter(Stock.sector == sector)
         total = stocks_query.count()
         page = stocks_query.order_by(Stock.symbol).offset(offset).limit(limit).all()
 

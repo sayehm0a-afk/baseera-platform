@@ -6,6 +6,7 @@ anywhere.
 
 import pytest
 
+from src.api.routes.stocks import _directory_search_cache
 from src.market_intelligence.sector_reliability import _sector_reliability_cache
 
 
@@ -22,3 +23,17 @@ def _reset_sector_reliability_cache():
     _sector_reliability_cache.clear()
     yield
     _sector_reliability_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_directory_search_cache():
+    """Same leakage risk as `_reset_sector_reliability_cache` above,
+    for `GET /stocks/directory`'s `q`-branch cache (2026-09-19 perf
+    fix, see src/api/routes/stocks.py's `_directory_search_cache`):
+    every test's in-memory-sqlite `Stock` rows differ while the cache
+    key (`query`, `sector`) can easily repeat across tests (e.g. many
+    tests search for the same symbol/sector), so without this reset a
+    match list cached by one test could be served, wrong, to the next."""
+    _directory_search_cache.clear()
+    yield
+    _directory_search_cache.clear()
