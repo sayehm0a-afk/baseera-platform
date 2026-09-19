@@ -20,10 +20,11 @@ import hashlib
 import json
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from src.api.exceptions import BacktestRunNotFoundError, DuplicateBacktestError, InvalidBacktestConfigError
+from src.api.middleware.rate_limiting import limiter
 from src.auth.rbac import require_active_subscription
 from src.api.schemas.backtesting import (
     BacktestComparisonOut,
@@ -103,18 +104,20 @@ def _get_run_or_404(session: Session, run_id: int, current_user: User) -> Backte
 
 
 @router.post("", response_model=BacktestRunOut)
+@limiter.limit("10/minute")
 def create_backtest(
-    request: BacktestCreateRequest,
+    request: Request,
+    body: BacktestCreateRequest,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_db),
     current_user: User = Depends(require_active_subscription()),
 ) -> BacktestRunOut:
-    if request.strategy not in DEFAULT_STRATEGIES:
+    if body.strategy not in DEFAULT_STRATEGIES:
         raise InvalidBacktestConfigError(
-            f"Unknown strategy {request.strategy!r}. Known strategies: {sorted(DEFAULT_STRATEGIES)}"
+            f"Unknown strategy {body.strategy!r}. Known strategies: {sorted(DEFAULT_STRATEGIES)}"
         )
 
-    idempotency_key = _compute_idempotency_key(request)
+    idempotency_key = _compute_idempotency_key(body)
     existing = (
         session.query(BacktestRun)
         .filter_by(idempotency_key=idempotency_key, created_by_user_id=current_user.id)
@@ -125,7 +128,7 @@ def create_backtest(
         return _to_run_out(existing)
 
     threshold = get_full_market_symbol_threshold()
-    if len(request.symbols) >= threshold:
+    if len(body.symbols) >= threshold:
         in_flight = (
             session.query(BacktestRun)
             .filter(BacktestRun.status.in_([BacktestRunStatus.PENDING, BacktestRunStatus.RUNNING]))
@@ -143,20 +146,20 @@ def create_backtest(
         idempotency_key=idempotency_key,
         created_by_user_id=current_user.id,
         status=BacktestRunStatus.PENDING,
-        symbols=request.symbols,
-        data_provenance_mode=DataProvenanceMode(request.data_provenance_mode),
-        strategy=request.strategy,
-        start_date=request.start_date,
-        end_date=request.end_date,
-        evaluation_frequency_days=request.evaluation_frequency_days,
-        holding_horizon_days=request.holding_horizon_days,
-        target_price_horizon_days=request.target_price_horizon_days,
-        transaction_cost_bps=request.transaction_cost_bps,
-        slippage_bps=request.slippage_bps,
-        confidence_threshold=request.confidence_threshold,
-        recommendation_threshold=request.recommendation_threshold,
-        fundamental_reporting_lag_days=request.fundamental_reporting_lag_days,
-        calibration_version=request.calibration_version,
+        symbols=body.symbols,
+        data_provenance_mode=DataProvenanceMode(body.data_provenance_mode),
+        strategy=body.strategy,
+        start_date=body.start_date,
+        end_date=body.end_date,
+        evaluation_frequency_days=body.evaluation_frequency_days,
+        holding_horizon_days=body.holding_horizon_days,
+        target_price_horizon_days=body.target_price_horizon_days,
+        transaction_cost_bps=body.transaction_cost_bps,
+        slippage_bps=body.slippage_bps,
+        confidence_threshold=body.confidence_threshold,
+        recommendation_threshold=body.recommendation_threshold,
+        fundamental_reporting_lag_days=body.fundamental_reporting_lag_days,
+        calibration_version=body.calibration_version,
     )
     session.add(run)
     session.commit()

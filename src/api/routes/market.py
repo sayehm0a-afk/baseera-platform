@@ -280,8 +280,10 @@ async def get_market_session_status(
 
 
 @router.post("/scan", response_model=MarketScanRunOut)
+@limiter.limit("10/minute")
 def create_scan(
-    request: MarketScanRequest,
+    request: Request,
+    body: MarketScanRequest,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_db),
     market_provider: IMarketDataProvider = Depends(get_market_provider),
@@ -304,7 +306,7 @@ def create_scan(
             "wait for it to finish before starting another scan."
         )
 
-    symbols = SymbolSelector().select(session, request.symbols)
+    symbols = SymbolSelector().select(session, body.symbols)
     run = _repository.create_scan_run(session, symbols_requested=len(symbols))
     run_out = _to_run_out(run)
 

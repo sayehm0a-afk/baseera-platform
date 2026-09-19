@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     # topology-dependent (reverse proxy / platform-generated domain)
     # and isn't knowable at this class's own definition time.
     trusted_hosts_raw: str = Field(default="", alias="TRUSTED_HOSTS")
+    # /metrics (main.py) exposes a live active-sessions count and DB
+    # pool utilization -- reconnaissance-useful to an anonymous caller.
+    # No safe default exists (unlike trusted_hosts_raw's "not enforced
+    # until set" precedent): unset means the endpoint denies every
+    # request rather than staying open, since nothing in this codebase
+    # currently scrapes it internally without a token.
+    metrics_token: Optional[str] = Field(default=None, alias="METRICS_TOKEN")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # --- Auth token lifetimes -------------------------------------------

@@ -8,7 +8,9 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from fastapi import Depends, FastAPI, HTTPException
+from typing import Optional
+
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
@@ -630,18 +632,34 @@ async def market_data_health():
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics(x_metrics_token: Optional[str] = Header(default=None)):
     """Prometheus metrics endpoint. Must be returned as a raw
     `text/plain` Response (the Prometheus exposition format), never a
     bare string -- FastAPI otherwise JSON-encodes a plain `str` return
     value, which double-escapes every newline and mislabels the
     content-type, producing a body no real Prometheus server can
-    actually scrape."""
+    actually scrape.
+
+    2026-09-19 security review finding: this endpoint exposes a live
+    `active_sessions` count and DB pool utilization to any anonymous
+    caller -- reconnaissance-useful (a live logged-in-user headcount).
+    Gated behind METRICS_TOKEN (compared via `secrets.compare_digest`
+    to avoid a timing side-channel): unset means deny every request,
+    never "stay open," since nothing in this codebase currently
+    scrapes it without a token."""
+    import secrets as _secrets
+
     from fastapi import Response
 
     from src.auth.repository import AuthRepository
+    from src.core.config.settings import settings
     from src.core.db.database import get_engine, get_session_factory
     from src.core.monitoring.prometheus_metrics import get_metrics
+
+    if not settings.metrics_token or not x_metrics_token or not _secrets.compare_digest(
+        x_metrics_token, settings.metrics_token
+    ):
+        raise HTTPException(status_code=404, detail="Not Found")
 
     session_factory = get_session_factory()
     db_session = session_factory()

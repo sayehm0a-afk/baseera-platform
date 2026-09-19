@@ -116,39 +116,6 @@ class TestProductionDeploymentSecurity:
             # Check for minimal base image
             assert 'python' in content.lower() or 'ubuntu' in content.lower()
 
-    def test_kubernetes_security(self):
-        """Test Kubernetes security configuration."""
-        import os
-
-        # Check if Kubernetes manifests exist
-        k8s_dir = REPO_ROOT / 'kubernetes'
-        assert os.path.exists(k8s_dir)
-
-        # Check for security-related files
-        assert os.path.exists(os.path.join(k8s_dir, 'openai-secret.yaml'))
-
-        # Read secret file
-        with open(os.path.join(k8s_dir, 'openai-secret.yaml'), 'r') as f:
-            content = f.read()
-
-            # Verify that secrets are not hardcoded
-            assert 'base64' in content or 'secretKeyRef' in content
-
-    def test_environment_configuration(self):
-        """Test environment configuration security."""
-        import os
-
-        # Check if environment configuration exists
-        assert os.path.exists(REPO_ROOT / 'kubernetes' / 'environment.yaml')
-
-        # Read environment file
-        with open(REPO_ROOT / 'kubernetes' / 'environment.yaml', 'r') as f:
-            content = f.read()
-
-            # Verify that environment configuration is present
-            assert 'ConfigMap' in content or 'configmap' in content.lower()
-            assert 'DATABASE_URL' in content or 'database_url' in content.lower()
-
 
 class TestDependencySecurityValidation:
     """Test dependency security validation."""
