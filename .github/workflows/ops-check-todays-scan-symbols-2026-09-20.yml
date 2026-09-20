@@ -1,0 +1,89 @@
+name: Ops - Check today's radar-v2 scan symbol list and decisions (read-only, 2026-09-20)
+
+# User question: were today's real top-gaining Tadawul stocks actually
+# among the 15 symbols Basirah's on-demand scan (last_scan_id=146,
+# started 2026-09-20T07:00:11Z) selected and live-verified? Pulls the
+# live radar-v2 opportunity list (symbol, classification, stage1_rank,
+# emitted_at) so the symbols from that specific scan can be identified
+# by their emitted_at timestamp and cross-checked against the real
+# top-gainer list. Never modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as staff
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then echo "::error::login failed"; exit 1; fi
+
+      - name: Live radar-v2 opportunities (full list, up to 200)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/market-intelligence/radar-v2/opportunities?limit=200" -o /tmp/opps.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          rows = json.load(open('/tmp/opps.json'))
+          rows.sort(key=lambda r: r.get('emitted_at') or '', reverse=True)
+          print(f'Total live opportunities: {len(rows)}')
+          print()
+          for r in rows:
+              print(f\"{r['symbol']:>8}  rank={r.get('stage1_rank')!s:>4}  class={r['classification']:<22} conf={r['confidence_score']:>5}  emitted_at={r['emitted_at']}\")
+          "
+
+      - name: Admin system summary (confirm today's scan id/window again)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 30 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/admin/system/summary" -o /tmp/summary.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/summary.json'))
+          keys = ['last_scan_id','last_scan_started_at','last_scan_finished_at','last_scan_symbols_requested','last_scan_symbols_succeeded','last_scan_published_count','last_scan_watch_only_count','last_scan_rejected_count']
+          print(json.dumps({k: d.get(k) for k in keys}, indent=2, ensure_ascii=False))
+          "
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found."
