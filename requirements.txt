@@ -67,7 +67,7 @@ email-validator>=2.3.0
 # an indirect dependency of nothing in this file -- added explicitly since
 # it is now imported directly, matching this section's own convention of
 # never relying on an unpinned transitive install for security-relevant code.
-pyotp>=2.9.0
+pyotp>=2.10.0
 # Already installed transitively (via bcrypt/PyJWT's build chain, confirmed
 # 41.0.7 present) but never imported directly until now -- pinned explicitly
 # for the same reason as pyotp above. Used only to encrypt the TOTP secret
