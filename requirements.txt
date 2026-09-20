@@ -59,7 +59,7 @@ redis>=8.1.0
 # package directly (see src/auth/password_hashing.py) avoids that
 # unmaintained shim entirely rather than pinning bcrypt to an old release
 # forever.
-bcrypt>=4.0.0
+bcrypt>=5.0.0
 PyJWT>=2.14.0
 slowapi>=0.1.10
 email-validator>=2.3.0
