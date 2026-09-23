@@ -317,6 +317,17 @@ class MarketIntelligenceRepository:
         query = self._exclude_shadow_internal_runs(session, query)
         return query.order_by(MarketScanRun.id.desc()).first()
 
+    def list_recent_consumer_visible_runs(self, session: Session, limit: int) -> List[MarketScanRun]:
+        """The last `limit` completed, consumer-visible scan runs
+        (Shadow-internal runs excluded -- same `_exclude_shadow_internal_
+        runs` filter as `get_latest_consumer_visible_run`), newest
+        first. Backs `get_recent_market_breadth`'s multi-session
+        aggregate; may return fewer than `limit` runs early in the
+        platform's history."""
+        query = session.query(MarketScanRun).filter(MarketScanRun.status == MarketScanStatus.SUCCESS)
+        query = self._exclude_shadow_internal_runs(session, query)
+        return query.order_by(MarketScanRun.id.desc()).limit(limit).all()
+
     def reap_stale_runs(self, session: Session, max_age_hours: float) -> List[MarketScanRun]:
         """A run that crashed or was cancelled (e.g. a killed GitHub
         Actions job) never reaches finish_run and stays PENDING/RUNNING
@@ -776,6 +787,45 @@ class MarketIntelligenceRepository:
             buy_count=counts.get(RecommendationLabel.BUY, 0) + counts.get(RecommendationLabel.STRONG_BUY, 0),
             sell_count=counts.get(RecommendationLabel.SELL, 0) + counts.get(RecommendationLabel.STRONG_SELL, 0),
             average_confidence=_f(avg_confidence),
+        )
+
+    def get_recent_market_breadth(self, session: Session, run_limit: int) -> Optional[MarketBreadthSummary]:
+        """Same aggregate as `get_market_breadth`, computed across the
+        last `run_limit` completed, consumer-visible scan runs (see
+        `list_recent_consumer_visible_runs`) instead of a single one --
+        see `MarketBreadthSummary.runs_aggregated`'s docstring and
+        `src.market_intelligence.config.get_market_risk_breadth_window_
+        runs` for why: a single ~15-symbol daily scan is too small a
+        sample for `classify_market_risk` to reliably represent
+        genuine market-wide breadth. `None` when no consumer-visible
+        run has ever completed, exactly like `get_market_breadth`."""
+        runs = self.list_recent_consumer_visible_runs(session, run_limit)
+        if not runs:
+            return None
+        run_ids = [run.id for run in runs]
+        counts = dict(
+            session.query(SymbolIntelligenceRecord.recommendation, func.count(SymbolIntelligenceRecord.id))
+            .filter(SymbolIntelligenceRecord.scan_run_id.in_(run_ids))
+            .group_by(SymbolIntelligenceRecord.recommendation)
+            .all()
+        )
+        symbols_scanned = sum(counts.values())
+        if symbols_scanned == 0:
+            return None
+        avg_confidence = (
+            session.query(func.avg(SymbolIntelligenceRecord.confidence))
+            .filter(SymbolIntelligenceRecord.scan_run_id.in_(run_ids))
+            .scalar()
+        )
+        latest_run = runs[0]
+        return MarketBreadthSummary(
+            scan_run_id=latest_run.id,
+            generated_at=latest_run.finished_at or datetime.now(timezone.utc),
+            symbols_scanned=symbols_scanned,
+            buy_count=counts.get(RecommendationLabel.BUY, 0) + counts.get(RecommendationLabel.STRONG_BUY, 0),
+            sell_count=counts.get(RecommendationLabel.SELL, 0) + counts.get(RecommendationLabel.STRONG_SELL, 0),
+            average_confidence=_f(avg_confidence),
+            runs_aggregated=len(runs),
         )
 
     # --- sector summaries -------------------------------------------------

@@ -142,16 +142,25 @@ def _classify_breadth(breadth: MarketBreadthSummary) -> MarketRiskState:
 
 
 def _basis_ar(breadth: MarketBreadthSummary, buy_ratio_pct: float) -> str:
+    # 2026-09-23 fix: `breadth` now typically spans a short rolling
+    # window of recent scan runs (see `MarketBreadthSummary.
+    # runs_aggregated`'s docstring), not just "the last scan" -- saying
+    # so honestly here, rather than always implying a single session,
+    # matches this codebase's standing rule that every disclosed basis
+    # sentence trace to the real evidence used.
+    scope_ar = (
+        f"خلال آخر {breadth.runs_aggregated} جلسات فحص" if breadth.runs_aggregated > 1 else "في آخر عملية مسح"
+    )
     return (
         f"نسبة الإشارات الإيجابية {buy_ratio_pct:.0f}% "
         f"({breadth.buy_count} شراء مقابل {breadth.sell_count} بيع) "
-        f"من أصل {breadth.symbols_scanned} سهمًا تم فحصها في آخر عملية مسح، "
+        f"من أصل {breadth.symbols_scanned} سهمًا تم فحصها {scope_ar}، "
         f"بمتوسط ثقة {breadth.average_confidence:.0f}/100."
         if breadth.average_confidence is not None
         else (
             f"نسبة الإشارات الإيجابية {buy_ratio_pct:.0f}% "
             f"({breadth.buy_count} شراء مقابل {breadth.sell_count} بيع) "
-            f"من أصل {breadth.symbols_scanned} سهمًا تم فحصها في آخر عملية مسح."
+            f"من أصل {breadth.symbols_scanned} سهمًا تم فحصها {scope_ar}."
         )
     )
 

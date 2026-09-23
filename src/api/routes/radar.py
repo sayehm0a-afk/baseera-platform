@@ -75,7 +75,11 @@ from src.auth.token_store import get_redis_client
 from src.core.db.database import get_db
 from src.domain.models import DecisionV2Outcome, RadarOpportunity, User
 from src.market_data.sahmk.operation_scope import CONSUMER_SCAN_NOW
-from src.market_intelligence.config import get_radar_scan_now_cooldown_seconds, get_radar_stage2_candidate_cap
+from src.market_intelligence.config import (
+    get_market_risk_breadth_window_runs,
+    get_radar_scan_now_cooldown_seconds,
+    get_radar_stage2_candidate_cap,
+)
 from src.ai_evolution.decision_v2_outcome_evaluation import is_actionable_buy_decision
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status, market_status_label_ar
 from src.market_intelligence.radar_v2 import list_live_opportunities, run_radar_v2_cycle
@@ -99,17 +103,17 @@ _HOME_TOP_OPPORTUNITIES_LIMIT = 5
 
 
 def _latest_market_breadth(session: Session):
-    """Best-effort, never-raising read of the most recent completed
-    scan run's breadth -- identical convention to `src.api.routes.
-    stocks._latest_market_breadth` and `src.api.routes.market`'s own
-    use of the same repository method; a missing/failed lookup degrades
-    to `None`, which `classify_market_risk` already handles honestly as
-    INSUFFICIENT_DATA rather than failing the whole request."""
+    """Best-effort, never-raising read of recent completed scan runs'
+    breadth, aggregated over a short rolling window (see
+    `get_market_risk_breadth_window_runs`'s docstring for why a single
+    scan is too small a sample) -- identical convention to
+    `src.api.routes.stocks._latest_market_breadth` and
+    `src.api.routes.market`'s own use of the same repository method; a
+    missing/failed lookup degrades to `None`, which `classify_market_
+    risk` already handles honestly as INSUFFICIENT_DATA rather than
+    failing the whole request."""
     try:
-        run = _repository.get_latest_consumer_visible_run(session)
-        if run is None:
-            return None
-        return _repository.get_market_breadth(session, run.id)
+        return _repository.get_recent_market_breadth(session, get_market_risk_breadth_window_runs())
     except Exception:  # noqa: BLE001 -- a breadth-read failure must never break /radar/summary
         return None
 

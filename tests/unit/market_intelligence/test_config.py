@@ -43,6 +43,15 @@ def test_stage1_threshold_defaults_match_documented_values():
     assert config.get_radar_stage2_candidate_cap() == 15
 
 
+def test_market_risk_breadth_window_runs_default_and_env_override():
+    """2026-09-23 fix: default 5, reads os.getenv at call time like every
+    other getter in this module."""
+    assert config.get_market_risk_breadth_window_runs() == 5
+    with mock.patch.dict(os.environ, {"MARKET_RISK_BREADTH_WINDOW_RUNS": "10"}):
+        assert config.get_market_risk_breadth_window_runs() == 10
+    assert config.get_market_risk_breadth_window_runs() == 5
+
+
 def test_min_calibrated_success_probability_default_is_60_percent():
     """2026-09-17 explicit product decision: lowered from 0.70 (raised
     2026-09-16 from 0.35, which filtered out nothing) after real

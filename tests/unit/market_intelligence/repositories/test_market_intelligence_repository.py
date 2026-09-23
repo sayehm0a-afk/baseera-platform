@@ -1204,3 +1204,145 @@ def test_get_market_breadth_returns_none_for_a_run_with_no_records(session, repo
 
 def test_get_market_breadth_returns_none_for_an_unknown_run_id(session, repo):
     assert repo.get_market_breadth(session, 9999) is None
+
+
+# --- get_recent_market_breadth / list_recent_consumer_visible_runs (2026-09-23 fix) ----
+
+
+def test_list_recent_consumer_visible_runs_returns_newest_first_bounded_by_limit(session, repo):
+    runs = [_success_run(repo, session) for _ in range(4)]
+
+    recent = repo.list_recent_consumer_visible_runs(session, limit=2)
+
+    assert [r.id for r in recent] == [runs[3].id, runs[2].id]
+
+
+def test_list_recent_consumer_visible_runs_excludes_shadow_runs(session, repo):
+    consumer_run = _success_run(repo, session)
+    shadow = _success_run(repo, session)
+    _mark_shadow(session, shadow.id)
+
+    recent = repo.list_recent_consumer_visible_runs(session, limit=10)
+
+    assert [r.id for r in recent] == [consumer_run.id]
+
+
+def test_list_recent_consumer_visible_runs_returns_fewer_than_limit_when_history_is_short(session, repo):
+    run = _success_run(repo, session)
+
+    recent = repo.list_recent_consumer_visible_runs(session, limit=5)
+
+    assert [r.id for r in recent] == [run.id]
+
+
+def test_list_recent_consumer_visible_runs_returns_empty_when_no_runs_exist(session, repo):
+    assert repo.list_recent_consumer_visible_runs(session, limit=5) == []
+
+
+@pytest.mark.asyncio
+async def test_get_recent_market_breadth_aggregates_across_the_window(session, repo):
+    """2026-09-23 fix's core case: a single day's DEFENSIVE_EXIT-
+    triggering session (0 buy vs several sell among its scanned
+    symbols) must be diluted by other recent sessions in the window,
+    not decide the classification alone."""
+    for symbol in ["1010", "1020", "1030", "1040"]:
+        _seed_stock(session, symbol)
+
+    run1 = repo.create_scan_run(session, symbols_requested=2)
+    await repo.save_symbol_records(
+        session,
+        run1.id,
+        [
+            make_outcome(symbol="1010", decision=make_decision(symbol="1010", recommendation=Recommendation.BUY, confidence=80.0)),
+            make_outcome(symbol="1020", decision=make_decision(symbol="1020", recommendation=Recommendation.BUY, confidence=80.0)),
+        ],
+    )
+    repo.finish_run(session, run1.id, MarketScanStatus.SUCCESS, symbols_succeeded=2, symbols_skipped=0, symbols_failed=0)
+
+    run2 = repo.create_scan_run(session, symbols_requested=2)
+    await repo.save_symbol_records(
+        session,
+        run2.id,
+        [
+            make_outcome(symbol="1030", decision=make_decision(symbol="1030", recommendation=Recommendation.SELL, confidence=60.0)),
+            make_outcome(symbol="1040", decision=make_decision(symbol="1040", recommendation=Recommendation.SELL, confidence=60.0)),
+        ],
+    )
+    repo.finish_run(session, run2.id, MarketScanStatus.SUCCESS, symbols_succeeded=2, symbols_skipped=0, symbols_failed=0)
+
+    breadth = repo.get_recent_market_breadth(session, run_limit=5)
+
+    assert breadth is not None
+    assert breadth.scan_run_id == run2.id  # newest run's id, for traceability
+    assert breadth.symbols_scanned == 4
+    assert breadth.buy_count == 2
+    assert breadth.sell_count == 2
+    assert breadth.runs_aggregated == 2
+    assert breadth.average_confidence == pytest.approx(70.0)
+
+
+@pytest.mark.asyncio
+async def test_get_recent_market_breadth_excludes_shadow_runs(session, repo):
+    _seed_stock(session, "1010")
+    _seed_stock(session, "1020")
+
+    consumer_run = repo.create_scan_run(session, symbols_requested=1)
+    await repo.save_symbol_records(
+        session,
+        consumer_run.id,
+        [make_outcome(symbol="1010", decision=make_decision(symbol="1010", recommendation=Recommendation.BUY, confidence=80.0))],
+    )
+    repo.finish_run(session, consumer_run.id, MarketScanStatus.SUCCESS, symbols_succeeded=1, symbols_skipped=0, symbols_failed=0)
+
+    shadow_run = repo.create_scan_run(session, symbols_requested=1, is_shadow_internal=True)
+    await repo.save_symbol_records(
+        session,
+        shadow_run.id,
+        [make_outcome(symbol="1020", decision=make_decision(symbol="1020", recommendation=Recommendation.SELL, confidence=60.0))],
+    )
+    repo.finish_run(session, shadow_run.id, MarketScanStatus.SUCCESS, symbols_succeeded=1, symbols_skipped=0, symbols_failed=0)
+
+    breadth = repo.get_recent_market_breadth(session, run_limit=5)
+
+    assert breadth is not None
+    assert breadth.symbols_scanned == 1
+    assert breadth.buy_count == 1
+    assert breadth.sell_count == 0
+    assert breadth.runs_aggregated == 1
+
+
+def test_get_recent_market_breadth_returns_none_when_no_consumer_visible_run_exists(session, repo):
+    assert repo.get_recent_market_breadth(session, run_limit=5) is None
+
+
+@pytest.mark.asyncio
+async def test_get_recent_market_breadth_respects_the_run_limit(session, repo):
+    """Even with more history available, only the most recent
+    `run_limit` runs are aggregated -- an older, contradicting session
+    must not leak into the window."""
+    for symbol in ["1010", "1020"]:
+        _seed_stock(session, symbol)
+
+    old_run = repo.create_scan_run(session, symbols_requested=1)
+    await repo.save_symbol_records(
+        session,
+        old_run.id,
+        [make_outcome(symbol="1010", decision=make_decision(symbol="1010", recommendation=Recommendation.SELL, confidence=60.0))],
+    )
+    repo.finish_run(session, old_run.id, MarketScanStatus.SUCCESS, symbols_succeeded=1, symbols_skipped=0, symbols_failed=0)
+
+    recent_run = repo.create_scan_run(session, symbols_requested=1)
+    await repo.save_symbol_records(
+        session,
+        recent_run.id,
+        [make_outcome(symbol="1020", decision=make_decision(symbol="1020", recommendation=Recommendation.BUY, confidence=80.0))],
+    )
+    repo.finish_run(session, recent_run.id, MarketScanStatus.SUCCESS, symbols_succeeded=1, symbols_skipped=0, symbols_failed=0)
+
+    breadth = repo.get_recent_market_breadth(session, run_limit=1)
+
+    assert breadth is not None
+    assert breadth.runs_aggregated == 1
+    assert breadth.symbols_scanned == 1
+    assert breadth.buy_count == 1
+    assert breadth.sell_count == 0
