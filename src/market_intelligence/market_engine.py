@@ -18,6 +18,7 @@ from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.strict_mode import StrictRealDataUnavailableError
 from src.market_intelligence.alert_engine import AlertEngine
 from src.market_intelligence.change_detector import ChangeDetector
+from src.market_intelligence.config import get_market_risk_breadth_window_runs
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.scanner import MarketScanner
 from src.market_intelligence.sector_analysis import SectorAnalyzer
@@ -82,11 +83,13 @@ class MarketIntelligenceEngine:
         finally:
             selection_session.close()
 
-        # Phase 3A: the previous completed run's market breadth, read
-        # once per scan (not once per symbol) and handed to every
-        # symbol's Decision Engine V2 computation -- the same "most
-        # recent completed run" semantics /decision-v2's own
-        # _latest_market_breadth already uses for a single symbol.
+        # Phase 3A: recent completed runs' market breadth, aggregated
+        # over a short rolling window (2026-09-23 fix -- see
+        # get_market_risk_breadth_window_runs's docstring for why a
+        # single run is too small a sample) and handed to every
+        # symbol's Decision Engine V2 computation -- the same
+        # multi-session semantics /decision-v2's own
+        # _latest_market_breadth now uses for a single symbol.
         # Best-effort: a missing/failed lookup degrades to None, which
         # classify_market_risk already handles honestly as
         # INSUFFICIENT_DATA rather than failing the whole scan.
@@ -95,17 +98,14 @@ class MarketIntelligenceEngine:
         # input, not staff observability -- a Shadow-internal run (see
         # `RecurrentLiveScanScheduler`) must never be selected here, or
         # its breadth would silently cap confidence / block entries for
-        # this run's *real* symbols via `classify_market_risk`. Uses
-        # the same `get_latest_consumer_visible_run` PR #105 already
-        # routes every consumer-facing route through -- see that
-        # method's own docstring for the exclusion mechanism.
+        # this run's *real* symbols via `classify_market_risk`.
+        # `get_recent_market_breadth` reuses the same consumer-visible
+        # exclusion PR #105 already routes every consumer-facing route
+        # through -- see that method's own docstring.
         breadth_session = self._session_factory()
         try:
-            latest_run = self._repository.get_latest_consumer_visible_run(breadth_session)
-            market_breadth = (
-                self._repository.get_market_breadth(breadth_session, latest_run.id)
-                if latest_run is not None
-                else None
+            market_breadth = self._repository.get_recent_market_breadth(
+                breadth_session, get_market_risk_breadth_window_runs()
             )
         except Exception as exc:  # noqa: BLE001 -- best-effort, matches _latest_market_breadth's pattern
             logger.info("Could not read latest market breadth for this scan's Decision V2 pass: %s", exc)

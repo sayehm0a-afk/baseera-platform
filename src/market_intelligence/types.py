@@ -433,3 +433,15 @@ class MarketBreadthSummary:
     buy_count: int  # BUY + STRONG_BUY
     sell_count: int  # SELL + STRONG_SELL
     average_confidence: Optional[float]
+    # 2026-09-23 finding: a single ~15-symbol daily scan is too small
+    # and too easily dominated by one or two SELL classifications to
+    # reliably represent genuine market-wide breadth -- the same,
+    # largely-recurring small candidate pool locked classify_market_risk
+    # into DEFENSIVE_EXIT for multiple consecutive real trading
+    # sessions. `get_recent_market_breadth` aggregates this summary
+    # across a short rolling window of recent scan runs instead of just
+    # the latest one; this field records how many runs actually went
+    # into it (1 for the original single-run `get_market_breadth`) so
+    # callers can disclose the real scope honestly rather than implying
+    # "today only" when it is not.
+    runs_aggregated: int = 1

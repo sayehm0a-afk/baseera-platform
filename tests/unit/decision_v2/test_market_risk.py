@@ -8,7 +8,7 @@ from src.analysis.decision_v2.market_risk import (
 from src.market_intelligence.types import MarketBreadthSummary
 
 
-def _breadth(buy=0, sell=0, scanned=20, confidence=60.0) -> MarketBreadthSummary:
+def _breadth(buy=0, sell=0, scanned=20, confidence=60.0, runs_aggregated=1) -> MarketBreadthSummary:
     return MarketBreadthSummary(
         scan_run_id=1,
         generated_at=datetime.now(timezone.utc),
@@ -16,6 +16,7 @@ def _breadth(buy=0, sell=0, scanned=20, confidence=60.0) -> MarketBreadthSummary
         buy_count=buy,
         sell_count=sell,
         average_confidence=confidence,
+        runs_aggregated=runs_aggregated,
     )
 
 
@@ -120,3 +121,44 @@ class TestLiveBreadthClassification:
         for state in MarketRiskState:
             assert state in MARKET_RISK_LABELS_AR
             assert MARKET_RISK_LABELS_AR[state]
+
+
+class TestMultiSessionBreadthDisclosure:
+    """2026-09-23 fix: breadth now typically spans a short rolling
+    window of recent scan runs (see `MarketBreadthSummary.
+    runs_aggregated`), not just the latest one -- the disclosed basis
+    sentence must say so honestly rather than always implying a single
+    session, and the classification math itself is unaffected by how
+    many runs the counts came from (it only ever sees a buy_count/
+    sell_count pair)."""
+
+    def test_single_run_basis_still_says_last_scan(self):
+        result = classify_market_risk(
+            market_is_open=True, breadth=_breadth(buy=1, sell=19, scanned=20, runs_aggregated=1)
+        )
+        assert "في آخر عملية مسح" in result.basis_ar
+        assert "جلسات فحص" not in result.basis_ar
+
+    def test_multi_run_basis_discloses_the_real_window_size(self):
+        result = classify_market_risk(
+            market_is_open=True, breadth=_breadth(buy=1, sell=19, scanned=20, runs_aggregated=5)
+        )
+        assert "خلال آخر 5 جلسات فحص" in result.basis_ar
+        assert "في آخر عملية مسح" not in result.basis_ar
+
+    def test_a_single_bad_session_diluted_by_good_recent_sessions_no_longer_locks_defensive_exit(self):
+        """The exact real-world scenario the fix targets: 0 buy vs 4
+        sell in the latest 15-symbol session alone was DEFENSIVE_EXIT,
+        but aggregated with healthier recent sessions the true breadth
+        no longer blocks entries."""
+        single_session_only = classify_market_risk(
+            market_is_open=True, breadth=_breadth(buy=0, sell=4, scanned=15, runs_aggregated=1)
+        )
+        assert single_session_only.state == MarketRiskState.DEFENSIVE_EXIT
+        assert single_session_only.entry_permitted is False
+
+        widened_window = classify_market_risk(
+            market_is_open=True, breadth=_breadth(buy=10, sell=10, scanned=75, runs_aggregated=5)
+        )
+        assert widened_window.state == MarketRiskState.NEUTRAL
+        assert widened_window.entry_permitted is True

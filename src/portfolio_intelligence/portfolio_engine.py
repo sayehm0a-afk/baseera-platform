@@ -31,6 +31,7 @@ from src.analysis.recommendation.types import AnalysisContext
 from src.domain.models import PeriodType, Stock
 from src.domain.sector_labels import sector_label_ar
 from src.market_data.providers.market_data_provider import IMarketDataProvider
+from src.market_intelligence.config import get_market_risk_breadth_window_runs
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository
 from src.market_intelligence.sector_reliability import (
@@ -88,13 +89,13 @@ class HoldingAnalyzer:
     def _latest_market_breadth(self) -> Optional[MarketBreadthSummary]:
         """Best-effort, never-raising -- same "no completed run yet, or
         a transient query error degrades to None" contract as
-        src.api.routes.stocks's `_latest_market_breadth`."""
+        src.api.routes.stocks's `_latest_market_breadth`, and the same
+        rolling-window aggregate (see `get_market_risk_breadth_window_
+        runs`'s docstring for why a single scan is too small a
+        sample)."""
         try:
             repository = MarketIntelligenceRepository()
-            run = repository.get_latest_consumer_visible_run(self._session)
-            if run is None:
-                return None
-            return repository.get_market_breadth(self._session, run.id)
+            return repository.get_recent_market_breadth(self._session, get_market_risk_breadth_window_runs())
         except Exception as exc:  # noqa: BLE001 -- a breadth-read failure must never break portfolio analysis
             logger.info("Could not read latest market breadth for portfolio holding analysis: %s", exc)
             return None

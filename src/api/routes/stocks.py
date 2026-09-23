@@ -131,6 +131,7 @@ from src.market_data.providers.market_data_provider import IMarketDataProvider
 from src.market_data.sahmk.exceptions import SahmkError
 from src.market_data.sahmk.operation_scope import STOCK_DETAIL, operation_scope
 from src.market_data.validators.symbol_validator import InvalidSymbolError, validate_symbol_format
+from src.market_intelligence.config import get_market_risk_breadth_window_runs
 from src.market_intelligence.market_status import MarketSessionStatus, get_market_status, market_status_label_ar
 from src.market_intelligence.repositories.market_intelligence_repository import MarketIntelligenceRepository, _f
 from src.market_intelligence.trading_calendar import to_tadawul_time
@@ -142,16 +143,15 @@ _market_repository = MarketIntelligenceRepository()
 
 
 def _latest_market_breadth(session: Session):
-    """Phase 2C: best-effort, never-raising read of the most recent
-    completed scan run's breadth -- a missing/failed lookup (no scan
-    has ever completed yet, or a transient query error) degrades to
-    `None`, which `classify_market_risk` already handles honestly as
+    """Phase 2C: best-effort, never-raising read of recent completed
+    scan runs' breadth, aggregated over a short rolling window (see
+    `get_market_risk_breadth_window_runs`'s docstring for why a single
+    scan is too small a sample) -- a missing/failed lookup (no scan has
+    ever completed yet, or a transient query error) degrades to `None`,
+    which `classify_market_risk` already handles honestly as
     INSUFFICIENT_DATA rather than failing the whole decision request."""
     try:
-        run = _market_repository.get_latest_consumer_visible_run(session)
-        if run is None:
-            return None
-        return _market_repository.get_market_breadth(session, run.id)
+        return _market_repository.get_recent_market_breadth(session, get_market_risk_breadth_window_runs())
     except Exception as exc:  # noqa: BLE001 -- a breadth-read failure must never break /decision-v2
         logger.info("Could not read latest market breadth: %s", exc)
         return None

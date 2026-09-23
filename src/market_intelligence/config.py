@@ -512,6 +512,24 @@ def get_radar_stage2_candidate_cap() -> int:
     return int(os.getenv("RADAR_STAGE2_CANDIDATE_CAP", "15"))
 
 
+def get_market_risk_breadth_window_runs() -> int:
+    """How many of the most recent completed, consumer-visible scan
+    runs `MarketIntelligenceRepository.get_recent_market_breadth`
+    aggregates for `classify_market_risk`'s breadth input, instead of
+    only the single latest run. 2026-09-23 finding: with the live scan
+    capped to `RADAR_STAGE2_CANDIDATE_CAP` (15) symbols by SAHMK quota,
+    and Stage 1 tending to re-rank a largely-recurring candidate pool
+    day to day, a single session's buy/sell breadth is too small and
+    too easily dominated by one or two SELL classifications to reliably
+    represent genuine market-wide breadth -- it locked
+    `classify_market_risk` into DEFENSIVE_EXIT (blocking every new
+    entry platform-wide) across several consecutive real trading
+    sessions. A short rolling window smooths single-session noise
+    without changing any individual entry-gate threshold. Default 5
+    (~one trading week at 15 symbols/session)."""
+    return int(os.getenv("MARKET_RISK_BREADTH_WINDOW_RUNS", "5"))
+
+
 # --- scheduler -------------------------------------------------------------
 
 
