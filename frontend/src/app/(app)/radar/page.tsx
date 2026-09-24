@@ -79,26 +79,6 @@ function useRadarData() {
   return { data, reload };
 }
 
-/** Market-wide entry-risk read (classify_market_risk) -- reuses the
- * existing up/down semantic tokens (never a new color system): green
- * when new entries are permitted, red when they are blocked. The
- * Arabic label/basis text always comes verbatim from the backend. */
-function MarketRiskBanner({ summary }: { summary: RadarHomeSummary }) {
-  const colorClass = summary.entry_permitted ? "text-bsr-market-up" : "text-bsr-market-down";
-  return (
-    <div className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-bsr-text-secondary">حالة السوق: {summary.market_status_label_ar}</span>
-        <span className={`text-sm font-semibold ${colorClass}`}>{summary.market_risk_label_ar}</span>
-      </div>
-      <p className="mt-bsr-2 text-xs text-bsr-text-secondary">{summary.market_risk_basis_ar}</p>
-      {!summary.market_risk_is_live ? (
-        <p className="mt-bsr-1 text-xs text-bsr-text-muted">هذا التقييم مبني على آخر جلسة تداول مكتملة، وليس بيانات حية.</p>
-      ) : null}
-    </div>
-  );
-}
-
 /** The real Radar V2 scan funnel -- Stage 1 scans the full local Saudi
  * market universe at zero SAHMK cost and ranks candidates; Stage 2
  * live-validates only the top-ranked ones, capped to protect paid
@@ -335,7 +315,6 @@ export default function RadarPage() {
         </p>
       ) : null}
 
-      {data.status === "ready" ? <MarketRiskBanner summary={data.summary} /> : null}
       {data.status === "ready" ? <ScanFunnelBanner summary={data.summary} /> : null}
 
       {data.status === "ready" && data.summary.live_opportunity_count === 0 ? (

@@ -600,26 +600,34 @@ class TestPhase2BStrongBuyIsStricterThanBuy:
         assert strong_result.decision is Decision.BUY_CANDIDATE  # downgraded, not STRONG_BUY_CANDIDATE
 
 
-class TestPhase2CMarketRiskPermitsEntryGate:
-    def test_entry_blocked_downgrades_buy_to_watch(self):
+class TestMarketRiskContextIsInformationalOnly:
+    """2026-09-24 product-owner decision: market-wide breadth used to
+    block every symbol's new entry once the aggregate state crossed
+    into a risk-off band, regardless of that symbol's own evidence.
+    Real production data showed this silenced the platform for a full
+    trading week. `market_risk_context` is now disclosure-only -- it
+    must never change the decision, whether market-wide entry would
+    have been permitted or not."""
+
+    def test_entry_not_permitted_does_not_block_a_valid_buy(self):
         inputs = _base_buy_inputs(market_risk_entry_permitted=False, market_risk_label_ar="خروج دفاعي")
         result = evaluate_decision(inputs, TUNING)
-        assert result.decision is Decision.WATCH
-        gate = next(g for g in result.gates if g.name == "market_risk_permits_entry")
-        assert gate.passed is False
-        assert gate.blocking is True
+        assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "market_risk_context")
+        assert gate.passed is True
+        assert gate.blocking is False
         assert "خروج دفاعي" in gate.detail
-        assert any("خروج دفاعي" in w for w in result.warnings)
+        assert not any("خروج دفاعي" in w for w in result.warnings)
 
     def test_entry_permitted_does_not_block_a_valid_buy(self):
         inputs = _base_buy_inputs(market_risk_entry_permitted=True, market_risk_label_ar="دخول قوي")
         result = evaluate_decision(inputs, TUNING)
         assert result.decision is Decision.BUY_CANDIDATE
-        gate = next(g for g in result.gates if g.name == "market_risk_permits_entry")
+        gate = next(g for g in result.gates if g.name == "market_risk_context")
         assert gate.passed is True
         assert gate.blocking is False
 
-    def test_market_risk_gate_does_not_affect_hold_or_sell_side_decisions(self):
+    def test_market_risk_context_does_not_affect_hold_or_sell_side_decisions(self):
         hold_inputs = _base_buy_inputs(
             recommendation=Recommendation.HOLD, direction=0, market_risk_entry_permitted=False,
         )

@@ -108,10 +108,9 @@ describe("RadarPage", () => {
     render(<RadarPage />);
 
     expect(await screen.findByText("لا توجد فرص مرصودة حاليًا")).toBeInTheDocument();
-    expect(screen.getByText("محايد")).toBeInTheDocument();
   });
 
-  it("shows real live opportunities and the market risk basis text verbatim from the backend", async () => {
+  it("shows real live opportunities", async () => {
     vi.mocked(getRadarSummary).mockResolvedValue(
       summary({
         live_opportunity_count: 1,
@@ -125,20 +124,24 @@ describe("RadarPage", () => {
 
     expect(await screen.findByText("2222")).toBeInTheDocument();
     expect(screen.getByText("توصيات الشراء (1)")).toBeInTheDocument();
-    expect(
-      screen.getByText("نسبة الإشارات الإيجابية 50% من أصل 20 سهمًا تم فحصها.")
-    ).toBeInTheDocument();
   });
 
-  it("shows an entry-blocked market risk state distinctly (red, not green)", async () => {
+  // 2026-09-24 product-owner decision: Basirah must judge each stock on
+  // its own evidence, never be silenced or visibly flagged by a
+  // market-wide read -- see gates.py's market_risk_context for the
+  // backend side of this change. The radar page intentionally no
+  // longer renders any market-wide risk banner, even when the backend
+  // still reports entry_permitted: false for other consumers (e.g.
+  // admin dashboards).
+  it("never renders a market-wide risk banner, even when the backend reports entry blocked", async () => {
     vi.mocked(getRadarSummary).mockResolvedValue(
       summary({ market_risk_label_ar: "خروج دفاعي", entry_permitted: false })
     );
 
     render(<RadarPage />);
 
-    const label = await screen.findByText("خروج دفاعي");
-    expect(label.className).toContain("text-bsr-market-down");
+    await screen.findByText("لا توجد فرص مرصودة حاليًا");
+    expect(screen.queryByText("خروج دفاعي")).not.toBeInTheDocument();
   });
 
   it("shows an error state and lets the user retry", async () => {

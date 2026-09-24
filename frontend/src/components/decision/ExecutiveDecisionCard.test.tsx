@@ -275,41 +275,24 @@ describe("ExecutiveDecisionCard", () => {
     expect(screen.queryByText("أقرب مقاومة")).not.toBeInTheDocument();
   });
 
-  it("renders the Phase 2C market risk state and its evidence basis", () => {
+  // 2026-09-24 product-owner decision: Basirah must judge each stock on
+  // its own evidence, never be visibly flagged by a market-wide read --
+  // see gates.py's market_risk_context for the backend side. This card
+  // intentionally no longer renders any market-wide risk state, even
+  // when the underlying decision payload still carries those fields
+  // (for other consumers, e.g. admin dashboards).
+  it("never renders a market-wide risk state, even when the decision payload carries one", () => {
     render(
       <ExecutiveDecisionCard
         decision={buildDecision({
-          market_risk_label_ar: "دخول انتقائي",
-          market_risk_basis_ar: "نسبة الإشارات الإيجابية 60% (24 شراء مقابل 16 بيع) من أصل 40 سهمًا.",
+          market_risk_label_ar: "خروج دفاعي",
+          market_risk_basis_ar: "نسبة الإشارات الإيجابية 0% (0 شراء مقابل 18 بيع) من أصل 75 سهمًا.",
+          market_risk_entry_permitted: false,
         })}
       />
     );
-    expect(screen.getByText("دخول انتقائي")).toBeInTheDocument();
-    expect(
-      screen.getByText("نسبة الإشارات الإيجابية 60% (24 شراء مقابل 16 بيع) من أصل 40 سهمًا.")
-    ).toBeInTheDocument();
-  });
-
-  it("labels a last-session market risk read as such, not as live", () => {
-    render(
-      <ExecutiveDecisionCard
-        decision={buildDecision({
-          market_risk_label_ar: "السوق مغلق",
-          market_risk_is_live: false,
-        })}
-      />
-    );
-    expect(screen.getByText("السوق مغلق (آخر جلسة)")).toBeInTheDocument();
-  });
-
-  it("does not append the last-session note when the market risk read is live", () => {
-    render(
-      <ExecutiveDecisionCard
-        decision={buildDecision({ market_risk_label_ar: "دخول قوي", market_risk_is_live: true })}
-      />
-    );
-    expect(screen.getByText("دخول قوي")).toBeInTheDocument();
-    expect(screen.queryByText(/آخر جلسة/)).not.toBeInTheDocument();
+    expect(screen.queryByText("خروج دفاعي")).not.toBeInTheDocument();
+    expect(screen.queryByText("حالة مخاطر السوق")).not.toBeInTheDocument();
   });
 
   it("shows the news-contradiction material risk banner when negative news opposes a bullish-leaning decision", () => {
