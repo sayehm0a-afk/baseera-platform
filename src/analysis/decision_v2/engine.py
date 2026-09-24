@@ -70,6 +70,7 @@ class DecisionEngineV2:
         quote_timestamp: Optional[datetime],
         market_status: str,
         market_is_open: Optional[bool],
+        quote_is_live_tick: Optional[bool] = None,
         scan_run_id: Optional[int] = None,
         market_breadth: Optional[MarketBreadthSummary] = None,
         sector_reliability_win_rate_pct: Optional[float] = None,
@@ -135,6 +136,26 @@ class DecisionEngineV2:
             ts = quote_timestamp if quote_timestamp.tzinfo is not None else quote_timestamp.replace(tzinfo=timezone.utc)
             data_age_hours = (now - ts).total_seconds() / 3600.0
         max_age_hours = get_max_data_age_hours()
+        # P1-1 remediation (2026-09-24 release-gate audit): while the
+        # market is open, a live-price fetch failure that fell back to
+        # the completed-daily-bar price must never authorize an
+        # *actionable* entry just because that bar happens to fall
+        # within the ordinary freshness window (gates.py's data_freshness
+        # gate) -- that window exists to accommodate legitimate closed-
+        # market last-session browsing, not to certify a same-session
+        # tick. When the market is closed, the fallback bar is already
+        # the expected, legitimate basis (see market_closed_confidence_
+        # cap above), so this never adds a new restriction there.
+        #
+        # Fail-closed remediation (independent pre-merge audit,
+        # 2026-09-24): `quote_is_live_tick` now defaults to `None`
+        # ("unknown"), not `True` -- an omitted argument or an explicit
+        # `None` must never be treated as equivalent to a positively
+        # confirmed live tick. Only `quote_is_live_tick is True` may
+        # satisfy this gate while the market is open; `False`, `None`,
+        # and "not passed at all" are all indistinguishable UNKNOWN
+        # evidence and all fail closed identically.
+        actionable_price_basis_confirmed = (market_is_open is not True) or (quote_is_live_tick is True)
         data_quality = scoring.data_quality_score(
             has_technical, has_fundamental, is_synthetic, data_age_hours, max_age_hours, tuning
         )
@@ -281,6 +302,7 @@ class DecisionEngineV2:
             # a second, independent computation.
             price_severely_missed_entry_zone=severely_missed_entry,
             breakout_status=breakout_confirmation.get("status", "NOT_APPLICABLE"),
+            actionable_price_basis_confirmed=actionable_price_basis_confirmed,
             # Comprehensive accuracy audit (2026-09-15): the caller
             # (MarketScanner/_build_decision_v2 for a batch scan, the
             # /decision-v2 route for a single symbol) resolves these

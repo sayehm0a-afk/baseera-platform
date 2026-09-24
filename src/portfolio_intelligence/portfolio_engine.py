@@ -197,6 +197,7 @@ class HoldingAnalyzer:
                 quote_timestamp=parse_quote_timestamp(quote_info.get("timestamp")),
                 market_status=market_info.status.value,
                 market_is_open=market_info.status == MarketSessionStatus.OPEN,
+                quote_is_live_tick=quote_info.get("is_live_tick"),
                 market_breadth=market_breadth,
                 sector_reliability_win_rate_pct=sector_reliability.win_rate_pct,
                 sector_reliability_sample_size=sector_reliability.sample_size,

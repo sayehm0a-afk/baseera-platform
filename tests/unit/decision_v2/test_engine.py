@@ -85,6 +85,15 @@ def _decide(ctx, decision, **overrides):
         quote_timestamp=datetime.now(timezone.utc),
         market_status="OPEN",
         market_is_open=True,
+        # Fail-closed remediation (independent pre-merge audit,
+        # 2026-09-24): quote_is_live_tick now defaults to None/unknown,
+        # not True -- this helper represents a normal, valid, live BUY
+        # setup for every OTHER gate this test suite exercises (entry
+        # zone, breakout, anti-chase, ...), none of which are testing
+        # live-tick provenance itself, so it must state that assumption
+        # explicitly here exactly as every real production caller does.
+        # Tests that specifically exercise provenance override this.
+        quote_is_live_tick=True,
         scan_run_id=None,
     )
     kwargs.update(overrides)
@@ -376,6 +385,87 @@ class TestClosedMarketAndFreshness:
         ctx = _context()
         result = _decide(ctx, _buy_decision(), is_synthetic=True)
         assert result.data_freshness_status is DataFreshnessStatus.UNKNOWN
+
+
+class TestP1_1_ActionablePriceBasisConfirmation:
+    """2026-09-24 release-gate remediation mandate (P1-1): engine.py
+    derives `actionable_price_basis_confirmed` from market_is_open +
+    quote_is_live_tick and threads it into GateInputs -- verified here
+    end-to-end (real gates.py evaluation, not a mocked gate input)."""
+
+    def test_open_market_with_fallback_bar_blocks_actionable_buy(self):
+        ctx = _context()
+        result = _decide(ctx, _buy_decision(), market_is_open=True, quote_is_live_tick=False)
+        assert result.decision is not Decision.BUY_CANDIDATE
+        assert result.decision is not Decision.STRONG_BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is False
+
+    def test_open_market_with_genuine_live_tick_is_unaffected(self):
+        ctx = _context()
+        result = _decide(ctx, _buy_decision(), market_is_open=True, quote_is_live_tick=True)
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is True
+
+    def test_closed_market_with_fallback_bar_is_not_newly_blocked(self):
+        # Closed-market last-session browsing is the existing, legitimate
+        # case (see test_closed_market_caps_confidence_and_warns above) --
+        # this remediation must add no new restriction there.
+        ctx = _context()
+        result = _decide(ctx, _buy_decision(), market_status="CLOSED", market_is_open=False, quote_is_live_tick=False)
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is True
+
+    @staticmethod
+    def _decide_without_live_tick_kwarg(ctx, decision, **overrides):
+        """Calls DecisionEngineV2.decide() directly, deliberately
+        bypassing this file's shared `_decide()` helper (which -- like
+        every real production caller -- explicitly supplies
+        `quote_is_live_tick` for its many OTHER, unrelated gate tests) so
+        `quote_is_live_tick` is genuinely omitted from the call, not just
+        defaulted by the helper."""
+        kwargs = dict(
+            company_name_ar="أرامكو السعودية", company_name_en="Saudi Aramco",
+            sector="Energy", sector_ar="الطاقة", is_synthetic=False, data_source="SAHMK",
+            quote_timestamp=datetime.now(timezone.utc), market_status="OPEN",
+            market_is_open=True, scan_run_id=None,
+        )
+        kwargs.update(overrides)
+        return DecisionEngineV2().decide(ctx, decision, **kwargs)
+
+    def test_omitted_quote_is_live_tick_fails_closed(self):
+        """Fail-closed remediation (independent pre-merge audit,
+        2026-09-24): a caller that omits `quote_is_live_tick` entirely
+        must NOT be treated as if it had passed `True` -- unknown
+        provenance must never authorize an actionable BUY while the
+        market is open."""
+        ctx = _context()
+        result = self._decide_without_live_tick_kwarg(ctx, _buy_decision(), market_is_open=True)
+        assert result.decision is Decision.WATCH
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is False
+
+    def test_explicit_none_quote_is_live_tick_fails_closed(self):
+        """Fail-closed remediation: an explicit `quote_is_live_tick=None`
+        ("provenance unknown") must be treated identically to omission
+        and to `False` -- never identically to `True`."""
+        ctx = _context()
+        result = _decide(ctx, _buy_decision(), market_is_open=True, quote_is_live_tick=None)
+        assert result.decision is Decision.WATCH
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is False
+
+    def test_closed_market_with_omitted_provenance_is_not_newly_blocked(self):
+        # Mirrors test_closed_market_with_fallback_bar_is_not_newly_
+        # blocked above, but for the truly-omitted-parameter path
+        # specifically -- closed-market last-session browsing must
+        # remain unaffected by the fail-closed remediation.
+        ctx = _context()
+        result = self._decide_without_live_tick_kwarg(
+            ctx, _buy_decision(), market_status="CLOSED", market_is_open=False
+        )
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is True
 
 
 class TestInsufficientData:

@@ -636,3 +636,99 @@ class TestMarketRiskContextIsInformationalOnly:
         )
         assert evaluate_decision(hold_inputs, TUNING).decision is Decision.HOLD
         assert evaluate_decision(sell_inputs, TUNING).decision is Decision.REDUCE
+
+
+class TestP1_1_ActionablePriceBasisConfirmation:
+    """2026-09-24 release-gate remediation mandate (P1-1): a fallback
+    (completed-daily-bar / previous-close) price can sit well within the
+    ordinary freshness window while the market is open, without ever
+    having been a genuine current-session tick. `actionable_price_basis_
+    confirmed=False` (engine.py sets this only when market_is_open AND
+    the price is known not to be a live tick) must downgrade a BUY-like
+    decision to WATCH -- it must never silently authorize a live
+    actionable entry on a stale-but-in-window basis."""
+
+    def test_unconfirmed_price_basis_blocks_an_otherwise_valid_buy(self):
+        inputs = _base_buy_inputs(actionable_price_basis_confirmed=False)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is False
+        assert gate.blocking is True
+        assert any("لا يمكن اعتبار هذا فرصة دخول فورية" in w for w in result.warnings)
+
+    def test_confirmed_price_basis_does_not_block_a_valid_buy(self):
+        inputs = _base_buy_inputs(actionable_price_basis_confirmed=True)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is True
+        assert gate.blocking is False
+
+    def test_default_behavior_unchanged_when_field_not_passed(self):
+        """Regression guard: existing callers/tests that never set this
+        new field must see byte-identical prior behavior (default=True)."""
+        inputs = _base_buy_inputs()
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_unconfirmed_price_basis_does_not_affect_hold_or_sell_side_decisions(self):
+        hold_inputs = _base_buy_inputs(
+            recommendation=Recommendation.HOLD, direction=0, actionable_price_basis_confirmed=False,
+        )
+        sell_inputs = _base_buy_inputs(
+            recommendation=Recommendation.SELL, direction=-1, actionable_price_basis_confirmed=False,
+        )
+        assert evaluate_decision(hold_inputs, TUNING).decision is Decision.HOLD
+        assert evaluate_decision(sell_inputs, TUNING).decision is Decision.REDUCE
+
+
+class TestP1_4_UnknownFreshnessFailsClosed:
+    """2026-09-24 release-gate remediation mandate (P1-4): data_age_hours
+    == None previously fell through the `is_stale` boolean as `False`,
+    i.e. treated identically to "confirmed fresh" -- unknown freshness
+    must never authorize an actionable BUY. It also must never appear as
+    a fabricated PASS on the data_freshness gate itself; NOT_EVALUATED is
+    the honest state (mirrors this file's existing ohlcv_staleness/
+    liquidity pattern for "no evidence to check")."""
+
+    def test_none_age_is_not_evaluated_not_a_fabricated_pass(self):
+        inputs = _base_buy_inputs(data_age_hours=None)
+        result = evaluate_decision(inputs, TUNING)
+        gate = next(g for g in result.gates if g.name == "data_freshness")
+        assert gate.status is GateStatus.NOT_EVALUATED
+
+    def test_none_age_blocks_an_otherwise_valid_buy(self):
+        inputs = _base_buy_inputs(data_age_hours=None)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+
+    def test_zero_age_is_fresh_and_does_not_block(self):
+        inputs = _base_buy_inputs(data_age_hours=0.0)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "data_freshness")
+        assert gate.status is GateStatus.PASS
+
+    def test_age_exactly_at_threshold_is_not_stale(self):
+        inputs = _base_buy_inputs(data_age_hours=24.0, max_age_hours=24.0)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_age_just_above_threshold_is_stale_and_blocks(self):
+        inputs = _base_buy_inputs(data_age_hours=24.01, max_age_hours=24.0)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.WATCH
+        gate = next(g for g in result.gates if g.name == "data_freshness")
+        assert gate.status is GateStatus.FAIL
+
+    def test_known_fresh_behavior_unchanged(self):
+        inputs = _base_buy_inputs(data_age_hours=1.0)
+        result = evaluate_decision(inputs, TUNING)
+        assert result.decision is Decision.BUY_CANDIDATE
+
+    def test_none_age_does_not_affect_hold_or_sell_side_decisions(self):
+        hold_inputs = _base_buy_inputs(recommendation=Recommendation.HOLD, direction=0, data_age_hours=None)
+        sell_inputs = _base_buy_inputs(recommendation=Recommendation.SELL, direction=-1, data_age_hours=None)
+        assert evaluate_decision(hold_inputs, TUNING).decision is Decision.HOLD
+        assert evaluate_decision(sell_inputs, TUNING).decision is Decision.REDUCE
