@@ -70,7 +70,7 @@ class DecisionEngineV2:
         quote_timestamp: Optional[datetime],
         market_status: str,
         market_is_open: Optional[bool],
-        quote_is_live_tick: bool = True,
+        quote_is_live_tick: Optional[bool] = None,
         scan_run_id: Optional[int] = None,
         market_breadth: Optional[MarketBreadthSummary] = None,
         sector_reliability_win_rate_pct: Optional[float] = None,
@@ -146,7 +146,16 @@ class DecisionEngineV2:
         # tick. When the market is closed, the fallback bar is already
         # the expected, legitimate basis (see market_closed_confidence_
         # cap above), so this never adds a new restriction there.
-        actionable_price_basis_confirmed = not (market_is_open is True and quote_is_live_tick is False)
+        #
+        # Fail-closed remediation (independent pre-merge audit,
+        # 2026-09-24): `quote_is_live_tick` now defaults to `None`
+        # ("unknown"), not `True` -- an omitted argument or an explicit
+        # `None` must never be treated as equivalent to a positively
+        # confirmed live tick. Only `quote_is_live_tick is True` may
+        # satisfy this gate while the market is open; `False`, `None`,
+        # and "not passed at all" are all indistinguishable UNKNOWN
+        # evidence and all fail closed identically.
+        actionable_price_basis_confirmed = (market_is_open is not True) or (quote_is_live_tick is True)
         data_quality = scoring.data_quality_score(
             has_technical, has_fundamental, is_synthetic, data_age_hours, max_age_hours, tuning
         )
