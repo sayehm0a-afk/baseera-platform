@@ -20,6 +20,23 @@ const nextConfig: NextConfig = {
     // p99 latency data for /portfolio/analyze, not a measured value.
     proxyTimeout: 120_000,
   },
+  async redirects() {
+    // Product-owner rebuild mandate (2026-09-24): /today and
+    // /opportunities were two additional "here are good stocks right
+    // now" screens sitting alongside /radar, each hitting a different
+    // endpoint (personal/top-opportunities, market/opportunities) and
+    // showing overlapping card grids -- the primary nav (nav-items.ts)
+    // already dropped both in favor of a single canonical "الرادار
+    // الذكي" entry, and the splash page (src/app/page.tsx) already
+    // sends a signed-in user straight to /radar. This closes the gap
+    // those two routes were still directly reachable, rather than
+    // leaving orphaned duplicate screens live. Not permanent (308):
+    // this consolidation itself could still be revisited.
+    return [
+      { source: "/today", destination: "/radar", permanent: false },
+      { source: "/opportunities", destination: "/radar", permanent: false },
+    ];
+  },
   async rewrites() {
     // Keep cookies first-party in Safari. The browser calls this app;
     // Next forwards to the existing API without changing cookie paths.
