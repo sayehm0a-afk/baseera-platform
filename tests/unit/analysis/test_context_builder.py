@@ -247,6 +247,10 @@ async def test_live_quote_is_preferred_over_stale_daily_bar(session):
     assert context.extra["quote"]["change_percent"] == pytest.approx(1.19)
     assert context.extra["quote"]["timestamp"] == "2026-07-29T11:00:00+03:00"
     assert context.extra["quote"]["source"] == "sahmk"
+    # P1-1 remediation (2026-09-24): a genuine live-quote success must be
+    # marked as such -- this is the only signal DecisionEngineV2 has to
+    # tell a real current-session tick apart from the daily-bar fallback.
+    assert context.extra["quote"]["is_live_tick"] is True
 
 
 @pytest.mark.asyncio
@@ -258,6 +262,11 @@ async def test_falls_back_to_daily_bar_when_live_quote_fails(session):
 
     assert context.latest_price is not None
     assert context.extra["quote"]["source"] == "dev-synthetic"
+    # P1-1 remediation (2026-09-24): the fallback bar must be marked as
+    # NOT a live tick, even though it succeeded and populated a usable
+    # price/timestamp -- this is what lets gates.py block it from
+    # authorizing an actionable BUY while the market is open.
+    assert context.extra["quote"]["is_live_tick"] is False
 
 
 @pytest.mark.asyncio
@@ -276,6 +285,7 @@ async def test_falls_back_to_daily_bar_when_live_quote_hits_upstream_quota_exhau
 
     assert context.latest_price is not None
     assert context.extra["quote"]["source"] == "dev-synthetic"
+    assert context.extra["quote"]["is_live_tick"] is False
     # The technical leg (computed before the quote fetch) must survive
     # the quote failure too -- proof the exception didn't abort the
     # whole function before this leg's result could be returned.

@@ -378,6 +378,44 @@ class TestClosedMarketAndFreshness:
         assert result.data_freshness_status is DataFreshnessStatus.UNKNOWN
 
 
+class TestP1_1_ActionablePriceBasisConfirmation:
+    """2026-09-24 release-gate remediation mandate (P1-1): engine.py
+    derives `actionable_price_basis_confirmed` from market_is_open +
+    quote_is_live_tick and threads it into GateInputs -- verified here
+    end-to-end (real gates.py evaluation, not a mocked gate input)."""
+
+    def test_open_market_with_fallback_bar_blocks_actionable_buy(self):
+        ctx = _context()
+        result = _decide(ctx, _buy_decision(), market_is_open=True, quote_is_live_tick=False)
+        assert result.decision is not Decision.BUY_CANDIDATE
+        assert result.decision is not Decision.STRONG_BUY_CANDIDATE
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is False
+
+    def test_open_market_with_genuine_live_tick_is_unaffected(self):
+        ctx = _context()
+        result = _decide(ctx, _buy_decision(), market_is_open=True, quote_is_live_tick=True)
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is True
+
+    def test_closed_market_with_fallback_bar_is_not_newly_blocked(self):
+        # Closed-market last-session browsing is the existing, legitimate
+        # case (see test_closed_market_caps_confidence_and_warns above) --
+        # this remediation must add no new restriction there.
+        ctx = _context()
+        result = _decide(ctx, _buy_decision(), market_status="CLOSED", market_is_open=False, quote_is_live_tick=False)
+        gate = next(g for g in result.gates if g.name == "live_quote_confirmed")
+        assert gate.passed is True
+
+    def test_default_quote_is_live_tick_preserves_prior_behavior(self):
+        # No caller passes quote_is_live_tick -> defaults to True ->
+        # byte-identical to pre-remediation behavior.
+        ctx = _context()
+        result_default = _decide(ctx, _buy_decision(), market_is_open=True)
+        result_explicit_true = _decide(ctx, _buy_decision(), market_is_open=True, quote_is_live_tick=True)
+        assert result_default.decision == result_explicit_true.decision
+
+
 class TestInsufficientData:
     def test_no_technical_data_is_insufficient_data(self):
         ctx = AnalysisContext(symbol="9999", technical_result=None, fundamental_result=None, latest_price=None)

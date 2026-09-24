@@ -27,6 +27,14 @@ not a single `decide()` call -- see `ChangeDetector`) and stale-
 recommendation detection (would require comparing against this
 symbol's *previous* stored `DecisionV2Snapshot`, a route/DB-layer
 concern this pure-function module deliberately has no access to).
+`data_freshness` joins them conditionally: an unknown age (P1-4
+remediation, 2026-09-24) is `NOT_EVALUATED`, never a silent PASS.
+
+P1-1 remediation (2026-09-24, same release-gate audit): a new
+`live_quote_confirmed` gate, BUY-path only, requires
+`GateInputs.actionable_price_basis_confirmed` -- see engine.py for how
+that's derived from market-open state and whether the price came from
+a genuine live tick versus the completed-daily-bar fallback.
 
 Per the Product Owner rule "a شراء قوي decision must be rare and
 require stricter gates than شراء": `STRONG_BUY_CANDIDATE` additionally
@@ -117,6 +125,15 @@ class GateInputs:
     sector_reliability_win_rate_pct: Optional[float] = None
     sector_reliability_sample_size: int = 0
 
+    # --- Actionable price-basis confirmation (P1-1, 2026-09-24
+    # release-gate remediation) -- computed in engine.py from
+    # market_is_open + whether this request's price came from a genuine
+    # live-quote fetch or the completed-daily-bar fallback. Defaults to
+    # True (preserves exact existing behavior for any caller/test that
+    # doesn't pass it) -- only ever False when the market is open AND
+    # the price basis is known NOT to be a live tick.
+    actionable_price_basis_confirmed: bool = True
+
 
 @dataclass
 class GateEvaluation:
@@ -160,12 +177,25 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
     # -- LIVE/LAST_SESSION/STALE/UNKNOWN -- is computed once in
     # engine.py, which also knows market_is_open; this gate only needs
     # the pass/fail boolean). ---------------------------------------
-    is_stale = inputs.data_age_hours is not None and inputs.data_age_hours > inputs.max_age_hours
-    gates.append(GateOutcome(
-        "data_freshness", GateStatus.FAIL if is_stale else GateStatus.PASS,
-        f"عمر البيانات {inputs.data_age_hours:.1f} ساعة" if inputs.data_age_hours is not None else "عمر البيانات غير معروف",
-        False,
-    ))
+    # P1-4 remediation (2026-09-24 release-gate audit): an unknown age
+    # (data_age_hours is None) previously fell through to `is_stale =
+    # False`, i.e. treated identically to "confirmed fresh" -- unknown
+    # freshness must never be interpreted as proven fresh. `age_known`
+    # and `freshness_confirmed` now separate "confirmed within window"
+    # from "not proven stale" so the BUY-path check below (line ~296)
+    # can require the former, not merely the absence of the latter.
+    age_known = inputs.data_age_hours is not None
+    is_stale = age_known and inputs.data_age_hours > inputs.max_age_hours
+    freshness_confirmed = age_known and not is_stale
+    if not age_known:
+        gates.append(GateOutcome(
+            "data_freshness", GateStatus.NOT_EVALUATED, "عمر البيانات غير معروف -- لا يمكن تأكيد حداثتها.", False,
+        ))
+    else:
+        gates.append(GateOutcome(
+            "data_freshness", GateStatus.FAIL if is_stale else GateStatus.PASS,
+            f"عمر البيانات {inputs.data_age_hours:.1f} ساعة", False,
+        ))
     if is_stale:
         warnings.append("البيانات المستخدمة أقدم من الحد المسموح -- التحليل معروض للاطلاع فقط وليس للتنفيذ الفوري.")
 
@@ -283,8 +313,32 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         return GateEvaluation(Decision.REDUCE, gates, warnings, disclosures)
 
     # From here on: recommendation is BUY-like (BUY/STRONG_BUY) -----------------
-    if is_stale:
-        warnings.append("لا يمكن اعتبار هذا فرصة شراء فعلية أثناء عدم توفر بيانات حديثة -- تم تصنيفه للمراقبة فقط.")
+    # P1-1 remediation (2026-09-24 release-gate audit): the market is
+    # open and this price is known NOT to be a genuine live tick (it
+    # fell back to the completed-daily-bar price) -- that fallback can
+    # sit well within the ordinary freshness window while still not
+    # being a current-session price, so it must not authorize a live
+    # actionable entry. Never fires when the market is closed (a last-
+    # session basis is already the expected, legitimate case there) and
+    # never changes the underlying deterministic score/classification --
+    # only whether it is exposed as an immediately actionable BUY.
+    if not inputs.actionable_price_basis_confirmed:
+        gates.append(GateOutcome(
+            "live_quote_confirmed", GateStatus.FAIL,
+            "السعر المستخدم مبني على آخر إغلاق مسجّل وليس تحديثًا حيًا مؤكدًا خلال الجلسة الحالية.", True,
+        ))
+        warnings.append(
+            "تعذّر تأكيد سعر حي لهذا السهم خلال الجلسة الحالية -- لا يمكن اعتبار هذا فرصة دخول فورية، تم تصنيفه للمراقبة فقط."
+        )
+        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
+    gates.append(GateOutcome(
+        "live_quote_confirmed", GateStatus.PASS, "السعر مؤكد كتحديث حي حالي أو أن حالة السوق لا تستوجب ذلك.", False,
+    ))
+    # P1-4 remediation: `freshness_confirmed` requires a KNOWN age within
+    # the window -- an unknown age (data_age_hours is None) no longer
+    # silently passes through here as if it were fresh.
+    if not freshness_confirmed:
+        warnings.append("لا يمكن اعتبار هذا فرصة شراء فعلية أثناء عدم توفر بيانات حديثة مؤكدة -- تم تصنيفه للمراقبة فقط.")
         return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
     if ohlcv_is_stale:
         warnings.append("لا يمكن اعتبار هذا فرصة شراء فعلية والمؤشرات الفنية مبنية على بيانات شموع قديمة -- تم تصنيفه للمراقبة فقط.")

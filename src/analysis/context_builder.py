@@ -279,6 +279,19 @@ async def build_analysis_context(
                     # fabricated spread.
                     "bid": quote.get("bid"),
                     "ask": quote.get("ask"),
+                    # P1-1 remediation (2026-09-24): distinguishes a
+                    # genuine current-session tick from the completed-
+                    # daily-bar fallback below -- the two can carry a
+                    # timestamp of similar apparent age, so age alone
+                    # cannot tell DecisionEngineV2 whether this price is
+                    # actually "live" right now. See gates.py's
+                    # actionable_price_basis_confirmed for how this is
+                    # used (only to gate an *actionable* BUY while the
+                    # market is open -- never changes the price/decision
+                    # itself, and never affects display when the market
+                    # is closed, where a last-session basis is already
+                    # the expected, legitimate case).
+                    "is_live_tick": True,
                 }
             }
         except (SahmkError, SahmkRateLimitExceededError, CircuitBreakerOpenError) as exc:
@@ -299,6 +312,10 @@ async def build_analysis_context(
                     "timestamp": bar.get("timestamp"),
                     "source": bar.get("source"),
                     "is_synthetic": bar.get("is_synthetic"),
+                    # P1-1 remediation (2026-09-24): this is the
+                    # completed-daily-bar fallback, never a live tick --
+                    # see the comment on the live-quote leg above.
+                    "is_live_tick": False,
                 }
             }
         except (SahmkError, SahmkRateLimitExceededError, CircuitBreakerOpenError) as exc:
