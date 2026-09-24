@@ -15,6 +15,7 @@ Required invariants (Section 20's acceptance criteria):
   refreshed within the reported MAX_BACKGROUND_REFRESH_AGE).
 """
 
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -31,12 +32,34 @@ from src.domain.models import (
     Stock,
     Timeframe,
 )
-from src.market_data.config import (
+
+# P1-2 remediation (2026-09-24 release-gate audit): the live-scan quota
+# reserve is now conditional on LIVE_RECURRENT_SCAN_ENABLED (see
+# src.market_data.config.get_sahmk_reserved_for_live_scan_requests_per_
+# day's own docstring) -- this simulation deliberately exercises the
+# full three-reserve worst case (100/30/20, Section 19's own evidence-
+# based numbers) regardless of the flag's real, current production
+# value, so it must force the flag on for its own constants below. Set
+# before importing src.market_data.config, since the getters below are
+# evaluated at import time; restored in teardown_module so this doesn't
+# leak into other test modules sharing this process.
+_LIVE_RECURRENT_SCAN_ENABLED_ORIGINAL = os.environ.get("LIVE_RECURRENT_SCAN_ENABLED")
+os.environ["LIVE_RECURRENT_SCAN_ENABLED"] = "true"
+
+
+def teardown_module(module):
+    if _LIVE_RECURRENT_SCAN_ENABLED_ORIGINAL is None:
+        os.environ.pop("LIVE_RECURRENT_SCAN_ENABLED", None)
+    else:
+        os.environ["LIVE_RECURRENT_SCAN_ENABLED"] = _LIVE_RECURRENT_SCAN_ENABLED_ORIGINAL
+
+
+from src.market_data.config import (  # noqa: E402 -- see the flag setup above
     get_sahmk_max_requests_per_day,
     get_sahmk_reserved_for_critical_requests_per_day,
     get_sahmk_reserved_for_live_scan_requests_per_day,
 )
-from src.market_data.ingestion.ohlcv_priority import build_priority_plan
+from src.market_data.ingestion.ohlcv_priority import build_priority_plan  # noqa: E402
 
 MAX_PER_DAY = get_sahmk_max_requests_per_day()
 RESERVED_CRITICAL = get_sahmk_reserved_for_critical_requests_per_day()
