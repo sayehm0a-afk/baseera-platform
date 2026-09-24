@@ -3,9 +3,11 @@ extension (5 more, to the 20-gate list: quote-timestamp, volume-quality,
 trend-consistency/contradiction, market-context, confidence-calibration,
 price-limit-proximity, and risk-warning-disclosure -- several of these
 share one gate entry where the underlying evidence is identical, see
-each gate's own comment below) plus Phase 2C's `market_risk_permits_entry`
-gate (a market-wide, not per-symbol, entry-permission check -- see
-`market_risk.py`), applied uniformly to every single-stock decision --
+each gate's own comment below) plus a `market_risk_context` disclosure
+(a market-wide, not per-symbol, informational note -- see
+`market_risk.py`; it no longer blocks a decision, see that gate's own
+comment below for the 2026-09-24 product-owner decision that changed
+this), applied uniformly to every single-stock decision --
 not only to the market-wide scanner, which is what
 `src.market_intelligence.publication_gate` already does today. Several
 gates below reuse that module's exact threshold getters
@@ -453,27 +455,27 @@ def evaluate_decision(inputs: GateInputs, tuning: DecisionV2Tuning) -> GateEvalu
         False,
     ))
 
-    # Phase 2C, market-risk entry-permission gate: a market-wide risk
-    # state (see market_risk.py, derived from real scan-run breadth) of
-    # REDUCE_POSITIONS/PARTIAL_EXIT/DEFENSIVE_EXIT blocks *new* entries.
-    # HOLD/REDUCE/EXIT decisions (already returned above) are never
-    # affected -- trimming or exiting a position during a risk-off
-    # market is exactly the defensive behavior this gate exists to
-    # encourage, not discourage.
-    if not inputs.market_risk_entry_permitted:
-        gates.append(GateOutcome(
-            "market_risk_permits_entry", GateStatus.FAIL,
-            f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- يتم تعليق توصيات الدخول الجديدة مؤقتًا.",
-            True,
-        ))
-        warnings.append(
-            f"حالة مخاطر السوق العامة حاليًا «{inputs.market_risk_label_ar}» -- "
-            "يُفضّل تجنب فتح مراكز جديدة حتى تتحسن الحالة."
-        )
-        return GateEvaluation(Decision.WATCH, gates, warnings, disclosures)
+    # Phase 2C -> Phase 3 revision (2026-09-24, explicit product-owner
+    # decision): market-wide breadth used to block *every* symbol's new
+    # entry the moment the aggregate state crossed into REDUCE_POSITIONS/
+    # PARTIAL_EXIT/DEFENSIVE_EXIT -- regardless of how strong that
+    # specific symbol's own technical/fundamental case was. Real
+    # production data (2026-09-24) showed this made the platform go
+    # silent for a full trading week even while individual candidates
+    # kept passing every other gate below. Product owner's explicit
+    # instruction: Basirah must judge each stock on its own evidence,
+    # not be silenced by a market-wide read. This gate is therefore now
+    # disclosure-only -- it always PASSes and never returns Decision
+    # .WATCH -- so a genuinely qualifying symbol is never blocked by
+    # market-wide conditions. `market_risk_label_ar`/`entry_permitted`
+    # are still computed and returned on the decision result for anyone
+    # who wants that context; they simply no longer affect the decision
+    # itself. HOLD/REDUCE/EXIT decisions (already returned above) were
+    # never affected by this gate either way.
     gates.append(GateOutcome(
-        "market_risk_permits_entry", GateStatus.PASS,
-        f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- لا تمنع الدخول.", False,
+        "market_risk_context", GateStatus.PASS,
+        f"حالة مخاطر السوق الحالية: «{inputs.market_risk_label_ar}» -- معلومة سياقية فقط، لا تؤثر على تحليل هذا السهم.",
+        False,
     ))
 
     # Failed-breakout gate: a real, already-in-progress breakout attempt

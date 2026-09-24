@@ -60,14 +60,18 @@ class DecisionV2Tuning:
     near_resistance_confidence_cap: float = 70.0
     missed_entry_confidence_cap: float = 60.0
 
-    # --- RADAR-C additions: market regime is real risk evidence but,
-    # unlike REDUCE_POSITIONS/PARTIAL_EXIT/DEFENSIVE_EXIT (which already
-    # block entry outright via gates.py's market_risk_permits_entry
-    # gate), CAUTION explicitly still permits an entry (market_risk.py's
-    # own docstring: "entries permitted, just flagged") -- so nothing in
-    # the pipeline previously reflected that flag in the number a user
-    # actually reads. Binary, matching every other regime-adjacent gate
-    # in this codebase. -----------------------------------------------
+    # --- RADAR-C additions: market regime is real risk evidence.
+    # Historical note: as of 2026-09-24, gates.py's market-risk gate is
+    # disclosure-only for every regime (including REDUCE_POSITIONS/
+    # PARTIAL_EXIT/DEFENSIVE_EXIT, which used to block entry outright --
+    # see gates.py's market_risk_context for why that changed). This
+    # CAUTION-specific confidence cap is a separate, much milder
+    # mechanism that was never a blocking gate to begin with (market_
+    # risk.py's own docstring: "entries permitted, just flagged") -- it
+    # only nudges the displayed confidence number down, never hides or
+    # blocks a recommendation, so it is left as-is pending a separate
+    # product decision. Binary, matching every other regime-adjacent
+    # gate in this codebase. --------------------------------------------
     market_caution_confidence_cap: float = 75.0
 
     # Graduated, not binary: volatility_score already scores a
