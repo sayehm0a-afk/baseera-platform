@@ -101,6 +101,31 @@ def get_decision_v2_outcome_leader_lease_seconds() -> float:
     return float(os.getenv("DECISION_V2_OUTCOME_SCHEDULER_LEADER_LEASE_SECONDS", "180"))
 
 
+def get_outcome_evaluation_leader_lease_seconds() -> float:
+    """P1-3 remediation (2026-09-24 release-gate audit): TTL of the
+    Redis leader lease `OutcomeEvaluationScheduler` uses so only one of
+    Gunicorn's worker processes actually evaluates due (legacy
+    RecommendationOutcome) rows at a time. This scheduler previously had
+    no lock at all -- a real, unprotected 4-worker race, architecturally
+    inconsistent with every sibling scheduler in this codebase (Ingestion,
+    MarketIntelligence, DecisionV2Outcome), each already fixed for this
+    exact bug class. Same default/shape as `get_decision_v2_outcome_
+    leader_lease_seconds` -- no new evidence-based number exists to
+    justify a different value, so this reuses the established, already-
+    justified default rather than inventing one."""
+    return float(os.getenv("OUTCOME_EVALUATION_SCHEDULER_LEADER_LEASE_SECONDS", "180"))
+
+
+def get_outcome_evaluation_leader_heartbeat_seconds() -> float:
+    """How often `OutcomeEvaluationScheduler`'s dedicated leadership
+    heartbeat task re-attempts/renews its Redis lease -- see
+    `get_outcome_evaluation_leader_lease_seconds` for why this scheduler
+    needed this fix and `get_decision_v2_outcome_leader_heartbeat_
+    seconds` for the identical, already-established pattern this
+    mirrors."""
+    return float(os.getenv("OUTCOME_EVALUATION_SCHEDULER_LEADER_HEARTBEAT_SECONDS", "30"))
+
+
 def get_decision_v2_outcome_leader_heartbeat_seconds() -> float:
     """How often `DecisionV2OutcomeScheduler`'s dedicated leadership
     heartbeat task re-attempts/renews its Redis lease. Deliberately

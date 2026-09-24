@@ -27,6 +27,8 @@ from src.ai_evolution.config import (
     get_decision_v2_outcome_leader_heartbeat_seconds,
     get_decision_v2_outcome_leader_lease_seconds,
     get_outcome_evaluation_interval_seconds,
+    get_outcome_evaluation_leader_heartbeat_seconds,
+    get_outcome_evaluation_leader_lease_seconds,
     get_pattern_discovery_interval_seconds,
 )
 from src.ai_evolution.daily_intelligence_aggregation import aggregate_daily_intelligence
@@ -53,22 +55,46 @@ class IOutcomeEvaluationScheduler(Protocol):
         ...
 
 
+_OUTCOME_EVALUATION_LEASE_KEY = "basirah:outcome_evaluation_scheduler:leader"
+
+
 class OutcomeEvaluationScheduler:
     """The one concrete `IOutcomeEvaluationScheduler` this codebase
     ships. `interval_seconds` defaults to
     `OUTCOME_EVALUATION_INTERVAL_SECONDS` -- passing one explicitly
-    overrides the environment for this instance."""
+    overrides the environment for this instance.
+
+    P1-3 remediation (2026-09-24 release-gate audit): this scheduler had
+    no distributed lock at all -- every one of Gunicorn's worker
+    processes ran `main.py`'s `@app.on_event("startup")` independently
+    and would each drive its own full, concurrent evaluation cycle on
+    the identical schedule, a real unprotected 4-worker race
+    (`evaluate_due_outcomes` reads-then-writes with no `SELECT ... FOR
+    UPDATE`/`SKIP LOCKED` and no unique-constraint backstop of its own,
+    unlike `DecisionV2OutcomeScheduler`'s `decision_v2_outcome_
+    snapshot_id` unique index). `_leader_lock` (an independent
+    `SchedulerLeaderLock` instance/lease key, mirroring
+    `DecisionV2OutcomeScheduler`'s own fix for the identical 2026-08-18
+    incident in this same file) closes it the same way: a dedicated,
+    fast heartbeat task keeps `self._is_leader` current, and the cycle
+    loop skips its own tick's work entirely (zero DB writes, zero log
+    line) whenever this worker does not currently hold the lease."""
 
     def __init__(
         self,
         session_factory: Optional[Callable[[], Session]] = None,
         interval_seconds: Optional[int] = None,
+        leader_lock: Optional[SchedulerLeaderLock] = None,
     ):
         self._session_factory = session_factory or self._default_session_factory
         self._interval_seconds = (
             interval_seconds if interval_seconds is not None else get_outcome_evaluation_interval_seconds()
         )
+        self._leader_lock = leader_lock or SchedulerLeaderLock(lease_key=_OUTCOME_EVALUATION_LEASE_KEY)
         self._task: Optional[asyncio.Task] = None
+        self._leadership_task: Optional[asyncio.Task] = None
+        self._is_leader: bool = False
+        self._skipped_due_to_not_leader_count: int = 0
 
     @staticmethod
     def _default_session_factory() -> Session:
@@ -80,26 +106,91 @@ class OutcomeEvaluationScheduler:
     def is_running(self) -> bool:
         return self._task is not None
 
+    @property
+    def is_leader(self) -> bool:
+        """Whether THIS process currently holds the outcome-evaluation-
+        scheduler lease -- real, current state (the heartbeat task
+        renews/re-checks it every
+        `get_outcome_evaluation_leader_heartbeat_seconds()`). Mirrors
+        `DecisionV2OutcomeScheduler.is_leader`'s exact contract."""
+        return self._is_leader
+
+    @property
+    def skipped_due_to_not_leader_count(self) -> int:
+        """How many cycle ticks this process has skipped because it was
+        not the leader at that tick -- observability only, never used
+        for any scheduling decision."""
+        return self._skipped_due_to_not_leader_count
+
     def start(self) -> None:
         if self._task is not None:
             logger.warning("OutcomeEvaluationScheduler.start() called while already running -- ignoring.")
             return
+        # Synchronous first attempt so `is_leader` reflects real state
+        # the instant start() returns, rather than depending on
+        # asyncio's task-scheduling order to run the heartbeat task's
+        # first iteration before the cycle loop's first tick.
+        self._is_leader = self._leader_lock.try_acquire_or_renew(get_outcome_evaluation_leader_lease_seconds())
+        self._leadership_task = asyncio.ensure_future(self._leadership_heartbeat_loop())
         self._task = asyncio.ensure_future(self._loop())
-        logger.info("OutcomeEvaluationScheduler started (interval_seconds=%s).", self._interval_seconds)
+        logger.info(
+            "OutcomeEvaluationScheduler started (interval_seconds=%s, is_leader=%s).",
+            self._interval_seconds,
+            self._is_leader,
+        )
 
     async def stop(self) -> None:
-        if self._task is None:
-            return
-        self._task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._task
-        self._task = None
+        # Cancel both tasks before awaiting either -- see
+        # DecisionV2OutcomeScheduler.stop()'s identical comment for why.
+        if self._leadership_task is not None:
+            self._leadership_task.cancel()
+        if self._task is not None:
+            self._task.cancel()
+        if self._leadership_task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._leadership_task
+            self._leadership_task = None
+        if self._task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+        self._leader_lock.release()
+        self._is_leader = False
         logger.info("OutcomeEvaluationScheduler stopped.")
+
+    async def _leadership_heartbeat_loop(self) -> None:
+        """Renews (or re-attempts) this worker's outcome-evaluation-
+        scheduler lease on a short, fixed cadence -- deliberately
+        independent of this scheduler's own (often much longer) cycle
+        interval. Mirrors `DecisionV2OutcomeScheduler._leadership_
+        heartbeat_loop`'s exact contract."""
+        heartbeat_seconds = get_outcome_evaluation_leader_heartbeat_seconds()
+        lease_seconds = get_outcome_evaluation_leader_lease_seconds()
+        while True:
+            await asyncio.sleep(heartbeat_seconds)
+            try:
+                self._is_leader = self._leader_lock.try_acquire_or_renew(lease_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 -- a heartbeat failure must never crash the process; fail closed instead
+                logger.exception("OutcomeEvaluationScheduler: unexpected error during leadership heartbeat.")
+                self._is_leader = False
 
     async def _loop(self) -> None:
         while True:
             try:
-                await self._run_one_cycle()
+                if self._is_leader:
+                    await self._run_one_cycle()
+                else:
+                    # Another worker holds the outcome-evaluation-
+                    # scheduler lease -- this tick is skipped entirely:
+                    # zero DB writes, no evaluation-cycle log line. See
+                    # the class docstring for the 2026-09-24 remediation
+                    # this closes (unprotected multi-worker evaluation).
+                    self._skipped_due_to_not_leader_count += 1
+                    logger.debug(
+                        "OutcomeEvaluationScheduler: not leader this tick -- skipping evaluation cycle."
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:
