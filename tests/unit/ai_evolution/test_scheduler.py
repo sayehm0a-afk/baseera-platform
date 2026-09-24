@@ -129,7 +129,16 @@ async def test_loop_survives_an_exception_and_keeps_scheduling(factory):
         call_count["n"] += 1
         raise RuntimeError("boom")
 
-    scheduler = OutcomeEvaluationScheduler(session_factory=factory, interval_seconds=0.01)
+    # P1-3 remediation (2026-09-24): needs a deterministic leader (see
+    # DecisionV2OutcomeScheduler's identical test) since the loop now
+    # only calls _run_one_cycle while this worker holds the lease.
+    scheduler = OutcomeEvaluationScheduler(
+        session_factory=factory,
+        interval_seconds=0.01,
+        leader_lock=SchedulerLeaderLock(
+            redis_client=_FakeRedis(), lease_key="basirah:outcome_evaluation_scheduler:leader:test"
+        ),
+    )
     scheduler._run_one_cycle = _raising_run_one_cycle
 
     scheduler.start()
@@ -137,6 +146,103 @@ async def test_loop_survives_an_exception_and_keeps_scheduling(factory):
     await scheduler.stop()
 
     assert call_count["n"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_non_leader_never_runs_a_cycle(factory, monkeypatch):
+    """P1-3 remediation (2026-09-24 release-gate audit): a follower (not
+    holding the outcome-evaluation-scheduler lease) must never call
+    evaluate_due_outcomes -- zero DB work, only the skip counter moves.
+    Mirrors DecisionV2OutcomeScheduler's identical test -- this
+    scheduler previously had no leader lock at all."""
+    scheduler = OutcomeEvaluationScheduler(session_factory=factory, interval_seconds=999999)
+    assert scheduler.is_leader is False  # never started -- default not-leader
+
+    calls = {"n": 0}
+
+    async def _counting_run_one_cycle():
+        calls["n"] += 1
+
+    scheduler._run_one_cycle = _counting_run_one_cycle
+
+    async def _recording_sleep(_seconds):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", _recording_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await scheduler._loop()
+
+    assert calls["n"] == 0
+    assert scheduler.skipped_due_to_not_leader_count == 1
+
+
+@pytest.mark.asyncio
+async def test_four_workers_only_one_becomes_leader_and_runs(factory):
+    """P1-3 remediation (2026-09-24 release-gate audit): the exact
+    scenario the mandate requires proof for -- N=4 concurrently-started
+    schedulers sharing one lease must produce exactly ONE leader (and
+    therefore exactly one worker whose loop would ever call
+    evaluate_due_outcomes), not four independent, duplicate evaluators."""
+    shared_redis = _FakeRedis()
+    lease_key = "basirah:outcome_evaluation_scheduler:leader:test-four-workers"
+    schedulers = [
+        OutcomeEvaluationScheduler(
+            session_factory=factory,
+            interval_seconds=999999,
+            leader_lock=SchedulerLeaderLock(redis_client=shared_redis, lease_key=lease_key),
+        )
+        for _ in range(4)
+    ]
+    for s in schedulers:
+        s.start()
+
+    leader_count = sum(1 for s in schedulers if s.is_leader)
+    assert leader_count == 1
+
+    for s in schedulers:
+        await s.stop()
+
+
+@pytest.mark.asyncio
+async def test_lock_failure_fails_closed_not_open(factory, monkeypatch):
+    """P1-3 remediation (2026-09-24 release-gate audit): if the lock
+    itself cannot be acquired (e.g. Redis unreachable), this worker must
+    default to NOT leader -- never silently proceed as if it were safe
+    to run. Mirrors the existing module-wide fail-closed contract
+    (scheduler_leader_lock.py's own module docstring)."""
+    monkeypatch.setattr(leader_lock_module, "_get_shared_redis_client", lambda: None)
+    scheduler = OutcomeEvaluationScheduler(session_factory=factory, interval_seconds=999999)
+    scheduler.start()
+    assert scheduler.is_leader is False
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_lock_recovery_after_expiry_lets_a_new_leader_take_over(factory):
+    """P1-3 remediation (2026-09-24 release-gate audit): a crashed
+    leader's lease must not deadlock the scheduler forever -- once the
+    lease naturally expires (or, as simulated here, is released), a
+    second worker attempting to acquire it must succeed."""
+    shared_redis = _FakeRedis()
+    lease_key = "basirah:outcome_evaluation_scheduler:leader:test-recovery"
+    leader = OutcomeEvaluationScheduler(
+        session_factory=factory,
+        interval_seconds=999999,
+        leader_lock=SchedulerLeaderLock(redis_client=shared_redis, lease_key=lease_key),
+    )
+    leader.start()
+    assert leader.is_leader is True
+    await leader.stop()  # simulates the leader crashing/shutting down and releasing its lease
+
+    successor = OutcomeEvaluationScheduler(
+        session_factory=factory,
+        interval_seconds=999999,
+        leader_lock=SchedulerLeaderLock(redis_client=shared_redis, lease_key=lease_key),
+    )
+    successor.start()
+    assert successor.is_leader is True
+    await successor.stop()
 
 
 # --- PatternDiscoveryScheduler --------------------------------------------
