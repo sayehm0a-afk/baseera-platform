@@ -66,3 +66,39 @@ def test_get_provider_selection_cache_seconds_defaults_and_reads_env(monkeypatch
     assert market_data_config.get_provider_selection_cache_seconds() == 60.0
     monkeypatch.setenv("MARKET_DATA_PROVIDER_CACHE_SECONDS", "0")
     assert market_data_config.get_provider_selection_cache_seconds() == 0.0
+
+
+class TestP1_2_LiveScanReserveConditionalOnFlag:
+    """2026-09-24 release-gate remediation mandate (P1-2): the LIVE_SCAN
+    quota reserve must not silently wall off part of the daily budget
+    for a feature confirmed disabled in production -- real production
+    evidence traced symbols 4050/1830/2382's live-price failures during
+    the regular market scan to exactly this unconditional reservation."""
+
+    def test_reserve_is_zero_when_flag_is_unset(self, monkeypatch):
+        monkeypatch.delenv("LIVE_RECURRENT_SCAN_ENABLED", raising=False)
+        monkeypatch.delenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", raising=False)
+        assert market_data_config.get_sahmk_reserved_for_live_scan_requests_per_day() is None
+
+    def test_reserve_is_zero_when_flag_is_explicitly_false(self, monkeypatch):
+        monkeypatch.setenv("LIVE_RECURRENT_SCAN_ENABLED", "false")
+        monkeypatch.delenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", raising=False)
+        assert market_data_config.get_sahmk_reserved_for_live_scan_requests_per_day() is None
+
+    def test_reserve_applies_its_configured_default_when_flag_is_true(self, monkeypatch):
+        monkeypatch.setenv("LIVE_RECURRENT_SCAN_ENABLED", "true")
+        monkeypatch.delenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", raising=False)
+        assert market_data_config.get_sahmk_reserved_for_live_scan_requests_per_day() == 20
+
+    def test_reserve_still_reads_env_override_when_flag_is_true(self, monkeypatch):
+        monkeypatch.setenv("LIVE_RECURRENT_SCAN_ENABLED", "true")
+        monkeypatch.setenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", "5")
+        assert market_data_config.get_sahmk_reserved_for_live_scan_requests_per_day() == 5
+
+    def test_explicit_env_override_is_still_ignored_when_flag_is_off(self, monkeypatch):
+        # No production variable needs to change for this fix to work --
+        # an operator-set reserve number must not resurrect the
+        # reservation while the feature it protects stays disabled.
+        monkeypatch.delenv("LIVE_RECURRENT_SCAN_ENABLED", raising=False)
+        monkeypatch.setenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", "5")
+        assert market_data_config.get_sahmk_reserved_for_live_scan_requests_per_day() is None

@@ -226,12 +226,29 @@ def get_sahmk_reserved_for_live_scan_requests_per_day() -> Optional[int]:
     src.market_data.sahmk.request_priority's module docstring. None
     (the default when SAHMK_MAX_REQUESTS_PER_DAY is unset) or 0
     disables the reservation -- live-scan and background work then draw
-    from the same pool, exactly as before this mechanism existed
-    (LIVE_RECURRENT_SCAN_ENABLED remains independently gated and stays
-    OFF regardless of this value; this only protects a budget for it to
-    use once/if a separate task enables it).
+    from the same pool, exactly as before this mechanism existed.
 
-    Default 20: get_live_recurrent_scan_max_candidates() (3) plus one
+    P1-2 remediation (2026-09-24 release-gate audit): this reservation
+    used to apply UNCONDITIONALLY regardless of whether the recurrent
+    live-scan feature itself (LIVE_RECURRENT_SCAN_ENABLED, see
+    src.market_intelligence.config.is_live_recurrent_scan_enabled) is
+    actually running -- a real production incident traced symbols
+    4050/1830/2382 failing live-price acquisition during the regular
+    MARKET_SCAN cycle to exactly this: the reservation silently walled
+    off 20 of the daily 100 requests for a scheduler confirmed disabled
+    in production, shrinking MARKET_SCAN's real usable headroom from
+    its nominal 15-request reserve down to nothing once day_count
+    crossed 50. Reading the flag directly here (not importing
+    src.market_intelligence.config, to avoid a new cross-module
+    dependency for one boolean) means the reservation now only ever
+    applies while the feature it protects is actually enabled -- when
+    disabled, MARKET_SCAN's own get_sahmk_reserved_for_market_scan_
+    requests_per_day() reserve is what protects it, at its full,
+    un-eroded size, with zero production variable changes required
+    (LIVE_RECURRENT_SCAN_ENABLED is already set to its real value).
+
+    Default 20 (when the feature is enabled):
+    get_live_recurrent_scan_max_candidates() (3) plus one
     STRICT_REAL_DATA preflight request = ~4 requests/cycle (see
     src.market_intelligence.config's own "Recurrent Live Scan" section);
     20 covers 5 cycles -- comfortably more than
@@ -242,6 +259,8 @@ def get_sahmk_reserved_for_live_scan_requests_per_day() -> Optional[int]:
     task's own PRODUCTION_SCALE_SIMULATION_DAYS report for the
     scenario-by-scenario sizing evidence (Section 9's 1/2/3/4-cycle
     table)."""
+    if os.getenv("LIVE_RECURRENT_SCAN_ENABLED", "false").lower() != "true":
+        return None
     raw = os.getenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", "20")
     if not raw.strip():
         return None
