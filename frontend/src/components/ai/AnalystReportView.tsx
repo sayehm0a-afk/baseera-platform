@@ -6,6 +6,7 @@ import {
   RecommendationBadge,
   type RecommendationValue,
 } from "@/components/badges/RecommendationBadge";
+import { ExpandableSection } from "@/components/patterns/ExpandableSection";
 import { RISK_LEVEL_LABELS, TIME_HORIZON_LABELS } from "@/lib/portfolio-labels";
 import type { AnalystReport } from "@/lib/api/stocks-types";
 
@@ -142,19 +143,11 @@ export function AnalystReportView({ report }: { report: AnalystReport }) {
         ) : null}
       </Section>
 
-      <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-2">
-        <Section title="التحليل الفني">
-          <p className="text-sm leading-7 text-bsr-text-secondary">{report.technical_reasoning}</p>
-        </Section>
-        <Section title="التحليل الأساسي">
-          <p className="text-sm leading-7 text-bsr-text-secondary">{report.fundamental_reasoning}</p>
-        </Section>
-      </div>
-
-      <Section title="تفسير المخاطر">
-        <p className="text-sm leading-7 text-bsr-text-secondary">{report.risk_explanation}</p>
-      </Section>
-
+      {/* Explainability Contract (DS §18.1) requires bullish/bearish
+       * factors to always be reachable and never hidden -- kept
+       * outside the collapsed section below, unlike the other nine
+       * explanation sections which are supplementary depth, not
+       * mandatory-visible content. */}
       <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-2">
         <Section title="عوامل داعمة">
           {report.bullish_factors.length === 0 ? (
@@ -189,54 +182,73 @@ export function AnalystReportView({ report }: { report: AnalystReport }) {
         </Section>
       </div>
 
-      <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-3">
-        <Section title="تفسير درجة الثقة">
-          <p className="text-sm leading-7 text-bsr-text-secondary">{report.confidence_explanation}</p>
-          {report.confidence_calibration_notes.length > 0 ? (
-            <ul className="mt-bsr-2 flex flex-col gap-bsr-1">
-              {report.confidence_calibration_notes.map((note, index) => (
-                <li key={index} className="text-xs text-bsr-text-muted">• {note}</li>
+      {/* Everything below is real depth this report already computes --
+       * nothing removed, nothing hidden permanently -- but nine flat
+       * text sections shown at once was exactly the "too much text"
+       * density this collapses by default; one tap reaches all of it. */}
+      <ExpandableSection title="التحليل التفصيلي الكامل" subtitle="الأساس الفني والأساسي، المخاطر، تفسير كل رقم، السيناريوهات البديلة">
+        <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-2">
+          <Section title="التحليل الفني">
+            <p className="text-sm leading-7 text-bsr-text-secondary">{report.technical_reasoning}</p>
+          </Section>
+          <Section title="التحليل الأساسي">
+            <p className="text-sm leading-7 text-bsr-text-secondary">{report.fundamental_reasoning}</p>
+          </Section>
+        </div>
+
+        <Section title="تفسير المخاطر">
+          <p className="text-sm leading-7 text-bsr-text-secondary">{report.risk_explanation}</p>
+        </Section>
+
+        <div className="grid grid-cols-1 gap-bsr-6 lg:grid-cols-3">
+          <Section title="تفسير درجة الثقة">
+            <p className="text-sm leading-7 text-bsr-text-secondary">{report.confidence_explanation}</p>
+            {report.confidence_calibration_notes.length > 0 ? (
+              <ul className="mt-bsr-2 flex flex-col gap-bsr-1">
+                {report.confidence_calibration_notes.map((note, index) => (
+                  <li key={index} className="text-xs text-bsr-text-muted">• {note}</li>
+                ))}
+              </ul>
+            ) : null}
+          </Section>
+          <Section title="تفسير السعر المستهدف">
+            <p className="text-sm leading-7 text-bsr-text-secondary">{report.target_price_explanation}</p>
+            <p className="mt-bsr-2 text-xs text-bsr-text-muted">
+              الأساس: {BASIS_LABELS[report.target_price_basis] ?? report.target_price_basis}
+            </p>
+          </Section>
+          <Section title="تفسير وقف الخسارة">
+            <p className="text-sm leading-7 text-bsr-text-secondary">{report.stop_loss_explanation}</p>
+            <p className="mt-bsr-2 text-xs text-bsr-text-muted">
+              الأساس: {BASIS_LABELS[report.stop_loss_basis] ?? report.stop_loss_basis}
+            </p>
+          </Section>
+        </div>
+
+        <Section title="تفسير الإطار الزمني">
+          <p className="text-sm leading-7 text-bsr-text-secondary">{report.time_horizon_explanation}</p>
+        </Section>
+
+        <Section title="سيناريوهات بديلة">
+          {report.alternative_scenarios.length === 0 ? (
+            <p className="text-sm text-bsr-text-muted">لا توجد سيناريوهات بديلة مسجّلة.</p>
+          ) : (
+            <ul className="flex flex-col gap-bsr-2">
+              {report.alternative_scenarios.map((scenario, index) => (
+                <li key={index} className="text-sm text-bsr-text-secondary">
+                  • {scenario}
+                </li>
               ))}
             </ul>
-          ) : null}
+          )}
         </Section>
-        <Section title="تفسير السعر المستهدف">
-          <p className="text-sm leading-7 text-bsr-text-secondary">{report.target_price_explanation}</p>
-          <p className="mt-bsr-2 text-xs text-bsr-text-muted">
-            الأساس: {BASIS_LABELS[report.target_price_basis] ?? report.target_price_basis}
+
+        <Section title="الأساس المنطقي للتوصية النهائية">
+          <p className="text-sm leading-7 text-bsr-text-secondary">
+            {report.final_recommendation_rationale}
           </p>
         </Section>
-        <Section title="تفسير وقف الخسارة">
-          <p className="text-sm leading-7 text-bsr-text-secondary">{report.stop_loss_explanation}</p>
-          <p className="mt-bsr-2 text-xs text-bsr-text-muted">
-            الأساس: {BASIS_LABELS[report.stop_loss_basis] ?? report.stop_loss_basis}
-          </p>
-        </Section>
-      </div>
-
-      <Section title="تفسير الإطار الزمني">
-        <p className="text-sm leading-7 text-bsr-text-secondary">{report.time_horizon_explanation}</p>
-      </Section>
-
-      <Section title="سيناريوهات بديلة">
-        {report.alternative_scenarios.length === 0 ? (
-          <p className="text-sm text-bsr-text-muted">لا توجد سيناريوهات بديلة مسجّلة.</p>
-        ) : (
-          <ul className="flex flex-col gap-bsr-2">
-            {report.alternative_scenarios.map((scenario, index) => (
-              <li key={index} className="text-sm text-bsr-text-secondary">
-                • {scenario}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
-
-      <Section title="الأساس المنطقي للتوصية النهائية">
-        <p className="text-sm leading-7 text-bsr-text-secondary">
-          {report.final_recommendation_rationale}
-        </p>
-      </Section>
+      </ExpandableSection>
     </div>
   );
 }

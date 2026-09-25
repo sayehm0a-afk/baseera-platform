@@ -115,6 +115,7 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
   const [tab, setTab] = useState<Tab>("overview");
   const [beginnerMode, setBeginnerMode] = useState(false);
   const [chartRange, setChartRange] = useState<ChartRange>("3M");
+  const [showAllChartLevels, setShowAllChartLevels] = useState(false);
 
   const stock = useResource(symbol, getStock);
   const quote = useResource(symbol, getQuote);
@@ -126,8 +127,17 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
   const analystReport = useResource(symbol, getAnalystReport);
   const radar = useResource(symbol, getRadarOpportunityBySymbol);
 
+  // 2026-09-25: real user complaint that the chart is "unclear" --
+  // traced to up to ~12 simultaneous horizontal price lines (entry
+  // zone, stop, 3 targets, breakout/breakdown/invalidation, reference
+  // price, 2 support + 2 resistance) drawn at once in a 360-440px
+  // chart, each with its own axis label. Nothing here is wrong or
+  // fabricated data, just too much drawn by default. Every level is
+  // tagged `essential` and only the essential subset (entry zone,
+  // stop, nearest target, reference price) renders by default; the
+  // rest is one toggle away (`showAllChartLevels`), never removed.
   const priceLevels = useMemo<PriceLevel[]>(() => {
-    const levels: PriceLevel[] = [];
+    const levels: (PriceLevel & { essential: boolean })[] = [];
 
     // Decision V2's entry zone/stop/targets take priority -- they're
     // the gate-checked, publication-safe numbers; the legacy /decision
@@ -135,35 +145,35 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
     // decision yet (e.g. insufficient data for the newer engine).
     if (decisionV2.status === "ready") {
       const d = decisionV2.data;
-      if (d.entry_zone_low != null) levels.push({ price: d.entry_zone_low, label: "أسفل نطاق الدخول", color: "#3E8ED0" });
-      if (d.entry_zone_high != null) levels.push({ price: d.entry_zone_high, label: "أعلى نطاق الدخول", color: "#3E8ED0" });
-      if (d.stop_loss != null) levels.push({ price: d.stop_loss, label: "وقف الخسارة", color: "#E5484D" });
-      if (d.target_1 != null) levels.push({ price: d.target_1, label: "الهدف الأول", color: "#1FA97A" });
-      if (d.target_2 != null) levels.push({ price: d.target_2, label: "الهدف الثاني", color: "#1FA97A" });
-      if (d.target_3 != null) levels.push({ price: d.target_3, label: "الهدف الثالث", color: "#1FA97A" });
+      if (d.entry_zone_low != null) levels.push({ price: d.entry_zone_low, label: "أسفل نطاق الدخول", color: "#3E8ED0", essential: true });
+      if (d.entry_zone_high != null) levels.push({ price: d.entry_zone_high, label: "أعلى نطاق الدخول", color: "#3E8ED0", essential: true });
+      if (d.stop_loss != null) levels.push({ price: d.stop_loss, label: "وقف الخسارة", color: "#E5484D", essential: true });
+      if (d.target_1 != null) levels.push({ price: d.target_1, label: "الهدف الأول", color: "#1FA97A", essential: true });
+      if (d.target_2 != null) levels.push({ price: d.target_2, label: "الهدف الثاني", color: "#1FA97A", essential: false });
+      if (d.target_3 != null) levels.push({ price: d.target_3, label: "الهدف الثالث", color: "#1FA97A", essential: false });
       // Phase 2F: breakout/breakdown/invalidation are already computed
       // by Decision Engine V2 (Phase 2A) but were never drawn on the
       // chart -- real levels, not derived here.
       if (d.breakout_level != null) {
-        levels.push({ price: d.breakout_level, label: "مستوى الاختراق", color: "#8B5CF6" });
+        levels.push({ price: d.breakout_level, label: "مستوى الاختراق", color: "#8B5CF6", essential: false });
       }
       if (d.breakdown_level != null) {
-        levels.push({ price: d.breakdown_level, label: "مستوى الانكسار", color: "#8B5CF6" });
+        levels.push({ price: d.breakdown_level, label: "مستوى الانكسار", color: "#8B5CF6", essential: false });
       }
       if (d.invalidation_price != null && d.invalidation_price !== d.stop_loss) {
-        levels.push({ price: d.invalidation_price, label: "سعر إلغاء القرار", color: "#B98900" });
+        levels.push({ price: d.invalidation_price, label: "سعر إلغاء القرار", color: "#B98900", essential: false });
       }
     } else if (decision.status === "ready") {
       if (decision.data.target_price != null) {
-        levels.push({ price: decision.data.target_price, label: "الهدف", color: "#1FA97A" });
+        levels.push({ price: decision.data.target_price, label: "الهدف", color: "#1FA97A", essential: true });
       }
       if (decision.data.stop_loss != null) {
-        levels.push({ price: decision.data.stop_loss, label: "وقف الخسارة", color: "#E5484D" });
+        levels.push({ price: decision.data.stop_loss, label: "وقف الخسارة", color: "#E5484D", essential: true });
       }
     }
 
     if (quote.status === "ready") {
-      levels.push({ price: quote.data.close, label: "السعر المرجعي", color: "#C9A24B" });
+      levels.push({ price: quote.data.close, label: "السعر المرجعي", color: "#C9A24B", essential: true });
     }
 
     // Support/resistance -- real indicator output from
@@ -186,15 +196,16 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
         .sort((a, b) => a - b)
         .slice(0, 2);
       nearestBelow.forEach((p, i) =>
-        levels.push({ price: p, label: i === 0 ? "دعم" : "دعم إضافي", color: "#3E8ED0" })
+        levels.push({ price: p, label: i === 0 ? "دعم" : "دعم إضافي", color: "#3E8ED0", essential: false })
       );
       nearestAbove.forEach((p, i) =>
-        levels.push({ price: p, label: i === 0 ? "مقاومة" : "مقاومة إضافية", color: "#B98900" })
+        levels.push({ price: p, label: i === 0 ? "مقاومة" : "مقاومة إضافية", color: "#B98900", essential: false })
       );
     }
 
-    return levels;
-  }, [decision, decisionV2, quote, technical]);
+    const visible = showAllChartLevels ? levels : levels.filter((level) => level.essential);
+    return visible.map(({ price, label, color }) => ({ price, label, color }));
+  }, [decision, decisionV2, quote, technical, showAllChartLevels]);
 
   // Phase 2F: real per-bar moving-average overlays (GET /technical's
   // `moving_averages`) -- absent entirely when the indicator wasn't
@@ -436,16 +447,25 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
             <>
               <div className="mb-bsr-3 flex flex-wrap items-center justify-between gap-bsr-2">
                 <ChartRangeTabs value={chartRange} onChange={setChartRange} />
-                {chartRangeChangePct != null ? (
-                  <span
-                    className={`bsr-numeric text-sm font-semibold ${
-                      chartRangeChangePct >= 0 ? "text-bsr-market-up" : "text-bsr-market-down"
-                    }`}
+                <div className="flex items-center gap-bsr-3">
+                  {chartRangeChangePct != null ? (
+                    <span
+                      className={`bsr-numeric text-sm font-semibold ${
+                        chartRangeChangePct >= 0 ? "text-bsr-market-up" : "text-bsr-market-down"
+                      }`}
+                    >
+                      {chartRangeChangePct >= 0 ? "+" : ""}
+                      {chartRangeChangePct.toFixed(2)}%
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setShowAllChartLevels((prev) => !prev)}
+                    className="rounded-bsr-md border border-bsr-border-subtle px-bsr-3 py-1 text-xs font-semibold text-bsr-text-secondary"
                   >
-                    {chartRangeChangePct >= 0 ? "+" : ""}
-                    {chartRangeChangePct.toFixed(2)}%
-                  </span>
-                ) : null}
+                    {showAllChartLevels ? "عرض المستويات الأساسية فقط" : "عرض كل المستويات"}
+                  </button>
+                </div>
               </div>
               <PriceChart bars={visibleBars} levels={priceLevels} movingAverages={movingAverages} />
             </>
