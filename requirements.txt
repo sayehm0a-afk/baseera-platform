@@ -46,7 +46,7 @@ uvicorn[standard]>=0.53.0
 # codebase; adopting 2.1 (and psycopg v3) should be a deliberate,
 # separately-tested upgrade, not an accidental side effect of an
 # unpinned floating dependency.
-sqlalchemy>=2.0.0,<2.1.0
+sqlalchemy>=2.0.54,<2.1.0
 asyncpg>=0.31.0
 psycopg2-binary>=2.9.12
 alembic>=1.13.0
