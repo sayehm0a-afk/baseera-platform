@@ -120,6 +120,43 @@ def get_ohlcv_backfill_days() -> int:
     return int(os.getenv("INGESTION_OHLCV_BACKFILL_DAYS", "90"))
 
 
+def get_tier4_guaranteed_daily_minimum() -> int:
+    """P1 data-freshness remediation (2026-09-25 real production
+    finding): how many Tier 4 (general background rotation) symbols are
+    guaranteed an ingestion attempt every day, regardless of how many
+    Tier 2/3 symbols exist that day.
+
+    Real production evidence: ALRAJHI (1120) -- one of the largest,
+    most liquid Tadawul banks -- went 36.4 days with zero OHLCV
+    refresh. Root cause traced to `OhlcvPriorityPlan.background_symbols`
+    ordering Tier 2 and Tier 3 strictly before Tier 4, combined with
+    `ingest_historical_ohlcv()`'s quota-exhaustion handling: once the
+    shared background budget is spent, it `break`s and marks every
+    remaining (unattempted) symbol as a budget skip -- so on any day
+    Tier 2+3 alone consume the whole background budget (observed:
+    `remaining_today_for_background_after_market_scan_reserve: 0`),
+    every single Tier 4 symbol gets literally zero attempts, which can
+    repeat indefinitely if Tier 2/3 membership stays similar day to
+    day. `ohlcv_priority.py`'s own `_fair_rotation_order()` is correctly
+    starvation-resistant *in isolation* (proven by
+    `test_no_permanent_starvation_across_many_rotation_passes`), but
+    that guarantee silently assumed Tier 4 always receives budget --
+    untrue once Tier 2/3 compete for the same shared pool.
+
+    Fix: the scheduler now runs a small, guaranteed-first Tier 4 slice
+    (this many symbols, oldest-bar-first) as its own priority-scoped
+    pass before Tier 2/3 -- see `IngestionScheduler._run_historical_
+    ohlcv()`. This bounds worst-case Tier 4 staleness to
+    `ceil(tier4_size / this_value)` days instead of the previously
+    unbounded (proven, not just theoretical) starvation. It does not
+    eliminate the underlying real quota scarcity (~100 SAHMK
+    requests/day against ~375 symbols) -- a modest default (10) that
+    still leaves the large majority of the background budget for Tier
+    2/3's own legitimate priority, honestly bounding rather than
+    hiding the real provider-capacity constraint."""
+    return int(os.getenv("INGESTION_TIER4_GUARANTEED_DAILY_MINIMUM", "10"))
+
+
 def get_critical_refresh_backfill_days() -> int:
     """P0 SAHMK quota architecture repair (2026-08-25), Section 7's
     DAILY_CRITICAL_REFRESH: how many days of history to backfill for a

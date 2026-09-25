@@ -18,6 +18,7 @@ from src.domain.models import (
     DecisionV2Snapshot,
     IngestionJobStatus,
     IngestionRunLog,
+    RadarOpportunity,
     Stock,
 )
 from src.market_data.ingestion._common import (
@@ -36,6 +37,7 @@ from src.market_data.ingestion.scheduler import (
 )
 from src.market_data.sahmk.rate_limiter import (
     SahmkQuotaReservedForCriticalError,
+    SahmkRateLimitExceededError,
     SahmkUpstreamQuotaExhaustedError,
 )
 from src.market_data.strict_mode import StrictRealDataUnavailableError
@@ -667,6 +669,94 @@ async def test_run_historical_ohlcv_runs_critical_pass_under_critical_and_backgr
 
     assert observed_priority_by_symbol["4050"] == "critical"
     assert observed_priority_by_symbol["1010"] == "background"
+
+
+@pytest.mark.asyncio
+async def test_tier4_gets_a_guaranteed_slice_even_when_tier2_alone_exhausts_the_shared_background_budget(
+    session_factory, monkeypatch
+):
+    """P1 data-freshness remediation (2026-09-25 real production
+    finding, ALRAJHI/1120 -- see ingestion.config.get_tier4_guaranteed_
+    daily_minimum's own docstring): before this fix, `plan.background_
+    symbols` ordered Tier 2/3 strictly before Tier 4, and a shared
+    background budget exhausted by Tier 2/3 alone meant Tier 4 got
+    literally zero attempts. Proves the guaranteed Tier 4 slice (here,
+    2 symbols) is genuinely attempted even when 3 Tier 2 symbols alone
+    would consume the entire simulated 3-request shared budget."""
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_ingestion_symbol_universe",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "src.market_data.ingestion.config.get_tier4_guaranteed_daily_minimum",
+        lambda: 2,
+    )
+    session = session_factory()
+
+    tier2_symbols = ["2222", "3333", "4444"]
+    for symbol in tier2_symbols:
+        stock = Stock(symbol=symbol, name_en=f"Tier2 {symbol}", is_active=True)
+        session.add(stock)
+        session.flush()
+        snapshot = DecisionV2Snapshot(
+            stock_id=stock.id, symbol=symbol, company_name_en=stock.name_en,
+            decision="BUY_CANDIDATE", decision_label_ar="شراء", confidence_score=70.0,
+            opportunity_quality_score=60.0, risk_score=30.0, data_quality_score=90.0,
+            data_freshness_status="LIVE", current_price=100.0, entry_zone_low=95.0,
+            entry_zone_high=100.0, target_1=110.0, target_2=120.0, target_3=130.0,
+            stop_loss=90.0, market_status="OPEN",
+            decision_timestamp=datetime.now(timezone.utc), analysis_version="2.0.0",
+            data_source="test",
+        )
+        session.add(snapshot)
+        session.flush()
+        session.add(RadarOpportunity(
+            symbol=symbol, stock_id=stock.id, decision_v2_snapshot_id=snapshot.id,
+            classification="BUY_CANDIDATE", classification_label_ar="شراء",
+            confidence_score=70.0, emitted_at=datetime.now(timezone.utc),
+        ))
+
+    tier4_symbols = ["1120", "1180"]  # never-ingested -> sorts first in fair rotation
+    for symbol in tier4_symbols:
+        session.add(Stock(symbol=symbol, name_en=f"Tier4 {symbol}", is_active=True))
+    session.commit()
+    session.close()
+
+    _SHARED_BUDGET = 3  # exactly the Tier 2 count -- would starve Tier 4 entirely pre-fix
+    calls_made = {"n": 0}
+    attempted_symbols = set()
+
+    class _BudgetLimitedProvider:
+        async def authenticate(self):
+            return True
+
+        async def disconnect(self):
+            pass
+
+        async def get_historical_ohlcv(self, symbol, start, end, interval="1d"):
+            attempted_symbols.add(symbol)
+            if calls_made["n"] >= _SHARED_BUDGET:
+                raise SahmkRateLimitExceededError("simulated shared background budget exhausted")
+            calls_made["n"] += 1
+            return [
+                {
+                    "symbol": symbol, "open": 1, "high": 2, "low": 0.5, "close": 1.5,
+                    "volume": 100, "timestamp": "2026-01-01T00:00:00+00:00",
+                    "source": "fake", "is_synthetic": True,
+                }
+            ]
+
+    async def get_provider():
+        return _BudgetLimitedProvider()
+
+    scheduler = IngestionScheduler(session_factory=session_factory, market_provider_getter=get_provider)
+    await scheduler._run_historical_ohlcv()
+
+    for symbol in tier4_symbols:
+        assert symbol in attempted_symbols, (
+            f"Tier 4 symbol {symbol} was never attempted -- the exact starvation bug "
+            "this fix closes (ALRAJHI/1120 going 36.4 days with zero refresh)."
+        )
 
 
 # --- _resolve_ohlcv_target_symbols (OHLCV persistence / post-signal ----

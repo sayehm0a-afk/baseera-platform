@@ -857,7 +857,21 @@ class IngestionScheduler:
         starvation-resistant tiering/rotation (see ohlcv_priority.py)
         instead of arbitrary Stock-table order. Results are merged into
         one IngestionResult so the existing single `historical_ohlcv`
-        IngestionRunLog row/observability contract is unaffected."""
+        IngestionRunLog row/observability contract is unaffected.
+
+        P1 data-freshness remediation (2026-09-25 real production
+        finding, see ingestion.config.get_tier4_guaranteed_daily_
+        minimum's own docstring for the full ALRAJHI/1120 root-cause
+        writeup): `plan.background_symbols` orders Tier 2/3 strictly
+        before Tier 4, and `ingest_historical_ohlcv()` stops entirely
+        (never attempting the rest) the moment the shared background
+        budget is exhausted -- so any day Tier 2/3 alone consume that
+        whole budget, EVERY Tier 4 symbol gets zero attempts, with no
+        guaranteed floor. A small, guaranteed-first Tier 4 slice (this
+        many symbols, oldest-bar-first) now runs as its own priority-
+        scoped pass BEFORE Tier 2/3, so it is attempted even on a day
+        Tier 2/3 alone would have exhausted the whole budget -- bounding
+        worst-case Tier 4 staleness instead of leaving it unbounded."""
         provider = _NonDisconnectingProviderProxy(await self._get_market_provider())
         plan = self._build_ohlcv_priority_plan()
 
@@ -871,17 +885,35 @@ class IngestionScheduler:
                     backfill_days=ingestion_config.get_critical_refresh_backfill_days(),
                 )
 
-        background_result = IngestionResult(symbols_requested=0)
-        if plan.background_symbols:
+        guaranteed_count = ingestion_config.get_tier4_guaranteed_daily_minimum()
+        guaranteed_tier4 = plan.tier4[:guaranteed_count]
+        remaining_background = [
+            s for s in plan.background_symbols if s not in set(guaranteed_tier4)
+        ]
+
+        tier4_guaranteed_result = IngestionResult(symbols_requested=0)
+        if guaranteed_tier4:
             with priority_scope(BACKGROUND), operation_scope(INGESTION):
-                background_result = await ingest_historical_ohlcv(
-                    plan.background_symbols,
+                tier4_guaranteed_result = await ingest_historical_ohlcv(
+                    guaranteed_tier4,
                     provider,
                     self._session_factory,
                     backfill_days=ingestion_config.get_ohlcv_backfill_days(),
                 )
 
-        return _merge_ingestion_results(critical_result, background_result)
+        background_result = IngestionResult(symbols_requested=0)
+        if remaining_background:
+            with priority_scope(BACKGROUND), operation_scope(INGESTION):
+                background_result = await ingest_historical_ohlcv(
+                    remaining_background,
+                    provider,
+                    self._session_factory,
+                    backfill_days=ingestion_config.get_ohlcv_backfill_days(),
+                )
+
+        return _merge_ingestion_results(
+            _merge_ingestion_results(critical_result, tier4_guaranteed_result), background_result
+        )
 
     async def _run_fundamentals(self) -> IngestionResult:
         with priority_scope(BACKGROUND), operation_scope(INGESTION):
