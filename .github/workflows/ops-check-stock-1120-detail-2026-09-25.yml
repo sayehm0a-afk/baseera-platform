@@ -1,0 +1,87 @@
+name: Ops - Check real /stocks/1120 decision-v2 response (read-only, 2026-09-25)
+
+# Direct user complaint (2026-09-25): "the app never changed" pointing at
+# https://frontend-production-c3de.up.railway.app/stocks/1120 specifically.
+# None of this session's fixes touched the stock-detail page itself (only
+# backend safety gates, a quota bug, a scheduler lock, a build-pin, and a
+# redirect on two OTHER routes) -- expected to look identical. This pulls
+# the real GET /api/v1/stocks/1120/decision-v2 response the page actually
+# renders from, to see the real current data rather than assuming.
+# Never modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as staff
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then echo "::error::login failed"; exit 1; fi
+
+      - name: Real GET /api/v1/stocks/1120/decision-v2
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/stocks/1120/decision-v2" \
+            -o /tmp/stock_1120_decision.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/stock_1120_decision.json'))
+          print(json.dumps(d, indent=2, ensure_ascii=False))
+          "
+
+      - name: Real GET /api/v1/stocks/1120 (base stock record)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/stocks/1120" \
+            -o /tmp/stock_1120_base.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/stock_1120_base.json'))
+          print(json.dumps(d, indent=2, ensure_ascii=False))
+          "
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found."
