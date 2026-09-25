@@ -1,0 +1,136 @@
+name: Ops - Core product rescue acceptance test (read-only, 2026-09-25)
+
+# CORE PRODUCT RESCUE mandate (2026-09-25): before making further UI
+# changes, get real production evidence for the two missions that
+# matter -- today's recommendations (GET /radar/summary + /opportunities)
+# and every-stock analysis freshness (GET /stocks/{symbol}/decision-v2)
+# across a diverse real sample of Tadawul symbols (large/mid cap, several
+# sectors). Prints exactly the fields the acceptance-test table needs:
+# price, price time, latest bar time, freshness signal, decision status,
+# entry/stop/targets, confidence, analysis time. Never modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as staff
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then echo "::error::login failed"; exit 1; fi
+
+      - name: Real market status
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/market/status" -o /tmp/market_status.json -w "\nHTTP %{http_code}\n"
+          python3 -c "import json; print(json.dumps(json.load(open('/tmp/market_status.json')), indent=2, ensure_ascii=False))"
+
+      - name: Real radar summary (today's recommendations, home-screen view)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/radar/summary" -o /tmp/radar_summary.json -w "\nHTTP %{http_code}\n"
+          python3 -c "import json; print(json.dumps(json.load(open('/tmp/radar_summary.json')), indent=2, ensure_ascii=False))"
+
+      - name: Real radar opportunities (full ranked list, up to 20)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/radar/opportunities?limit=20" -o /tmp/radar_opportunities.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/radar_opportunities.json'))
+          print('count:', len(d) if isinstance(d, list) else 'N/A (not a list)')
+          print(json.dumps(d, indent=2, ensure_ascii=False)[:6000])
+          "
+
+      - name: Real per-stock decision-v2 across 10 diverse real Tadawul symbols
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          # Large/mid cap, multiple sectors: 2222 Aramco (energy), 1120
+          # Al Rajhi (banking, the exact symbol from the user's own
+          # complaint), 2010 SABIC (materials), 7010 STC (telecom), 1180
+          # SAB (banking), 2280 Almarai (consumer staples), 1211 Maaden
+          # (mining), 4030 Bahri (transport/logistics), 6001 Halwani
+          # (food, smaller cap), 4061 Anaam (smaller cap, food).
+          SYMBOLS="2222 1120 2010 7010 1180 2280 1211 4030 6001 4061"
+          echo "symbol,http_code,decision,decision_label_ar,confidence,entry_zone_low,entry_zone_high,stop_loss,target_1,quote_close,quote_is_live_tick,quote_timestamp,generated_at,decision_freshness_ok" > /tmp/acceptance_table.csv
+          for SYM in $SYMBOLS; do
+            BODY=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\n%{http_code}" "$BACKEND_URL/api/v1/stocks/$SYM/decision-v2" || echo -e "\n000")
+            HTTP_CODE=$(echo "$BODY" | tail -1)
+            JSON=$(echo "$BODY" | sed '$d')
+            echo "$JSON" > "/tmp/decision_$SYM.json"
+            echo "=== $SYM (HTTP $HTTP_CODE) ==="
+            echo "$JSON" | python3 -c "
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception as e:
+              print('  (could not parse JSON:', e, ')')
+              sys.exit(0)
+          for k in ['decision','decision_label_ar','confidence','entry_zone_low','entry_zone_high','stop_loss','target_1','target_2','target_3','generated_at']:
+              print(f'  {k}: {d.get(k)}')
+          " || true
+
+            QBODY=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\n%{http_code}" "$BACKEND_URL/api/v1/stocks/$SYM/quote" || echo -e "\n000")
+            QHTTP=$(echo "$QBODY" | tail -1)
+            QJSON=$(echo "$QBODY" | sed '$d')
+            echo "  --- quote (HTTP $QHTTP) ---"
+            echo "$QJSON" | python3 -c "
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+          except Exception as e:
+              print('  (could not parse JSON:', e, ')')
+              sys.exit(0)
+          for k in ['close','timestamp','is_live_tick','is_synthetic','source']:
+              print(f'  {k}: {d.get(k)}')
+          " || true
+            echo ""
+          done
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found."
