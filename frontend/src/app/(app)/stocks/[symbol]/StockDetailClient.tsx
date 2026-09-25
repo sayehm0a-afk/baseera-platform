@@ -46,6 +46,7 @@ import {
   getTechnicalAnalysis,
 } from "@/lib/api/stocks";
 import { useResource } from "@/lib/hooks/useResource";
+import { formatArabicDateTime, freshnessLabelAr } from "@/lib/format/freshness";
 import { POSITION_SIZE_LABELS, RISK_LEVEL_LABELS, TIME_HORIZON_LABELS } from "@/lib/portfolio-labels";
 import { formatIndicatorValue, formatRatioValue } from "@/lib/stock-detail-format";
 
@@ -418,6 +419,34 @@ export function StockDetailClient({ symbol }: { symbol: string }) {
           the "لماذا؟" reasons above have a chart to point at before any
           advanced detail. */}
       <div id="chart" className="rounded-bsr-lg border border-bsr-border-subtle bg-bsr-surface-raised p-bsr-3">
+        {/* CORE PRODUCT RESCUE mandate (2026-09-25): the chart itself
+            must visibly carry its own freshness -- not only the page
+            header above it, which a user may have scrolled past. Reuses
+            the exact same data_freshness_status the executive decision
+            card already shows (never a second, independently-derived
+            freshness read) so the chart and the recommendation can
+            never disagree on how current the data is. Falls back to the
+            quote's own timestamp when Decision V2 isn't ready yet. */}
+        {quote.status === "ready" ? (
+          <p className="mb-bsr-2 text-xs text-bsr-text-secondary">
+            آخر تحديث: <span className="bsr-numeric">{formatArabicDateTime(quote.data.timestamp)}</span>
+            {decisionV2.status === "ready" ? (
+              <>
+                {" "}·{" "}
+                <span
+                  className={
+                    decisionV2.data.data_freshness_status === "STALE" ||
+                    decisionV2.data.data_freshness_status === "UNKNOWN"
+                      ? "font-semibold text-bsr-action-watch"
+                      : ""
+                  }
+                >
+                  {freshnessLabelAr(decisionV2.data.data_freshness_status)}
+                </span>
+              </>
+            ) : null}
+          </p>
+        ) : null}
         {history.status === "loading" ? <LoadingScreen /> : null}
         {history.status === "insufficient_data" || history.status === "not_found" ? (
           <EmptyState
