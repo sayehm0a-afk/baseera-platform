@@ -1,0 +1,104 @@
+name: Ops - Real final_score distribution vs buy_threshold (read-only, 2026-09-27)
+
+# Sunday post-fix follow-up: the decision-intelligence endpoint's
+# "confidence" buckets (mostly 60-80%) are a DIFFERENT axis from the
+# actual weighted final_score RecommendationEngine compares against
+# RecommendationTuning.buy_threshold (60.0) -- confidence measures
+# evidence quality/consistency, not directional strength. Before any
+# statistical claim about buy_threshold being miscalibrated, this pulls
+# the real GET /stocks/{symbol}/recommendation final_score for a
+# diverse real sample, to see whether non-BUY symbols cluster just
+# below 60 (a genuine calibration question) or well below it (a
+# genuinely weak setup, not a threshold problem). Never modifies
+# anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as staff
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then echo "::error::login failed"; exit 1; fi
+
+      - name: Real final_score for the current radar list plus 10 diverse symbols
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          # Same 10 diverse symbols as the earlier acceptance test, plus
+          # every symbol currently in the live radar list (the ones the
+          # decision-intelligence check already showed as HOLD/WATCH/
+          # REDUCE this week) so the score distribution reflects the
+          # exact same real population, not a different sample.
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/radar/opportunities?limit=20" -o /tmp/radar.json
+          RADAR_SYMBOLS=$(python3 -c "
+          import json
+          d = json.load(open('/tmp/radar.json'))
+          print(' '.join(o['symbol'] for o in d) if isinstance(d, list) else '')
+          ")
+          SYMBOLS="2222 1120 2010 7010 1180 2280 1211 4030 6001 4061 $RADAR_SYMBOLS"
+          SYMBOLS=$(echo "$SYMBOLS" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+          echo "Checking symbols: $SYMBOLS"
+          echo "symbol,recommendation,final_score,confidence,technical_score,fundamental_score" > /tmp/scores.csv
+          for SYM in $SYMBOLS; do
+            BODY=$(curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt -w "\n%{http_code}" "$BACKEND_URL/api/v1/stocks/$SYM/recommendation" || echo -e "\n000")
+            HTTP_CODE=$(echo "$BODY" | tail -1)
+            JSON=$(echo "$BODY" | sed '$d')
+            ROW=$(echo "$JSON" | python3 -c "
+          import json, sys
+          try:
+              d = json.load(sys.stdin)
+              print(f\"{d.get('symbol')},{d.get('recommendation')},{d.get('final_score')},{d.get('confidence')},{d.get('technical_score')},{d.get('fundamental_score')}\")
+          except Exception as e:
+              print(f'$SYM,ERROR,,,,')
+          " 2>/dev/null || echo "$SYM,HTTP_$HTTP_CODE,,,,")
+            echo "$ROW" >> /tmp/scores.csv
+          done
+          echo "=== Real final_score distribution (real symbols, real weighted scores) ==="
+          cat /tmp/scores.csv
+          echo ""
+          echo "=== Sorted by final_score ascending ==="
+          (head -1 /tmp/scores.csv; tail -n +2 /tmp/scores.csv | sort -t, -k3 -n) | column -t -s,
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json /tmp/*.csv; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found."
