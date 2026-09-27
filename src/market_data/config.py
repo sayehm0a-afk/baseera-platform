@@ -204,8 +204,35 @@ def get_sahmk_reserved_for_critical_requests_per_day() -> Optional[int]:
     reserve close to or exceeding the total daily budget would starve
     every other priority permanently, which 1000-of-100 effectively
     did before this fix (the reservation checks below force
-    reserved_for_critical + reserved_for_live_scan <= max_per_day)."""
-    raw = os.getenv("SAHMK_RESERVED_FOR_CRITICAL_REQUESTS_PER_DAY", "30")
+    reserved_for_critical + reserved_for_live_scan <= max_per_day).
+
+    CORE PRODUCT RESCUE mandate quota-allocation fix (2026-09-27):
+    raised 30 -> 50. Real production evidence the same day: by
+    ~10:53 UTC (under 4 hours after market open, hours before Tadawul
+    close), requests_used_today had already hit the full 100/100 --
+    critical_requests_used_today (31) had already exceeded its OWN
+    30-request reservation (meaning it was drawing from the shared
+    unreserved pool too), while background_requests_used_today (54,
+    routine OHLCV/dividends ingestion) had consumed the entire
+    remainder. A real user opening a real stock page mid-afternoon hit
+    "SAHMK connectivity probe failed: SAHMK daily request quota (100)
+    already reached" -- GET /decision-v2 and /quote returning HTTP 503
+    for the rest of the day, confirmed live in production (screenshots:
+    frozen chart, "تعذّر الاتصال بمصدر البيانات الحقيقية"). The 2026-08-25
+    sizing (14 active-signal symbols) never accounted for ordinary
+    unpredictable consumer browsing traffic -- any of ~375 covered
+    symbols, at any time a real subscriber opens that page -- which is
+    exactly priority #3 in the mandate's own SAHMK-quota order ("stocks
+    users explicitly open"), above background historical recovery
+    (explicitly priority #6, "must never starve" higher priorities).
+    50 does not solve the underlying scarcity (SAHMK's own real ~100/
+    day ceiling is an external provider constraint no internal
+    reallocation can lift -- see get_sahmk_max_requests_per_day()'s own
+    docstring), it only shifts the daily exhaustion point later and
+    protects real user-facing lookups longer into the trading day at
+    routine background maintenance's expense, per the mandate's
+    explicit priority order."""
+    raw = os.getenv("SAHMK_RESERVED_FOR_CRITICAL_REQUESTS_PER_DAY", "50")
     if not raw.strip():
         return None
     value = int(raw)
