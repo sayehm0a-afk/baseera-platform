@@ -1,0 +1,94 @@
+name: Ops - Check why a live STRONG_BUY base rec becomes WATCH (read-only, 2026-09-27)
+
+# CRITICAL Sunday finding: GET /stocks/7010/recommendation returns a
+# real, live STRONG_BUY (final_score 81.5), yet GET /stocks/7010/
+# decision-v2 shows WATCH -- during real market-open hours, not a
+# weekend artifact. This dumps the full decision-v2 response (its
+# "gates" array is Decision Engine V2's own real, already-computed
+# publication-gate trace) to find exactly which gate downgrades this
+# specific, real, live BUY-eligible base recommendation. Never
+# modifies anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as staff
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then echo "::error::login failed"; exit 1; fi
+
+      - name: Real GET /stocks/7010/decision-v2 (live, market open) -- full gates trace
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/stocks/7010/decision-v2" -o /tmp/d7010.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/d7010.json'))
+          print('decision:', d.get('decision'))
+          print('decision_label_ar:', d.get('decision_label_ar'))
+          print('confidence_score:', d.get('confidence_score'))
+          print('market_status:', d.get('market_status'))
+          print('data_freshness_status:', d.get('data_freshness_status'))
+          print('is_decision_fresh:', d.get('is_decision_fresh'))
+          print()
+          print('=== gates ===')
+          for g in d.get('gates', []):
+              print(f\"  {g.get('name'):30s} {g.get('status'):15s} blocking={g.get('blocking')}  {g.get('detail')}\")
+          print()
+          print('warnings:', d.get('warnings'))
+          print()
+          print('why_not_stronger_ar:', d.get('why_not_stronger_ar'))
+          "
+
+      - name: Real GET /stocks/7010/quote (the actual live-tick provenance)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/stocks/7010/quote" -o /tmp/q7010.json -w "\nHTTP %{http_code}\n"
+          cat /tmp/q7010.json
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found."
