@@ -4,25 +4,25 @@ export interface NavItem {
   href: string;
 }
 
-/** Single-screen focus mandate (2026-09-28, direct owner instruction
- * after a real, difficult week: "focus on ONE screen -- issuing
- * confirmed recommendations -- we don't need stock analysis or any
- * other interface"). The app's one primary destination is now the
- * Smart Radar / confirmed-recommendations screen itself.
+/** Partial reversal of the single-screen mandate (2026-09-28, same
+ * day, direct owner instruction after reviewing a competitor app):
+ * a radar-only app shows a completely empty screen on any day with
+ * zero confirmed recommendations -- which, given real external SAHMK
+ * quota scarcity, is common. The owner's own reference screenshots
+ * showed a competitor that never shows an empty screen because
+ * Portfolio and Market are always populated with real holdings/prices
+ * regardless of whether a signal fired that day. Restoring those two
+ * surfaces alongside Radar so the app always has real content to show.
  *
- * Every previously-listed surface (stock directory, portfolio,
- * watchlist, and everything from the earlier RADAR-C/E ten-item nav)
- * still exists as a real route with real, untouched backend data
- * behind it -- only removed from primary/mobile navigation, matching
- * this codebase's own established convention: "do not delete useful
- * capability merely because it disappears from navigation." A stock
- * is still reachable by search (TopBar) or by tapping a recommendation
- * card; portfolio/watchlist remain reachable via direct URL for anyone
- * who still wants them, just no longer competing for primary attention.
+ * Watchlist and everything else from the earlier RADAR-C/E four-item
+ * nav still exists as a real route with real, untouched backend data
+ * behind it -- only Radar/Stocks/Portfolio are back in primary nav.
  */
 export const PRIMARY_NAV_ITEMS: NavItem[] = [
   { key: "radar", labelAr: "التوصيات المؤكدة", href: "/radar" },
+  { key: "stocks", labelAr: "السوق", href: "/stocks" },
+  { key: "portfolio", labelAr: "محفظتي", href: "/portfolio" },
 ];
 
-/** The mobile bottom tab bar mirrors the single primary surface. */
+/** The mobile bottom tab bar mirrors the three primary surfaces. */
 export const MOBILE_TAB_ITEMS: NavItem[] = PRIMARY_NAV_ITEMS;
