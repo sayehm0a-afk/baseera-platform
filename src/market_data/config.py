@@ -152,30 +152,34 @@ def get_sahmk_max_requests_per_day() -> Optional[int]:
     up to 3x per logical call with no awareness this is a quota, not a
     transient failure).
 
-    P0 SAHMK quota architecture repair (2026-08-25 production evidence,
-    superseding the 2026-08-09 "5000 requests/day" 429-body claim
-    below): the real, currently-effective upstream ceiling is
-    approximately 100 requests/day (repeated live 429 evidence: "IP
-    daily rate limit exceeded (100 requests/day)", most recently
-    reconfirmed 2026-08-25 via `upstream_confirmed_exhausted=true` with
-    `remaining_today_for_background=0`). The 5000/day figure from
-    2026-08-09's 429 body was real evidence at the time but is no
-    longer the operative constraint -- whether that reflects a plan
-    downgrade, a shared/IP-level cap distinct from the per-key figure
-    that 429 body described, or some other change is not established
-    here; only the currently observed ceiling is. This default (100)
-    is deliberately NOT the sole safety mechanism: SahmkRateLimiter.
-    acquire() checks SAHMK's own real 429-evidence-based exhaustion
-    FIRST, before this (or any) static day_count estimate, and that
-    check always wins (see this module's own docstring, "provider
-    truth always overrides this limiter's own bookkeeping") --
-    changing this default cannot make the system less safe if the real
-    quota turns out to be lower still, only better-calibrated when it
-    isn't. Override with SAHMK_MAX_REQUESTS_PER_DAY once the plan's
-    true quota is reconfirmed differently; set to "" (empty string) to
-    disable the client-side cap entirely and rely on SAHMK's own 429
-    only, as before this default existed."""
-    raw = os.getenv("SAHMK_MAX_REQUESTS_PER_DAY", "100")
+    P1 SAHMK quota re-verification (2026-09-30, real evidence: the
+    account owner's own sahmk.sa developer dashboard, screenshotted
+    live, shows a currently-active **Starter** plan -- "52 من أصل
+    5,000 طلب يومي" (52 of 5,000 daily requests used) -- superseding
+    the 2026-08-25 "~100 requests/day" figure this default previously
+    used. That 100/day evidence (real 429s reading "IP daily rate
+    limit exceeded (100 requests/day)") reflected the account being on
+    the Free tier at that specific time, not a permanent upstream
+    ceiling; sahmk.sa's own published pricing lists Free=100/day,
+    Starter=5,000/day, confirming 100 and 5,000 as two different real
+    plan tiers rather than a contradiction. The dashboard also warned
+    the Starter plan expires in 2 days without renewal, reverting to
+    Free (100/day) -- if that lapses, this default will again overstate
+    the real ceiling until corrected, but that carries no safety risk
+    (see below). This default (5000) is deliberately NOT the sole
+    safety mechanism: SahmkRateLimiter.acquire() checks SAHMK's own
+    real 429-evidence-based exhaustion FIRST, before this (or any)
+    static day_count estimate, and that check always wins (see this
+    module's own docstring, "provider truth always overrides this
+    limiter's own bookkeeping") -- changing this default cannot make
+    the system less safe if the real quota turns out to be lower
+    still (a lapsed Starter renewal, a shared/IP-level cap below the
+    per-key figure), only better-calibrated when it isn't. Override
+    with SAHMK_MAX_REQUESTS_PER_DAY once the plan's true quota is
+    reconfirmed differently; set to "" (empty string) to disable the
+    client-side cap entirely and rely on SAHMK's own 429 only, as
+    before this default existed."""
+    raw = os.getenv("SAHMK_MAX_REQUESTS_PER_DAY", "5000")
     return int(raw) if raw.strip() else None
 
 

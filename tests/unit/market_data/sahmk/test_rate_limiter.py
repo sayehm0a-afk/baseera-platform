@@ -998,7 +998,7 @@ def test_default_singleton_enforces_the_confirmed_real_daily_quota(monkeypatch):
     monkeypatch.delenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", raising=False)
     monkeypatch.delenv("LIVE_RECURRENT_SCAN_ENABLED", raising=False)
     limiter = get_default_rate_limiter()
-    assert limiter._max_per_day == 100
+    assert limiter._max_per_day == 5000
     assert limiter._reserved_for_critical == 50
     assert limiter._reserved_for_live_scan == 0
     assert limiter._reserved_for_critical + limiter._reserved_for_live_scan < limiter._max_per_day
@@ -1017,7 +1017,7 @@ def test_default_singleton_reserves_live_scan_only_when_the_feature_is_enabled(m
     monkeypatch.delenv("SAHMK_RESERVED_FOR_LIVE_SCAN_REQUESTS_PER_DAY", raising=False)
     monkeypatch.setenv("LIVE_RECURRENT_SCAN_ENABLED", "true")
     limiter = get_default_rate_limiter()
-    assert limiter._max_per_day == 100
+    assert limiter._max_per_day == 5000
     assert limiter._reserved_for_critical == 50
     assert limiter._reserved_for_live_scan == 20
     assert limiter._reserved_for_critical + limiter._reserved_for_live_scan < limiter._max_per_day
