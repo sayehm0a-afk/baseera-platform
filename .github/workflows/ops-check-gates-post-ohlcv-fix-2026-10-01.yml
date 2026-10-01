@@ -1,0 +1,103 @@
+name: Ops - Check decision-v2 gates for a high-confidence symbol post-OHLCV-fix (read-only, 2026-10-01)
+
+# Real finding this morning: the full 386-symbol universe's daily OHLCV
+# candles refreshed successfully overnight (symbols_succeeded: 386/386,
+# up from 6/386 before the SAHMK quota fix) -- yet decision-intelligence
+# still shows zero buy_candidate_count across every sector, despite
+# notably higher confidence averages (up to 82%) than before. This
+# dumps the full decision-v2 gates trace for a real high-confidence
+# symbol from today's sector_ranking (materials sector, average
+# confidence 75.3, 6 symbols evaluated) to see exactly which gate is
+# still blocking a BUY now that OHLCV staleness is no longer the
+# proximate cause. Never modifies anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Symbol to inspect (default 2010, SABIC, materials sector)"
+        required: false
+        default: "2010"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      STAFF_EMAIL: ${{ secrets.STAFF_EMAIL }}
+      STAFF_PASSWORD: ${{ secrets.STAFF_PASSWORD }}
+      SYMBOL: ${{ inputs.symbol || '2010' }}
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Resolve backend URL
+        id: urls
+        run: |
+          railway domain list --service backend --json > /tmp/backend_domains.json
+          BACKEND_URL=$(python3 -c "import json; d=json.load(open('/tmp/backend_domains.json')); print('https://' + d['domains'][0]['domain'])")
+          echo "backend_url=$BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Log in as staff
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -c /tmp/cookies.txt -o /tmp/login_body.json -w "%{http_code}" \
+            -X POST "$BACKEND_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_EMAIL']))"), \"password\": $(python3 -c "import json,os; print(json.dumps(os.environ['STAFF_PASSWORD']))")}")
+          echo "Login HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then echo "::error::login failed"; exit 1; fi
+
+      - name: Real GET /stocks/{symbol}/recommendation (base score) and /decision-v2 (full gates trace)
+        env:
+          BACKEND_URL: ${{ steps.urls.outputs.backend_url }}
+        run: |
+          echo "=== recommendation (base RecommendationEngine output) ==="
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/stocks/$SYMBOL/recommendation" -o /tmp/rec.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/rec.json'))
+          for k in ['symbol','recommendation','final_score','confidence','technical_score','fundamental_score']:
+              print(f'  {k}: {d.get(k)}')
+          "
+
+          echo ""
+          echo "=== decision-v2 (full gates trace) ==="
+          curl -sS --connect-timeout 10 --max-time 20 -b /tmp/cookies.txt \
+            "$BACKEND_URL/api/v1/stocks/$SYMBOL/decision-v2" -o /tmp/dv2.json -w "\nHTTP %{http_code}\n"
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/dv2.json'))
+          print('decision:', d.get('decision'))
+          print('decision_label_ar:', d.get('decision_label_ar'))
+          print('data_freshness_status:', d.get('data_freshness_status'))
+          print()
+          print('=== gates ===')
+          for g in d.get('gates', []):
+              print(f\"  {g.get('name'):30s} {g.get('status'):15s} blocking={g.get('blocking')}  {g.get('detail')}\")
+          print()
+          print('warnings:', d.get('warnings'))
+          print()
+          print('why_not_stronger_ar:', d.get('why_not_stronger_ar'))
+          "
+
+      - name: Security check -- grep captured responses for secret-leak patterns
+        if: always()
+        run: |
+          PATTERN='sk-[A-Za-z0-9]{10,}|RAILWAY_TOKEN|SAHMK_API_KEY|postgres:\/\/[^"]*:[^"]*@|SECRET_KEY|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          FOUND=0
+          for f in /tmp/*.json; do
+            [ -f "$f" ] || continue
+            if grep -qE "$PATTERN" "$f"; then
+              echo "::error::Potential secret-leak pattern found in $f"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" != "0" ]; then exit 1; fi
+          echo "No secret-leak patterns found."
