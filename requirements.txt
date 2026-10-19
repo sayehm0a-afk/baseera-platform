@@ -83,7 +83,7 @@ pyotp>=2.10.0
 # for the same reason as pyotp above. Used only to encrypt the TOTP secret
 # at rest (src/auth/mfa_totp.py); never used for password hashing (bcrypt
 # stays the one and only password hasher, see this section's own docstring).
-cryptography>=41.0.7
+cryptography>=50.0.1
 
 # ===========================
 # Observability
